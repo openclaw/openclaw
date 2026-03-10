@@ -40,15 +40,12 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onReasoningEnd?.();
 }
 
-export function resolveSilentReplyFallbackText(params: {
-  text: string;
-  messagingToolSentTexts: string[];
-}): string {
-  // Do not replace NO_REPLY with messaging tool text: doing so causes the
-  // already-delivered text to flow back through the delivery pipeline and get
-  // sent again as a duplicate. Keep NO_REPLY so downstream suppression logic
-  // can handle it correctly. (See: #38826, #36811)
-  return params.text;
+export function resolveSilentReplyFallbackText(text: string): string {
+  // Previously this replaced NO_REPLY with the last messaging-tool-sent text,
+  // but that caused the already-delivered text to flow back through the delivery
+  // pipeline and get sent again as a duplicate. Keep NO_REPLY so downstream
+  // suppression logic can handle it correctly. (See: #38826, #36811)
+  return text;
 }
 
 export function handleMessageStart(
@@ -268,10 +265,9 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
-  const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
-    messagingToolSentTexts: ctx.state.messagingToolSentTexts,
-  });
+  const text = resolveSilentReplyFallbackText(
+    ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+  );
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
