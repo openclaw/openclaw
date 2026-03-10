@@ -20,6 +20,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+}));
+
+vi.mock("../../agents/auth-profiles/store.js", () => ({
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
 }));
 
@@ -37,12 +40,13 @@ const { modelsAuthCleanCommand } = await import("./auth-clean.js");
 
 function makeRuntime(): RuntimeEnv & { logs: string[] } {
   const logs: string[] = [];
-  return {
+  const runtime = {
     logs,
-    log: vi.fn((msg: string) => logs.push(msg)),
+    log: (msg: string) => { logs.push(msg); },
     error: vi.fn(),
     exit: vi.fn(),
   };
+  return runtime as unknown as RuntimeEnv & { logs: string[] };
 }
 
 function makeCfg(
