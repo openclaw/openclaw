@@ -4,7 +4,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("redactToolResult", () => {
   it("redacts nested sensitive strings", () => {
-    const secret = "Bearer testtok_abcdefghijklmnopqrstuvwxyz1234";
+    const secret = "Bearer testtok_abcdefghijklmnopqrstuvwxyz1234"; // pragma: allowlist secret
     const input = {
       content: [{ type: "text", text: `token=${secret}` }],
       details: { nested: { token: secret } },

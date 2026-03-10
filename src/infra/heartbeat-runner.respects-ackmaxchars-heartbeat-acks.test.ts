@@ -570,7 +570,7 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       const rawXapp = "xapp-1-AABBCCDDEEFF-1234567890ABCDEFFEDCBA";
-      const rawAwsAccessKey = "AKIAABCDEFGHIJKLMNOP";
+      const rawAwsAccessKey = "AKIAABCDEFGHIJKLMNOP"; // pragma: allowlist secret
       replySpy.mockResolvedValue({
         text: `Incident trace ${rawXapp} aws_key=${rawAwsAccessKey}`,
       });

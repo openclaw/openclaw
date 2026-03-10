@@ -1637,7 +1637,7 @@ else
 fi
 
 # Test 2: Payload with bearer token is scrubbed
-payload_secret='{"summary":"Token is Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}'
+payload_secret='{"summary":"Token is Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}' # pragma: allowlist secret
 result=$(redact_for_sink "$payload_secret" "slack")
 if echo "$result" | grep -q "Bearer"; then
   echo "FAIL: bearer token not scrubbed"; ((FAIL++))
@@ -1646,7 +1646,7 @@ else
 fi
 
 # Test 3: High-entropy token triggers quarantine
-payload_entropy='{"summary":"key=aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZyB0aGF0IHNob3VsZCBiZSBjYXVnaHQ="}'
+payload_entropy='{"summary":"key=aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZyB0aGF0IHNob3VsZCBiZSBjYXVnaHQ="}' # pragma: allowlist secret
 result=$(redact_for_sink "$payload_entropy" "slack")
 status=$?
 if [[ $status -ne 0 ]] || echo "$result" | grep -q "redacted: suspected secret"; then

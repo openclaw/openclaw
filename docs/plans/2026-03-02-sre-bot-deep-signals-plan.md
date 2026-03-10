@@ -567,12 +567,12 @@ declare -A tests
 tests["Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6Ik"]="Bearer <redacted>"
 tests["xoxb-1234567890-abcdef"]="xoxb-<redacted>"
 tests["xapp-1-A234567890-abcdef"]="xapp-<redacted>"
-tests["ghp_ABCDEFGHIJKLMNOPqrstuvwxyz0123"]="ghp_<redacted>"
+tests["ghp_ABCDEFGHIJKLMNOPqrstuvwxyz0123"]="ghp_<redacted>" # pragma: allowlist secret
 tests["github_pat_11AABBCC22ddeeffgg"]="github_pat_<redacted>"
-tests["AKIAIOSFODNN7EXAMPLE"]="AKIA<redacted>"
+tests["AKIAIOSFODNN7EXAMPLE"]="AKIA<redacted>" # pragma: allowlist secret
 tests["sk-ant-api03-abcdefghijklmnop"]="sk-ant-<redacted>"
 tests["hvs.CAESIJzGZ"]="hvs.<redacted>"
-tests["password=mysecret123"]="password=<redacted>"
+tests["password=mysecret123"]="password=<redacted>" # pragma: allowlist secret
 tests['"token":"abc123xyz"']='"token":"<redacted>"'
 tests["api_key: sk_live_abcdefgh"]="api_key: <redacted>"
 tests["aws_secret_access_key=wJalrXUtnFEMI"]="aws_secret_access_key=<redacted>"
