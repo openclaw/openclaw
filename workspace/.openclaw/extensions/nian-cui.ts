@@ -9,16 +9,18 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { DatabaseSync } from "node:sqlite";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 
-const EXTRACTION_PROMPT = `You are a memory extraction system. Given a conversation between a user and an AI agent, extract the key facts worth remembering for future interactions.
+const EXTRACTION_PROMPT = `You are a memory extraction system for a customer service agent. Given a conversation between a customer and an AI agent, extract key facts worth remembering for future interactions.
 
 Rules:
 - Extract 3-7 facts maximum
-- Focus on: user preferences, decisions made, problems solved, action items, people mentioned, important dates
-- Skip: greetings, small talk, system messages, tool call details
+- MUST record: completed transactions (amounts, methods), customer preferences, abnormal events, handoff reasons, complaints
+- MAY skip: routine FAQ answers, simple greetings, small talk
 - Each fact should be one concise sentence
+- Note when images were sent (e.g. transfer screenshots) — they often indicate payment proof
 - Use the same language as the conversation (usually Chinese)
 - If the conversation is too short or trivial, return NONE
 
@@ -28,6 +30,106 @@ Output format (one fact per line):
 - ...
 
 Or just: NONE`;
+
+// --- Shadow DB connection (lazy, read-only for context) ---
+
+let shadowDb: DatabaseSync | null = null;
+
+function getShadowDb(): DatabaseSync | null {
+  if (shadowDb) return shadowDb;
+  try {
+    const fs = require("node:fs") as typeof import("node:fs");
+    if (!fs.existsSync("/data/line-shadow.db")) return null;
+    shadowDb = new DatabaseSync("/data/line-shadow.db");
+    shadowDb.exec("PRAGMA journal_mode=WAL");
+    return shadowDb;
+  } catch {
+    return null;
+  }
+}
+
+function saveOutboundMessages(
+  userId: string,
+  messages: Array<{ role: string; text: string }>,
+): void {
+  const db = getShadowDb();
+  if (!db) return;
+
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO messages (timestamp, user_id, source_type, message_type, text, message_id, reply_token, raw_event, direction, media_path)
+      VALUES (?, ?, 'bot', 'text', ?, NULL, NULL, '{}', 'outbound', NULL)
+    `);
+    const now = new Date().toISOString();
+    for (const msg of messages) {
+      if (msg.role !== "assistant" || !msg.text) continue;
+      stmt.run(now, userId, msg.text.slice(0, 10000));
+    }
+  } catch (err) {
+    console.error(`[念·萃] outbound save error: ${err}`);
+  }
+}
+
+interface DbRow {
+  direction: string;
+  text: string | null;
+  message_type: string;
+  timestamp: string;
+}
+
+function getRecentHistory(userId: string, limit = 20): string {
+  const db = getShadowDb();
+  if (!db) return "";
+
+  try {
+    const rows = db
+      .prepare(`
+      SELECT direction, text, message_type, timestamp
+      FROM messages WHERE user_id = ?
+      ORDER BY timestamp DESC LIMIT ?
+    `)
+      .all(userId, limit) as DbRow[];
+
+    if (rows.length === 0) return "";
+
+    // Reverse to chronological order
+    rows.reverse();
+    const lines = rows.map((r) => {
+      const dir = r.direction === "outbound" ? "outbound" : "inbound";
+      if (r.message_type === "image") return `[${dir}] <圖片>`;
+      if (r.message_type === "video") return `[${dir}] <影片>`;
+      if (r.message_type === "audio") return `[${dir}] <語音>`;
+      return `[${dir}] ${(r.text ?? "").slice(0, 200)}`;
+    });
+
+    return `\n--- RECENT LINE HISTORY ---\n${lines.join("\n")}`;
+  } catch (err) {
+    console.error(`[念·萃] DB history query error: ${err}`);
+    return "";
+  }
+}
+
+function extractFlatMessages(messages: unknown[]): Array<{ role: string; text: string }> {
+  const result: Array<{ role: string; text: string }> = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const m = msg as Record<string, unknown>;
+    const role = m.role as string | undefined;
+    if (role !== "user" && role !== "assistant") continue;
+
+    const content = m.content;
+    if (typeof content === "string") {
+      result.push({ role, text: content });
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block && typeof block === "object" && "text" in block) {
+          result.push({ role, text: (block as { text: string }).text });
+        }
+      }
+    }
+  }
+  return result;
+}
 
 function extractTextFromMessages(messages: unknown[]): string {
   const lines: string[] = [];
@@ -67,27 +169,54 @@ export default function register(api: OpenClawPluginApi) {
       return;
     }
 
+    // --- Record outbound messages to shadow DB (LINE only) ---
+    const isLine = ctx.messageProvider === "line" || (ctx.sessionKey ?? "").includes(":line:");
+    let lineUserId: string | null = null;
+
+    if (isLine) {
+      const parts = (ctx.sessionKey ?? "").split(":");
+      lineUserId = parts[parts.length - 1] || null;
+
+      if (lineUserId) {
+        const outbound = extractFlatMessages(event.messages).filter((m) => m.role === "assistant");
+        if (outbound.length > 0) {
+          saveOutboundMessages(lineUserId, outbound);
+          logger.debug?.(`[念·萃] saved ${outbound.length} outbound messages for ${lineUserId}`);
+        }
+      }
+    }
+
     const conversationText = extractTextFromMessages(event.messages);
     if (conversationText.length < 100) {
       return;
+    }
+
+    // --- Enrich with DB history (LINE only) ---
+    let dbHistory = "";
+    if (isLine && lineUserId) {
+      dbHistory = getRecentHistory(lineUserId);
     }
 
     try {
       const fs = await import("node:fs");
       const path = await import("node:path");
 
-      // Resolve agent memory directory
-      const agentDir = path.join(workspaceDir, "agents", agentId);
-      const memoryDir = path.join(agentDir, "memory");
+      // Resolve memory directory — try both multi-agent and single-agent layouts
+      const multiAgentMemory = path.join(workspaceDir, "agents", agentId, "memory");
+      const singleAgentMemory = path.join(workspaceDir, "memory");
 
-      if (!fs.existsSync(agentDir)) {
-        logger.debug?.(`[念·萃] agent dir not found: ${agentDir}`);
+      let memoryDir: string;
+      if (fs.existsSync(multiAgentMemory)) {
+        memoryDir = multiAgentMemory;
+      } else if (fs.existsSync(singleAgentMemory)) {
+        memoryDir = singleAgentMemory;
+      } else if (fs.existsSync(path.join(workspaceDir, "agents", agentId))) {
+        // Agent dir exists but no memory dir yet — create it
+        fs.mkdirSync(multiAgentMemory, { recursive: true });
+        memoryDir = multiAgentMemory;
+      } else {
+        logger.debug?.(`[念·萃] no suitable memory dir for ${agentId}`);
         return;
-      }
-
-      // Ensure memory directory exists
-      if (!fs.existsSync(memoryDir)) {
-        fs.mkdirSync(memoryDir, { recursive: true });
       }
 
       // Call Haiku for extraction
@@ -96,6 +225,12 @@ export default function register(api: OpenClawPluginApi) {
         logger.warn("[念·萃] ANTHROPIC_API_KEY not set, skipping extraction");
         return;
       }
+
+      const promptParts = [
+        EXTRACTION_PROMPT,
+        dbHistory,
+        `\n--- CONVERSATION ---\n${conversationText}`,
+      ];
 
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -110,7 +245,7 @@ export default function register(api: OpenClawPluginApi) {
           messages: [
             {
               role: "user",
-              content: `${EXTRACTION_PROMPT}\n\n--- CONVERSATION ---\n${conversationText}`,
+              content: promptParts.join("\n"),
             },
           ],
         }),
