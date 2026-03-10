@@ -534,7 +534,7 @@ export type ToolsConfig = {
         /** Enable Parallel extract (default: false; opt-in). */
         enabled?: boolean;
         /** Parallel API key (defaults to PARALLEL_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Base URL for API requests (defaults to "https://api.parallel.ai"). */
         baseUrl?: string;
         /** Timeout in seconds for Parallel extract requests. */

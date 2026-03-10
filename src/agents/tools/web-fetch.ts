@@ -1014,7 +1014,8 @@ export function createWebFetchTool(options?: {
     DEFAULT_TIMEOUT_SECONDS,
   );
   const parallelExtract = resolveParallelExtractConfig(fetch);
-  const parallelExtractApiKey = resolveParallelExtractApiKey(parallelExtract);
+  const parallelExtractApiKey =
+    parallelExtract?.enabled !== false ? resolveParallelExtractApiKey(parallelExtract) : undefined;
   const parallelExtractEnabled = resolveParallelExtractEnabled({
     parallel: parallelExtract,
     apiKey: parallelExtractApiKey,
