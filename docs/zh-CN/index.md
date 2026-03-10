@@ -174,7 +174,7 @@ Gateway 网关启动后，打开浏览器控制界面。
   <Card title="多智能体路由" href="/zh-CN/concepts/multi-agent" icon="route">
     工作区隔离和按智能体的会话管理。
   </Card>
-  <Card title="安全" href="/gateway/security" icon="shield">
+  <Card title="安全" href="/zh-CN/gateway/security" icon="shield">
     令牌、白名单和安全控制。
   </Card>
   <Card title="故障排除" href="/zh-CN/gateway/troubleshooting" icon="wrench">
