@@ -144,6 +144,7 @@ Docs: https://docs.openclaw.ai
 - Skills/download installs: pin the validated per-skill tools root before writing downloaded archives, so rebinding the lexical tools path cannot redirect download writes outside the intended tools directory. Thanks @tdjackey.
 - Control UI/Debug: replace the Manual RPC free-text method field with a sorted dropdown sourced from gateway-advertised methods, and stack the form vertically for narrower layouts. (#14967) thanks @rixau.
 - Auth/profile resolution: log debug details when auto-discovered auth profiles fail during provider API-key resolution, so `--debug` output surfaces the real refresh/keychain/credential-store failure instead of only the generic missing-key message. (#41271) thanks @he-yufeng.
+- ACP/cancel scoping: scope `chat.abort` and shared-session ACP event routing by `runId` so one session cannot cancel or consume another session's run when they share the same gateway session key. (#41331) Thanks @pejmanjohn.
 
 ## 2026.3.7
 
