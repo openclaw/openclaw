@@ -16,6 +16,7 @@ import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
+import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
@@ -424,11 +425,18 @@ export class DiscordExecApprovalHandler {
       urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
       urlOverrideSource: gatewayUrlOverrideSource,
     });
+    const localTlsRuntime =
+      this.opts.cfg.gateway?.tls?.enabled === true &&
+      !gatewayUrlOverrideSource &&
+      gatewayUrl.startsWith("wss://")
+        ? await loadGatewayTlsRuntime(this.opts.cfg.gateway?.tls)
+        : undefined;
 
     this.gatewayClient = new GatewayClient({
       url: gatewayUrl,
       token: auth.token,
       password: auth.password,
+      tlsFingerprint: localTlsRuntime?.enabled ? localTlsRuntime.fingerprintSha256 : undefined,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "Discord Exec Approvals",
       mode: GATEWAY_CLIENT_MODES.BACKEND,
