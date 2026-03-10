@@ -553,19 +553,22 @@ export async function sanitizeSessionHistory(params: {
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
+  const dropsEmptyAssistantTurnsOnConversion =
+    params.modelApi === "anthropic-messages" || params.modelApi === "bedrock-converse-stream";
   // pi-agent-core persists a synthetic empty assistant error message when a
   // request fails before yielding usable content. Anthropic drops empty
   // assistant turns during payload conversion, which can turn
   // user -> assistant(error) -> user into consecutive user turns.
-  const withoutEmptyAssistantErrors = policy.validateAnthropicTurns
-    ? droppedThinking.filter((msg) => {
-        if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
-          return true;
-        }
-        const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
-        return assistant.stopReason !== "error" || !isEmptyAssistantMessageContent(assistant);
-      })
-    : droppedThinking;
+  const withoutEmptyAssistantErrors =
+    policy.validateAnthropicTurns && dropsEmptyAssistantTurnsOnConversion
+      ? droppedThinking.filter((msg) => {
+          if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+            return true;
+          }
+          const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+          return assistant.stopReason !== "error" || !isEmptyAssistantMessageContent(assistant);
+        })
+      : droppedThinking;
   const sanitizedToolCalls = sanitizeToolCallInputs(withoutEmptyAssistantErrors, {
     allowedToolNames: params.allowedToolNames,
   });

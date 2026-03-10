@@ -655,6 +655,31 @@ describe("sanitizeSessionHistory", () => {
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).stopReason).toBe("error");
   });
 
+  it("does not drop empty assistant error stubs for strict OpenAI-compatible histories", async () => {
+    setNonGoogleModelApi();
+
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage([{ type: "text", text: "" }], {
+        stopReason: "error",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "vllm",
+      modelId: "gemma-3-27b",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(result[1]?.role).toBe("assistant");
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).stopReason).toBe("error");
+  });
+
   it("synthesizes missing tool results for openai-responses after repair", async () => {
     const messages: AgentMessage[] = [
       makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
