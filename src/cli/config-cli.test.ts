@@ -442,4 +442,28 @@ describe("config cli", () => {
       expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
     });
   });
+
+  describe("config restore", () => {
+    it("restores config from backup file", async () => {
+      const mockAccess = vi.fn().mockResolvedValue(undefined);
+      const mockCopyFile = vi.fn().mockResolvedValue(undefined);
+
+      vi.doMock("node:fs/promises", () => ({
+        default: {
+          access: mockAccess,
+          copyFile: mockCopyFile,
+        },
+      }));
+
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "restore"]);
+
+      expect(mockCopyFile).toHaveBeenCalledWith(
+        expect.stringContaining(".bak"),
+        expect.stringContaining("openclaw.json")
+      );
+    });
+  });
 });

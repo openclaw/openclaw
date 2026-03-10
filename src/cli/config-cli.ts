@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -6,6 +7,7 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { danger, info, success } from "../globals.js";
+import { emitGatewayRestart } from "../infra/restart.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -341,6 +343,54 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
+export async function runConfigRestore(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const configPath = CONFIG_PATH ?? "openclaw.json";
+  const backupPath = `${configPath}.bak`;
+  const shortBackupPath = shortenHomePath(backupPath);
+
+  try {
+    // Check if backup file exists
+    try {
+      await fs.access(backupPath);
+    } catch {
+      runtime.error(danger(`Backup file not found: ${shortBackupPath}`));
+      runtime.exit(1);
+      return;
+    }
+
+    // Copy backup to main config
+    await fs.copyFile(backupPath, configPath);
+
+    // Validate restored config
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      const issues = normalizeConfigIssues(snapshot.issues);
+      runtime.error(danger(`Restored config is invalid:`));
+      for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
+        runtime.error(`  ${line}`);
+      }
+      runtime.error("");
+      runtime.error(formatDoctorHint("to repair the restored config."));
+      runtime.exit(1);
+      return;
+    }
+
+    runtime.log(success(`Config restored from backup: ${shortBackupPath}`));
+
+    // Auto-restart gateway
+    const restarted = emitGatewayRestart();
+    if (restarted) {
+      runtime.log(info("Gateway is restarting..."));
+    } else {
+      runtime.log(info("Restart the gateway manually to apply the restored configuration."));
+    }
+  } catch (err) {
+    runtime.error(danger(`Config restore failed: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
@@ -472,5 +522,12 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
       await runConfigValidate({ json: Boolean(opts.json) });
+    });
+
+  cmd
+    .command("restore")
+    .description("Restore config from the latest backup (.bak file)")
+    .action(async () => {
+      await runConfigRestore();
     });
 }
