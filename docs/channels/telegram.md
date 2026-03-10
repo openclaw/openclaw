@@ -187,16 +187,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
       groups: {
         "-1001234567890": {
           requireMention: true,
+          allowFrom: ["8734062810", "745123456"],
         },
       },
-      groupAllowFrom: ["8734062810", "745123456"],
     },
   },
 }
 ```
 
     <Warning>
-      Common mistake: `groupAllowFrom` is not a Telegram group whitelist.
+      Common mistake: `groupAllowFrom` is not a Telegram group allowlist.
 
       - Put negative Telegram group or supergroup chat IDs like `-1001234567890` under `channels.telegram.groups`.
       - Put Telegram user IDs like `8734062810` under `groupAllowFrom` when you want to limit which people inside an allowed group can trigger the bot.
