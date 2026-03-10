@@ -88,6 +88,7 @@ struct OpenClawChatComposer: View {
             Text("Low").tag("low")
             Text("Medium").tag("medium")
             Text("High").tag("high")
+            Text("Adaptive").tag("adaptive")
         }
         .labelsHidden()
         .pickerStyle(.menu)
