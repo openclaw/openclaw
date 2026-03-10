@@ -123,11 +123,11 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
       Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
         ? ctx.InboundHistory.length
         : undefined,
-    // Marker to indicate this metadata uses the new separator format.
-    // Used by stripInboundMetadata to avoid stripping legacy user content.
-    _sep: true,
   };
+  // Only add the separator marker if we have actual conversation info to emit.
+  // This avoids making the metadata block unconditionally present.
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
+    (conversationInfo as Record<string, unknown>)._sep = true;
     blocks.push(
       [
         "Conversation info (untrusted metadata):",
