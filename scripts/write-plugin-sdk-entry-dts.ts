@@ -33,6 +33,7 @@ const entrypoints = [
   "matrix",
   "mattermost",
   "memory-core",
+  "mqtt-hooks",
   "memory-lancedb",
   "minimax-portal-auth",
   "nextcloud-talk",

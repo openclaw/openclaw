@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/mqtt-hooks",
+  "version": "2026.3.9",
+  "description": "OpenClaw MQTT ingress plugin",
+  "type": "module",
+  "dependencies": {
+    "mqtt": "^5.15.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.8"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/mqtt-hooks",
+      "localPath": "extensions/mqtt-hooks",
+      "defaultChoice": "npm"
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "mqtt"
+      ]
+    }
+  }
+}

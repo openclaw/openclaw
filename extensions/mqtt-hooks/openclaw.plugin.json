@@ -1,0 +1,123 @@
+{
+  "id": "mqtt-hooks",
+  "name": "MQTT Hooks",
+  "description": "Consume MQTT events and route them through OpenClaw ingress actions.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["broker", "subscriptions"],
+    "properties": {
+      "broker": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string" },
+          "clientId": { "type": "string" },
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "keepaliveSeconds": { "type": "integer", "minimum": 1 },
+          "clean": { "type": "boolean" },
+          "reconnectPeriodMs": { "type": "integer", "minimum": 1 },
+          "connectTimeoutMs": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "runtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxPayloadBytes": { "type": "integer", "minimum": 1 },
+          "maxConcurrentMessages": { "type": "integer", "minimum": 1 },
+          "dedupeWindowMs": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "subscriptions": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "topic", "action"],
+          "properties": {
+            "id": { "type": "string" },
+            "enabled": { "type": "boolean" },
+            "topic": { "type": "string" },
+            "qos": { "type": "integer", "enum": [0, 1, 2] },
+            "ignoreRetainedOnStartup": { "type": "boolean" },
+            "action": { "type": "string", "enum": ["wake", "agent"] },
+            "name": { "type": "string" },
+            "agentId": { "type": "string" },
+            "sessionKey": { "type": "string" },
+            "wakeMode": { "type": "string", "enum": ["now", "next-heartbeat"] },
+            "deliver": { "type": "boolean" },
+            "channel": { "type": "string" },
+            "to": { "type": "string" },
+            "model": { "type": "string" },
+            "thinking": { "type": "string" },
+            "timeoutSeconds": { "type": "integer", "minimum": 1 },
+            "textTemplate": { "type": "string" },
+            "messageTemplate": { "type": "string" },
+            "semantic": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "description": { "type": "string" },
+                "messageClass": {
+                  "type": "string",
+                  "enum": ["telemetry", "alert", "state", "event"]
+                },
+                "entityName": { "type": "string" },
+                "location": { "type": "string" },
+                "payloadHint": { "type": "string" },
+                "fieldMap": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                },
+                "thresholdHint": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "high": { "type": "number" },
+                    "low": { "type": "number" }
+                  }
+                },
+                "intentHint": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "broker.url": {
+      "label": "Broker URL",
+      "help": "MQTT broker URL, for example mqtt://broker.local:1883 or wss://broker.example.com/mqtt."
+    },
+    "broker.clientId": {
+      "label": "Client ID"
+    },
+    "broker.username": {
+      "label": "Username"
+    },
+    "broker.password": {
+      "label": "Password",
+      "sensitive": true
+    },
+    "runtime.maxPayloadBytes": {
+      "label": "Max Payload Bytes",
+      "advanced": true
+    },
+    "runtime.maxConcurrentMessages": {
+      "label": "Max Concurrent Messages",
+      "advanced": true
+    },
+    "runtime.dedupeWindowMs": {
+      "label": "Dedupe Window (ms)",
+      "advanced": true
+    },
+    "subscriptions": {
+      "label": "Subscriptions"
+    }
+  }
+}
