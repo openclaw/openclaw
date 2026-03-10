@@ -2,6 +2,7 @@ import { createAccountActionGate } from "../channels/plugins/account-action-gate
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import { logDebug } from "../logger.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
@@ -74,12 +75,19 @@ export function resolveDiscordMaxLinesPerMessage(params: {
   accountId?: string | null;
 }): number | undefined {
   if (typeof params.discordConfig?.maxLinesPerMessage === "number") {
+    logDebug(
+      `[discord-maxlines] using discordConfig.maxLinesPerMessage=${params.discordConfig.maxLinesPerMessage} (accountId=${params.accountId})`,
+    );
     return params.discordConfig.maxLinesPerMessage;
   }
-  return resolveDiscordAccount({
+  const fromAccount = resolveDiscordAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   }).config.maxLinesPerMessage;
+  logDebug(
+    `[discord-maxlines] using account.config.maxLinesPerMessage=${fromAccount} (accountId=${params.accountId})`,
+  );
+  return fromAccount;
 }
 
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {

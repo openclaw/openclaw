@@ -114,4 +114,50 @@ describe("resolveDiscordMaxLinesPerMessage", () => {
 
     expect(resolved).toBe(80);
   });
+
+  it("returns undefined when no maxLinesPerMessage is configured anywhere", () => {
+    const resolved = resolveDiscordMaxLinesPerMessage({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "token-default" },
+            },
+          },
+        },
+      },
+      discordConfig: {},
+      accountId: "default",
+    });
+
+    expect(resolved).toBeUndefined();
+  });
+
+  // Regression test for #42224
+  it("correctly resolves maxLinesPerMessage when passed through provider flow", () => {
+    // Simulate the provider flow: resolveDiscordAccount -> account.config
+    const cfg = {
+      channels: {
+        discord: {
+          maxLinesPerMessage: 100,
+          textChunkLimit: 2000,
+          blockStreaming: true,
+          streaming: "off" as const,
+        },
+      },
+    };
+
+    // This is what provider.ts does
+    const account = resolveDiscordAccount({ cfg, accountId: "default" });
+    const discordCfg = account.config;
+
+    // This is what message-handler.process.ts does
+    const maxLinesPerMessage = resolveDiscordMaxLinesPerMessage({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: "default",
+    });
+
+    expect(maxLinesPerMessage).toBe(100);
+  });
 });

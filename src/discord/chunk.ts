@@ -1,4 +1,5 @@
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../auto-reply/chunk.js";
+import { logDebug } from "../logger.js";
 
 export type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
@@ -108,6 +109,10 @@ function splitLongLine(
 export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
+
+  logDebug(
+    `[discord-chunk] maxChars=${maxChars} maxLines=${maxLines} opts.maxLines=${opts.maxLines}`,
+  );
 
   const body = text ?? "";
   if (!body) {
