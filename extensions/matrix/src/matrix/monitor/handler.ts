@@ -699,7 +699,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               }
               return;
             }
-            const editEventId = await client.sendMessage(roomId, {
+            await client.sendMessage(roomId, {
               msgtype: "m.text",
               body: `* ${trimmedText}`,
               "m.new_content": {
@@ -711,7 +711,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 event_id: reasoningDraftState.messageId,
               },
             });
-            void editEventId;
           })
           .catch((err) => {
             runtime.error?.(`matrix reasoning draft update failed: ${String(err)}`);
