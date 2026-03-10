@@ -90,6 +90,13 @@ class MockAcpRemoteGateway {
       }
       beginSse();
       const session = this.sessions.get(sessionId);
+      const requestedCwd =
+        typeof request.params?.cwd === "string" && request.params.cwd.trim()
+          ? request.params.cwd.trim()
+          : undefined;
+      if (session && requestedCwd) {
+        session.cwd = requestedCwd;
+      }
       if (session?.history.length) {
         for (const notification of session.history) {
           writeSse(notification);
@@ -99,6 +106,7 @@ class MockAcpRemoteGateway {
         jsonrpc: "2.0",
         id: request.id,
         result: {
+          cwd: session?.cwd,
           modes: session?.currentModeId
             ? {
                 currentModeId: session.currentModeId,
@@ -124,8 +132,13 @@ class MockAcpRemoteGateway {
 
     if (request.method === "session/new") {
       const sessionId = String(request.params?._meta?.openclawSessionId ?? "");
+      const cwd =
+        typeof request.params?.cwd === "string" && request.params.cwd.trim()
+          ? request.params.cwd.trim()
+          : this.fallbackCwd;
       this.newCalls.push(sessionId);
       this.sessions.set(sessionId, {
+        cwd,
         currentModeId: undefined,
         configOptions: {},
         history: [],
@@ -135,6 +148,7 @@ class MockAcpRemoteGateway {
         id: request.id,
         result: {
           sessionId,
+          cwd,
         },
       });
       return;
@@ -312,9 +326,11 @@ class MockAcpRemoteGateway {
   protocolVersion = ACP_REMOTE_PROTOCOL_VERSION;
   loadSession = true;
   dropFirstPromptAttempt = false;
+  fallbackCwd = "/home/remote";
   readonly sessions = new Map<
     string,
     {
+      cwd: string;
       currentModeId?: string;
       configOptions: Record<string, string>;
       history: unknown[];
@@ -372,12 +388,18 @@ afterEach(async () => {
   }
 });
 
-async function createRuntime(params: { gateway?: MockAcpRemoteGateway } = {}) {
+async function createRuntime(
+  params: {
+    gateway?: MockAcpRemoteGateway;
+    config?: { defaultCwd?: string };
+  } = {},
+) {
   const gateway = params.gateway ?? new MockAcpRemoteGateway();
   const url = await gateway.start();
   servers.push(gateway);
   const runtime = new AcpRemoteRuntime({
     url,
+    defaultCwd: params.config?.defaultCwd,
     headers: {},
     timeoutMs: 5_000,
     retryDelayMs: 1,
@@ -448,6 +470,85 @@ describe("AcpRemoteRuntime", () => {
     expect(gateway.loadCalls).toEqual(["agent:codex:acp:stable", "agent:codex:acp:stable"]);
     expect(gateway.newCalls).toEqual(["agent:codex:acp:stable"]);
     expect(new Set(clientIds)).toEqual(new Set([decoded?.clientId]));
+  });
+
+  it("uses configured defaultCwd when callers omit cwd", async () => {
+    const { runtime, gateway } = await createRuntime({
+      config: {
+        defaultCwd: "/srv/openclaw",
+      },
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:default-cwd",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const decoded = decodeAcpRemoteHandleState(handle.runtimeSessionName);
+    const sessionLoadRequest = gateway.requests.find(
+      (entry) => entry.request.method === "session/load",
+    );
+    const sessionNewRequest = gateway.requests.find(
+      (entry) => entry.request.method === "session/new",
+    );
+
+    expect(sessionLoadRequest?.request.params?.cwd).toBeUndefined();
+    expect(sessionNewRequest?.request.params?.cwd).toBe("/srv/openclaw");
+    expect(handle.cwd).toBe("/srv/openclaw");
+    expect(decoded?.cwd).toBe("/srv/openclaw");
+  });
+
+  it("omits cwd on the wire and uses the remote fallback when no cwd is configured", async () => {
+    const { runtime, gateway } = await createRuntime();
+
+    const first = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:remote-fallback",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const second = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:remote-fallback",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const sessionRequests = gateway.requests.filter((entry) =>
+      ["session/new", "session/load"].includes(String(entry.request.method)),
+    );
+
+    expect(sessionRequests.every((entry) => entry.request.params?.cwd === undefined)).toBe(true);
+    expect(first.cwd).toBe(gateway.fallbackCwd);
+    expect(second.cwd).toBe(gateway.fallbackCwd);
+    expect(decodeAcpRemoteHandleState(second.runtimeSessionName)?.cwd).toBe(gateway.fallbackCwd);
+  });
+
+  it("preserves an existing remote cwd on load when callers omit cwd", async () => {
+    const gateway = new MockAcpRemoteGateway();
+    gateway.sessions.set("agent:codex:acp:preserve-cwd", {
+      cwd: "/srv/existing-session",
+      currentModeId: undefined,
+      configOptions: {},
+      history: [],
+    });
+    const { runtime } = await createRuntime({
+      gateway,
+      config: {
+        defaultCwd: "/srv/openclaw",
+      },
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:preserve-cwd",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const loadRequest = gateway.requests.find((entry) => entry.request.method === "session/load");
+
+    expect(loadRequest?.request.params?.cwd).toBeUndefined();
+    expect(gateway.newCalls).toEqual([]);
+    expect(handle.cwd).toBe("/srv/existing-session");
+    expect(decodeAcpRemoteHandleState(handle.runtimeSessionName)?.cwd).toBe(
+      "/srv/existing-session",
+    );
   });
 
   it("uses Streamable HTTP headers and omits private transport markers", async () => {

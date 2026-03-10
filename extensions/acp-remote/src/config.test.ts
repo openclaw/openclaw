@@ -23,6 +23,7 @@ describe("acp-remote plugin config parsing", () => {
     const resolved = resolveAcpRemotePluginConfig({
       rawConfig: {
         url: "http://127.0.0.1:8787/acp",
+        defaultCwd: "/srv/openclaw",
         headers: {
           Authorization: "Bearer test",
         },
@@ -32,6 +33,7 @@ describe("acp-remote plugin config parsing", () => {
       },
     });
 
+    expect(resolved.defaultCwd).toBe("/srv/openclaw");
     expect(resolved.headers).toEqual({
       Authorization: "Bearer test",
     });
@@ -51,6 +53,17 @@ describe("acp-remote plugin config parsing", () => {
         },
       }),
     ).toThrow("headers must be an object of string values");
+  });
+
+  it("rejects relative defaultCwd values", () => {
+    expect(() =>
+      resolveAcpRemotePluginConfig({
+        rawConfig: {
+          url: "http://127.0.0.1:8787/acp",
+          defaultCwd: "relative/path",
+        },
+      }),
+    ).toThrow("defaultCwd must be an absolute path");
   });
 
   it("schema rejects malformed URLs", () => {

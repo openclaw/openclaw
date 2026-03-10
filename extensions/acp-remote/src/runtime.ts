@@ -50,13 +50,13 @@ type AcpRemoteHandleState = {
   sessionId: string;
   sessionKey: string;
   clientId: string;
-  cwd: string;
+  cwd?: string;
   mode: AcpRuntimeEnsureInput["mode"];
 };
 
 type AcpRemoteSessionState = {
   clientId: string;
-  cwd: string;
+  cwd?: string;
   mode: AcpRuntimeEnsureInput["mode"];
   currentModeId?: string;
   configOptions: Record<string, string>;
@@ -139,7 +139,7 @@ export function decodeAcpRemoteHandleState(
     const clientId = normalizeText(parsed.clientId);
     const cwd = normalizeText(parsed.cwd);
     const mode = parsed.mode;
-    if (!sessionId || !sessionKey || !clientId || !cwd) {
+    if (!sessionId || !sessionKey || !clientId) {
       return null;
     }
     if (mode !== "persistent" && mode !== "oneshot") {
@@ -174,6 +174,24 @@ function sleep(ms: number): Promise<void> {
 function buildStableClientId(sessionKey: string): string {
   const digest = createHash("sha256").update(sessionKey).digest("hex").slice(0, 24);
   return `openclaw:${digest}`;
+}
+
+function buildSessionInitParams(params: {
+  sessionId?: string;
+  cwd?: string;
+  clientId: string;
+  sessionKey: string;
+}): Record<string, unknown> {
+  return {
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    mcpServers: [],
+    _meta: {
+      openclawClientId: params.clientId,
+      openclawSessionId: params.sessionKey,
+      openclawSessionKey: params.sessionKey,
+    },
+  };
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -225,6 +243,13 @@ function readCurrentModeId(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeText(value.currentModeId);
+}
+
+function readSessionCwd(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return normalizeText(value.cwd);
 }
 
 function readConfigOptionValues(value: unknown): Record<string, string> {
@@ -332,6 +357,7 @@ export class AcpRemoteRuntime implements AcpRuntime {
     const sessionState = this.sessionStateBySessionId.get(state.sessionId);
     const currentModeId = sessionState?.currentModeId;
     const configOptions = sessionState?.configOptions ?? {};
+    const cwd = sessionState?.cwd ?? state.cwd;
     return {
       summary: currentModeId
         ? `remote ACP session ready (${currentModeId})`
@@ -339,8 +365,8 @@ export class AcpRemoteRuntime implements AcpRuntime {
       backendSessionId: state.sessionId,
       details: {
         url: this.config.url,
-        cwd: sessionState?.cwd ?? state.cwd,
         clientId: sessionState?.clientId ?? state.clientId,
+        ...(cwd ? { cwd } : {}),
         ...(currentModeId ? { currentModeId } : {}),
         ...(Object.keys(configOptions).length > 0 ? { configOptions } : {}),
       },
@@ -353,50 +379,46 @@ export class AcpRemoteRuntime implements AcpRuntime {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    const cwd = normalizeText(input.cwd) ?? process.cwd();
     const sessionId = sessionKey;
     const existing = this.sessionStateBySessionId.get(sessionId);
     const clientId = existing?.clientId ?? buildStableClientId(sessionKey);
+    const explicitCwd = normalizeText(input.cwd);
+    let effectiveCwd = existing?.cwd;
 
     try {
       const result = await this.request<Record<string, unknown> | null>({
         method: "session/load",
         id: `load:${sessionId}`,
-        params: {
+        params: buildSessionInitParams({
           sessionId,
-          cwd,
-          mcpServers: [],
-          _meta: this.buildMeta({
-            openclawClientId: clientId,
-            openclawSessionId: sessionId,
-            openclawSessionKey: sessionKey,
-          }),
-        },
+          cwd: explicitCwd,
+          clientId,
+          sessionKey,
+        }),
       });
+      const loadedCwd = readSessionCwd(result) ?? existing?.cwd ?? explicitCwd;
       this.upsertSessionState(sessionId, {
         clientId,
-        cwd,
+        cwd: loadedCwd,
         mode: input.mode,
       });
       this.applyRemoteSessionMetadata(sessionId, result);
+      effectiveCwd = this.sessionStateBySessionId.get(sessionId)?.cwd ?? loadedCwd;
     } catch (error) {
       if (!this.isMissingSessionError(error)) {
         throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", toMessageText(error), {
           cause: error,
         });
       }
+      const createCwd = explicitCwd ?? this.config.defaultCwd;
       const result = await this.request<Record<string, unknown>>({
         method: "session/new",
         id: `new:${sessionId}`,
-        params: {
-          cwd,
-          mcpServers: [],
-          _meta: this.buildMeta({
-            openclawClientId: clientId,
-            openclawSessionId: sessionId,
-            openclawSessionKey: sessionKey,
-          }),
-        },
+        params: buildSessionInitParams({
+          cwd: createCwd,
+          clientId,
+          sessionKey,
+        }),
       });
       const returnedSessionId = normalizeText(result.sessionId);
       if (!returnedSessionId) {
@@ -411,12 +433,21 @@ export class AcpRemoteRuntime implements AcpRuntime {
           `ACP remote session/new returned sessionId "${returnedSessionId}" but OpenClaw requires stable sessionId "${sessionId}".`,
         );
       }
+      const createdCwd = readSessionCwd(result) ?? createCwd;
       this.upsertSessionState(sessionId, {
         clientId,
-        cwd,
+        cwd: createdCwd,
         mode: input.mode,
       });
       this.applyRemoteSessionMetadata(sessionId, result);
+      effectiveCwd = this.sessionStateBySessionId.get(sessionId)?.cwd ?? createdCwd;
+    }
+
+    if (!effectiveCwd) {
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "ACP remote session did not resolve an effective working directory.",
+      );
     }
 
     return {
@@ -426,10 +457,10 @@ export class AcpRemoteRuntime implements AcpRuntime {
         sessionId,
         sessionKey,
         clientId,
-        cwd,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         mode: input.mode,
       }),
-      cwd,
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
       backendSessionId: sessionId,
     };
   }
@@ -708,12 +739,12 @@ export class AcpRemoteRuntime implements AcpRuntime {
 
   private upsertSessionState(
     sessionId: string,
-    patch: Pick<AcpRemoteSessionState, "clientId" | "cwd" | "mode">,
+    patch: Pick<AcpRemoteSessionState, "clientId" | "mode"> & { cwd?: string },
   ): void {
     const current = this.sessionStateBySessionId.get(sessionId);
     this.sessionStateBySessionId.set(sessionId, {
       clientId: patch.clientId,
-      cwd: patch.cwd,
+      cwd: patch.cwd ?? current?.cwd,
       mode: patch.mode,
       currentModeId: current?.currentModeId,
       configOptions: { ...(current?.configOptions ?? {}) },
@@ -724,6 +755,10 @@ export class AcpRemoteRuntime implements AcpRuntime {
     const state = this.sessionStateBySessionId.get(sessionId);
     if (!state || !isRecord(value)) {
       return;
+    }
+    const resolvedCwd = normalizeText(value.cwd);
+    if (resolvedCwd) {
+      state.cwd = resolvedCwd;
     }
     const currentModeId =
       readCurrentModeId(value.modes) ?? readCurrentModeId(value.currentMode) ?? state.currentModeId;

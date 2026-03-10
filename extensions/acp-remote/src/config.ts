@@ -1,9 +1,11 @@
+import { isAbsolute } from "node:path";
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acp";
 
 export const ACP_REMOTE_PROTOCOL_VERSION = 1;
 
 export type AcpRemotePluginConfig = {
   url?: string;
+  defaultCwd?: string;
   headers?: Record<string, string>;
   timeoutSeconds?: number;
   retryDelayMs?: number;
@@ -12,6 +14,7 @@ export type AcpRemotePluginConfig = {
 
 export type ResolvedAcpRemotePluginConfig = {
   url: string;
+  defaultCwd?: string;
   headers: Record<string, string>;
   timeoutMs: number;
   retryDelayMs: number;
@@ -54,6 +57,7 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
 
   const allowedKeys = new Set([
     "url",
+    "defaultCwd",
     "headers",
     "timeoutSeconds",
     "retryDelayMs",
@@ -73,6 +77,16 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
     new URL(url);
   } catch {
     return { ok: false, message: "url must be a valid absolute URL" };
+  }
+
+  const defaultCwd = normalizeText(value.defaultCwd);
+  if (value.defaultCwd !== undefined) {
+    if (!defaultCwd) {
+      return { ok: false, message: "defaultCwd must be a non-empty string" };
+    }
+    if (!isAbsolute(defaultCwd)) {
+      return { ok: false, message: "defaultCwd must be an absolute path" };
+    }
   }
 
   const headers = value.headers;
@@ -108,6 +122,7 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
     ok: true,
     value: {
       url,
+      defaultCwd,
       headers: headers as Record<string, string> | undefined,
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       retryDelayMs: typeof retryDelayMs === "number" ? retryDelayMs : undefined,
@@ -141,6 +156,7 @@ export function createAcpRemotePluginConfigSchema(): OpenClawPluginConfigSchema 
       required: ["url"],
       properties: {
         url: { type: "string" },
+        defaultCwd: { type: "string" },
         headers: {
           type: "object",
           additionalProperties: { type: "string" },
@@ -167,6 +183,7 @@ export function resolveAcpRemotePluginConfig(params: {
   const normalized = parsed.value ?? {};
   return {
     url: new URL(normalized.url ?? "").toString(),
+    defaultCwd: normalized.defaultCwd,
     headers: { ...(normalized.headers ?? {}) },
     timeoutMs: Math.round((normalized.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000),
     retryDelayMs: Math.max(0, Math.round(normalized.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS)),

@@ -9,6 +9,9 @@
       "url": {
         "type": "string"
       },
+      "defaultCwd": {
+        "type": "string"
+      },
       "headers": {
         "type": "object",
         "additionalProperties": {
@@ -35,6 +38,10 @@
     "url": {
       "label": "Gateway URL",
       "help": "HTTP endpoint that accepts ACP JSON-RPC requests over Streamable HTTP and returns JSON or SSE responses."
+    },
+    "defaultCwd": {
+      "label": "Default Working Directory",
+      "help": "Optional absolute path to use on the remote host when callers omit cwd. If unset, the remote gateway falls back to its home directory."
     },
     "headers": {
       "label": "HTTP Headers",
