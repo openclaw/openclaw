@@ -1,12 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   createWebhookInFlightLimiter,
   createReplyPrefixOptions,
   registerWebhookTargetWithPluginRoute,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
-} from "openclaw/plugin-sdk/googlechat";
+} from "openclaw/plugin-sdk";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -90,11 +90,17 @@ export async function handleGoogleChatWebhookRequest(
 }
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
-  const eventType = event.type ?? (event as { eventType?: string }).eventType;
-  if (eventType !== "MESSAGE") {
+  const eventType = event.type ?? (event as any).eventType;
+  if (eventType !== "MESSAGE" && eventType !== "ADDED_TO_SPACE") {
     return;
   }
-  if (!event.message || !event.space) {
+  if (!event.space) {
+    return;
+  }
+  if (eventType === "ADDED_TO_SPACE" && !event.message) {
+    return;
+  }
+  if (!event.message) {
     return;
   }
 
@@ -131,6 +137,20 @@ function resolveBotDisplayName(params: {
   return "OpenClaw";
 }
 
+// Deduplication cache: prevents processing the same message twice
+// (Google Chat / Add-ons can sometimes deliver the same event more than once)
+const recentlyProcessedMessages = new Map<string, number>();
+const DEDUP_TTL_MS = 60_000; // 60 seconds
+
+function pruneDedup(): void {
+  const now = Date.now();
+  for (const [key, ts] of recentlyProcessedMessages) {
+    if (now - ts > DEDUP_TTL_MS) {
+      recentlyProcessedMessages.delete(key);
+    }
+  }
+}
+
 async function processMessageWithPipeline(params: {
   event: GoogleChatEvent;
   account: ResolvedGoogleChatAccount;
@@ -151,8 +171,23 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
+
+  // Dedup: skip if we already processed this exact message recently
+  const msgId = message.name ?? "";
+  if (msgId) {
+    pruneDedup();
+    if (recentlyProcessedMessages.has(msgId)) {
+      logVerbose(
+        core,
+        runtime,
+        `skipping duplicate message: ${msgId} (already processed within ${DEDUP_TTL_MS}ms)`,
+      );
+      return;
+    }
+  }
+
   const spaceType = (space.type ?? "").toUpperCase();
-  const isGroup = spaceType !== "DM";
+  const isGroup = spaceType !== "DM" && spaceType !== "DIRECT_MESSAGE";
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
@@ -221,7 +256,7 @@ async function processMessageWithPipeline(params: {
   }
 
   const fromLabel = isGroup
-    ? space.displayName || `space:${spaceId}`
+    ? `${senderName || "Unknown"} in ${space.displayName || `space:${spaceId}`}`
     : senderName || `user:${senderId}`;
   const { storePath, body } = buildEnvelope({
     channel: "Google Chat",
@@ -244,7 +279,7 @@ async function processMessageWithPipeline(params: {
     SenderName: senderName || undefined,
     SenderId: senderId,
     SenderUsername: senderEmail,
-    WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+    WasMentioned: isGroup ? effectiveWasMentioned : true,
     CommandAuthorized: commandAuthorized,
     Provider: "googlechat",
     Surface: "googlechat",
@@ -252,6 +287,7 @@ async function processMessageWithPipeline(params: {
     MessageSidFull: message.name,
     ReplyToId: message.thread?.name,
     ReplyToIdFull: message.thread?.name,
+    MessageThreadId: message.thread?.name,
     MediaPath: mediaPath,
     MediaType: mediaType,
     MediaUrl: mediaPath,
@@ -339,6 +375,11 @@ async function processMessageWithPipeline(params: {
       onModelSelected,
     },
   });
+
+  // Mark as processed only after successful dispatch
+  if (msgId) {
+    recentlyProcessedMessages.set(msgId, Date.now());
+  }
 }
 
 async function downloadAttachment(
@@ -380,6 +421,10 @@ async function deliverGoogleChatReply(params: {
     : payload.mediaUrl
       ? [payload.mediaUrl]
       : [];
+
+  if (payload.replyToId) {
+    logVerbose(core, runtime, `googlechat: delivery using replyToId=${payload.replyToId}`);
+  }
 
   if (mediaList.length > 0) {
     let suppressCaption = false;
@@ -448,6 +493,7 @@ async function deliverGoogleChatReply(params: {
     const chunkLimit = account.config.textChunkLimit ?? 4000;
     const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
     const chunks = core.channel.text.chunkMarkdownTextWithMode(payload.text, chunkLimit, chunkMode);
+
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       try {
@@ -471,6 +517,12 @@ async function deliverGoogleChatReply(params: {
         runtime.error?.(`Google Chat message send failed: ${String(err)}`);
       }
     }
+  } else {
+    logVerbose(
+      core,
+      runtime,
+      `Bot generated an empty response payload for space ${spaceId}, thread=${payload.replyToId}`,
+    );
   }
 }
 
