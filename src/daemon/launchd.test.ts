@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  shouldUseDetachedLaunchAgentRestart,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -18,6 +19,8 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
+  kickstartResponses: [] as Array<{ stdout: string; stderr: string; code: number }>,
+  spawnCalls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -49,7 +52,19 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
     }
+    if (call[0] === "kickstart" && state.kickstartResponses.length > 0) {
+      return state.kickstartResponses.shift()!;
+    }
     return { stdout: "", stderr: "", code: 0 };
+  }),
+}));
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn((file: string, args: string[], options: Record<string, unknown>) => {
+    state.spawnCalls.push({ file, args, options });
+    return {
+      unref: vi.fn(),
+    };
   }),
 }));
 
@@ -109,6 +124,8 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
+  state.kickstartResponses.length = 0;
+  state.spawnCalls.length = 0;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -304,8 +321,55 @@ describe("launchd install", () => {
     expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
-  it("restarts LaunchAgent with bootout-enable-bootstrap-kickstart order", async () => {
+  it("detects gateway service env as detached-restart context", () => {
+    expect(
+      shouldUseDetachedLaunchAgentRestart({
+        HOME: "/Users/test",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseDetachedLaunchAgentRestart({
+        HOME: "/Users/test",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "node",
+      }),
+    ).toBe(false);
+  });
+
+  it("restarts a loaded LaunchAgent with kickstart only", async () => {
     const env = createDefaultLaunchdEnv();
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const serviceId = `${domain}/${label}`;
+    const kickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
+    );
+
+    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout")).toBe(false);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootstrap")).toBe(false);
+    expect(state.launchctlCalls.some((c) => c[0] === "enable")).toBe(false);
+  });
+
+  it("bootstraps when kickstart reports the LaunchAgent is not loaded", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.kickstartResponses.push(
+      {
+        stdout: "",
+        stderr:
+          'Bad request. Could not find service "ai.openclaw.gateway" in domain for user gui: 501',
+        code: 1,
+      },
+      { stdout: "", stderr: "", code: 0 },
+    );
+
     await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
@@ -315,62 +379,48 @@ describe("launchd install", () => {
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
-    const bootoutIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootout" && c[1] === serviceId,
-    );
     const enableIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "enable" && c[1] === serviceId,
     );
     const bootstrapIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
-    const kickstartIndex = state.launchctlCalls.findIndex(
+    const kickstartCalls = state.launchctlCalls.filter(
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
     );
 
-    expect(bootoutIndex).toBeGreaterThanOrEqual(0);
     expect(enableIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
-    expect(bootoutIndex).toBeLessThan(enableIndex);
-    expect(enableIndex).toBeLessThan(bootstrapIndex);
-    expect(bootstrapIndex).toBeLessThan(kickstartIndex);
+    expect(kickstartCalls).toHaveLength(2);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout")).toBe(false);
   });
 
-  it("waits for previous launchd pid to exit before bootstrapping", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.printOutput = ["state = running", "pid = 4242"].join("\n");
-    const killSpy = vi.spyOn(process, "kill");
-    killSpy
-      .mockImplementationOnce(() => true)
-      .mockImplementationOnce(() => {
-        const err = new Error("no such process") as NodeJS.ErrnoException;
-        err.code = "ESRCH";
-        throw err;
-      });
+  it("uses a detached helper when restart is invoked from the managed gateway process tree", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    };
 
-    vi.useFakeTimers();
-    try {
-      const restartPromise = restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      });
-      await vi.advanceTimersByTimeAsync(250);
-      await restartPromise;
-      expect(killSpy).toHaveBeenCalledWith(4242, 0);
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const label = "ai.openclaw.gateway";
-      const bootoutIndex = state.launchctlCalls.findIndex(
-        (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
-      );
-      const bootstrapIndex = state.launchctlCalls.findIndex((c) => c[0] === "bootstrap");
-      expect(bootoutIndex).toBeGreaterThanOrEqual(0);
-      expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-      expect(bootoutIndex).toBeLessThan(bootstrapIndex);
-    } finally {
-      vi.useRealTimers();
-      killSpy.mockRestore();
-    }
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.spawnCalls).toHaveLength(1);
+    expect(state.spawnCalls[0]?.file).toBe("/bin/sh");
+    expect(state.spawnCalls[0]?.options).toEqual(
+      expect.objectContaining({
+        detached: true,
+        stdio: "ignore",
+      }),
+    );
+    expect(
+      Array.from(state.files.values()).some((content) =>
+        content.includes("launchctl kickstart -k"),
+      ),
+    ).toBe(true);
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
