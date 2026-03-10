@@ -300,6 +300,12 @@ function resolvePendingDeliveryRecoveryTargets(params: {
     if (!accountId) {
       continue;
     }
+    if (!configuredAccountSet.has(accountId)) {
+      // Avoid creating synthetic readiness targets (e.g. "default") when the
+      // channel has no configured accounts. Those targets can never appear in
+      // channelAccounts and only force the preflight to time out.
+      continue;
+    }
 
     const key = `${channel}:${accountId}`;
     if (!targets.has(key)) {
@@ -390,6 +396,10 @@ async function waitForPendingDeliveryChannelReadiness(params: {
     await sleepWithAbort(Math.min(pollMs, Math.max(1, deadline - now)), params.signal);
   }
 }
+
+export const __testing = {
+  resolvePendingDeliveryRecoveryTargets,
+};
 
 export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
