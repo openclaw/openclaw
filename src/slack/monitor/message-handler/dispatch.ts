@@ -306,6 +306,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const draftChannelId = draftStream?.channelId();
       const finalText = payload.text;
       const canFinalizeViaPreviewEdit =
+        !previewEditDone &&
         previewStreamingEnabled &&
         streamMode !== "status_final" &&
         mediaCount === 0 &&
@@ -317,6 +318,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       if (canFinalizeViaPreviewEdit) {
         draftStream?.stop();
+        await draftStream?.waitForInFlight();
         try {
           await ctx.app.client.chat.update({
             token: ctx.botToken,
@@ -324,6 +326,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: draftMessageId,
             text: normalizeSlackOutboundText(finalText.trim()),
           });
+          previewEditDone = true;
+          replyPlan.markSent();
           return;
         } catch (err) {
           logVerbose(
@@ -375,6 +379,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     warn: logVerbose,
   });
   let hasStreamedMessage = false;
+  let previewEditDone = false;
   const streamMode = slackStreaming.draftMode;
   let appendRenderedText = "";
   let appendSourceText = "";

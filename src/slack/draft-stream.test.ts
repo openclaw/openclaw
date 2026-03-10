@@ -122,6 +122,19 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("waitForInFlight resolves after in-flight send completes", async () => {
+    const { stream, send } = createDraftStreamHarness();
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+
+    // After flush, in-flight is settled — waitForInFlight should resolve immediately.
+    await stream.waitForInFlight();
+    expect(stream.messageId()).toBe("111.222");
+  });
+
   it("clear warns when cleanup fails", async () => {
     const remove = vi.fn<DraftRemoveFn>(async () => {
       throw new Error("cleanup failed");
