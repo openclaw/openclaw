@@ -386,7 +386,13 @@ export function normalizeProviders(params: {
         const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
         if (apiKey?.trim()) {
-          if (profileApiKey && profileApiKey.source !== "plaintext") {
+          // Mark as SecretRef-managed if:
+          // 1. API key comes from auth profile with non-plaintext source, OR
+          // 2. API key comes from environment variable (env-ref)
+          const isSecretRefManaged =
+            (profileApiKey && profileApiKey.source !== "plaintext") ||
+            (fromEnv && profileApiKey?.source === "env-ref");
+          if (isSecretRefManaged) {
             params.secretRefManagedProviders?.add(normalizedKey);
           }
           mutated = true;
