@@ -155,6 +155,42 @@ describe("ssrf pinning", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
+  it("allows mixed DNS responses with valid IPv4 + special-use IPv6 (dual-stack DNS pollution)", async () => {
+    // Simulates DNS returning a valid public IPv4 alongside a special-use IPv6 (e.g. "::")
+    // as commonly seen on dual-stack networks with DNS pollution. The request must succeed
+    // and the blocked IPv6 address must NOT appear in the pinned address pool.
+    const lookup = vi.fn(async () => [
+      { address: "142.251.37.14", family: 4 },
+      { address: "::", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostnameWithPolicy("www.google.com", { lookupFn: lookup });
+    expect(pinned.addresses).toEqual(["142.251.37.14"]);
+    expect(pinned.addresses).not.toContain("::");
+  });
+
+  it("rejects DNS responses where all addresses are blocked (pure-private response)", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "10.0.0.1", family: 4 },
+      { address: "::1", family: 6 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("evil.internal", { lookupFn: lookup }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it("strips blocked IPv6 addresses from the pinned pool when valid IPv4 is present", async () => {
+    // Teredo address (2001::/32) is blocked; valid IPv4 should be the only pinned address.
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "2001:0000:0:0:0:0:80ff:fefe", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostnameWithPolicy("example.com", { lookupFn: lookup });
+    expect(pinned.addresses).toEqual(["93.184.216.34"]);
+  });
+
   it("sorts IPv4 addresses before IPv6 in pinned results", async () => {
     const lookup = vi.fn(async () => [
       { address: "2001:db8::1", family: 6 },

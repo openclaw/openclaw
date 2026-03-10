@@ -180,16 +180,20 @@ function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy)
   }
 }
 
-function assertAllowedResolvedAddressesOrThrow(
+function filterAndAssertAllowedResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   policy?: SsrFPolicy,
-): void {
-  for (const entry of results) {
-    // Reuse the exact same host/IP classifier as the pre-DNS check to avoid drift.
-    if (isBlockedHostnameOrIp(entry.address, policy)) {
-      throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
-    }
+): LookupAddress[] {
+  // Filter out blocked addresses; require at least one valid address to proceed.
+  // This tolerates mixed DNS responses (e.g. valid IPv4 + special-use IPv6 from DNS
+  // pollution) while still blocking requests that resolve entirely to private/internal
+  // ranges. Blocked addresses are removed from the returned list so they never enter
+  // the pinned address pool and cannot be reached on retry.
+  const allowed = results.filter((entry) => !isBlockedHostnameOrIp(entry.address, policy));
+  if (allowed.length === 0) {
+    throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
   }
+  return allowed;
 }
 
 export function createPinnedLookup(params: {
@@ -303,14 +307,17 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
 
-  if (!skipPrivateNetworkChecks) {
-    // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
-    assertAllowedResolvedAddressesOrThrow(results, params.policy);
-  }
+  // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
+  // When not skipping checks, filter out blocked addresses and require at least one
+  // valid address to remain. Blocked entries are excluded from the pinned pool so they
+  // cannot be reached on retry (e.g. a stale round-robin tick).
+  const resolvedForPinning = skipPrivateNetworkChecks
+    ? results
+    : filterAndAssertAllowedResolvedAddressesOrThrow(results, params.policy);
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
   // families so Happy Eyeballs and pinned round-robin both attempt IPv4 first.
-  const addresses = dedupeAndPreferIpv4(results);
+  const addresses = dedupeAndPreferIpv4(resolvedForPinning);
   if (addresses.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
