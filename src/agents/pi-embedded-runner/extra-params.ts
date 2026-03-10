@@ -20,6 +20,7 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createCodexDefaultTransportWrapper,
+  createOpenAICompletionsContentFlattenWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
@@ -446,6 +447,11 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Flatten Anthropic-style content arrays to strings on assistant messages
+  // for openai-completions providers. Without this, multi-turn tool call
+  // sessions loop because providers reject the array content format.
+  agent.streamFn = createOpenAICompletionsContentFlattenWrapper(agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],

@@ -255,3 +255,48 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     return underlying(model, context, mergedOptions);
   };
 }
+
+/**
+ * Flatten assistant message content arrays to strings for openai-completions
+ * providers. The internal representation uses Anthropic-style content arrays
+ * (`[{ type: "text", text: "..." }]`) but the OpenAI chat-completions spec
+ * requires `content` to be a string (or null) on assistant messages that
+ * carry `tool_calls`. Without this, providers reject the payload or loop.
+ */
+export function createOpenAICompletionsContentFlattenWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload, payloadModel) => {
+        if (payload && typeof payload === "object") {
+          const messages = (payload as Record<string, unknown>).messages;
+          if (Array.isArray(messages)) {
+            for (const msg of messages as Array<{
+              role?: string;
+              content?: unknown;
+              tool_calls?: unknown;
+            }>) {
+              if (msg.role === "assistant" && Array.isArray(msg.content)) {
+                // Flatten content array to a concatenated string.
+                const parts = msg.content as Array<{ type?: string; text?: string }>;
+                const text = parts
+                  .filter((p) => p.type === "text" && typeof p.text === "string")
+                  .map((p) => p.text)
+                  .join("");
+                msg.content = text || null;
+              }
+            }
+          }
+        }
+        return originalOnPayload?.(payload, payloadModel);
+      },
+    });
+  };
+}
