@@ -57,6 +57,11 @@ vi.mock("node:net", () => ({
   getDefaultAutoSelectFamily,
 }));
 
+vi.mock("./proxy-env.js", () => ({
+  hasProxyEnvConfigured: vi.fn(() => false),
+}));
+
+import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciStreamTimeouts,
@@ -69,6 +74,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
+    vi.mocked(hasProxyEnvConfigured).mockReturnValue(false);
   });
 
   it("replaces default Agent dispatcher with extended stream timeouts", () => {
@@ -100,6 +106,23 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.connect).toEqual({
       autoSelectFamily: false,
+      autoSelectFamilyAttemptTimeout: 300,
+    });
+  });
+
+  it("upgrades default Agent dispatcher to EnvHttpProxyAgent when proxy env is configured", () => {
+    vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.connect).toEqual({
+      autoSelectFamily: true,
       autoSelectFamilyAttemptTimeout: 300,
     });
   });

@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { hasProxyEnvConfigured } from "./proxy-env.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -73,7 +74,9 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
     return;
   }
 
-  const kind = resolveDispatcherKind(dispatcher);
+  const currentKind = resolveDispatcherKind(dispatcher);
+  const kind =
+    currentKind === "agent" && hasProxyEnvConfigured() ? ("env-proxy" as const) : currentKind;
   if (kind === "unsupported") {
     return;
   }
