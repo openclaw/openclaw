@@ -139,6 +139,7 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
     };
 
     const desktopRecord = this.getDesktopRecord();
+    // The AOTUI runtime lock API is synchronous; execute() remains the async boundary.
     this.options.kernel.acquireLock(desktopRecord.desktopId, this.ownerId);
     try {
       const result = await this.options.kernel.execute(

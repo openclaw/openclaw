@@ -173,6 +173,7 @@ Create a new TODO item
 ### mark_complete
 Mark a TODO as completed
 
+\`\`\`
 
 ## Understanding Applications
 
