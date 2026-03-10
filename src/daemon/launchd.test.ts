@@ -336,6 +336,18 @@ describe("launchd install", () => {
         OPENCLAW_SERVICE_KIND: "node",
       }),
     ).toBe(false);
+    expect(
+      shouldUseDetachedLaunchAgentRestart({
+        HOME: "/Users/test",
+        XPC_SERVICE_NAME: "ai.openclaw.gateway",
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseDetachedLaunchAgentRestart({
+        HOME: "/Users/test",
+        XPC_SERVICE_NAME: "com.other.service",
+      }),
+    ).toBe(false);
   });
 
   it("restarts a loaded LaunchAgent with kickstart only", async () => {
@@ -416,11 +428,10 @@ describe("launchd install", () => {
         stdio: "ignore",
       }),
     );
-    expect(
-      Array.from(state.files.values()).some((content) =>
-        content.includes("launchctl kickstart -k"),
-      ),
-    ).toBe(true);
+    const [scriptPath, scriptContent] = Array.from(state.files.entries())[0] ?? [];
+    expect(scriptPath).toMatch(/openclaw-launchd-restart-[0-9a-f-]+\.sh$/);
+    expect(scriptContent).toContain("launchctl kickstart -k");
+    expect(scriptContent).toContain("grep -qiE 'no such process|could not find service|not found'");
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {

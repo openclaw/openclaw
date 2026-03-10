@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -393,17 +394,26 @@ async function prepareDetachedLaunchAgentRestartScript(
   plistPath: string,
 ): Promise<string | null> {
   try {
-    const scriptPath = path.join(os.tmpdir(), `openclaw-launchd-restart-${Date.now()}.sh`);
+    const scriptId = randomUUID();
+    const scriptPath = path.join(os.tmpdir(), `openclaw-launchd-restart-${scriptId}.sh`);
+    const kickstartErrPath = path.join(os.tmpdir(), `openclaw-launchd-kickstart-${scriptId}.log`);
     const escapedServiceId = shellEscape(serviceId);
     const escapedDomain = shellEscape(domain);
     const escapedPlistPath = shellEscape(plistPath);
+    const escapedKickstartErrPath = shellEscape(kickstartErrPath);
     const scriptContent = `#!/bin/sh
 sleep 1
-if ! launchctl kickstart -k '${escapedServiceId}' 2>/dev/null; then
+if launchctl kickstart -k '${escapedServiceId}' >'${escapedKickstartErrPath}' 2>&1; then
+  rm -f '${escapedKickstartErrPath}'
+  rm -f "$0"
+  exit 0
+fi
+if grep -qiE 'no such process|could not find service|not found' '${escapedKickstartErrPath}' 2>/dev/null; then
   launchctl enable '${escapedServiceId}' 2>/dev/null
   launchctl bootstrap '${escapedDomain}' '${escapedPlistPath}' 2>/dev/null
   launchctl kickstart -k '${escapedServiceId}' 2>/dev/null || true
 fi
+rm -f '${escapedKickstartErrPath}'
 rm -f "$0"
 `;
     await fs.writeFile(scriptPath, scriptContent, {
