@@ -343,6 +343,7 @@ export type SessionSystemPromptReport = {
   };
   systemPrompt: {
     chars: number;
+    tokens?: number;
     projectContextChars: number;
     nonProjectContextChars: number;
   };

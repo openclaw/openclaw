@@ -36,7 +36,8 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // See: https://github.com/openclaw/openclaw/issues/39760
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
-      if (!restart.ok) {
+      // Best-effort: if kickstart isn't supported in this environment, still treat as supervised.
+      if (restart && !restart.ok) {
         return {
           mode: "failed",
           detail: restart.detail ?? `${restart.method} restart failed`,
