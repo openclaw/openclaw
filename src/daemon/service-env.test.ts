@@ -118,6 +118,10 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
     expect(result).toContain("/Users/testuser/.bun/bin");
 
+    // Should include container runtime paths (Docker Desktop, OrbStack)
+    expect(result).toContain("/Users/testuser/.docker/bin");
+    expect(result).toContain("/Users/testuser/.orbstack/bin");
+
     // Should also include macOS system directories
     expect(result).toContain("/opt/homebrew/bin");
     expect(result).toContain("/usr/local/bin");

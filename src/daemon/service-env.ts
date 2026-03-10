@@ -149,6 +149,10 @@ export function resolveDarwinUserBinDirs(
   dirs.push(`${home}/Library/pnpm`); // pnpm default
   dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
 
+  // Container runtimes (Docker Desktop, OrbStack)
+  dirs.push(`${home}/.docker/bin`); // Docker Desktop
+  dirs.push(`${home}/.orbstack/bin`); // OrbStack
+
   return dirs;
 }
 
