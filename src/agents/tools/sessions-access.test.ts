@@ -61,6 +61,23 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
       }),
     ).toBe("all");
   });
+
+  it("falls back to default sandbox clamp when agentId override is missing", () => {
+    const cfg = {
+      tools: { sessions: { visibility: "all" } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: true,
+        agentId: "ghost",
+      }),
+    ).toBe("tree");
+  });
 });
 
 describe("sandbox session-tools context", () => {
