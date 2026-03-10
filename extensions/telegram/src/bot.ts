@@ -507,6 +507,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     groupAllowFrom,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
+    resolveGroupRequireMention,
+    resolveGroupActivation,
     shouldSkipUpdate,
     processMessage,
     logger,

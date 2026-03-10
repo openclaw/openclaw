@@ -30,7 +30,7 @@ import {
   readPendingInbound,
   readStaleActiveTurns,
 } from "../infra/pending-inbound-store.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEvent, MAX_EVENTS } from "../infra/system-events.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
@@ -155,6 +155,19 @@ export async function startGatewaySidecars(params: {
       // Consume-then-process: clear only inbound entries to prevent infinite retry on crash.
       // Active turns remain intact in the shared file.
       await clearPendingInboundEntries(stateDir);
+
+      // Per-session cap: system-event queue holds at most MAX_EVENTS entries.
+      // Reserve one slot for a "skipped" summary so we never silently drop events.
+      const REPLAY_CAP_PER_SESSION = MAX_EVENTS - 1;
+
+      // Phase 1: resolve sessionKey and eventText for every entry, collecting by session.
+      type ResolvedEntry = {
+        entry: (typeof pending)[number];
+        sessionKey: string;
+        eventText: string;
+      };
+      const bySession = new Map<string, ResolvedEntry[]>();
+
       for (const entry of pending) {
         try {
           const payload = entry.payload as {
@@ -183,17 +196,43 @@ export async function startGatewaySidecars(params: {
               : entry.channel === "discord"
                 ? `discord:channel:${payload.channelId ?? "unknown"}`
                 : `${entry.channel}:unknown`);
-          const eventText = `[pending-inbound] Missed message during restart from ${senderLabel}: "${textPreview || "(no text)"}"`;
+          // Include entry.id in the event text so that two identical messages sent during
+          // a drain window (same text, same sender) are never collapsed by enqueueSystemEvent's
+          // consecutive-duplicate guard.
+          const eventText = `[pending-inbound:${entry.id}] Missed message during restart from ${senderLabel}: "${textPreview || "(no text)"}"`;
+          const list = bySession.get(sessionKey) ?? [];
+          list.push({ entry, sessionKey, eventText });
+          bySession.set(sessionKey, list);
+        } catch (err) {
+          params.log.warn(
+            `pending-inbound: replay failed for ${entry.channel}:${entry.id}: ${String(err)}`,
+          );
+        }
+      }
+
+      // Phase 2: enqueue per-session, capping at REPLAY_CAP_PER_SESSION to avoid silent
+      // truncation when the session accumulates more than MAX_EVENTS during a long drain.
+      for (const [sessionKey, entries] of bySession) {
+        const skipped = Math.max(0, entries.length - REPLAY_CAP_PER_SESSION);
+        const toReplay = skipped > 0 ? entries.slice(skipped) : entries;
+
+        if (skipped > 0) {
+          params.log.warn(
+            `pending-inbound: ${skipped} older message(s) trimmed for session ${sessionKey} (queue cap)`,
+          );
+          enqueueSystemEvent(
+            `[pending-inbound] ${skipped} older message${skipped > 1 ? "s" : ""} skipped during restart (queue cap ${MAX_EVENTS})`,
+            { sessionKey },
+          );
+        }
+
+        for (const { entry, eventText } of toReplay) {
           enqueueSystemEvent(eventText, {
             sessionKey,
             contextKey: `pending-inbound:${entry.channel}:${entry.id}`,
           });
           params.log.warn(
             `pending-inbound: replayed ${entry.channel}:${entry.id} → session ${sessionKey}`,
-          );
-        } catch (err) {
-          params.log.warn(
-            `pending-inbound: replay failed for ${entry.channel}:${entry.id}: ${String(err)}`,
           );
         }
       }

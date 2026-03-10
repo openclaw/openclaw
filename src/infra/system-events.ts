@@ -4,7 +4,7 @@
 
 export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
 
-const MAX_EVENTS = 20;
+export const MAX_EVENTS = 20;
 
 type SessionQueue = {
   queue: SystemEvent[];

@@ -9,6 +9,7 @@ import {
   buildModelsProviderData,
   formatModelsAvailableHeader,
 } from "../auto-reply/reply/commands-models.js";
+import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
@@ -36,9 +37,10 @@ import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  firstDefined,
   isSenderAllowed,
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
@@ -57,6 +59,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  hasBotMention,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import {
@@ -138,6 +141,8 @@ export const registerTelegramHandlers = ({
   groupAllowFrom,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
+  resolveGroupRequireMention,
+  resolveGroupActivation,
   shouldSkipUpdate,
   processMessage,
   logger,
@@ -1697,6 +1702,15 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      // requireTopic gate: mirror buildTelegramMessageContext — DMs without a topic are
+      // blocked when requireTopic=true.  Apply before the drain guard so that messages
+      // that would be dropped in the normal path are never persisted to the pending store.
+      const requireTopicConfig = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
+      if (!event.isGroup && requireTopicConfig === true && dmThreadId == null) {
+        logVerbose(`Blocked telegram DM ${event.chatId}: requireTopic=true but no topic present`);
+        return;
+      }
+
       // Drain guard: only persist messages that passed the auth checks above.
       // Moved after authorization context, group policy, and DM access checks
       // so that unauthorized messages are never written to the pending store.
@@ -1716,6 +1730,20 @@ export const registerTelegramHandlers = ({
           senderId: event.senderId,
           topicAgentId: topicConfig?.agentId,
         });
+
+        // Named-account gate: groups with a non-default account require an explicit binding.
+        // Without one, the message would be dropped in buildTelegramMessageContext — mirror
+        // that check here so we never persist messages the session would discard anyway.
+        // DMs use a per-account fallback session key (not dropped), so this is groups-only.
+        const drainIsNamedAccountFallback =
+          drainRoute.accountId !== DEFAULT_ACCOUNT_ID && drainRoute.matchedBy === "default";
+        if (drainIsNamedAccountFallback && event.isGroup) {
+          logVerbose(
+            `Blocked drain: non-default account requires explicit binding for group ${event.chatId}`,
+          );
+          return;
+        }
+
         // Apply thread-scoped session key for DM topics — mirrors resolveTelegramSessionState.
         // dmThreadId is already resolved from eventAuthContext above.
         const drainBaseSessionKey = drainRoute.sessionKey;
@@ -1727,6 +1755,52 @@ export const registerTelegramHandlers = ({
               })
             : null;
         const drainSessionKey = drainThreadKeys?.sessionKey ?? drainBaseSessionKey;
+
+        // Mention gate: if the group requires a bot mention, verify the message contains one.
+        // This prevents flooding the pending-inbound store with messages the session would
+        // skip due to mention gating (mirrors buildTelegramMessageContext + resolveTelegramInboundBody).
+        if (event.isGroup) {
+          const activationOverride = resolveGroupActivation({
+            chatId: event.chatId,
+            messageThreadId: resolvedThreadId,
+            sessionKey: drainSessionKey,
+            agentId: drainRoute.agentId,
+          });
+          const baseRequireMention = resolveGroupRequireMention(event.chatId);
+          const drainRequireMention = firstDefined(
+            activationOverride,
+            topicConfig?.requireMention,
+            (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
+            baseRequireMention,
+          );
+          if (drainRequireMention) {
+            const mentionRegexes = buildMentionRegexes(cfg, drainRoute.agentId);
+            const botUsername = event.ctx.me?.username?.toLowerCase();
+            const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+            if (canDetectMention) {
+              const messageText = event.msg.text ?? event.msg.caption ?? "";
+              const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
+              const hasAnyMention = entities.some((e) => e.type === "mention");
+              const explicitlyMentioned = botUsername
+                ? hasBotMention(event.msg, botUsername)
+                : false;
+              const wasMentioned = matchesMentionWithExplicit({
+                text: messageText,
+                mentionRegexes,
+                explicit: {
+                  hasAnyMention,
+                  isExplicitlyMentioned: explicitlyMentioned,
+                  canResolveExplicit: Boolean(botUsername),
+                },
+              });
+              if (!wasMentioned) {
+                logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
+                return;
+              }
+            }
+          }
+        }
+
         await writePendingInbound(stateDir, {
           channel: "telegram",
           // Prefix with accountId to prevent collisions in multi-account deployments where two
