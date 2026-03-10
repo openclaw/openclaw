@@ -2,6 +2,23 @@ import { Type } from "@sinclair/typebox";
 import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
+export const AgentInternalEventSchema = Type.Object(
+  {
+    type: Type.Literal("task_completion"),
+    source: Type.String({ enum: ["subagent", "cron"] }),
+    childSessionKey: Type.String(),
+    childSessionId: Type.Optional(Type.String()),
+    announceType: Type.String(),
+    taskLabel: Type.String(),
+    status: Type.String({ enum: ["ok", "timeout", "error", "unknown"] }),
+    statusLabel: Type.String(),
+    result: Type.String(),
+    statsLine: Type.Optional(Type.String()),
+    replyInstruction: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentEventSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -78,10 +95,12 @@ export const AgentParamsSchema = Type.Object(
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
+    internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(
       Type.Object(
         {
           kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+          originSessionId: Type.Optional(Type.String()),
           sourceSessionKey: Type.Optional(Type.String()),
           sourceChannel: Type.Optional(Type.String()),
           sourceTool: Type.Optional(Type.String()),
@@ -92,6 +111,7 @@ export const AgentParamsSchema = Type.Object(
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(Type.String()),
+    workspaceDir: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

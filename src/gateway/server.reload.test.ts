@@ -175,12 +175,14 @@ describe("gateway hot reload", () => {
   let prevSkipGmail: string | undefined;
   let prevSkipProviders: string | undefined;
   let prevOpenAiApiKey: string | undefined;
+  let prevGeminiApiKey: string | undefined;
 
   beforeEach(() => {
     prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     prevOpenAiApiKey = process.env.OPENAI_API_KEY;
+    prevGeminiApiKey = process.env.GEMINI_API_KEY;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -207,6 +209,11 @@ describe("gateway hot reload", () => {
     } else {
       process.env.OPENAI_API_KEY = prevOpenAiApiKey;
     }
+    if (prevGeminiApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = prevGeminiApiKey;
+    }
   });
 
   async function writeEnvRefConfig() {
@@ -225,6 +232,69 @@ describe("gateway hot reload", () => {
                 apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
                 models: [],
               },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeDisabledSurfaceRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          channels: {
+            telegram: {
+              enabled: false,
+              botToken: { source: "env", provider: "default", id: "DISABLED_TELEGRAM_STARTUP_REF" },
+            },
+          },
+          tools: {
+            web: {
+              search: {
+                enabled: false,
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "DISABLED_WEB_SEARCH_STARTUP_REF",
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeGatewayTokenRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_STARTUP_GW_TOKEN" },
             },
           },
         },
@@ -257,6 +327,34 @@ describe("gateway hot reload", () => {
           selectedProfileId: "missing",
           lastUsedProfileByModel: {},
           usageStats: {},
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeWebSearchGeminiRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+                provider: "gemini",
+                gemini: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+                },
+              },
+            },
+          },
         },
         null,
         2,
@@ -387,6 +485,28 @@ describe("gateway hot reload", () => {
     );
   });
 
+  it("allows startup when unresolved refs exist only on disabled surfaces", async () => {
+    await writeDisabledSurfaceRefConfig();
+    delete process.env.DISABLED_TELEGRAM_STARTUP_REF;
+    delete process.env.DISABLED_WEB_SEARCH_STARTUP_REF;
+    await expect(withGatewayServer(async () => {})).resolves.toBeUndefined();
+  });
+
+  it("honors startup auth overrides before secret preflight gating", async () => {
+    await writeGatewayTokenRefConfig();
+    delete process.env.MISSING_STARTUP_GW_TOKEN;
+    await expect(
+      withGatewayServer(async () => {}, {
+        serverOptions: {
+          auth: {
+            mode: "password",
+            password: "override-password", // pragma: allowlist secret
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("fails startup when auth-profile secret refs are unresolved", async () => {
     await writeAuthProfileEnvRefStore();
     delete process.env.MISSING_OPENCLAW_AUTH_REF;
@@ -401,7 +521,7 @@ describe("gateway hot reload", () => {
 
   it("emits one-shot degraded and recovered system events during secret reload transitions", async () => {
     await writeEnvRefConfig();
-    process.env.OPENAI_API_KEY = "sk-startup";
+    process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret
 
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
@@ -446,7 +566,65 @@ describe("gateway hot reload", () => {
       );
       expect(drainSystemEvents(sessionKey)).toEqual([]);
 
-      process.env.OPENAI_API_KEY = "sk-recovered";
+      process.env.OPENAI_API_KEY = "sk-recovered"; // pragma: allowlist secret
+      await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
+      const recoveredEvents = drainSystemEvents(sessionKey);
+      expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
+        true,
+      );
+    });
+  });
+
+  it("emits one-shot degraded and recovered system events for web search secret reload transitions", async () => {
+    await writeWebSearchGeminiRefConfig();
+    process.env.GEMINI_API_KEY = "gemini-startup-key"; // pragma: allowlist secret
+
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+      const sessionKey = resolveMainSessionKeyFromConfig();
+      const plan = {
+        changedPaths: ["tools.web.search.gemini.apiKey"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["tools.web.search.gemini.apiKey"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartBrowserControl: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartChannels: new Set(),
+        noopPaths: [],
+      };
+      const nextConfig = {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      };
+
+      delete process.env.GEMINI_API_KEY;
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      );
+      const degradedEvents = drainSystemEvents(sessionKey);
+      expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
+        true,
+      );
+
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      );
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
+
+      process.env.GEMINI_API_KEY = "gemini-recovered-key"; // pragma: allowlist secret
       await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
       const recoveredEvents = drainSystemEvents(sessionKey);
       expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
@@ -457,7 +635,7 @@ describe("gateway hot reload", () => {
 
   it("serves secrets.reload immediately after startup without race failures", async () => {
     await writeEnvRefConfig();
-    process.env.OPENAI_API_KEY = "sk-startup";
+    process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret
     const { server, ws } = await startServerWithClient();
     try {
       await connectOk(ws);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -8,6 +9,7 @@ const ROOT_SECTIONS = [
   "wizard",
   "diagnostics",
   "logging",
+  "cli",
   "update",
   "browser",
   "ui",
@@ -108,6 +110,10 @@ const TARGET_KEYS = [
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.retry",
+  "cron.retry.maxAttempts",
+  "cron.retry.backoffMs",
+  "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
@@ -261,6 +267,7 @@ const TARGET_KEYS = [
   "browser.noSandbox",
   "browser.profiles",
   "browser.profiles.*.driver",
+  "browser.profiles.*.attachOnly",
   "tools",
   "tools.allow",
   "tools.deny",
@@ -298,6 +305,7 @@ const TARGET_KEYS = [
   "talk.modelId",
   "talk.outputFormat",
   "talk.interruptOnSpeech",
+  "talk.silenceTimeoutMs",
   "meta",
   "env",
   "env.shellEnv",
@@ -332,6 +340,8 @@ const TARGET_KEYS = [
   "plugins.slots",
   "plugins.entries",
   "plugins.entries.*.enabled",
+  "plugins.entries.*.hooks",
+  "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
@@ -363,6 +373,12 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.maxHistoryShare",
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.recentTurnsPreserve",
+  "agents.defaults.compaction.qualityGuard",
+  "agents.defaults.compaction.qualityGuard.enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.postCompactionSections",
+  "agents.defaults.compaction.model",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -399,7 +415,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"clawd"', '"extension"'],
+  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"extension"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
@@ -415,6 +431,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
+  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
@@ -452,15 +469,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  "tools.media.audio.attachments",
-  "tools.media.audio.enabled",
-  "tools.media.audio.language",
-  "tools.media.audio.maxBytes",
-  "tools.media.audio.maxChars",
-  "tools.media.audio.models",
-  "tools.media.audio.prompt",
-  "tools.media.audio.scope",
-  "tools.media.audio.timeoutSeconds",
+  ...MEDIA_AUDIO_FIELD_KEYS,
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
@@ -513,6 +522,12 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "channels.telegram",
   "channels.telegram.botToken",
   "channels.telegram.capabilities.inlineButtons",
+  "channels.telegram.execApprovals",
+  "channels.telegram.execApprovals.enabled",
+  "channels.telegram.execApprovals.approvers",
+  "channels.telegram.execApprovals.agentFilter",
+  "channels.telegram.execApprovals.sessionFilter",
+  "channels.telegram.execApprovals.target",
   "channels.whatsapp",
 ] as const;
 
@@ -758,11 +773,19 @@ describe("config help copy quality", () => {
 
     const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
+
+    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
+    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
+    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
+    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
     const providerKey = FIELD_HELP["models.providers.*.apiKey"];
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
+    const modelsMode = FIELD_HELP["models.mode"];
+    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
+    expect(modelsMode.includes("preserve")).toBe(true);
 
     const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
     expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
@@ -784,6 +807,18 @@ describe("config help copy quality", () => {
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
+    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
+    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+
+    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
+    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

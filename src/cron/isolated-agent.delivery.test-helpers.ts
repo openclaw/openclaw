@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -30,6 +30,20 @@ export function mockAgentPayloads(
   });
 }
 
+export function expectDirectTelegramDelivery(
+  deps: CliDeps,
+  params: { chatId: string; text: string; messageThreadId?: number },
+) {
+  expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+  expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+    params.chatId,
+    params.text,
+    expect.objectContaining(
+      params.messageThreadId === undefined ? {} : { messageThreadId: params.messageThreadId },
+    ),
+  );
+}
+
 export async function runTelegramAnnounceTurn(params: {
   home: string;
   storePath: string;
@@ -40,6 +54,7 @@ export async function runTelegramAnnounceTurn(params: {
     to?: string;
     bestEffort?: boolean;
   };
+  deliveryContract?: "cron-owned" | "shared";
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
   return runCronIsolatedAgentTurn({
     cfg: makeCfg(params.home, params.storePath, {
@@ -53,5 +68,6 @@ export async function runTelegramAnnounceTurn(params: {
     message: "do it",
     sessionKey: "cron:job-1",
     lane: "cron",
+    deliveryContract: params.deliveryContract,
   });
 }

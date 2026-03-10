@@ -30,6 +30,9 @@ Trust model note:
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
 - Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+- Approved node-host runs also bind canonical execution context: canonical cwd, pinned executable
+  path when applicable, and interpreter-style script operands. If a bound script changes after
+  approval but before execution, the run is denied instead of executing drifted content.
 
 macOS split:
 
@@ -252,6 +255,10 @@ When a prompt is required, the gateway broadcasts `exec.approval.requested` to o
 The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
 
+For `host=node`, approval requests include a canonical `systemRunPlan` payload. The gateway uses
+that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
+requests.
+
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
 timeout, the request is treated as an approval timeout and surfaced as a denial reason.
@@ -301,6 +308,32 @@ Reply in chat:
 /approve <id> allow-always
 /approve <id> deny
 ```
+
+### Built-in chat approval clients
+
+Discord and Telegram can also act as explicit exec approval clients with channel-specific config.
+
+- Discord: `channels.discord.execApprovals.*`
+- Telegram: `channels.telegram.execApprovals.*`
+
+These clients are opt-in. If a channel does not have exec approvals enabled, OpenClaw does not treat
+that channel as an approval surface just because the conversation happened there.
+
+Shared behavior:
+
+- only configured approvers can approve or deny
+- the requester does not need to be an approver
+- when channel delivery is enabled, approval prompts include the command text
+- if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
+
+Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
+want approval prompts to appear in the originating Telegram chat/topic as well. For Telegram forum
+topics, OpenClaw preserves the topic for the approval prompt and the post-approval follow-up.
+
+See:
+
+- [Discord](/channels/discord#exec-approvals-in-discord)
+- [Telegram](/channels/telegram#exec-approvals-in-telegram)
 
 ### macOS IPC flow
 

@@ -36,6 +36,7 @@ import {
   createSandboxedWriteTool,
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
+  wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
@@ -43,6 +44,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { isXaiProvider } from "./schema/clean-for-xai.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
@@ -65,6 +67,8 @@ function isOpenAIProvider(provider?: string) {
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
+const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["web_search"]);
+const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();
@@ -85,6 +89,18 @@ function applyMessageProviderToolPolicy(
   }
   const deniedSet = new Set(deniedTools);
   return tools.filter((tool) => !deniedSet.has(tool.name));
+}
+
+function applyModelProviderToolPolicy(
+  tools: AnyAgentTool[],
+  params?: { modelProvider?: string; modelId?: string },
+): AnyAgentTool[] {
+  if (!isXaiProvider(params?.modelProvider, params?.modelId)) {
+    return tools;
+  }
+  // xAI/Grok providers expose a native web_search tool; sending OpenClaw's
+  // web_search alongside it causes duplicate-name request failures.
+  return tools.filter((tool) => !TOOL_DENY_FOR_XAI_PROVIDERS.has(tool.name));
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -177,6 +193,7 @@ export const __testing = {
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
   assertRequiredParams,
+  applyModelProviderToolPolicy,
 } as const;
 
 export function createOpenClawCodingTools(options?: {
@@ -188,8 +205,23 @@ export function createOpenClawCodingTools(options?: {
   messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** What initiated this run (for trigger-specific tool restrictions). */
+  trigger?: string;
+  /** Relative workspace path that memory-triggered writes may append to. */
+  memoryFlushWritePath?: string;
   agentDir?: string;
   workspaceDir?: string;
+  /**
+   * Workspace directory that spawned subagents should inherit.
+   * When sandboxing uses a copied workspace (`ro` or `none`), workspaceDir is the
+   * sandbox copy but subagents should inherit the real agent workspace instead.
+   * Defaults to workspaceDir when not set.
+   */
+  spawnWorkspaceDir?: string;
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   /**
@@ -239,6 +271,11 @@ export function createOpenClawCodingTools(options?: {
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
+  const isMemoryFlushRun = options?.trigger === "memory";
+  if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
+    throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
+  }
+  const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
   const {
     agentId,
     globalPolicy,
@@ -303,7 +340,7 @@ export function createOpenClawCodingTools(options?: {
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
-    workspaceOnly: fsConfig.workspaceOnly,
+    workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
@@ -469,6 +506,9 @@ export function createOpenClawCodingTools(options?: {
       sandboxFsBridge,
       fsPolicy,
       workspaceDir: workspaceRoot,
+      spawnWorkspaceDir: options?.spawnWorkspaceDir
+        ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
+        : undefined,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([
@@ -493,12 +533,42 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
+      sessionId: options?.sessionId,
     }),
   ];
-  const toolsForMessageProvider = applyMessageProviderToolPolicy(tools, options?.messageProvider);
+  const toolsForMemoryFlush =
+    isMemoryFlushRun && memoryFlushWritePath
+      ? tools.flatMap((tool) => {
+          if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
+            return [];
+          }
+          if (tool.name === "write") {
+            return [
+              wrapToolMemoryFlushAppendOnlyWrite(tool, {
+                root: sandboxRoot ?? workspaceRoot,
+                relativePath: memoryFlushWritePath,
+                containerWorkdir: sandbox?.containerWorkdir,
+                sandbox:
+                  sandboxRoot && sandboxFsBridge
+                    ? { root: sandboxRoot, bridge: sandboxFsBridge }
+                    : undefined,
+              }),
+            ];
+          }
+          return [tool];
+        })
+      : tools;
+  const toolsForMessageProvider = applyMessageProviderToolPolicy(
+    toolsForMemoryFlush,
+    options?.messageProvider,
+  );
+  const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForMessageProvider, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -524,12 +594,17 @@ export function createOpenClawCodingTools(options?: {
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
   const normalized = subagentFiltered.map((tool) =>
-    normalizeToolParameters(tool, { modelProvider: options?.modelProvider }),
+    normalizeToolParameters(tool, {
+      modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
+    }),
   );
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
+      sessionId: options?.sessionId,
+      runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );

@@ -1,11 +1,11 @@
+import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
-  isAuthPermanentErrorMessage,
+  classifyFailoverReasonFromHttpStatus,
+  isTimeoutErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
-const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
@@ -49,6 +49,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 402;
     case "rate_limit":
       return 429;
+    case "overloaded":
+      return 503;
     case "auth":
       return 401;
     case "auth_permanent":
@@ -59,6 +61,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 400;
     case "model_not_found":
       return 404;
+    case "session_expired":
+      return 410; // Gone - session no longer exists
     default:
       return undefined;
   }
@@ -78,13 +82,6 @@ function getStatusCode(err: unknown): number | undefined {
     return Number(candidate);
   }
   return undefined;
-}
-
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  return "name" in err ? String(err.name) : "";
 }
 
 function getErrorCode(err: unknown): string | undefined {
@@ -125,11 +122,11 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (getErrorName(err) === "TimeoutError") {
+  if (readErrorName(err) === "TimeoutError") {
     return true;
   }
   const message = getErrorMessage(err);
-  return Boolean(message && TIMEOUT_HINT_RE.test(message));
+  return Boolean(message && isTimeoutErrorMessage(message));
 }
 
 export function isTimeoutError(err: unknown): boolean {
@@ -139,7 +136,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  if (getErrorName(err) !== "AbortError") {
+  if (readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);
@@ -157,38 +154,31 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const status = getStatusCode(err);
-  if (status === 402) {
-    return "billing";
-  }
-  if (status === 429) {
-    return "rate_limit";
-  }
-  if (status === 401 || status === 403) {
-    const msg = getErrorMessage(err);
-    if (msg && isAuthPermanentErrorMessage(msg)) {
-      return "auth_permanent";
-    }
-    return "auth";
-  }
-  if (status === 408) {
-    return "timeout";
-  }
-  if (status === 502 || status === 503 || status === 504) {
-    return "timeout";
-  }
-  if (status === 400) {
-    return "format";
+  const message = getErrorMessage(err);
+  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
+  if (statusReason) {
+    return statusReason;
   }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
+  if (
+    [
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "ECONNRESET",
+      "ECONNABORTED",
+      "ECONNREFUSED",
+      "ENETUNREACH",
+      "EHOSTUNREACH",
+      "ENETRESET",
+      "EAI_AGAIN",
+    ].includes(code)
+  ) {
     return "timeout";
   }
   if (isTimeoutError(err)) {
     return "timeout";
   }
-
-  const message = getErrorMessage(err);
   if (!message) {
     return null;
   }

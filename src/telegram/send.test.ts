@@ -17,6 +17,7 @@ const {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendTypingTelegram,
   sendPollTelegram,
   sendStickerTelegram,
 } = await importTelegramSendModule();
@@ -171,6 +172,25 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("sends typing to the resolved chat and topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction.mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890:topic:271", {
+      accountId: "default",
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledWith("-1001234567890", "typing", {
+      message_thread_id: 271,
+    });
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
@@ -779,6 +799,31 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("retries when grammY network envelope message includes failed-after wording", async () => {
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("Network request for 'sendMessage' failed after 1 attempts."),
+      )
+      .mockResolvedValueOnce({
+        message_id: 7,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ messageId: "7", chatId });
+  });
+
   it("sends GIF media as animation", async () => {
     const chatId = "123";
     const sendAnimation = vi.fn().mockResolvedValue({
@@ -870,6 +915,16 @@ describe("sendMessageTelegram", () => {
         fileName: "clip.mp3",
         asVoice: true,
         expectedMethod: "sendVoice" as const,
+        expectedOptions: { caption: "caption", parse_mode: "HTML" },
+      },
+      {
+        name: "normalizes parameterized audio MIME with mixed casing",
+        chatId: "123",
+        text: "caption",
+        mediaUrl: "https://example.com/note",
+        contentType: " Audio/Ogg; codecs=opus ",
+        fileName: "note.ogg",
+        expectedMethod: "sendAudio" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
     ];
@@ -1138,6 +1193,69 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("59");
+  });
+
+  it("defaults outbound media uploads to 100MB", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 60,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "photo", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/photo.jpg",
+      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+    );
+  });
+
+  it("uses configured telegram mediaMaxMb for outbound uploads", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 61,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          mediaMaxMb: 42,
+        },
+      },
+    });
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "photo", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/photo.jpg",
+      expect.objectContaining({ maxBytes: 42 * 1024 * 1024 }),
+    );
   });
 });
 

@@ -15,7 +15,9 @@ import {
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
+import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { logWarn } from "../logger.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -23,9 +25,15 @@ import {
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-import { hardenApprovedExecutionPaths } from "./invoke-system-run-plan.js";
+import {
+  hardenApprovedExecutionPaths,
+  revalidateApprovedCwdSnapshot,
+  revalidateApprovedMutableFileOperand,
+  type ApprovedCwdSnapshot,
+} from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
+  ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
@@ -49,6 +57,7 @@ type SystemRunExecutionContext = {
   sessionKey: string;
   runId: string;
   cmdText: string;
+  suppressNotifyOnExit: boolean;
 };
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
@@ -57,6 +66,7 @@ type SystemRunParsePhase = {
   argv: string[];
   shellCommand: string | null;
   cmdText: string;
+  approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
   agentId: string | undefined;
   sessionKey: string;
   runId: string;
@@ -68,6 +78,7 @@ type SystemRunParsePhase = {
   timeoutMs: number | undefined;
   needsScreenRecording: boolean;
   approved: boolean;
+  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -80,16 +91,21 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   segments: ExecCommandSegment[];
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
+  approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
 
 const safeBinTrustedDirWarningCache = new Set<string>();
+const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval cwd changed before execution";
+const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
     return;
   }
   safeBinTrustedDirWarningCache.add(message);
-  console.warn(message);
+  logWarn(message);
 }
 
 function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
@@ -129,19 +145,7 @@ export type HandleSystemRunInvokeOptions = {
   sendNodeEvent: (client: GatewayClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
-  sendExecFinishedEvent: (params: {
-    sessionKey: string;
-    runId: string;
-    cmdText: string;
-    result: {
-      stdout?: string;
-      stderr?: string;
-      error?: string | null;
-      exitCode?: number | null;
-      timedOut?: boolean;
-      success?: boolean;
-    };
-  }) => Promise<void>;
+  sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
 };
 
@@ -165,6 +169,7 @@ async function sendSystemRunDenied(
       host: "node",
       command: execution.cmdText,
       reason: params.reason,
+      suppressNotifyOnExit: execution.suppressNotifyOnExit,
     }),
   );
   await opts.sendInvokeResult({
@@ -174,7 +179,7 @@ async function sendSystemRunDenied(
 }
 
 export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
-export { buildSystemRunApprovalPlanV2 } from "./invoke-system-run-plan.js";
+export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
@@ -200,9 +205,21 @@ async function parseSystemRunPhase(
 
   const shellCommand = command.shellCommand;
   const cmdText = command.cmdText;
+  const approvalPlan =
+    opts.params.systemRunPlan === undefined
+      ? null
+      : normalizeSystemRunApprovalPlan(opts.params.systemRunPlan);
+  if (opts.params.systemRunPlan !== undefined && !approvalPlan) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "systemRunPlan invalid" },
+    });
+    return null;
+  }
   const agentId = opts.params.agentId?.trim() || undefined;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellCommand !== null,
@@ -211,10 +228,11 @@ async function parseSystemRunPhase(
     argv: command.argv,
     shellCommand,
     cmdText,
+    approvalPlan,
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, cmdText },
+    execution: { sessionKey, runId, cmdText, suppressNotifyOnExit },
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
@@ -222,6 +240,7 @@ async function parseSystemRunPhase(
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,
+    suppressNotifyOnExit,
   };
 }
 
@@ -310,6 +329,14 @@ async function evaluateSystemRunPolicyPhase(
     });
     return null;
   }
+  const approvedCwdSnapshot = policy.approvedByAsk ? hardenedPaths.approvedCwdSnapshot : undefined;
+  if (policy.approvedByAsk && hardenedPaths.cwd && !approvedCwdSnapshot) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+    });
+    return null;
+  }
 
   const plannedAllowlistArgv = resolvePlannedAllowlistArgv({
     security,
@@ -337,6 +364,7 @@ async function evaluateSystemRunPolicyPhase(
     segments,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
+    approvedCwdSnapshot,
   };
 }
 
@@ -344,6 +372,33 @@ async function executeSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<void> {
+  if (
+    phase.approvedCwdSnapshot &&
+    !revalidateApprovedCwdSnapshot({ snapshot: phase.approvedCwdSnapshot })
+  ) {
+    logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
+  if (
+    phase.approvalPlan?.mutableFileOperand &&
+    !revalidateApprovedMutableFileOperand({
+      snapshot: phase.approvalPlan.mutableFileOperand,
+      argv: phase.argv,
+      cwd: phase.cwd,
+    })
+  ) {
+    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
+
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
@@ -384,6 +439,7 @@ async function executeSystemRunPhase(
         runId: phase.runId,
         cmdText: phase.cmdText,
         result,
+        suppressNotifyOnExit: phase.suppressNotifyOnExit,
       });
       await opts.sendInvokeResult({
         ok: true,
@@ -451,6 +507,7 @@ async function executeSystemRunPhase(
     runId: phase.runId,
     cmdText: phase.cmdText,
     result,
+    suppressNotifyOnExit: phase.suppressNotifyOnExit,
   });
 
   await opts.sendInvokeResult({
