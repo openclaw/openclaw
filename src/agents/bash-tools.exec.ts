@@ -381,7 +381,10 @@ export function createExecTool(
           })
         : mergedEnv;
 
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      // When exec falls back from the default sandbox host to direct local execution because
+      // no sandbox runtime is available, it still needs the login-shell PATH probe. Otherwise
+      // version-manager-installed tools (nvm/fnm/volta, etc.) can disappear from PATH.
+      if (!sandbox && (host === "gateway" || host === "sandbox") && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
