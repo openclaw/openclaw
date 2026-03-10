@@ -146,9 +146,9 @@ export function parsePipeline(srcDir: string): ParsedPipeline {
     throw new Error("[parse-pipeline] No pipeline steps parsed from tool-policy-pipeline.ts");
   }
   if (steps.length !== EXPECTED_PIPELINE_STEPS) {
-    console.warn(
-      `[parse-pipeline] Pipeline step count changed from ${EXPECTED_PIPELINE_STEPS} to ${steps.length}. ` +
-        `Verify SMT encoders and tests still match the runtime pipeline.`,
+    throw new Error(
+      `[parse-pipeline] Expected ${EXPECTED_PIPELINE_STEPS} pipeline steps, parsed ${steps.length}. ` +
+        `Update SMT encoders/tests to match buildDefaultToolPolicyPipelineSteps before continuing.`,
     );
   }
 
