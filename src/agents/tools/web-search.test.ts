@@ -320,9 +320,9 @@ describe("web_search parallel config resolution", () => {
   });
 
   it("falls back to PARALLEL_API_KEY env var", () => {
-    withEnv({ PARALLEL_API_KEY: "parallel-env-key" }, () => {
-      // pragma: allowlist secret
-      expect(resolveParallelApiKey({})).toBe("parallel-env-key"); // pragma: allowlist secret
+    const key = "parallel-env-key"; // pragma: allowlist secret
+    withEnv({ PARALLEL_API_KEY: key }, () => {
+      expect(resolveParallelApiKey({})).toBe(key);
     });
   });
 
