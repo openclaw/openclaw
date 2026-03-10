@@ -914,7 +914,7 @@ export async function runEmbeddedPiAgent(
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               modelKey: lastModelId,
-              reason: promptFailoverReason,
+              reason: promptFailoverReason ?? "unknown",
             });
             if (
               isFailoverErrorMessage(errorText) &&

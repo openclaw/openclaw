@@ -591,10 +591,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetaById.clear();
     toolSummaryById.clear();
     state.lastToolError = undefined;
-    messagingToolSentTexts.length = 0;
-    messagingToolSentTextsNormalized.length = 0;
-    messagingToolSentTargets.length = 0;
-    messagingToolSentMediaUrls.length = 0;
+    // PRESERVE messaging tool sent tracking - these messages were already successfully
+    // sent and should NOT be re-sent after compaction retry. Clearing these causes
+    // duplicate messages because the deduplication check won't find previously sent texts.
+    // pendingMessagingTexts.clear(); // Only clear pending (not yet sent)
+    // pendingMessagingTargets.clear();
+    // messagingToolSentTexts.length = 0;
+    // messagingToolSentTextsNormalized.length = 0;
+    // messagingToolSentTargets.length = 0;
+    // messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
