@@ -179,7 +179,7 @@ export function readNextcloudTalkWebhookBody(
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
   server: Server;
   start: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 } {
   const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
   const maxBodyBytes =
@@ -191,6 +191,8 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
+
+  let listening = false;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === HEALTH_PATH) {
@@ -271,29 +273,66 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   });
 
   const start = (): Promise<void> => {
-    return new Promise((resolve) => {
-      server.listen(port, host, () => resolve());
+    if (listening) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      const onListening = () => {
+        cleanup();
+        listening = true;
+        resolve();
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const cleanup = () => {
+        server.off("listening", onListening);
+        server.off("error", onError);
+      };
+
+      server.once("listening", onListening);
+      server.once("error", onError);
+      try {
+        server.listen(port, host);
+      } catch (error) {
+        cleanup();
+        reject(error instanceof Error ? error : new Error(formatError(error)));
+      }
     });
   };
 
   let stopped = false;
-  const stop = () => {
-    if (stopped) {
-      return;
+  const stop = (): Promise<void> => {
+    if (stopped || (!server.listening && !listening)) {
+      return Promise.resolve();
     }
     stopped = true;
-    try {
-      server.close();
-    } catch {
-      // ignore close races while shutting down
-    }
+
+    return new Promise((resolve, reject) => {
+      server.close((error) => {
+        listening = false;
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
   };
 
   if (abortSignal) {
     if (abortSignal.aborted) {
-      stop();
+      void stop();
     } else {
-      abortSignal.addEventListener("abort", stop, { once: true });
+      abortSignal.addEventListener(
+        "abort",
+        () => {
+          void stop();
+        },
+        { once: true },
+      );
     }
   }
 
@@ -311,7 +350,7 @@ export type NextcloudTalkMonitorOptions = {
 
 export async function monitorNextcloudTalkProvider(
   opts: NextcloudTalkMonitorOptions,
-): Promise<{ stop: () => void }> {
+): Promise<{ stop: () => Promise<void> }> {
   const core = getNextcloudTalkRuntime();
   const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
   const account = resolveNextcloudTalkAccount({

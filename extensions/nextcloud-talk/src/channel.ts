@@ -57,6 +57,8 @@ type NextcloudSetupInput = ChannelSetupInput & {
   useEnv?: boolean;
 };
 
+const gatewayAccountStops = new Map<string, () => Promise<void>>();
+
 export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = {
   id: "nextcloud-talk",
   meta,
@@ -336,6 +338,12 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         );
       }
 
+      const existingStop = gatewayAccountStops.get(account.accountId);
+      if (existingStop) {
+        await existingStop();
+        gatewayAccountStops.delete(account.accountId);
+      }
+
       ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk webhook server`);
 
       const { stop } = await monitorNextcloudTalkProvider({
@@ -346,9 +354,27 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
 
+      gatewayAccountStops.set(account.accountId, stop);
+
       // Keep webhook channels pending for the account lifecycle.
       await waitForAbortSignal(ctx.abortSignal);
-      stop();
+      await stop();
+      if (gatewayAccountStops.get(account.accountId) === stop) {
+        gatewayAccountStops.delete(account.accountId);
+      }
+    },
+    stopAccount: async ({ accountId }) => {
+      const stop = gatewayAccountStops.get(accountId);
+      if (!stop) {
+        return;
+      }
+      try {
+        await stop();
+      } finally {
+        if (gatewayAccountStops.get(accountId) === stop) {
+          gatewayAccountStops.delete(accountId);
+        }
+      }
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;

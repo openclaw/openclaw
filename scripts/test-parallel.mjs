@@ -231,8 +231,14 @@ const passthroughArgs =
   rawPassthroughArgs[0] === "--" ? rawPassthroughArgs.slice(1) : rawPassthroughArgs;
 const topLevelParallelEnabled = testProfile !== "low" && testProfile !== "serial";
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
-const resolvedOverride =
+const resolvedOverrideRaw =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
+// GitHub-hosted Linux runners are memory-constrained (~7 GiB). Forcing multiple Vitest workers
+// there can trigger OOMs and flaky failures when multiple suites run in parallel.
+const resolvedOverride =
+  isCI && !isMacOS && hostMemoryGiB > 0 && hostMemoryGiB < 16 && resolvedOverrideRaw
+    ? Math.min(1, resolvedOverrideRaw)
+    : resolvedOverrideRaw;
 const parallelGatewayEnabled =
   process.env.OPENCLAW_TEST_PARALLEL_GATEWAY === "1" || (!isCI && highMemLocalHost);
 // Keep gateway serial by default except when explicitly requested or on high-memory local hosts.
@@ -335,13 +341,17 @@ const maxOldSpaceSizeMb = (() => {
   // CI can hit Node heap limits (especially on large suites). Allow override, default to 4GB.
   const raw = process.env.OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB ?? "";
   const parsed = Number.parseInt(raw, 10);
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return parsed;
+
+  const defaultValue = isCI && !isWindows ? DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB : null;
+  const requested = Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+
+  // On low-memory CI hosts, don't allow huge heaps (it just increases overall memory pressure
+  // across parallel suites/workers and can lead to OOM/flakes).
+  if (isCI && !isMacOS && hostMemoryGiB > 0 && hostMemoryGiB < 16 && requested) {
+    return Math.min(DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB, requested);
   }
-  if (isCI && !isWindows) {
-    return DEFAULT_CI_MAX_OLD_SPACE_SIZE_MB;
-  }
-  return null;
+
+  return requested;
 })();
 
 const runOnce = (entry, extraArgs = []) =>
