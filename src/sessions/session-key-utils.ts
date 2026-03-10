@@ -63,7 +63,8 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   if (!parsed) {
     return false;
   }
-  return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
+  // Allow optional timestamp suffix for unique run session keys (e.g., :1773119700000)
+  return /^cron:[^:]+:run:[^:]+(:\d+)?$/.test(parsed.rest);
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {

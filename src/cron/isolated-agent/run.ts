@@ -344,8 +344,9 @@ export async function runCronIsolatedAgentTurn(params: {
     forceNew: params.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
+  // Use a unique run session key to avoid conflicts with other concurrent runs
   const runSessionKey = baseSessionKey.startsWith("cron:")
-    ? `${agentSessionKey}:run:${runSessionId}`
+    ? `${agentSessionKey}:run:${runSessionId}:${now}`
     : agentSessionKey;
   const persistSessionEntry = async () => {
     if (isFastTestEnv) {
