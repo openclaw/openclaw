@@ -450,6 +450,8 @@ describe("AcpxRuntime", () => {
     for await (const event of runtime.runTurn({
       handle,
       text: "hello",
+      mode: "prompt",
+      requestId: "req-agent-cmd-prompt",
     })) {
       events.push(event);
     }
