@@ -1616,37 +1616,6 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
-      if (isGatewayDraining()) {
-        const stateDir = resolveStateDir(process.env);
-        // Resolve the session key now so replay routes to the correct agent-scoped session.
-        const { route: drainRoute } = resolveTelegramConversationRoute({
-          cfg,
-          accountId,
-          chatId: event.chatId,
-          isGroup: event.isGroup,
-          resolvedThreadId: resolveTelegramForumThreadId({
-            isForum: event.isForum,
-            messageThreadId: event.messageThreadId,
-          }),
-          senderId: event.senderId,
-        });
-        await writePendingInbound(stateDir, {
-          channel: "telegram",
-          id: String(event.msg.message_id ?? Date.now()),
-          payload: {
-            chatId: event.chatId,
-            messageId: event.msg.message_id,
-            text: event.msg.text ?? event.msg.caption ?? "",
-            senderId: event.senderId,
-            senderUsername: event.senderUsername,
-            isGroup: event.isGroup,
-            date: event.msg.date,
-          },
-          capturedAt: Date.now(),
-          sessionKey: drainRoute.sessionKey,
-        });
-        return; // provider already got 200, no retry needed
-      }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
         isGroup: event.isGroup,
@@ -1708,6 +1677,41 @@ export const registerTelegramHandlers = ({
         if (!dmAuthorized) {
           return;
         }
+      }
+
+      // Drain guard: only persist messages that passed the auth checks above.
+      // Moved after authorization context, group policy, and DM access checks
+      // so that unauthorized messages are never written to the pending store.
+      if (isGatewayDraining()) {
+        const stateDir = resolveStateDir(process.env);
+        // Resolve the session key now so replay routes to the correct agent-scoped session.
+        const { route: drainRoute } = resolveTelegramConversationRoute({
+          cfg,
+          accountId,
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          resolvedThreadId: resolveTelegramForumThreadId({
+            isForum: event.isForum,
+            messageThreadId: event.messageThreadId,
+          }),
+          senderId: event.senderId,
+        });
+        await writePendingInbound(stateDir, {
+          channel: "telegram",
+          id: String(event.msg.message_id ?? Date.now()),
+          payload: {
+            chatId: event.chatId,
+            messageId: event.msg.message_id,
+            text: event.msg.text ?? event.msg.caption ?? "",
+            senderId: event.senderId,
+            senderUsername: event.senderUsername,
+            isGroup: event.isGroup,
+            date: event.msg.date,
+          },
+          capturedAt: Date.now(),
+          sessionKey: drainRoute.sessionKey,
+        });
+        return; // provider already got 200, no retry needed
       }
 
       await processInboundMessage({

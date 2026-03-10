@@ -109,6 +109,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
+  // Drain guard: persist authorized messages for replay after restart.
+  // Auth was already verified in the preflight step (message-handler.preflight.ts) —
+  // unauthorized messages return null from preflight and never reach this function.
+  // Only messages that passed DM policy, guild allowlist, channel config, and
+  // member access checks are persisted here.
   if (isGatewayDraining()) {
     const stateDir = resolveStateDir(process.env);
     await writePendingInbound(stateDir, {

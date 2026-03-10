@@ -10,6 +10,7 @@ import {
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
+import { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
@@ -170,9 +171,14 @@ export async function startGatewaySidecars(params: {
             senderUsername?: string;
             text?: string;
           };
-          const senderLabel =
+          // NOTE: senderLabel and textPreview are untrusted user-controlled content
+          // from the original inbound message. Sanitize to prevent prompt injection
+          // via spoofed system tags (e.g. "[System Message]", "System:").
+          const rawSenderLabel =
             payload.senderName ?? payload.senderUsername ?? payload.senderId ?? "unknown";
-          const textPreview = (payload.text ?? "").slice(0, 200).replace(/\n/g, "\\n");
+          const senderLabel = sanitizeInboundSystemTags(String(rawSenderLabel));
+          const rawPreview = (payload.text ?? "").slice(0, 200).replace(/\n/g, "\\n");
+          const textPreview = sanitizeInboundSystemTags(String(rawPreview));
           // Prefer the resolved session key stored at capture time; fall back to
           // fabricated key for backward compatibility with entries captured before
           // this change.

@@ -350,6 +350,46 @@ describe("pending-inbound-store", () => {
     expect(result).toHaveLength(10);
   });
 
+  // --- Bounded store growth (pruning) ---
+
+  it("writePendingInbound prunes oldest entries when exceeding MAX_PENDING_ENTRIES (200)", async () => {
+    // Write 210 entries sequentially — oldest 10 should be pruned.
+    for (let i = 0; i < 210; i++) {
+      await writePendingInbound(stateDir, {
+        channel: "telegram",
+        id: `prune-${i}`,
+        payload: { index: i },
+        capturedAt: 1700000000000 + i,
+      });
+    }
+
+    const result = await readPendingInbound(stateDir);
+    expect(result).toHaveLength(200);
+
+    // The 10 oldest (capturedAt 1700000000000..1700000000009) should be pruned.
+    const capturedAts = result.map((e) => e.capturedAt).toSorted((a, b) => a - b);
+    expect(capturedAts[0]).toBeGreaterThanOrEqual(1700000000010);
+  });
+
+  it("writeActiveTurn prunes oldest turns when exceeding MAX_ACTIVE_TURNS (50)", async () => {
+    // Write 60 turns sequentially — oldest 10 should be pruned.
+    for (let i = 0; i < 60; i++) {
+      await writeActiveTurn(stateDir, {
+        sessionId: `sess-prune-${i}`,
+        sessionKey: `telegram:${i}`,
+        channel: "telegram",
+        startedAt: 1700000000000 + i,
+      });
+    }
+
+    const result = await readStaleActiveTurns(stateDir);
+    expect(result).toHaveLength(50);
+
+    // The 10 oldest (startedAt 1700000000000..1700000000009) should be pruned.
+    const startedAts = result.map((e) => e.startedAt).toSorted((a, b) => a - b);
+    expect(startedAts[0]).toBeGreaterThanOrEqual(1700000000010);
+  });
+
   it("concurrent active turn writes do not lose entries", async () => {
     const writes = Array.from({ length: 10 }, (_, i) =>
       writeActiveTurn(stateDir, {
