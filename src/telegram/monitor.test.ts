@@ -66,6 +66,9 @@ const { createTelegramBotErrors } = vi.hoisted(() => ({
 const { createTelegramBotCalls } = vi.hoisted(() => ({
   createTelegramBotCalls: [] as Array<Record<string, unknown>>,
 }));
+const { createTelegramBotUseSpies } = vi.hoisted(() => ({
+  createTelegramBotUseSpies: [] as Array<ReturnType<typeof vi.fn>>,
+}));
 
 const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
@@ -166,15 +169,22 @@ vi.mock("./bot.js", () => ({
       }
       await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
     };
-    return {
+    const use = vi.fn();
+    const bot = {
       on: vi.fn(),
-      use: vi.fn(),
+      use,
       api,
       me: { username: "mybot" },
       init: initSpy,
       stop,
       start: vi.fn(),
     };
+    const onBeforeHandlersRegister = opts.onBeforeHandlersRegister;
+    if (typeof onBeforeHandlersRegister === "function") {
+      onBeforeHandlersRegister(bot);
+    }
+    createTelegramBotUseSpies.push(use);
+    return bot;
   },
 }));
 
@@ -224,6 +234,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     createTelegramBotCalls.length = 0;
+    createTelegramBotUseSpies.length = 0;
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
     startTelegramWebhookSpy.mockClear();
@@ -567,6 +578,56 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     // Advance time past the stall threshold (90s) + watchdog interval (30s)
     vi.advanceTimersByTime(120_000);
+    await monitor;
+
+    expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("force-restarts polling when a handler stays active beyond watchdog bypass max", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    let running = true;
+    let releaseTask: (() => void) | undefined;
+    const stop = vi.fn(async () => {
+      running = false;
+      releaseTask?.();
+    });
+
+    runSpy
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () =>
+            new Promise<void>((resolve) => {
+              releaseTask = resolve;
+            }),
+          stop,
+          isRunning: () => running,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: async () => {
+            abort.abort();
+          },
+        }),
+      );
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    const firstUse = createTelegramBotUseSpies[0];
+    const lifecycleMiddleware = firstUse?.mock.calls[0]?.[0] as
+      | ((ctx: unknown, next: () => Promise<void>) => Promise<void>)
+      | undefined;
+    expect(lifecycleMiddleware).toBeTypeOf("function");
+    void lifecycleMiddleware?.({}, async () => await new Promise<void>(() => undefined));
+    await Promise.resolve();
+
+    // Past stall threshold and watchdog interval, plus active-handler bypass max.
+    vi.advanceTimersByTime(750_000);
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
