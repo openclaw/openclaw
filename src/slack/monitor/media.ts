@@ -50,7 +50,7 @@ function resolveRequestUrl(input: RequestInfo | URL): string {
   throw new Error("Unsupported fetch input: expected string, URL, or Request");
 }
 
-function createSlackMediaFetch(token: string): FetchLike {
+export function createSlackMediaFetch(token: string): FetchLike {
   let includeAuth = true;
   return async (input, init) => {
     const url = resolveRequestUrl(input);
@@ -108,7 +108,7 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
-const SLACK_MEDIA_SSRF_POLICY = {
+export const SLACK_MEDIA_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
