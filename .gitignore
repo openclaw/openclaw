@@ -81,6 +81,7 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
+docs/.llm/
 IDENTITY.md
 USER.md
 .tgz
