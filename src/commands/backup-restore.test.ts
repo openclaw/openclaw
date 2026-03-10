@@ -29,6 +29,8 @@ describe("backup restore", () => {
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-restore-test-");
     previousCwd = process.cwd();
+    serviceIsLoaded.mockClear();
+    serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(false);
     serviceStop.mockResolvedValue(undefined);
     runtime = {
@@ -231,6 +233,45 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects workspace restore targets whose symlinks resolve into the state directory", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const symlinkPath = path.join(tempHome.home, "workspace-link");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-link"), { recursive: true });
+      await fs.symlink(stateDir, symlinkPath);
+
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [symlinkPath],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: symlinkPath,
+                archivePath: "archive-root/assets/workspace-link",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow("Refusing to restore workspace to an unsafe path");
+    } finally {
+      await fs.rm(symlinkPath, { force: true }).catch(() => undefined);
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("emits a single JSON payload when restore runs with --json", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-json-"));
@@ -292,12 +333,31 @@ describe("backup restore", () => {
   });
 
   it("rejects invalid restore modes instead of defaulting to full-host", async () => {
+    serviceIsLoaded.mockResolvedValue(true);
     await expect(
       backupRestoreCommand(runtime, {
         archive: path.join(tempHome.home, "missing.tar.gz"),
         mode: "workspace" as "full-host",
+        forceStop: true,
       }),
     ).rejects.toThrow("Invalid restore mode: workspace");
+    expect(serviceIsLoaded).not.toHaveBeenCalled();
+    expect(serviceStop).not.toHaveBeenCalled();
+  });
+
+  it("does not stop the gateway when restore archive validation fails", async () => {
+    serviceIsLoaded.mockResolvedValue(true);
+
+    await expect(
+      backupRestoreCommand(runtime, {
+        archive: path.join(tempHome.home, "missing.tar.gz"),
+        mode: "full-host",
+        forceStop: true,
+      }),
+    ).rejects.toThrow();
+
+    expect(serviceIsLoaded).not.toHaveBeenCalled();
+    expect(serviceStop).not.toHaveBeenCalled();
   });
 
   it("restores the original target if copying fails after rollback rename", async () => {

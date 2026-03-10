@@ -62,6 +62,25 @@ function workspacePathKey(value: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
+async function canonicalizePathForContainment(inputPath: string): Promise<string> {
+  const resolved = path.resolve(inputPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+  while (true) {
+    try {
+      const real = await fs.realpath(probe);
+      return suffix.length === 0 ? real : path.join(real, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
 function selectWorkspaceTargets(params: {
   workspaceAssetCount: number;
   manifestWorkspaceDirs: string[];
@@ -295,14 +314,12 @@ async function applyRestoreOperations(
   }
 }
 
-function isUnsafeRestoreTarget(targetPath: string): boolean {
-  const resolved = path.resolve(targetPath);
-  const root = path.parse(resolved).root;
-  if (resolved === root) {
+function isUnsafeRestoreTarget(targetPath: string, homePath?: string): boolean {
+  const root = path.parse(targetPath).root;
+  if (targetPath === root) {
     return true;
   }
-  const home = resolveHomeDir();
-  return Boolean(home && resolved === path.resolve(home));
+  return Boolean(homePath && targetPath === homePath);
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -314,18 +331,23 @@ function isNotFoundError(error: unknown): boolean {
   );
 }
 
-function assertSafeWorkspaceRestoreTarget(params: {
+async function assertSafeWorkspaceRestoreTarget(params: {
   targetPath: string;
   stateDir: string;
   configPath: string;
   oauthDir: string;
-}): void {
-  const resolved = path.resolve(params.targetPath);
+}): Promise<void> {
+  const resolved = await canonicalizePathForContainment(params.targetPath);
+  const stateDir = await canonicalizePathForContainment(params.stateDir);
+  const configPath = await canonicalizePathForContainment(params.configPath);
+  const oauthDir = await canonicalizePathForContainment(params.oauthDir);
+  const homeDir = resolveHomeDir();
+  const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
   if (
-    isUnsafeRestoreTarget(resolved) ||
-    isPathWithin(resolved, params.stateDir) ||
-    resolved === path.resolve(params.configPath) ||
-    resolved === path.resolve(params.oauthDir)
+    isUnsafeRestoreTarget(resolved, canonicalHomeDir) ||
+    isPathWithin(resolved, stateDir) ||
+    resolved === configPath ||
+    resolved === oauthDir
   ) {
     throw new Error(`Refusing to restore workspace to an unsafe path: ${resolved}`);
   }
@@ -452,7 +474,7 @@ export async function buildRestoreOperations(params: {
         if (!targetPath) {
           continue;
         }
-        assertSafeWorkspaceRestoreTarget({
+        await assertSafeWorkspaceRestoreTarget({
           targetPath,
           stateDir,
           configPath,
@@ -481,12 +503,9 @@ export async function backupRestoreCommand(
   opts: BackupRestoreOptions,
   deps?: BackupSnapshotDeps,
 ): Promise<BackupRestoreResult> {
-  await ensureGatewayStopped(runtime, Boolean(opts.forceStop), Boolean(opts.json));
-
   const mode = normalizeRestoreMode(opts.mode);
   const restoreSource = await prepareRestoreArchive(opts, deps);
-  const workingDir =
-    restoreSource.tempDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-")));
+  let workingDir: string | undefined;
 
   try {
     const verifyRuntime: RuntimeEnv = opts.json ? { ...runtime, log: () => {} } : runtime;
@@ -494,6 +513,9 @@ export async function backupRestoreCommand(
       archive: restoreSource.archivePath,
       json: false,
     });
+    await ensureGatewayStopped(runtime, Boolean(opts.forceStop), Boolean(opts.json));
+    workingDir =
+      restoreSource.tempDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-")));
     await extractArchive({
       archivePath: restoreSource.archivePath,
       destDir: workingDir,
@@ -533,7 +555,7 @@ export async function backupRestoreCommand(
   } finally {
     if (restoreSource.tempDir) {
       await fs.rm(restoreSource.tempDir, { recursive: true, force: true }).catch(() => undefined);
-    } else {
+    } else if (workingDir) {
       await fs.rm(workingDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
