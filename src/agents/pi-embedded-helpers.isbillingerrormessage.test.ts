@@ -501,6 +501,26 @@ describe("isFailoverErrorMessage", () => {
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });
+
+  it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
+    const samples = [
+      "Unhandled stop reason: MALFORMED_RESPONSE",
+      "Unhandled stop reason: malformed_response",
+      "stop reason: MALFORMED_RESPONSE",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+    const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
+  });
 });
 
 describe("parseImageSizeError", () => {
