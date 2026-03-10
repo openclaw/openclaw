@@ -17,11 +17,12 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
 
     /// Provider-qualified model ref used for picker identity and selection tags.
     public var selectionID: String {
-        if self.modelID.contains("/") {
-            return self.modelID
-        }
         let trimmedProvider = self.provider.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedProvider.isEmpty else { return self.modelID }
+        let providerPrefix = "\(trimmedProvider)/"
+        if self.modelID.hasPrefix(providerPrefix) {
+            return self.modelID
+        }
         return "\(trimmedProvider)/\(self.modelID)"
     }
 

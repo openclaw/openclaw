@@ -49,6 +49,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
+    private var modelSelectionRequestID: UInt64 = 0
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -504,6 +505,8 @@ public final class OpenClawChatViewModel {
         guard next != self.modelSelectionID else { return }
 
         let previous = self.modelSelectionID
+        self.modelSelectionRequestID &+= 1
+        let requestID = self.modelSelectionRequestID
         self.modelSelectionID = next
         self.errorText = nil
 
@@ -511,8 +514,10 @@ public final class OpenClawChatViewModel {
             try await self.transport.setSessionModel(
                 sessionKey: self.sessionKey,
                 model: self.modelRef(forSelectionID: next))
+            guard requestID == self.modelSelectionRequestID else { return }
             self.updateCurrentSessionModel(self.modelRef(forSelectionID: next))
         } catch {
+            guard requestID == self.modelSelectionRequestID else { return }
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
             chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
@@ -561,10 +566,10 @@ public final class OpenClawChatViewModel {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed.contains("/") {
+        if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
             return trimmed
         }
-        let matches = self.modelChoices.filter { $0.modelID == trimmed }
+        let matches = self.modelChoices.filter { $0.modelID == trimmed || $0.selectionID == trimmed }
         if matches.count == 1 {
             return matches[0].selectionID
         }

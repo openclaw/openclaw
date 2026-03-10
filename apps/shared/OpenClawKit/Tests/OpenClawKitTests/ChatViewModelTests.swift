@@ -76,6 +76,7 @@ private func makeViewModel(
     historyResponses: [OpenClawChatHistoryPayload],
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     initialThinkingLevel: String? = nil,
     onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil) async
     -> (TestChatTransport, OpenClawChatViewModel)
@@ -83,7 +84,8 @@ private func makeViewModel(
     let transport = TestChatTransport(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
-        modelResponses: modelResponses)
+        modelResponses: modelResponses,
+        setSessionModelHook: setSessionModelHook)
     let vm = await MainActor.run {
         OpenClawChatViewModel(
             sessionKey: sessionKey,
@@ -184,6 +186,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
@@ -191,11 +194,13 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     init(
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
-        modelResponses: [[OpenClawChatModelChoice]] = [])
+        modelResponses: [[OpenClawChatModelChoice]] = [],
+        setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil)
     {
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.setSessionModelHook = setSessionModelHook
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
             cont = c
@@ -262,6 +267,9 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func setSessionModel(sessionKey _: String, model: String?) async throws {
         await self.state.patchedModelsAppend(model)
+        if let setSessionModelHook = self.setSessionModelHook {
+            try await setSessionModelHook(model)
+        }
     }
 
     func setSessionThinking(sessionKey _: String, thinkingLevel: String) async throws {
@@ -636,6 +644,81 @@ extension TestChatTransportState {
             let patched = await transport.patchedModels()
             return patched == ["openai/gpt-4.1-mini"]
         }
+    }
+
+    @Test func slashModelIDsStayProviderQualifiedInSelectionAndPatch() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+            ])
+        let models = [
+            modelChoice(
+                id: "openai/gpt-5.4",
+                name: "GPT-5.4 via Vercel AI Gateway",
+                provider: "vercel-ai-gateway"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run { vm.selectModel("vercel-ai-gateway/openai/gpt-5.4") }
+
+        try await waitUntil("slash model patched with provider-qualified ref") {
+            let patched = await transport.patchedModels()
+            return patched == ["vercel-ai-gateway/openai/gpt-5.4"]
+        }
+    }
+
+    @Test func staleModelPatchCompletionsDoNotOverwriteNewerSelection() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+            ])
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+            modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.4" {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run {
+            vm.selectModel("openai/gpt-5.4")
+            vm.selectModel("openai/gpt-5.4-pro")
+        }
+
+        try await waitUntil("two model patches complete") {
+            let patched = await transport.patchedModels()
+            return patched.count == 2
+        }
+
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4-pro")
     }
 
     @Test func explicitThinkingLevelWinsOverHistoryAndPersistsChanges() async throws {

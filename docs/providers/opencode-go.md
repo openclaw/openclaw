@@ -30,7 +30,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" },
+  env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
   agents: { defaults: { model: { primary: "opencode-go/kimi-k2.5" } } },
 }
 ```
