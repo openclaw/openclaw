@@ -35,7 +35,7 @@ import {
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -324,6 +324,12 @@ function shouldRequireConnectedForRecovery(channel: ChannelId): boolean {
   return channel === "whatsapp";
 }
 
+function shouldSkipDeliveryRecoveryReadinessPreflight(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return isTruthyEnvValue(env.OPENCLAW_SKIP_CHANNELS) || isTruthyEnvValue(env.OPENCLAW_SKIP_PROVIDERS);
+}
+
 function formatRecoveryTarget(target: PendingDeliveryRecoveryTarget): string {
   return `${target.channel}:${target.accountId}`;
 }
@@ -400,6 +406,7 @@ async function waitForPendingDeliveryChannelReadiness(params: {
 
 export const __testing = {
   resolvePendingDeliveryRecoveryTargets,
+  shouldSkipDeliveryRecoveryReadinessPreflight,
 };
 
 export type GatewayServer = {
@@ -1135,13 +1142,18 @@ export async function startGatewayServer(
       }
 
       const targets = resolvePendingDeliveryRecoveryTargets({ pending, cfg: cfgAtStart });
-      if (targets.length > 0) {
+      const skipRecoveryReadinessPreflight = shouldSkipDeliveryRecoveryReadinessPreflight();
+      if (targets.length > 0 && !skipRecoveryReadinessPreflight) {
         await waitForPendingDeliveryChannelReadiness({
           channelManager,
           targets,
           log: logRecovery,
           signal: deliveryRecoveryAbort.signal,
         });
+      } else if (targets.length > 0 && skipRecoveryReadinessPreflight) {
+        logRecovery.info(
+          "Recovery preflight skipped: channel startup disabled via OPENCLAW_SKIP_CHANNELS/OPENCLAW_SKIP_PROVIDERS.",
+        );
       }
       if (deliveryRecoveryAbort.signal.aborted) {
         logRecovery.info("Delivery recovery skipped: gateway shutdown in progress.");
