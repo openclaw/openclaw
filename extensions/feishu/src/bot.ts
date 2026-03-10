@@ -498,6 +498,9 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Video]";
       case "sticker":
         return "[Sticker]";
+      case "interactive":
+      case "interactive_card":
+        return parseInteractiveCardContent(parsed);
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
