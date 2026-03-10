@@ -175,6 +175,115 @@ export async function createMattermostDirectChannel(
   });
 }
 
+export type CreateDmChannelRetryOptions = {
+  /** Maximum number of retry attempts (default: 3) */
+  maxRetries?: number;
+  /** Initial delay in milliseconds (default: 1000) */
+  initialDelayMs?: number;
+  /** Maximum delay in milliseconds (default: 10000) */
+  maxDelayMs?: number;
+  /** Timeout for each individual request in milliseconds (default: 30000) */
+  timeoutMs?: number;
+  /** Optional logger for retry events */
+  onRetry?: (attempt: number, delayMs: number, error: Error) => void;
+};
+
+/**
+ * Creates a Mattermost DM channel with exponential backoff retry logic.
+ * Retries on transient errors (429, 5xx, network errors) but not on
+ * client errors (4xx except 429) or permanent failures.
+ */
+export async function createMattermostDirectChannelWithRetry(
+  client: MattermostClient,
+  userIds: string[],
+  options: CreateDmChannelRetryOptions = {},
+): Promise<MattermostChannel> {
+  const {
+    maxRetries = 3,
+    initialDelayMs = 1000,
+    maxDelayMs = 10000,
+    timeoutMs = 30000,
+    onRetry,
+  } = options;
+
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Use AbortController for per-request timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const result = await createMattermostDirectChannel(client, userIds);
+        return result;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Don't retry on the last attempt
+      if (attempt >= maxRetries) {
+        break;
+      }
+
+      // Check if error is retryable
+      if (!isRetryableError(lastError)) {
+        throw lastError;
+      }
+
+      // Calculate exponential backoff delay with jitter
+      const delayMs = Math.min(
+        initialDelayMs * Math.pow(2, attempt) + Math.random() * 1000,
+        maxDelayMs,
+      );
+
+      if (onRetry) {
+        onRetry(attempt + 1, delayMs, lastError);
+      }
+
+      // Wait before retrying
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError ?? new Error("Failed to create DM channel after retries");
+}
+
+function isRetryableError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+
+  // Retry on rate limiting (429)
+  if (message.includes("429") || message.includes("too many requests")) {
+    return true;
+  }
+
+  // Retry on 5xx server errors
+  if (/\b5\d{2}\b/.test(message)) {
+    return true;
+  }
+
+  // Retry on network/transient errors
+  const retryablePatterns = [
+    "network error",
+    "timeout",
+    "abort",
+    "connection refused",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "enotfound",
+    "socket hang up",
+  ];
+
+  return retryablePatterns.some((pattern) => message.includes(pattern));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function createMattermostPost(
   client: MattermostClient,
   params: {

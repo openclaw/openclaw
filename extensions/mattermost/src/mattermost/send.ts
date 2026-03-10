@@ -3,7 +3,7 @@ import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
-  createMattermostDirectChannel,
+  createMattermostDirectChannelWithRetry,
   createMattermostPost,
   fetchMattermostChannelByName,
   fetchMattermostMe,
@@ -12,6 +12,7 @@ import {
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
   type MattermostUser,
+  type CreateDmChannelRetryOptions,
 } from "./client.js";
 import {
   buildButtonProps,
@@ -32,6 +33,8 @@ export type MattermostSendOpts = {
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
   attachmentText?: string;
+  /** Retry options for DM channel creation */
+  dmRetryOptions?: CreateDmChannelRetryOptions;
 };
 
 export type MattermostSendResult = {
@@ -182,11 +185,15 @@ async function resolveChannelIdByName(params: {
   throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);
 }
 
-async function resolveTargetChannelId(params: {
+type ResolveTargetChannelIdParams = {
   target: MattermostTarget;
   baseUrl: string;
   token: string;
-}): Promise<string> {
+  dmRetryOptions?: CreateDmChannelRetryOptions;
+  logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
+};
+
+async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
   if (params.target.kind === "channel") {
     return params.target.id;
   }
@@ -214,7 +221,17 @@ async function resolveTargetChannelId(params: {
     baseUrl: params.baseUrl,
     botToken: params.token,
   });
-  const channel = await createMattermostDirectChannel(client, [botUser.id, userId]);
+
+  const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
+    ...params.dmRetryOptions,
+    onRetry: params.logger
+      ? (attempt, delayMs, error) => {
+          params.logger?.warn?.(
+            `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
+          );
+        }
+      : undefined,
+  });
   dmChannelCache.set(dmKey, channel.id);
   return channel.id;
 }
@@ -232,6 +249,7 @@ async function resolveMattermostSendContext(
   opts: MattermostSendOpts = {},
 ): Promise<MattermostSendContext> {
   const core = getCore();
+  const logger = core.logging.getChildLogger({ module: "mattermost" });
   const cfg = opts.cfg ?? core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
@@ -262,10 +280,25 @@ async function resolveMattermostSendContext(
       : opaqueTarget?.kind === "channel"
         ? { kind: "channel" as const, id: opaqueTarget.id }
         : parseMattermostTarget(trimmedTo);
+  // Build retry options from account config, allowing opts to override
+  const accountRetryConfig = account.config.dmChannelRetry;
+  const dmRetryOptions: CreateDmChannelRetryOptions | undefined =
+    opts.dmRetryOptions ??
+    (accountRetryConfig
+      ? {
+          maxRetries: accountRetryConfig.maxRetries,
+          initialDelayMs: accountRetryConfig.initialDelayMs,
+          maxDelayMs: accountRetryConfig.maxDelayMs,
+          timeoutMs: accountRetryConfig.timeoutMs,
+        }
+      : undefined);
+
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
     token,
+    dmRetryOptions,
+    logger: core.logging.shouldLogVerbose() ? logger : undefined,
   });
 
   return {
