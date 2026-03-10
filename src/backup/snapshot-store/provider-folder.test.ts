@@ -94,6 +94,9 @@ describe("folder snapshot store", () => {
   });
 
   it("writes snapshot files with restrictive mode", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const targetDir = await createTempDir("openclaw-snapshot-store-mode-");
     const payloadPath = path.join(targetDir, "source.payload");
     await fs.writeFile(payloadPath, "payload-data", "utf8");

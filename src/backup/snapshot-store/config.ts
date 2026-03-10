@@ -60,12 +60,12 @@ export async function resolveSnapshotStoreConfig(params: {
 
   const targetDir = await canonicalizePathForContainment(resolveUserPath(target));
   const stateDir = await canonicalizePathForContainment(resolveStateDir(params.env));
-  if (isPathWithin(targetDir, stateDir)) {
+  if (targetDir === stateDir || isPathWithin(targetDir, stateDir)) {
     throw new Error("backup.target must not be inside the live state directory.");
   }
   for (const workspaceDir of collectWorkspaceDirs(params.config)) {
     const canonicalWorkspaceDir = await canonicalizePathForContainment(workspaceDir);
-    if (isPathWithin(targetDir, canonicalWorkspaceDir)) {
+    if (targetDir === canonicalWorkspaceDir || isPathWithin(targetDir, canonicalWorkspaceDir)) {
       throw new Error("backup.target must not be inside a workspace being backed up.");
     }
   }
