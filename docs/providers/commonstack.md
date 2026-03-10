@@ -34,9 +34,6 @@ openclaw onboard --auth-choice commonstack-api-key
       commonstack: {
         baseUrl: "https://api.commonstack.ai/v1",
         api: "openai-completions",
-        headers: {
-          "User-Agent": "https://openclaw.ai",
-        },
       },
     },
   },
@@ -66,6 +63,5 @@ openclaw models scan --scan-provider commonstack --set-default
 ## Notes
 
 - Model refs are `commonstack/<model_id>` (e.g., `commonstack/openai/gpt-oss-120b`).
-- CommonStack requires a custom `User-Agent` header (`https://openclaw.ai`) for API calls.
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - CommonStack uses Bearer token authentication with your API key.
