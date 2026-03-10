@@ -25,6 +25,19 @@ async function makeSessionDirectory(): Promise<string> {
   return path.join(root, "session-dir");
 }
 
+async function makeSessionSymlink(targetContent = "target"): Promise<{
+  symlinkPath: string;
+  targetPath: string;
+}> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-bootstrap-link-"));
+  tempRoots.push(root);
+  const targetPath = path.join(root, "target.jsonl");
+  const symlinkPath = path.join(root, "session.jsonl");
+  await fs.writeFile(targetPath, targetContent, "utf-8");
+  await fs.symlink(targetPath, symlinkPath);
+  return { symlinkPath, targetPath };
+}
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -76,6 +89,14 @@ describe("shouldInjectBootstrapContext", () => {
 
     expect(await shouldInjectBootstrapContext(sessionDir)).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to injecting bootstrap context when transcript path is a symlink",
+    async () => {
+      const { symlinkPath } = await makeSessionSymlink();
+      expect(await shouldInjectBootstrapContext(symlinkPath)).toBe(true);
+    },
+  );
 
   it("falls back to injecting bootstrap context when the first assistant entry is beyond the scan cap", async () => {
     const oversizedUserContent = "x".repeat(300_000);
@@ -178,4 +199,31 @@ describe("prepareSessionManagerForRun", () => {
     expect(sessionManager.leafId).toBe("msg-1");
     expect(sessionManager.flushed).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses to truncate symlinked session files while resetting pre-assistant state",
+    async () => {
+      const { symlinkPath, targetPath } = await makeSessionSymlink("do-not-touch");
+      const header = { type: "session" as const, id: "sess-1", cwd: "/workspace" };
+      const sessionManager = {
+        sessionId: "sess-1",
+        flushed: true,
+        fileEntries: [
+          header,
+          { type: "message" as const, message: { role: "user", content: "hello" } },
+        ],
+      };
+
+      await expect(
+        prepareSessionManagerForRun({
+          sessionManager,
+          sessionFile: symlinkPath,
+          hadSessionFile: true,
+          sessionId: "sess-1",
+          cwd: "/workspace",
+        }),
+      ).rejects.toThrow(/must be a regular file/i);
+      expect(await fs.readFile(targetPath, "utf-8")).toBe("do-not-touch");
+    },
+  );
 });

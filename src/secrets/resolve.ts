@@ -57,6 +57,15 @@ type ResolutionLimits = {
 
 type ProviderResolutionOutput = Map<string, unknown>;
 
+class WindowsAclUnavailableError extends Error {
+  readonly code = "WINDOWS_ACL_UNAVAILABLE" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WindowsAclUnavailableError";
+  }
+}
+
 export class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
@@ -259,7 +268,7 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
+    throw new WindowsAclUnavailableError(
       `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this specific check when the path is trusted.`,
     );
   }
@@ -304,8 +313,7 @@ async function readFileProviderPayload(params: {
       const isWindowsAclFallback =
         params.providerConfig.allowInsecurePath &&
         process.platform === "win32" &&
-        error instanceof Error &&
-        error.message.includes("ACL verification unavailable on Windows");
+        error instanceof WindowsAclUnavailableError;
       if (!isWindowsAclFallback) {
         throw error;
       }

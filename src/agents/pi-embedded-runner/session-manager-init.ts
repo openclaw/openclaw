@@ -12,10 +12,20 @@ function isAssistantMessageEntry(entry: SessionTranscriptEntry): entry is Sessio
   return entry.type === "message" && entry.message?.role === "assistant";
 }
 
+async function statRegularSessionTranscript(
+  sessionFile: string,
+): Promise<Awaited<ReturnType<typeof fsPromises.lstat>>> {
+  const stat = await fsPromises.lstat(sessionFile);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Session transcript must be a regular file: ${sessionFile}`);
+  }
+  return stat;
+}
+
 export async function shouldInjectBootstrapContext(sessionFile: string): Promise<boolean> {
-  let stat: Awaited<ReturnType<typeof fsPromises.stat>>;
+  let stat: Awaited<ReturnType<typeof fsPromises.lstat>>;
   try {
-    stat = await fsPromises.stat(sessionFile);
+    stat = await statRegularSessionTranscript(sessionFile);
   } catch {
     return true;
   }
@@ -106,6 +116,7 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
+    await statRegularSessionTranscript(params.sessionFile);
     // Reset file so the first assistant flush includes header+user+assistant in order.
     await fsPromises.writeFile(params.sessionFile, "", "utf-8");
     sm.fileEntries = [header];
