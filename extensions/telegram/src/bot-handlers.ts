@@ -1685,16 +1685,18 @@ export const registerTelegramHandlers = ({
       if (isGatewayDraining()) {
         const stateDir = resolveStateDir(process.env);
         // Resolve the session key now so replay routes to the correct agent-scoped session.
+        // Pass replyThreadId and topicAgentId so topic conversation bindings are applied,
+        // matching the routing parameters used in the normal (non-drain) message path.
+        const drainReplyThreadId = resolvedThreadId ?? dmThreadId;
         const { route: drainRoute } = resolveTelegramConversationRoute({
           cfg,
           accountId,
           chatId: event.chatId,
           isGroup: event.isGroup,
-          resolvedThreadId: resolveTelegramForumThreadId({
-            isForum: event.isForum,
-            messageThreadId: event.messageThreadId,
-          }),
+          resolvedThreadId,
+          replyThreadId: drainReplyThreadId,
           senderId: event.senderId,
+          topicAgentId: topicConfig?.agentId,
         });
         // Apply thread-scoped session key for DM topics — mirrors resolveTelegramSessionState.
         // dmThreadId is already resolved from eventAuthContext above.
@@ -1709,8 +1711,9 @@ export const registerTelegramHandlers = ({
         const drainSessionKey = drainThreadKeys?.sessionKey ?? drainBaseSessionKey;
         await writePendingInbound(stateDir, {
           channel: "telegram",
-          // Include chatId in the id to prevent collisions across chats with the same message_id.
-          id: `${event.chatId}:${event.msg.message_id ?? Date.now()}`,
+          // Prefix with accountId to prevent collisions in multi-account deployments where two
+          // bot accounts in the same chat can see the same message_id.
+          id: `${accountId}::${event.chatId}:${event.msg.message_id ?? Date.now()}`,
           payload: {
             chatId: event.chatId,
             messageId: event.msg.message_id,
