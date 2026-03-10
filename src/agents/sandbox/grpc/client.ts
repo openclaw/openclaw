@@ -59,7 +59,15 @@ const HealthDefinition = {
       requestStream: false as const,
       responseType: {
         encode: (_msg: Record<string, unknown>) => ({ finish: () => new Uint8Array() }),
-        decode: (_bytes: Uint8Array) => ({ status: 0 }),
+        decode: (bytes: Uint8Array) => {
+          // Decode grpc.health.v1.HealthCheckResponse: field 1 (status) is a varint enum.
+          // Wire format: tag byte 0x08 (field 1, wire type 0) followed by varint value.
+          let status = 0;
+          if (bytes.length >= 2 && bytes[0] === 0x08) {
+            status = bytes[1]!;
+          }
+          return { status };
+        },
         fromPartial: (_obj: unknown) => ({ status: 0 }),
       },
       responseStream: false as const,

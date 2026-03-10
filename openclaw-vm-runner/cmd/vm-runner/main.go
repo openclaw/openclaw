@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -159,7 +160,7 @@ func main() {
 	s := grpc.NewServer()
 
 	// Register services
-	pb.RegisterSandboxServiceServer(s, server.NewSandboxServer(mgr))
+	pb.RegisterSandboxServiceServer(s, server.NewSandboxServer(mgr, jl))
 	pb.RegisterExecServiceServer(s, server.NewExecServer(mgr, connCache))
 	pb.RegisterFileServiceServer(s, server.NewFileServer(mgr, connCache))
 	pb.RegisterBrowserServiceServer(s, server.NewBrowserServer(mgr, connCache, cfg.VNCProxyPort))
@@ -276,7 +277,7 @@ type mainShutdownDeps struct {
 }
 
 func (d *mainShutdownDeps) StopAccepting() {
-	// The gRPC GracefulStop handles this
+	d.mgr.StopAccepting()
 }
 
 func (d *mainShutdownDeps) ActiveVMIDs() []string {
@@ -298,7 +299,9 @@ func (d *mainShutdownDeps) DestroyVM(ctx context.Context, vmID string) error {
 		return mgrErr
 	}
 	// Ignore jailer "not found" during shutdown -- VM may not have jail entry
-	_ = jlErr
+	if jlErr != nil && !strings.Contains(jlErr.Error(), "not found") {
+		return jlErr
+	}
 	return nil
 }
 

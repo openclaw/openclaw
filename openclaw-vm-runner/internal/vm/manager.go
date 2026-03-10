@@ -46,7 +46,8 @@ type MachineFactory func(ctx context.Context, req *CreateRequest, vmCfg *VMConfi
 type Manager struct {
 	mu         sync.RWMutex
 	machines   map[string]*MachineEntry
-	cidCounter uint32 // atomic; starts at 2 so first nextCID returns 3
+	cidCounter   uint32 // atomic; starts at 2 so first nextCID returns 3
+	shuttingDown int32  // atomic; 1 = shutting down, rejects new Create
 
 	cfg         *config.ServiceConfig
 	factory     MachineFactory
@@ -102,17 +103,33 @@ func (m *Manager) lastAssignedCID() uint32 {
 	return atomic.LoadUint32(&m.cidCounter)
 }
 
+// StopAccepting marks the manager as shutting down, causing all subsequent
+// Create calls to return an error. This prevents new VMs from being created
+// during the graceful shutdown window between StopAccepting and DrainGRPC.
+func (m *Manager) StopAccepting() {
+	atomic.StoreInt32(&m.shuttingDown, 1)
+}
+
 // Create builds a VM configuration and creates a new sandbox. When a Pool and
 // Snapshotter are configured, it first attempts to acquire a pre-warmed snapshot
 // (with a 50ms timeout) and restore it. If snapshot acquisition or restore fails,
 // it falls back to cold boot via the MachineFactory.
-// Returns an error if a sandbox with the same ID already exists.
+// Returns an error if a sandbox with the same ID already exists or if the
+// max-vms limit has been reached.
 func (m *Manager) Create(ctx context.Context, req *CreateRequest) (*MachineEntry, error) {
+	if atomic.LoadInt32(&m.shuttingDown) == 1 {
+		return nil, fmt.Errorf("service is shutting down, not accepting new sandboxes")
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if _, exists := m.machines[req.SandboxID]; exists {
 		return nil, fmt.Errorf("sandbox %s already exists", req.SandboxID)
+	}
+
+	if m.cfg.MaxVMs > 0 && len(m.machines) >= m.cfg.MaxVMs {
+		return nil, fmt.Errorf("max VM limit reached (%d)", m.cfg.MaxVMs)
 	}
 
 	// Try snapshot-first path if pool and snapshotter are configured

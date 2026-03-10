@@ -20,15 +20,23 @@ type VMManager interface {
 	List() []*vm.MachineEntry
 }
 
+// JailCleaner releases jail state (chroot, UID allocation) for a destroyed sandbox.
+// If nil, jail cleanup is skipped (e.g., in tests or non-jailed deployments).
+type JailCleaner interface {
+	Destroy(ctx context.Context, vmID string) error
+}
+
 // sandboxServer implements the SandboxServiceServer gRPC interface.
 type sandboxServer struct {
 	pb.UnimplementedSandboxServiceServer
-	mgr VMManager
+	mgr         VMManager
+	jailCleaner JailCleaner
 }
 
 // NewSandboxServer creates a new SandboxService gRPC handler.
-func NewSandboxServer(mgr VMManager) *sandboxServer {
-	return &sandboxServer{mgr: mgr}
+// jailCleaner is optional — pass nil to skip jail cleanup on destroy.
+func NewSandboxServer(mgr VMManager, jailCleaner JailCleaner) *sandboxServer {
+	return &sandboxServer{mgr: mgr, jailCleaner: jailCleaner}
 }
 
 // mapStateToProto converts a vm.MachineEntry state string to the proto SandboxState enum.
@@ -72,14 +80,27 @@ func (s *sandboxServer) CreateSandbox(ctx context.Context, req *pb.CreateSandbox
 	}, nil
 }
 
-// DestroySandbox destroys a running sandbox via the Manager.
+// DestroySandbox destroys a running sandbox via the Manager and cleans up jail state.
 func (s *sandboxServer) DestroySandbox(ctx context.Context, req *pb.DestroySandboxRequest) (*pb.DestroySandboxResponse, error) {
-	err := s.mgr.Destroy(ctx, req.GetSandboxId())
+	sandboxID := req.GetSandboxId()
+
+	err := s.mgr.Destroy(ctx, sandboxID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return nil, status.Errorf(codes.NotFound, "sandbox %s not found", req.GetSandboxId())
+			return nil, status.Errorf(codes.NotFound, "sandbox %s not found", sandboxID)
 		}
 		return nil, status.Errorf(codes.Internal, "failed to destroy sandbox: %v", err)
+	}
+
+	// Clean up jail state (chroot, UID) so the sandbox_id can be reused.
+	if s.jailCleaner != nil {
+		if jlErr := s.jailCleaner.Destroy(ctx, sandboxID); jlErr != nil {
+			// Log but don't fail the RPC — the VM is already destroyed.
+			// Jail-not-found is expected if the VM wasn't jailed.
+			if !strings.Contains(jlErr.Error(), "not found") {
+				return nil, status.Errorf(codes.Internal, "VM destroyed but jail cleanup failed: %v", jlErr)
+			}
+		}
 	}
 
 	return &pb.DestroySandboxResponse{}, nil

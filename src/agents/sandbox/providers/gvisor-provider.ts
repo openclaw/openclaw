@@ -178,8 +178,8 @@ export class GVisorProvider implements ISandboxProvider, IBrowserCapable {
    * Delegates to execDockerRaw identically to DockerProvider.
    * Runtime flag is NOT needed for exec (only for container creation).
    */
-  async exec(_containerName: string, args: string[], opts?: ExecOptions): Promise<ExecResult> {
-    return execDockerRaw(args, opts);
+  async exec(containerName: string, args: string[], opts?: ExecOptions): Promise<ExecResult> {
+    return execDockerRaw(["exec", containerName, ...args], opts);
   }
 
   /**

@@ -13,8 +13,11 @@ import { access, constants } from "node:fs/promises";
 import type { ProviderHealthResult } from "../provider.js";
 import { VM_RUNNER_SOCKET } from "./channel.js";
 
+/** gRPC health check serving status enum (grpc.health.v1). */
+const HEALTH_SERVING = 1;
+
 export interface HealthClient {
-  check(request: Record<string, unknown>): Promise<unknown>;
+  check(request: Record<string, unknown>): Promise<{ status?: number }>;
 }
 
 /**
@@ -48,7 +51,15 @@ export async function checkFirecrackerHealth(
 
   // Phase 3: gRPC health check
   try {
-    await healthClient.check({});
+    const resp = await healthClient.check({});
+    // status 1 = SERVING in grpc.health.v1.HealthCheckResponse
+    const status = (resp as { status?: number })?.status;
+    if (status !== undefined && status !== 1) {
+      return {
+        available: false,
+        message: `vm-runner health check returned non-serving status: ${status}`,
+      };
+    }
   } catch {
     return {
       available: false,

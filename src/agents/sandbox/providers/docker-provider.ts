@@ -111,8 +111,8 @@ export class DockerProvider implements ISandboxProvider, IBrowserCapable {
     return containerName;
   }
 
-  async exec(_containerName: string, args: string[], opts?: ExecOptions): Promise<ExecResult> {
-    return execDockerRaw(args, opts);
+  async exec(containerName: string, args: string[], opts?: ExecOptions): Promise<ExecResult> {
+    return execDockerRaw(["exec", containerName, ...args], opts);
   }
 
   async destroy(containerName: string, opts?: DestroyOptions): Promise<void> {

@@ -69,6 +69,15 @@ func (s *browserProxy) Launch(ctx context.Context, req *pb.LaunchRequest) (*pb.L
 		SessionId: resp.GetSessionId(),
 	}
 
+	// Forward VNC info from envd response (password, display, availability)
+	if envdVNC := resp.GetVncInfo(); envdVNC != nil {
+		launchResp.VncInfo = &pb.VNCInfo{
+			Password:  envdVNC.GetPassword(),
+			Display:   envdVNC.GetDisplay(),
+			Available: envdVNC.GetAvailable(),
+		}
+	}
+
 	// Populate VNC WebSocket URL if proxy is enabled
 	if s.vncProxyPort > 0 {
 		launchResp.VncWebsocketUrl = fmt.Sprintf("ws://localhost:%d/vnc?sandbox_id=%s", s.vncProxyPort, req.GetSandboxId())

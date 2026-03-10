@@ -76,8 +76,12 @@ func (s *execBridge) Exec(stream pb.ExecService_ExecServer) error {
 	}
 	shellCmd := strings.Join(escapedArgs, " ")
 
-	// 6. Convert timeout: ms -> sec.
-	timeoutSec := startExec.GetTimeoutMs() / 1000
+	// 6. Convert timeout: ms -> sec (ceiling division to preserve sub-second timeouts).
+	timeoutMs := startExec.GetTimeoutMs()
+	var timeoutSec int64
+	if timeoutMs > 0 {
+		timeoutSec = (timeoutMs + 999) / 1000
+	}
 
 	// 7. Call envd Start with server stream.
 	envdStream, err := envdClient.Start(ctx, &envdpb.StartRequest{
