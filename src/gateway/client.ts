@@ -118,6 +118,7 @@ export class GatewayClient {
   private connectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private pendingConnectErrorDetailCode: string | null = null;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -209,6 +210,8 @@ export class GatewayClient {
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
+      const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
+      this.pendingConnectErrorDetailCode = null;
       this.ws = null;
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
@@ -232,6 +235,10 @@ export class GatewayClient {
         }
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
+      if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
+        this.opts.onClose?.(code, reasonText);
+        return;
+      }
       this.scheduleReconnect();
       this.opts.onClose?.(code, reasonText);
     });
@@ -247,6 +254,7 @@ export class GatewayClient {
     this.closed = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.pendingConnectErrorDetailCode = null;
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -362,6 +370,7 @@ export class GatewayClient {
       .then((helloOk) => {
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
+        this.pendingConnectErrorDetailCode = null;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           storeDeviceAuthToken({
@@ -381,6 +390,8 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        this.pendingConnectErrorDetailCode =
+          err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
           error: err,
           explicitGatewayToken,
@@ -401,6 +412,35 @@ export class GatewayClient {
         }
         this.ws?.close(1008, "connect failed");
       });
+  }
+
+  private shouldPauseReconnectAfterAuthFailure(detailCode: string | null): boolean {
+    if (!detailCode) {
+      return false;
+    }
+    if (
+      detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+      detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
+      detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
+      detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+      detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
+      detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+      detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
+    ) {
+      return true;
+    }
+    if (detailCode !== ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+      return false;
+    }
+    if (this.pendingDeviceTokenRetry) {
+      return false;
+    }
+    // If the endpoint is not trusted for retry, mismatch is terminal until operator action.
+    if (!this.isTrustedDeviceRetryEndpoint()) {
+      return true;
+    }
+    // Pause mismatch reconnect loops once the one-shot device-token retry is consumed.
+    return this.deviceTokenRetryBudgetUsed;
   }
 
   private shouldRetryWithStoredDeviceToken(params: {

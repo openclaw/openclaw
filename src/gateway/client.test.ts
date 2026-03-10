@@ -511,4 +511,73 @@ describe("GatewayClient connect auth payload", () => {
     });
     client.stop();
   });
+
+  it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
+    vi.useFakeTimers();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    });
+
+    client.start();
+    const ws1 = getLatestWs();
+    ws1.emitOpen();
+    emitConnectChallenge(ws1);
+    const firstConnectRaw = ws1.sent.find((frame) => frame.includes('"method":"connect"'));
+    expect(firstConnectRaw).toBeTruthy();
+    const firstConnect = JSON.parse(firstConnectRaw ?? "{}") as { id?: string };
+
+    ws1.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: firstConnect.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details: { code: "AUTH_TOKEN_MISSING" },
+        },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+    client.stop();
+    vi.useRealTimers();
+  });
+
+  it("does not auto-reconnect on token mismatch when retry is not trusted", async () => {
+    vi.useFakeTimers();
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "wss://gateway.example.com:18789",
+      token: "shared-token",
+    });
+
+    client.start();
+    const ws1 = getLatestWs();
+    ws1.emitOpen();
+    emitConnectChallenge(ws1);
+    const firstConnectRaw = ws1.sent.find((frame) => frame.includes('"method":"connect"'));
+    expect(firstConnectRaw).toBeTruthy();
+    const firstConnect = JSON.parse(firstConnectRaw ?? "{}") as { id?: string };
+
+    ws1.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: firstConnect.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+        },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+    client.stop();
+    vi.useRealTimers();
+  });
 });

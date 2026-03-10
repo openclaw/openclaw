@@ -197,6 +197,7 @@ public actor GatewayChannelActor {
     private var keepaliveTask: Task<Void, Never>?
     private var pendingDeviceTokenRetry = false
     private var deviceTokenRetryBudgetUsed = false
+    private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
     private let connectOptions: GatewayConnectOptions?
@@ -269,10 +270,19 @@ public actor GatewayChannelActor {
         while self.shouldReconnect {
             guard await self.sleepUnlessCancelled(nanoseconds: 30 * 1_000_000_000) else { return } // 30s cadence
             guard self.shouldReconnect else { return }
+            if self.reconnectPausedForAuthFailure { continue }
             if self.connected { continue }
             do {
                 try await self.connect()
             } catch {
+                if self.shouldPauseReconnectAfterAuthFailure(error) {
+                    self.reconnectPausedForAuthFailure = true
+                    self.logger.error(
+                        "gateway watchdog reconnect paused for non-recoverable auth failure " +
+                            "\(error.localizedDescription, privacy: .public)"
+                    )
+                    continue
+                }
                 let wrapped = self.wrap(error, context: "gateway watchdog reconnect")
                 self.logger.error("gateway watchdog reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             }
@@ -323,6 +333,7 @@ public actor GatewayChannelActor {
         }
         self.listen()
         self.connected = true
+        self.reconnectPausedForAuthFailure = false
         self.backoffMs = 500
         self.lastSeq = nil
         self.startKeepalive()
@@ -687,14 +698,17 @@ public actor GatewayChannelActor {
 
     private func scheduleReconnect() async {
         guard self.shouldReconnect else { return }
+        guard !self.reconnectPausedForAuthFailure else { return }
         let delay = self.backoffMs / 1000
         self.backoffMs = min(self.backoffMs * 2, 30000)
         guard await self.sleepUnlessCancelled(nanoseconds: UInt64(delay * 1_000_000_000)) else { return }
         guard self.shouldReconnect else { return }
+        guard !self.reconnectPausedForAuthFailure else { return }
         do {
             try await self.connect()
         } catch {
             if self.shouldPauseReconnectAfterAuthFailure(error) {
+                self.reconnectPausedForAuthFailure = true
                 self.logger.error(
                     "gateway reconnect paused for non-recoverable auth failure " +
                         "\(error.localizedDescription, privacy: .public)"
@@ -755,6 +769,9 @@ public actor GatewayChannelActor {
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {
+        // This client currently treats loopback as the only trusted retry target.
+        // Unlike the Node gateway client, it does not yet expose a pinned TLS-fingerprint
+        // trust path for remote retry, so remote fallback remains disabled by default.
         guard let host = self.url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !host.isEmpty
         else {

@@ -60,7 +60,7 @@ export function resolveGatewayErrorDetailCode(
  * NOTE: AUTH_TOKEN_MISMATCH is intentionally NOT included here because the
  * browser client supports a bounded one-time retry with a cached device token
  * when the endpoint is trusted. Reconnect suppression for mismatch is handled
- * with client state (only when no retry is pending).
+ * with client state (after retry budget is exhausted).
  */
 export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
   if (!error) {
@@ -82,7 +82,8 @@ function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
     const host = gatewayUrl.hostname.trim().toLowerCase();
-    const isLoopbackHost = host === "localhost" || host === "::1" || host === "127.0.0.1";
+    const isLoopbackHost =
+      host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
     const isLoopbackIPv4 = host.startsWith("127.");
     if (isLoopbackHost || isLoopbackIPv4) {
       return true;
@@ -186,6 +187,7 @@ export class GatewayBrowserClient {
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       if (
         connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH &&
+        this.deviceTokenRetryBudgetUsed &&
         !this.pendingDeviceTokenRetry
       ) {
         return;
