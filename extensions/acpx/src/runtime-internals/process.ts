@@ -12,6 +12,7 @@ import {
   omitEnvKeysCaseInsensitive,
   resolveWindowsSpawnProgramCandidate,
 } from "openclaw/plugin-sdk/acpx";
+import { getActiveSkillEnvKeys } from "../../../../src/agents/skills/env-overrides.runtime.js";
 
 export type SpawnExit = {
   code: number | null;
@@ -56,6 +57,20 @@ const DEFAULT_RUNTIME: SpawnRuntime = {
   env: process.env,
   execPath: process.execPath,
 };
+
+export function resolveAcpxSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  options?: { stripKeys?: ReadonlySet<string> },
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  if (options?.stripKeys) {
+    for (const key of options.stripKeys) {
+      delete env[key];
+    }
+  }
+  env.OPENCLAW_SHELL = "acp";
+  return env;
+}
 
 export function resolveSpawnCommand(
   params: { command: string; args: string[] },
@@ -143,11 +158,12 @@ export function spawnWithResolvedCommand(
     process.env,
     params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
   );
-  childEnv.OPENCLAW_SHELL = "acp";
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: childEnv,
+    env: resolveAcpxSpawnEnv(childEnv, {
+      stripKeys: getActiveSkillEnvKeys(),
+    }),
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
