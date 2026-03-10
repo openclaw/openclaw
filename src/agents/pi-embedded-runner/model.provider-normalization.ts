@@ -25,7 +25,7 @@ function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
   if (!trimmed) {
     return false;
   }
-  return /^https?:\/\/api\.githubcopilot\.com\/?$/i.test(trimmed);
+  return /^https?:\/\/api\.githubcopilot\.com(?:\/v1)?\/?$/i.test(trimmed);
 }
 
 function normalizeOpenAICodexTransport(params: {
@@ -42,9 +42,12 @@ function normalizeOpenAICodexTransport(params: {
     isOpenAICodexBaseUrl(params.model.baseUrl) ||
     isLegacyCodexCompatBaseUrl(params.model.baseUrl);
 
+  const shouldPromoteResponses = useCodexTransport && params.model.api === "openai-responses";
+  const shouldPromoteLegacyCompletions =
+    isLegacyCodexCompatBaseUrl(params.model.baseUrl) && params.model.api === "openai-completions";
+
   const nextApi =
-    useCodexTransport &&
-    (params.model.api === "openai-responses" || params.model.api === "openai-completions")
+    shouldPromoteResponses || shouldPromoteLegacyCompletions
       ? ("openai-codex-responses" as const)
       : params.model.api;
   const nextBaseUrl =

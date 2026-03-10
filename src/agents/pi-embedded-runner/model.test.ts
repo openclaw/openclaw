@@ -718,6 +718,60 @@ describe("resolveModel", () => {
     });
   });
 
+  it("normalizes legacy githubcopilot openai-completions override to codex transport", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.githubcopilot.com",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.4",
+        provider: "openai-codex",
+      },
+    });
+  });
+
+  it("normalizes legacy githubcopilot /v1 openai-completions override to codex transport", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.githubcopilot.com/v1",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.4",
+        provider: "openai-codex",
+      },
+    });
+  });
+
   it("includes auth hint for unknown ollama models (#17328)", () => {
     // resetMockDiscoverModels() in beforeEach already sets find → null
     const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
