@@ -14,6 +14,9 @@ let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+// Tracks the most recent runtimeSnapshot queued while a refresh is in-flight so it
+// is not silently dropped when a second caller arrives concurrently.
+let pendingRuntimeSnapshot: ChannelRuntimeSnapshot | undefined = undefined;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -68,15 +71,35 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+/** @internal Reset module-level state between tests only. */
+export function __resetHealthStateForTest() {
+  healthCache = null;
+  healthRefresh = null;
+  pendingRuntimeSnapshot = undefined;
+  healthVersion = 1;
+  presenceVersion = 1;
+  broadcastHealthUpdate = null;
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: {
   probe?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
 }) {
+  // Always track the newest runtimeSnapshot so it is not silently discarded when
+  // a refresh is already in-flight and a second caller provides a fresher snapshot.
+  if (opts?.runtimeSnapshot !== undefined) {
+    pendingRuntimeSnapshot = opts.runtimeSnapshot;
+  }
+
   if (!healthRefresh) {
+    // Capture and clear the pending snapshot for this refresh cycle.
+    const snapshotForRefresh = pendingRuntimeSnapshot;
+    pendingRuntimeSnapshot = undefined;
+
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot({
         probe: opts?.probe,
-        runtimeSnapshot: opts?.runtimeSnapshot,
+        runtimeSnapshot: snapshotForRefresh,
       });
       healthCache = snap;
       healthVersion += 1;
@@ -86,6 +109,11 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       return snap;
     })().finally(() => {
       healthRefresh = null;
+      // If a newer runtimeSnapshot arrived while the refresh was in-flight, kick
+      // off a follow-up refresh so the latest runtime state is reflected.
+      if (pendingRuntimeSnapshot !== undefined) {
+        void refreshGatewayHealthSnapshot({ probe: opts?.probe });
+      }
     });
   }
   return healthRefresh;

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import type { ChannelRuntimeSnapshot } from "../gateway/server-channels.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -457,7 +458,7 @@ export async function getHealthSnapshot(params?: {
       const runtimeForAccount =
         runtimeAccount ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
       const snapshot: ChannelAccountSnapshot = {
-        ...(runtimeForAccount ?? {}),
+        ...runtimeForAccount,
         accountId,
         enabled,
         configured,
@@ -493,6 +494,15 @@ export async function getHealthSnapshot(params?: {
         record.lastProbeAt = lastProbeAt;
       }
       record.accountId = accountId;
+      // Preserve runtime-backed fields (connected, lastConnectedAt, lastEventAt, etc.) that
+      // buildChannelSummary may not include in its return value.
+      if (runtimeForAccount) {
+        for (const [key, value] of Object.entries(runtimeForAccount)) {
+          if (record[key] === undefined) {
+            record[key] = value;
+          }
+        }
+      }
       accountSummaries[accountId] = record;
     }
 
