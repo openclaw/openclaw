@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseQmdQueryJson } from "./qmd-query-parser.js";
+import { parseQmdMcporterJson, parseQmdQueryJson } from "./qmd-query-parser.js";
 
 describe("parseQmdQueryJson", () => {
   it("parses clean qmd JSON output", () => {
@@ -43,6 +43,38 @@ complete`,
   it("throws when stdout cannot be interpreted as qmd JSON", () => {
     expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
       /qmd query returned invalid JSON/i,
+    );
+  });
+});
+
+describe("parseQmdMcporterJson", () => {
+  it("parses mcporter structuredContent payloads", () => {
+    const results = parseQmdMcporterJson(
+      JSON.stringify({ structuredContent: { results: [{ docid: "abc", score: 0.4 }] } }),
+      "",
+    );
+    expect(results).toEqual([{ docid: "abc", score: 0.4 }]);
+  });
+
+  it("parses JSON-RPC result payloads", () => {
+    const results = parseQmdMcporterJson(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: [{ docid: "abc", score: 1 }] }),
+      "",
+    );
+    expect(results).toEqual([{ docid: "abc", score: 1 }]);
+  });
+
+  it("extracts embedded JSON when stdout is noisy", () => {
+    const results = parseQmdMcporterJson(
+      `status: ok\n{"structuredContent":{"results":[{"docid":"abc","score":0.2}]}}\n`,
+      "",
+    );
+    expect(results).toEqual([{ docid: "abc", score: 0.2 }]);
+  });
+
+  it("throws when mcporter payload lacks results", () => {
+    expect(() => parseQmdMcporterJson(JSON.stringify({ structuredContent: {} }), "")).toThrow(
+      /qmd mcporter JSON response missing results array/i,
     );
   });
 });

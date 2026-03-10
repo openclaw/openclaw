@@ -11,6 +11,8 @@ export type QmdQueryResult = {
   body?: string;
 };
 
+type JsonRecord = Record<string, unknown>;
+
 export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
   const trimmedStdout = stdout.trim();
   const trimmedStderr = stderr.trim();
@@ -46,6 +48,37 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
   }
 }
 
+export function parseQmdMcporterJson(stdout: string, stderr: string): QmdQueryResult[] {
+  const trimmedStdout = stdout.trim();
+  const trimmedStderr = stderr.trim();
+  const stdoutIsMarker = trimmedStdout.length > 0 && isQmdNoResultsOutput(trimmedStdout);
+  const stderrIsMarker = trimmedStderr.length > 0 && isQmdNoResultsOutput(trimmedStderr);
+  if (stdoutIsMarker || (!trimmedStdout && stderrIsMarker)) {
+    return [];
+  }
+  if (!trimmedStdout) {
+    const context = trimmedStderr ? ` (stderr: ${summarizeQmdStderr(trimmedStderr)})` : "";
+    const message = `stdout empty${context}`;
+    log.warn(`qmd mcporter returned invalid JSON: ${message}`);
+    throw new Error(`qmd mcporter returned invalid JSON: ${message}`);
+  }
+  try {
+    const parsed = parseQmdJsonPayload(trimmedStdout);
+    if (parsed === null) {
+      throw new Error("qmd mcporter JSON response could not be parsed");
+    }
+    const results = normalizeQmdResultsFromUnknown(parsed);
+    if (!results) {
+      throw new Error("qmd mcporter JSON response missing results array");
+    }
+    return results;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(`qmd mcporter returned invalid JSON: ${message}`);
+    throw new Error(`qmd mcporter returned invalid JSON: ${message}`, { cause: err });
+  }
+}
+
 function isQmdNoResultsOutput(raw: string): boolean {
   const lines = raw
     .split(/\r?\n/)
@@ -67,6 +100,10 @@ function summarizeQmdStderr(raw: string): string {
   return raw.length <= 120 ? raw : `${raw.slice(0, 117)}...`;
 }
 
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -79,11 +116,70 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
   }
 }
 
+function parseQmdJsonPayload(raw: string): unknown | null {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    const extracted = extractFirstJsonValue(raw);
+    if (!extracted) {
+      return null;
+    }
+    try {
+      return JSON.parse(extracted) as unknown;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function normalizeQmdResultsFromUnknown(payload: unknown): QmdQueryResult[] | null {
+  let value = payload;
+  if (isRecord(value) && "result" in value) {
+    value = value.result;
+  }
+  if (Array.isArray(value)) {
+    return value as QmdQueryResult[];
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (isRecord(value.structuredContent)) {
+    value = value.structuredContent;
+    if (Array.isArray(value)) {
+      return value as QmdQueryResult[];
+    }
+    if (isRecord(value) && Array.isArray(value.results)) {
+      return value.results as QmdQueryResult[];
+    }
+    return null;
+  }
+  if (Array.isArray(value.results)) {
+    return value.results as QmdQueryResult[];
+  }
+  return null;
+}
+
 function extractFirstJsonArray(raw: string): string | null {
   const start = raw.indexOf("[");
   if (start < 0) {
     return null;
   }
+  return extractJsonValue(raw, start, "[", "]");
+}
+
+function extractFirstJsonValue(raw: string): string | null {
+  const arrayStart = raw.indexOf("[");
+  const objectStart = raw.indexOf("{");
+  if (arrayStart < 0 && objectStart < 0) {
+    return null;
+  }
+  if (arrayStart >= 0 && (objectStart < 0 || arrayStart < objectStart)) {
+    return extractJsonValue(raw, arrayStart, "[", "]");
+  }
+  return extractJsonValue(raw, objectStart, "{", "}");
+}
+
+function extractJsonValue(raw: string, start: number, open: string, close: string): string | null {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -108,9 +204,9 @@ function extractFirstJsonArray(raw: string): string | null {
       inString = true;
       continue;
     }
-    if (char === "[") {
+    if (char === open) {
       depth += 1;
-    } else if (char === "]") {
+    } else if (char === close) {
       depth -= 1;
       if (depth === 0) {
         return raw.slice(start, i + 1);
