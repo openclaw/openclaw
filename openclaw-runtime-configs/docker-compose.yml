@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  vllm-proxy:
+    container_name: vllm-proxy
+    image: node:22-alpine
+    restart: unless-stopped
+    volumes:
+      - ../vllm-proxy.js:/app/proxy.js:ro
+    command: ["node", "/app/proxy.js"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  openclaw-gateway:
+    container_name: openclaw-gateway
+    image: ${OPENCLAW_IMAGE}
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    user: ${OPENCLAW_RUN_USER:-0:0}
+    environment:
+      TZ: Asia/Shanghai
+      HOME: /home/node
+      TERM: xterm-256color
+      # 禁用模型配置自动同步（使用 openclaw.json 手动配置）
+      SYNC_MODEL_CONFIG: "false"
+      # AI模型配置
+      MODEL_ID: ${MODEL_ID}
+      BASE_URL: ${BASE_URL}
+      API_KEY: ${API_KEY}
+      API_PROTOCOL: ${API_PROTOCOL}
+      CONTEXT_WINDOW: ${CONTEXT_WINDOW}
+      MAX_TOKENS: ${MAX_TOKENS}
+      # 飞书配置
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      # 钉钉配置
+      DINGTALK_CLIENT_ID: ${DINGTALK_CLIENT_ID}
+      DINGTALK_CLIENT_SECRET: ${DINGTALK_CLIENT_SECRET}
+      DINGTALK_ROBOT_CODE: ${DINGTALK_ROBOT_CODE}
+      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID}
+      DINGTALK_AGENT_ID: ${DINGTALK_AGENT_ID}
+      # QQ机器人配置
+      QQBOT_APP_ID: ${QQBOT_APP_ID}
+      QQBOT_CLIENT_SECRET: ${QQBOT_CLIENT_SECRET}
+      # 企业微信配置
+      WECOM_TOKEN: ${WECOM_TOKEN}
+      WECOM_ENCODING_AES_KEY: ${WECOM_ENCODING_AES_KEY}
+      # Telegram配置（可选）
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      # 工作空间配置
+      WORKSPACE: ${WORKSPACE}
+      # Gateway配置
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND}
+      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT}
+      OPENCLAW_BRIDGE_PORT: ${OPENCLAW_BRIDGE_PORT}
+    volumes:
+      - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
+      # 覆盖 init：chown 后台限时，避免 Windows 卷阻塞导致 Gateway 无法启动
+      - ./docker/init.sh:/usr/local/bin/init.sh:ro
+      # 使用匿名卷隔离extensions目录，保留镜像中预装的国内IM插件
+      - /home/node/.openclaw/extensions
+      # 宿主机备份目录只读挂载（Windows 路径格式）
+      - E:/openclaw-backup:/backup:ro
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT}:18789"
+      - "${OPENCLAW_BRIDGE_PORT}:18790"
+      - "18060:18060"
+    init: true
+    restart: unless-stopped
+    # 容器内 DNS，便于浏览器解析国内域名（如小红书 www.xiaohongshu.com）
+    dns:
+      - 223.5.5.5
+      - 114.114.114.114
+      - 8.8.8.8
+    extra_hosts:
+      # 让容器内可以访问宿主机的3000端口（AIClient-2-API服务）
+      - "host.docker.internal:host-gateway"
+      # 小红书：固定 IPv4，避免容器内 DNS/IPv6 导致浏览器无法访问
+      - "www.xiaohongshu.com:81.69.116.86"
+      - "xiaohongshu.com:81.69.116.86"

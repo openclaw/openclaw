@@ -1,0 +1,27 @@
+services:
+  vllm-proxy:
+    container_name: vllm-proxy
+    image: node:22-alpine
+    restart: unless-stopped
+    volumes:
+      - ../vllm-proxy.js:/app/proxy.js:ro
+    command: ["node", "/app/proxy.js"]
+
+  openclaw-gateway:
+    container_name: openclaw-gateway
+    image: fourplayers/openclaw:latest
+    environment:
+      TZ: Asia/Shanghai
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN:-123456}"
+      OPENCLAW_GATEWAY_BIND: "${OPENCLAW_GATEWAY_BIND:-lan}"
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_SKIP_ONBOARD: "true"
+    volumes:
+      - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - vllm-proxy
