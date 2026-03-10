@@ -44,6 +44,25 @@ export function doesGatewayBindResolveToLoopback(params: {
     isLoopbackIpAddress(customBindHost)
   );
 }
+
+export function hasTailscaleServeFunnelNonLoopbackBind(params: {
+  bind: unknown;
+  customBindHost?: unknown;
+  tailscaleMode?: unknown;
+}): boolean {
+  const { tailscaleMode } = params;
+  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+    return false;
+  }
+  if (!isGatewayNonLoopbackBindMode(params.bind)) {
+    return false;
+  }
+  return !doesGatewayBindResolveToLoopback({
+    bind: params.bind,
+    customBindHost: params.customBindHost,
+  });
+}
+
 export function buildDefaultControlUiAllowedOrigins(params: {
   port: number;
   bind: unknown;

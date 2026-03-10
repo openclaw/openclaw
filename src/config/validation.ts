@@ -19,7 +19,7 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
-import { doesGatewayBindResolveToLoopback } from "./gateway-control-ui-origins.js";
+import { hasTailscaleServeFunnelNonLoopbackBind } from "./gateway-control-ui-origins.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -197,13 +197,11 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
 
 function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationIssue[] {
   const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
-  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
-    return [];
-  }
   if (
-    doesGatewayBindResolveToLoopback({
+    !hasTailscaleServeFunnelNonLoopbackBind({
       bind: config.gateway?.bind,
       customBindHost: config.gateway?.customBindHost,
+      tailscaleMode,
     })
   ) {
     return [];
