@@ -80,7 +80,9 @@ Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when 
 
 ## Publish & verify
 
-- Upload `OpenClaw-2026.3.9.zip` (and `OpenClaw-2026.3.9.dSYM.zip`) to the GitHub release for tag `v2026.3.9`.
+- Pushing tag `v2026.3.9` now triggers `.github/workflows/macos-release.yml`, which builds, signs, notarizes, and uploads the macOS assets to the GitHub release.
+- `appcast.xml` is still manual for now.
+- Verify that `OpenClaw-2026.3.9.zip`, `OpenClaw-2026.3.9.dmg`, and `OpenClaw-2026.3.9.dSYM.zip` (if produced) are attached to the GitHub release for tag `v2026.3.9`.
 - Ensure the raw appcast URL matches the baked feed: `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
 - Sanity checks:
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` returns 200.

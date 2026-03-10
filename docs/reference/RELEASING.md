@@ -89,6 +89,8 @@ Historical note:
 - [ ] Follow [macOS release](/platforms/mac/release) for the exact commands and required env vars.
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
   - If notarizing, use the `openclaw-notary` keychain profile created from App Store Connect API env vars (see [macOS release](/platforms/mac/release)).
+  - Pushing the release tag also triggers `.github/workflows/macos-release.yml`, which builds, signs, notarizes, and uploads macOS release assets to the GitHub release.
+  - `appcast.xml` remains a manual publish step for now.
 
 6. **Publish (npm)**
 
@@ -113,9 +115,11 @@ Historical note:
 7. **GitHub release + appcast**
 
 - [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
-  - Pushing the tag also triggers the npm release workflow.
-- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `openclaw X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.
-- [ ] Attach artifacts: `npm pack` tarball (optional), `OpenClaw-X.Y.Z.zip`, and `OpenClaw-X.Y.Z.dSYM.zip` (if generated).
+  - Pushing the tag also triggers `.github/workflows/openclaw-npm-release.yml` and `.github/workflows/macos-release.yml`.
+- [ ] Verify the GitHub release for `vX.Y.Z`.
+  - The macOS workflow creates or updates the release with **title `openclaw X.Y.Z`**, uses the matching changelog section as the body, and uploads the macOS assets.
+  - If you need to fix notes or assets after the workflow runs, refresh them manually.
+- [ ] Confirm the expected artifacts are attached: `npm pack` tarball (optional/manual), `OpenClaw-X.Y.Z.zip`, `OpenClaw-X.Y.Z.dmg`, and `OpenClaw-X.Y.Z.dSYM.zip` (if generated).
 - [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
 - [ ] From a clean temp directory (no `package.json`), run `npx -y openclaw@X.Y.Z send --help` to confirm install/CLI entrypoints work.
 - [ ] Announce/share release notes.
