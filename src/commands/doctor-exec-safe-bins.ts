@@ -9,6 +9,7 @@ import {
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
+import { isRecord } from "../utils.js";
 
 export type ExecSafeBinCoverageHit = {
   scopePath: string;
@@ -29,13 +30,6 @@ export type ExecSafeBinTrustedDirHintHit = {
   bin: string;
   resolvedPath: string;
 };
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function normalizeConfiguredSafeBins(entries: unknown): string[] {
   if (!Array.isArray(entries)) {
@@ -61,7 +55,7 @@ function normalizeConfiguredTrustedSafeBinDirs(entries: unknown): string[] {
 
 function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   const scopes: ExecSafeBinScopeRef[] = [];
-  const globalExec = asObjectRecord(cfg.tools?.exec);
+  const globalExec = isRecord(cfg.tools?.exec) ? cfg.tools.exec : null;
   const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
   if (globalExec) {
     const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
@@ -86,7 +80,7 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
       continue;
     }
-    const agentExec = asObjectRecord(agent.tools?.exec);
+    const agentExec = isRecord(agent.tools?.exec) ? agent.tools.exec : null;
     if (!agentExec) {
       continue;
     }
@@ -176,8 +170,8 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
     if (missingBins.length === 0) {
       continue;
     }
-    const profileHolder =
-      asObjectRecord(scope.exec.safeBinProfiles) ?? (scope.exec.safeBinProfiles = {});
+    const profileHolder = isRecord(scope.exec.safeBinProfiles) ? scope.exec.safeBinProfiles : null;
+    const mutableProfileHolder = profileHolder ?? (scope.exec.safeBinProfiles = {});
     for (const bin of missingBins) {
       if (interpreterBins.has(bin)) {
         warnings.push(
@@ -185,10 +179,10 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
         );
         continue;
       }
-      if (profileHolder[bin] !== undefined) {
+      if (mutableProfileHolder[bin] !== undefined) {
         continue;
       }
-      profileHolder[bin] = {};
+      mutableProfileHolder[bin] = {};
       changes.push(
         `- ${scope.scopePath}.safeBinProfiles.${bin}: added scaffold profile {} (review and tighten flags/positionals).`,
       );
