@@ -433,6 +433,35 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
+  it("should preserve toolCall blocks with matching tool_result", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+          { type: "text", text: "Here's result" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "call-1", content: [{ type: "text", text: "Result" }] },
+          { type: "text", text: "Thanks" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+      { type: "text", text: "Here's result" },
+    ]);
+  });
+
   it("should insert fallback text when all content would be removed", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
