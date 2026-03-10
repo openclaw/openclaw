@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { resizeToJpeg } from "../../../media/image-ops.js";
 import { resolveUserPath } from "../../../utils.js";
 import { loadWebMedia } from "../../../web/media.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -60,6 +61,60 @@ function isImageExtension(filePath: string): boolean {
 
 function normalizeRefForDedupe(raw: string): string {
   return process.platform === "win32" ? raw.toLowerCase() : raw;
+}
+
+/**
+ * Compresses existing images (from message attachments) using imageCompression settings.
+ * This is needed because existingImages bypass loadWebMedia and go directly to sanitization.
+ */
+async function compressExistingImages(
+  images: ImageContent[],
+  compressionSettings?: {
+    optimize: boolean;
+    maxSide?: number;
+    quality?: number;
+  },
+): Promise<ImageContent[]> {
+  // Skip if no compression needed or no settings provided
+  if (
+    !compressionSettings?.optimize ||
+    compressionSettings.maxSide === undefined ||
+    compressionSettings.quality === undefined
+  ) {
+    return images;
+  }
+
+  const compressed: ImageContent[] = [];
+  for (const image of images) {
+    try {
+      console.log(
+        `[media] Compressing existing image: maxSide=${compressionSettings.maxSide}, quality=${compressionSettings.quality}`,
+      );
+      const buffer = Buffer.from(image.data, "base64");
+      const originalSize = buffer.length;
+      const resized = await resizeToJpeg({
+        buffer,
+        maxSide: compressionSettings.maxSide,
+        quality: compressionSettings.quality,
+        withoutEnlargement: true,
+      });
+      console.log(
+        `[media] Existing image compressed: ${originalSize} -> ${resized.length} bytes (side=${compressionSettings.maxSide}, q=${compressionSettings.quality})`,
+      );
+      compressed.push({
+        type: "image",
+        data: resized.toString("base64"),
+        mimeType: "image/jpeg",
+      });
+    } catch (err) {
+      // If compression fails, include original image
+      log.debug(
+        `Native image: failed to compress existing image: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      compressed.push(image);
+    }
+  }
+  return compressed;
 }
 
 async function sanitizeImagesWithLog(
@@ -331,9 +386,15 @@ export async function detectAndLoadPromptImages(params: {
   // Detect images from current prompt
   const allRefs = detectImageReferences(params.prompt);
 
+  // Compress existing images (from message attachments) early
+  const compressedExisting = await compressExistingImages(
+    params.existingImages ?? [],
+    params.compressionSettings,
+  );
+
   if (allRefs.length === 0) {
     return {
-      images: params.existingImages ?? [],
+      images: compressedExisting,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -342,7 +403,7 @@ export async function detectAndLoadPromptImages(params: {
 
   log.debug(`Native image: detected ${allRefs.length} image refs in prompt`);
 
-  const promptImages: ImageContent[] = [...(params.existingImages ?? [])];
+  const promptImages: ImageContent[] = [...compressedExisting];
 
   let loadedCount = 0;
   let skippedCount = 0;
