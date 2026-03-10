@@ -129,6 +129,7 @@ export function stripInboundMetadata(text: string): string {
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;
+  let strippedMetadata = false; // Track if we actually stripped any metadata
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -148,6 +149,7 @@ export function stripInboundMetadata(text: string): string {
       }
       inMetaBlock = true;
       inFencedJson = false;
+      strippedMetadata = true; // We're entering a metadata block
       continue;
     }
 
@@ -174,25 +176,29 @@ export function stripInboundMetadata(text: string): string {
     result.push(line);
   }
 
-  // Skip any leading blank lines before checking for separator.
-  // The metadata blocks end with a blank line, so after stripping metadata
-  // we may have leading blanks before the "---" separator.
-  let separatorIndex = 0;
-  while (separatorIndex < result.length && result[separatorIndex]?.trim() === "") {
-    separatorIndex++;
-  }
+  // Only strip the separator if we actually stripped metadata.
+  // This prevents corrupting user content that happens to start with the separator pattern.
+  if (strippedMetadata) {
+    // Skip any leading blank lines before checking for separator.
+    // The metadata blocks end with a blank line, so after stripping metadata
+    // we may have leading blanks before the "---" separator.
+    let separatorIndex = 0;
+    while (separatorIndex < result.length && result[separatorIndex]?.trim() === "") {
+      separatorIndex++;
+    }
 
-  // Strip the user message separator if present.
-  // Only strip when we see the full pattern: "---" followed by "**User Message:**"
-  if (
-    separatorIndex < result.length &&
-    result[separatorIndex]?.trim() === "---" &&
-    result[separatorIndex + 1]?.trim() === "**User Message:**"
-  ) {
-    // Remove the separator lines and any leading blank lines
-    result.splice(0, separatorIndex + 2);
-    while (result.length > 0 && result[0]?.trim() === "") {
-      result.shift();
+    // Strip the user message separator if present.
+    // Only strip when we see the full pattern: "---" followed by "**User Message:**"
+    if (
+      separatorIndex < result.length &&
+      result[separatorIndex]?.trim() === "---" &&
+      result[separatorIndex + 1]?.trim() === "**User Message:**"
+    ) {
+      // Remove the separator lines and any leading blank lines
+      result.splice(0, separatorIndex + 2);
+      while (result.length > 0 && result[0]?.trim() === "") {
+        result.shift();
+      }
     }
   }
 
