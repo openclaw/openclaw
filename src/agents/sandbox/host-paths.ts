@@ -30,7 +30,7 @@ export function normalizeSandboxHostPath(raw: string): string {
   }
   let normalTrimmed = trimmed.replaceAll("\\", "/");
   const windowsPrefix = /^[A-Za-z]:/;
-  if (windowsPrefix.test(normalTrimmed)){
+  if (windowsPrefix.test(normalTrimmed)) {
     normalTrimmed = normalTrimmed.toUpperCase();
   }
   const normalized = posix.normalize(normalTrimmed);
