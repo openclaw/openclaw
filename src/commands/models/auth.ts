@@ -24,6 +24,7 @@ import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
+import { callGatewayFromCli } from "../../cli/gateway-rpc.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
@@ -466,5 +467,32 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   }
   if (result.notes && result.notes.length > 0) {
     await prompter.note(result.notes.join("\n"), "Provider notes");
+  }
+
+  // Sync auth profiles to gateway if running on a node host
+  const configAfterUpdate = await loadValidConfigOrThrow();
+  const gatewayUrl = configAfterUpdate.gateway?.remote?.url;
+  if (gatewayUrl && typeof gatewayUrl === "string" && gatewayUrl.trim()) {
+    runtime.log("Detected node host mode, syncing auth profiles to gateway...");
+    try {
+      // Read the updated auth-profiles.json and sync to gateway
+      const { readAuthProfilesFile } = await import("../secrets/auth-store-paths.js");
+      const authProfiles = readAuthProfilesFile(agentDir);
+      
+      await callGatewayFromCli(
+        "authProfiles.upsert",
+        { url: gatewayUrl.trim() },
+        { profiles: authProfiles },
+        { progress: false },
+      );
+      runtime.log("✅ Auth profiles synced to gateway");
+    } catch (err) {
+      runtime.log(
+        `⚠️  Warning: Failed to sync auth profiles to gateway: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      runtime.log(
+        "Please manually run auth login on the gateway host or copy the auth-profiles.json file.",
+      );
+    }
   }
 }
