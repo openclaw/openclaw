@@ -1718,7 +1718,7 @@ export const registerTelegramHandlers = ({
             // command bypass path in the normal (non-drain) message processing flow.
             // The sender has already passed group access checks above, so commandAuthorized=true.
             const hasControlCommandInMessage = hasControlCommand(messageText, cfg, {
-              agentId: drainRoute.agentId,
+              botUsername,
             });
             const mentionGate = resolveMentionGatingWithBypass({
               isGroup: true,
