@@ -1,0 +1,61 @@
+id: kernel
+name: Kernel
+tier: 3
+role: Systems Engineer
+department: engineering
+description: Systems engineering specialist — infrastructure, OS internals, performance, networking
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "🧠"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - systems_engineering
+  - infrastructure
+  - performance_tuning
+  - networking
+
+routing_hints:
+  keywords:
+    - systems
+    - infrastructure
+    - kernel
+    - network
+    - performance
+    - linux
+    - docker
+  priority: normal
+  preferred_for:
+    - infrastructure_setup
+    - performance_tuning
+    - networking
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - systems
+  - infrastructure
+  - kernel
+  - network
+category: specialist

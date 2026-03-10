@@ -28,7 +28,27 @@ const InstancesPage = lazy(() =>
   import("@/pages/instances").then((m) => ({ default: m.InstancesPage })),
 );
 
-const AgentsPage = lazy(() => import("@/pages/agents").then((m) => ({ default: m.AgentsPage })));
+const AgentBrowsePage = lazy(() =>
+  import("@/pages/agents/browse").then((m) => ({ default: m.AgentBrowsePage })),
+);
+const AgentInstalledPage = lazy(() =>
+  import("@/pages/agents/installed").then((m) => ({ default: m.AgentInstalledPage })),
+);
+const AgentRegistriesPage = lazy(() =>
+  import("@/pages/agents/registries").then((m) => ({ default: m.AgentRegistriesPage })),
+);
+const AgentHealthPage = lazy(() =>
+  import("@/pages/agents/health").then((m) => ({ default: m.AgentHealthPage })),
+);
+const AgentConfigPage = lazy(() =>
+  import("@/pages/agents/config").then((m) => ({ default: m.AgentConfigPage })),
+);
+const AgentPreviewPage = lazy(() =>
+  import("@/pages/agents/preview").then((m) => ({ default: m.AgentPreviewPage })),
+);
+const AgentOrganizationPage = lazy(() =>
+  import("@/pages/agents/organization").then((m) => ({ default: m.AgentOrganizationPage })),
+);
 const MemoryPage = lazy(() => import("@/pages/memory").then((m) => ({ default: m.MemoryPage })));
 const UsagePage = lazy(() => import("@/pages/usage").then((m) => ({ default: m.UsagePage })));
 const VisualizePage = lazy(() =>
@@ -91,11 +111,60 @@ export function App() {
                 </Suspense>
               }
             />
+            <Route path="/agents" element={<Navigate to="/agents/organization" replace />} />
             <Route
-              path="/agents"
+              path="/agents/browse"
               element={
                 <Suspense fallback={<PageLoader />}>
-                  <AgentsPage />
+                  <AgentBrowsePage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/agents/installed"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <AgentInstalledPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/agents/registries"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <AgentRegistriesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/agents/health"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <AgentHealthPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/agents/config/:agentId"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <AgentConfigPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/agents/organization"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <AgentOrganizationPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/agents/preview/:agentId"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <AgentPreviewPage />
                 </Suspense>
               }
             />

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.9",
+  "version": "2026.3.10",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -325,8 +325,8 @@
     "test:watch": "vitest",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
-    "ui-next:build": "pnpm --filter ./ui-next build",
-    "ui-next:dev": "pnpm --filter ./ui-next dev",
+    "ui-next:build": "cd ui-next && npm run build",
+    "ui-next:dev": "cd ui-next && npm run dev",
     "ui:build": "node scripts/ui.js build",
     "ui:build:all": "pnpm ui:build && pnpm ui-next:build",
     "ui:dev": "node scripts/ui.js dev",

@@ -1,0 +1,57 @@
+id: vibe
+name: Vibe
+tier: 3
+role: Social Media Manager
+department: marketing
+description: Social media management specialist — content scheduling, engagement, platform strategy
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "🎵"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - social_media
+  - content_scheduling
+  - engagement
+  - platform_strategy
+
+routing_hints:
+  keywords:
+    - social
+    - twitter
+    - instagram
+    - linkedin
+    - post
+    - engagement
+    - hashtag
+  priority: normal
+  preferred_for:
+    - social_media_posts
+    - engagement_strategy
+    - content_calendar
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - social
+  - twitter
+  - instagram
+  - linkedin
+category: specialist

@@ -1,0 +1,62 @@
+id: binary
+name: Binary
+tier: 3
+role: Mobile Engineer
+department: engineering
+description: Mobile engineering specialist — iOS, Android, React Native, cross-platform development
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "🔢"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - mobile_development
+  - ios_development
+  - android_development
+  - cross_platform
+
+routing_hints:
+  keywords:
+    - mobile
+    - ios
+    - android
+    - swift
+    - kotlin
+    - react-native
+    - flutter
+    - app
+  priority: normal
+  preferred_for:
+    - mobile_development
+    - app_bugs
+    - cross_platform
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - mobile
+  - ios
+  - android
+  - swift
+category: specialist

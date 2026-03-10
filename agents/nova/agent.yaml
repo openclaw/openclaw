@@ -1,0 +1,57 @@
+id: nova
+name: Nova
+tier: 3
+role: SEO Specialist
+department: marketing
+description: SEO specialist — keyword research, on-page optimization, technical SEO, rankings
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "💫"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - seo_optimization
+  - keyword_research
+  - technical_seo
+  - content_optimization
+
+routing_hints:
+  keywords:
+    - seo
+    - keyword
+    - ranking
+    - search
+    - organic
+    - backlink
+    - meta
+  priority: normal
+  preferred_for:
+    - seo_audit
+    - keyword_research
+    - content_optimization
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - seo
+  - keyword
+  - ranking
+  - search
+category: specialist

@@ -1,0 +1,33 @@
+id: finance-pack
+name: Finance Pack
+tier: 2
+role: Complete Finance Team
+department: finance
+description: Pre-packaged finance department — CFO plus all finance specialists.
+version: 1.0.0
+
+is_bundle: true
+bundle_agents:
+  - trinity
+  - oracle
+  - seraph
+  - zee
+  - ledger
+  - vault
+  - shield
+  - trace
+  - quota
+  - merit
+  - beacon
+
+keywords:
+  - finance
+  - budget
+  - compliance
+  - analytics
+  - tax
+  - investment
+  - procurement
+  - bundle
+  - pack
+category: bundle

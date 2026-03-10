@@ -1,0 +1,33 @@
+id: engineering-pack
+name: Engineering Pack
+tier: 2
+role: Complete Engineering Team
+department: engineering
+description: Pre-packaged engineering department — CTO plus all engineering specialists.
+version: 1.0.0
+
+is_bundle: true
+bundle_agents:
+  - neo
+  - tank
+  - dozer
+  - mouse
+  - spark
+  - cipher
+  - relay
+  - ghost
+  - binary
+  - kernel
+  - prism
+
+keywords:
+  - engineering
+  - backend
+  - frontend
+  - devops
+  - security
+  - mobile
+  - testing
+  - bundle
+  - pack
+category: bundle

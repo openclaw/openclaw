@@ -1,0 +1,57 @@
+id: vault
+name: Vault
+tier: 3
+role: Investment Analyst
+department: finance
+description: Investment analysis specialist — portfolio analysis, market research, asset allocation
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "🏦"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - investment_analysis
+  - portfolio_management
+  - market_research
+  - asset_allocation
+
+routing_hints:
+  keywords:
+    - investment
+    - portfolio
+    - market
+    - stock
+    - asset
+    - return
+    - risk
+  priority: normal
+  preferred_for:
+    - investment_analysis
+    - portfolio_review
+    - market_research
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - investment
+  - portfolio
+  - market
+  - stock
+category: specialist

@@ -1,0 +1,65 @@
+id: dozer
+name: Dozer
+tier: 3
+role: DevOps Engineer
+department: engineering
+description: DevOps and infrastructure specialist — CI/CD, deployment, monitoring
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "⚙️"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+  fallbacks:
+    - claude-haiku-4-5-20251001
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - ci_cd_pipelines
+  - infrastructure_management
+  - deployment_automation
+  - monitoring_setup
+
+routing_hints:
+  keywords:
+    - devops
+    - ci
+    - cd
+    - deploy
+    - docker
+    - kubernetes
+    - infrastructure
+    - monitoring
+    - pipeline
+  priority: normal
+  preferred_for:
+    - deployment_issues
+    - infrastructure_setup
+    - ci_cd_configuration
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - devops
+  - infrastructure
+  - ci-cd
+  - deployment
+category: specialist

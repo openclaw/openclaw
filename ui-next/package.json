@@ -10,8 +10,11 @@
   "dependencies": {
     "@noble/ed25519": "3.0.0",
     "@tailwindcss/typography": "^0.5.19",
+    "@types/dagre": "^0.7.54",
+    "@xyflow/react": "^12.10.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dagre": "^0.8.5",
     "date-fns": "^4.1.0",
     "framer-motion": "^11.0.0",
     "lucide-react": "^0.460.0",

@@ -1,0 +1,63 @@
+id: operator1
+name: Operator1
+tier: 1
+role: COO
+department: operations
+description: Chief Operating Officer — the orchestrator. Routes tasks to department heads, cannot be removed.
+version: 1.0.0
+identity:
+  emoji: "🎯"
+
+model:
+  provider: anthropic
+  primary: claude-opus-4-6
+  fallbacks:
+    - claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+    - browser
+
+capabilities:
+  - task_routing
+  - team_coordination
+  - strategic_planning
+  - cross_department_sync
+
+routing_hints:
+  keywords:
+    - general
+    - coordinate
+    - plan
+    - status
+    - overview
+    - strategy
+  priority: high
+  preferred_for:
+    - cross_department_tasks
+    - strategic_decisions
+    - status_updates
+
+skills:
+  - coding-agent
+  - github
+
+limits:
+  timeout_seconds: 600
+  cost_limit_usd: 1.00
+  context_window_tokens: 200000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - orchestrator
+  - coo
+  - operations
+  - routing
+category: core

@@ -1,0 +1,54 @@
+id: rex
+name: Rex
+tier: 3
+role: Designer
+department: marketing
+description: Design specialist — visual assets, brand identity, UI/UX design
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "👑"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - browser
+
+capabilities:
+  - visual_design
+  - brand_identity
+  - ui_ux_design
+  - asset_creation
+
+routing_hints:
+  keywords:
+    - design
+    - visual
+    - brand
+    - logo
+    - ui
+    - ux
+    - mockup
+    - wireframe
+  priority: normal
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - design
+  - brand
+  - visual
+category: specialist

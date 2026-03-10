@@ -1,0 +1,56 @@
+id: ledger
+name: Ledger
+tier: 3
+role: Bookkeeper
+department: finance
+description: Bookkeeping specialist — transaction recording, reconciliation, financial statements
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "📒"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - bookkeeping
+  - transaction_recording
+  - reconciliation
+  - financial_statements
+
+routing_hints:
+  keywords:
+    - bookkeeping
+    - transaction
+    - ledger
+    - reconciliation
+    - journal
+    - entry
+  priority: normal
+  preferred_for:
+    - bookkeeping
+    - transaction_recording
+    - reconciliation
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - bookkeeping
+  - transaction
+  - ledger
+  - reconciliation
+category: specialist

@@ -1,4 +1,5 @@
 import { Outlet, useLocation } from "react-router-dom";
+import { CreateAgentDialog } from "@/components/agents/create-agent-dialog";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   Breadcrumb,
@@ -18,6 +19,10 @@ const PAGE_TITLES: Record<string, string> = {
   "/sessions": "Sessions",
   "/cron": "Cron Jobs",
   "/agents": "Agents",
+  "/agents/browse": "Browse Agents",
+  "/agents/installed": "Installed Agents",
+  "/agents/registries": "Registries",
+  "/agents/health": "Agent Health",
   "/visualize": "Visualize",
   "/memory": "Memory",
   "/skills": "Skills",
@@ -32,7 +37,13 @@ const FULL_HEIGHT_PAGES = new Set(["/chat", "/logs", "/config", "/visualize"]);
 
 export function Shell() {
   const location = useLocation();
-  const pageTitle = PAGE_TITLES[location.pathname] ?? "Operator";
+  const pageTitle =
+    PAGE_TITLES[location.pathname] ??
+    (location.pathname.startsWith("/agents/config/")
+      ? "Agent Config"
+      : location.pathname.startsWith("/agents/preview/")
+        ? "Agent Preview"
+        : "Operator");
   const isFullHeight = FULL_HEIGHT_PAGES.has(location.pathname);
 
   // Single gateway connection shared with all child pages via context
@@ -67,6 +78,7 @@ export function Shell() {
             <Outlet />
           </main>
         </SidebarInset>
+        <CreateAgentDialog />
       </SidebarProvider>
     </GatewayContext.Provider>
   );

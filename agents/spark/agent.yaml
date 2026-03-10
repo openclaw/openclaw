@@ -1,0 +1,62 @@
+id: spark
+name: Spark
+tier: 3
+role: Frontend Engineer
+department: engineering
+description: Frontend development specialist — UI components, responsive design, web applications
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "⚡"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - frontend_development
+  - ui_design
+  - responsive_design
+  - web_applications
+
+routing_hints:
+  keywords:
+    - frontend
+    - ui
+    - react
+    - css
+    - html
+    - component
+    - responsive
+    - web
+  priority: normal
+  preferred_for:
+    - ui_development
+    - component_design
+    - frontend_bugs
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - frontend
+  - ui
+  - react
+  - css
+category: specialist

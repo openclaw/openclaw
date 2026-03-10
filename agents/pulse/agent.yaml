@@ -1,0 +1,56 @@
+id: pulse
+name: Pulse
+tier: 3
+role: Community Manager
+department: marketing
+description: Community management specialist — forums, Discord, user engagement, feedback loops
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "📈"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - community_management
+  - user_engagement
+  - feedback_collection
+  - moderation
+
+routing_hints:
+  keywords:
+    - community
+    - discord
+    - forum
+    - engagement
+    - feedback
+    - moderation
+  priority: normal
+  preferred_for:
+    - community_engagement
+    - feedback_collection
+    - user_support
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - community
+  - discord
+  - forum
+  - engagement
+category: specialist

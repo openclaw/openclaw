@@ -1,0 +1,56 @@
+id: merit
+name: Merit
+tier: 3
+role: Procurement
+department: finance
+description: Procurement specialist — vendor management, sourcing, contract negotiation, purchasing
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "⭐"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - procurement
+  - vendor_management
+  - sourcing
+  - contract_negotiation
+
+routing_hints:
+  keywords:
+    - procurement
+    - vendor
+    - sourcing
+    - contract
+    - purchase
+    - supplier
+  priority: normal
+  preferred_for:
+    - vendor_sourcing
+    - contract_review
+    - procurement_process
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - procurement
+  - vendor
+  - sourcing
+  - contract
+category: specialist

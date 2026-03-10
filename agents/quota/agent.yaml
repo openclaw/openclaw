@@ -1,0 +1,56 @@
+id: quota
+name: Quota
+tier: 3
+role: Budget Manager
+department: finance
+description: Budget management specialist — budget planning, allocation, forecasting, variance analysis
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "📏"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - budget_management
+  - budget_planning
+  - forecasting
+  - variance_analysis
+
+routing_hints:
+  keywords:
+    - budget
+    - allocation
+    - forecast
+    - variance
+    - planning
+    - spending
+  priority: normal
+  preferred_for:
+    - budget_planning
+    - budget_forecast
+    - variance_analysis
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - budget
+  - allocation
+  - forecast
+  - variance
+category: specialist

@@ -1,0 +1,64 @@
+id: mouse
+name: Mouse
+tier: 3
+role: QA Engineer
+department: engineering
+description: QA and testing specialist — test strategy, automation, quality assurance
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "🐭"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+  fallbacks:
+    - claude-haiku-4-5-20251001
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - test_automation
+  - quality_assurance
+  - bug_investigation
+  - test_strategy
+
+routing_hints:
+  keywords:
+    - test
+    - qa
+    - quality
+    - bug
+    - regression
+    - coverage
+    - e2e
+    - unit test
+  priority: normal
+  preferred_for:
+    - test_writing
+    - bug_investigation
+    - quality_review
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - testing
+  - qa
+  - quality
+  - automation
+category: specialist

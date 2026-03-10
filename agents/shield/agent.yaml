@@ -1,0 +1,56 @@
+id: shield
+name: Shield
+tier: 3
+role: Insurance & Risk
+department: finance
+description: Insurance and risk management specialist — risk assessment, coverage analysis, claims
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "🛡️"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - risk_management
+  - insurance_analysis
+  - coverage_assessment
+  - claims_management
+
+routing_hints:
+  keywords:
+    - insurance
+    - risk
+    - coverage
+    - claim
+    - liability
+    - underwriting
+  priority: normal
+  preferred_for:
+    - risk_assessment
+    - insurance_review
+    - coverage_analysis
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - insurance
+  - risk
+  - coverage
+  - claim
+category: specialist

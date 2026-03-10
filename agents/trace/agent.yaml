@@ -1,0 +1,56 @@
+id: trace
+name: Trace
+tier: 3
+role: Expense Tracker
+department: finance
+description: Expense tracking specialist — expense categorization, receipt processing, spending analysis
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "🔍"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - expense_tracking
+  - receipt_processing
+  - spending_analysis
+  - categorization
+
+routing_hints:
+  keywords:
+    - expense
+    - receipt
+    - spending
+    - cost
+    - reimbursement
+    - tracking
+  priority: normal
+  preferred_for:
+    - expense_tracking
+    - receipt_processing
+    - spending_analysis
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - expense
+  - receipt
+  - spending
+  - cost
+category: specialist

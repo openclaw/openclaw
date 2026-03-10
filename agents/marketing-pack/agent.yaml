@@ -1,0 +1,33 @@
+id: marketing-pack
+name: Marketing Pack
+tier: 2
+role: Complete Marketing Team
+department: marketing
+description: Pre-packaged marketing department — CMO plus all marketing specialists.
+version: 1.0.0
+
+is_bundle: true
+bundle_agents:
+  - morpheus
+  - niobe
+  - switch
+  - rex
+  - ink
+  - vibe
+  - lens
+  - echo
+  - nova
+  - pulse
+  - blaze
+
+keywords:
+  - marketing
+  - content
+  - social
+  - seo
+  - brand
+  - email
+  - community
+  - bundle
+  - pack
+category: bundle

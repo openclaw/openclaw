@@ -1,0 +1,51 @@
+id: oracle
+name: Oracle
+tier: 3
+role: Data Analyst
+department: finance
+description: Data analytics specialist — reporting, dashboards, data insights
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "🔮"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - data_analysis
+  - reporting
+  - dashboard_creation
+  - trend_analysis
+
+routing_hints:
+  keywords:
+    - analytics
+    - data
+    - report
+    - dashboard
+    - metrics
+    - kpi
+  priority: normal
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - analytics
+  - data
+  - reporting
+category: specialist

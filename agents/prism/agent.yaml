@@ -1,0 +1,62 @@
+id: prism
+name: Prism
+tier: 3
+role: AI/ML Engineer
+department: engineering
+description: AI/ML engineering specialist — model training, inference, embeddings, ML pipelines
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "🔬"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - ml_engineering
+  - model_training
+  - inference_optimization
+  - embeddings
+
+routing_hints:
+  keywords:
+    - ai
+    - ml
+    - model
+    - training
+    - inference
+    - embedding
+    - neural
+    - llm
+  priority: normal
+  preferred_for:
+    - ml_pipeline
+    - model_development
+    - ai_integration
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - ai
+  - ml
+  - model
+  - training
+category: specialist

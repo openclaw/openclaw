@@ -1,0 +1,57 @@
+id: ink
+name: Ink
+tier: 3
+role: Copywriter
+department: marketing
+description: Copywriting specialist — blog posts, landing pages, product copy, brand voice
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "✒️"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - copywriting
+  - content_creation
+  - brand_voice
+  - landing_pages
+
+routing_hints:
+  keywords:
+    - copy
+    - writing
+    - blog
+    - content
+    - landing
+    - headline
+    - tagline
+  priority: normal
+  preferred_for:
+    - copywriting
+    - blog_posts
+    - product_copy
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - copy
+  - writing
+  - blog
+  - content
+category: specialist

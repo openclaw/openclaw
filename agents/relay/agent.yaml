@@ -1,0 +1,60 @@
+id: relay
+name: Relay
+tier: 3
+role: Integration Engineer
+department: engineering
+description: Integration engineering specialist — APIs, webhooks, third-party services, data pipelines
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "📡"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - api_integration
+  - webhook_management
+  - data_pipeline
+  - third_party_services
+
+routing_hints:
+  keywords:
+    - integration
+    - webhook
+    - connector
+    - pipeline
+    - sync
+    - middleware
+  priority: normal
+  preferred_for:
+    - api_integration
+    - webhook_setup
+    - service_connection
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - integration
+  - webhook
+  - connector
+  - pipeline
+category: specialist

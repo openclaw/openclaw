@@ -1,14 +1,18 @@
 import {
+  Activity,
   BarChart3,
   BookOpen,
   Brain,
   Bug,
+  Database,
   Eye,
   FileText,
   FolderOpen,
+  GitBranch,
   Link2,
   MessageSquare,
   Monitor,
+  Package,
   Radio,
   ScrollText,
   Settings,
@@ -82,9 +86,41 @@ const navData = {
   agent: [
     {
       title: "Agents",
-      url: "/agents",
+      url: "/agents/organization",
       icon: FolderOpen,
-      subtitle: "Agent workspaces and identities",
+      subtitle: "Agent organization and workspaces",
+      items: [
+        {
+          title: "Browse",
+          url: "/agents/browse",
+          icon: Store,
+          subtitle: "Registry blueprints and bundles",
+        },
+        {
+          title: "Organization",
+          url: "/agents/organization",
+          icon: GitBranch,
+          subtitle: "Deployed agent hierarchy",
+        },
+        {
+          title: "Installed",
+          url: "/agents/installed",
+          icon: Package,
+          subtitle: "Agent workspaces and files",
+        },
+        {
+          title: "Registries",
+          url: "/agents/registries",
+          icon: Database,
+          subtitle: "Manage agent registries",
+        },
+        {
+          title: "Health",
+          url: "/agents/health",
+          icon: Activity,
+          subtitle: "Agent health status",
+        },
+      ],
     },
     {
       title: "Visualize",

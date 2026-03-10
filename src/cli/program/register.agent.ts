@@ -1,10 +1,8 @@
 import type { Command } from "commander";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
 import {
-  agentsAddCommand,
   agentsBindingsCommand,
   agentsBindCommand,
-  agentsDeleteCommand,
   agentsListCommand,
   agentsSetIdentityCommand,
   agentsUnbindCommand,
@@ -14,7 +12,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
 import { createDefaultDeps } from "../deps.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
@@ -168,40 +165,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     });
 
   agents
-    .command("add [name]")
-    .description("Add a new isolated agent")
-    .option("--workspace <dir>", "Workspace directory for the new agent")
-    .option("--model <id>", "Model id for this agent")
-    .option("--agent-dir <dir>", "Agent state directory for this agent")
-    .option("--bind <channel[:accountId]>", "Route channel binding (repeatable)", collectOption, [])
-    .option("--non-interactive", "Disable prompts; requires --workspace", false)
-    .option("--json", "Output JSON summary", false)
-    .action(async (name, opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const hasFlags = hasExplicitOptions(command, [
-          "workspace",
-          "model",
-          "agentDir",
-          "bind",
-          "nonInteractive",
-        ]);
-        await agentsAddCommand(
-          {
-            name: typeof name === "string" ? name : undefined,
-            workspace: opts.workspace as string | undefined,
-            model: opts.model as string | undefined,
-            agentDir: opts.agentDir as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
-            nonInteractive: Boolean(opts.nonInteractive),
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-          { hasFlags },
-        );
-      });
-    });
-
-  agents
     .command("set-identity")
     .description("Update an agent identity (name/theme/emoji/avatar)")
     .option("--agent <id>", "Agent id to update")
@@ -244,24 +207,6 @@ ${formatHelpExamples([
             theme: opts.theme as string | undefined,
             emoji: opts.emoji as string | undefined,
             avatar: opts.avatar as string | undefined,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  agents
-    .command("delete <id>")
-    .description("Delete an agent and prune workspace/state")
-    .option("--force", "Skip confirmation", false)
-    .option("--json", "Output JSON summary", false)
-    .action(async (id, opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        await agentsDeleteCommand(
-          {
-            id: String(id),
-            force: Boolean(opts.force),
             json: Boolean(opts.json),
           },
           defaultRuntime,

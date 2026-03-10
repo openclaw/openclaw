@@ -1,0 +1,51 @@
+id: full-pack
+name: Full Organization Pack
+tier: 2
+role: Complete Organization
+department: all
+description: All department heads and specialists — the complete Operator1 agent organization in one install.
+version: 1.0.0
+
+is_bundle: true
+bundle_agents:
+  - neo
+  - trinity
+  - morpheus
+  - tank
+  - dozer
+  - mouse
+  - spark
+  - cipher
+  - relay
+  - ghost
+  - binary
+  - kernel
+  - prism
+  - oracle
+  - seraph
+  - zee
+  - ledger
+  - vault
+  - shield
+  - trace
+  - quota
+  - merit
+  - beacon
+  - niobe
+  - switch
+  - rex
+  - ink
+  - vibe
+  - lens
+  - echo
+  - nova
+  - pulse
+  - blaze
+
+keywords:
+  - all
+  - complete
+  - organization
+  - bundle
+  - pack
+category: bundle

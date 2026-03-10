@@ -1,0 +1,52 @@
+id: zee
+name: Zee
+tier: 3
+role: Financial Analyst
+department: finance
+description: Financial operations specialist — budgets, forecasting, financial modeling
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "📊"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - financial_modeling
+  - budget_management
+  - forecasting
+  - cost_analysis
+
+routing_hints:
+  keywords:
+    - budget
+    - forecast
+    - financial model
+    - cost
+    - revenue
+    - p&l
+    - expense
+  priority: normal
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - finance
+  - budget
+  - forecasting
+category: specialist

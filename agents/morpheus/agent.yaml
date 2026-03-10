@@ -1,0 +1,60 @@
+id: morpheus
+name: Morpheus
+tier: 2
+role: CMO
+department: marketing
+description: Chief Marketing Officer — oversees content, social, and design
+version: 1.0.0
+identity:
+  emoji: "🌀"
+
+model:
+  provider: anthropic
+  primary: claude-opus-4-6
+  fallbacks:
+    - claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - browser
+
+capabilities:
+  - content_strategy
+  - brand_management
+  - campaign_planning
+  - audience_analysis
+
+routing_hints:
+  keywords:
+    - marketing
+    - content
+    - social
+    - brand
+    - design
+    - campaign
+    - pr
+    - communications
+  priority: high
+  preferred_for:
+    - marketing_strategy
+    - content_planning
+    - brand_decisions
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.50
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - marketing
+  - content
+  - social
+  - cmo
+category: department-head

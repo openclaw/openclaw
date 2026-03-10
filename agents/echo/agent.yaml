@@ -1,0 +1,56 @@
+id: echo
+name: Echo
+tier: 3
+role: Email Marketing
+department: marketing
+description: Email marketing specialist — campaigns, newsletters, automation, deliverability
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "📢"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - email_marketing
+  - campaign_management
+  - newsletter
+  - automation
+
+routing_hints:
+  keywords:
+    - email
+    - newsletter
+    - campaign
+    - drip
+    - automation
+    - deliverability
+  priority: normal
+  preferred_for:
+    - email_campaigns
+    - newsletter_creation
+    - email_automation
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - email
+  - newsletter
+  - campaign
+  - drip
+category: specialist

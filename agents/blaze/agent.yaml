@@ -1,0 +1,56 @@
+id: blaze
+name: Blaze
+tier: 3
+role: Brand Strategist
+department: marketing
+description: Brand strategy specialist — brand identity, positioning, guidelines, competitive analysis
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "🔥"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - brand_strategy
+  - brand_identity
+  - positioning
+  - competitive_analysis
+
+routing_hints:
+  keywords:
+    - brand
+    - identity
+    - positioning
+    - guideline
+    - competitive
+    - strategy
+  priority: normal
+  preferred_for:
+    - brand_strategy
+    - brand_guidelines
+    - competitive_analysis
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - brand
+  - identity
+  - positioning
+  - guideline
+category: specialist

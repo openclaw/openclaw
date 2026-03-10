@@ -1,0 +1,52 @@
+id: niobe
+name: Niobe
+tier: 3
+role: Content Strategist
+department: marketing
+description: Content strategy specialist — blog posts, documentation, copywriting
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "🚀"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - content_creation
+  - content_strategy
+  - copywriting
+  - editorial_planning
+
+routing_hints:
+  keywords:
+    - content
+    - blog
+    - article
+    - copy
+    - writing
+    - editorial
+    - documentation
+  priority: normal
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - content
+  - writing
+  - strategy
+category: specialist

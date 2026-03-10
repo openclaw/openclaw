@@ -1,0 +1,61 @@
+id: trinity
+name: Trinity
+tier: 2
+role: CFO
+department: finance
+description: Chief Financial Officer — manages finance, compliance, and analytics
+version: 1.0.0
+identity:
+  emoji: "💎"
+
+model:
+  provider: anthropic
+  primary: claude-opus-4-6
+  fallbacks:
+    - claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - browser
+
+capabilities:
+  - financial_analysis
+  - compliance_review
+  - budget_management
+  - risk_assessment
+
+routing_hints:
+  keywords:
+    - finance
+    - budget
+    - compliance
+    - analytics
+    - cost
+    - revenue
+    - audit
+    - tax
+    - investment
+  priority: high
+  preferred_for:
+    - financial_decisions
+    - compliance_questions
+    - budget_planning
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.50
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - finance
+  - compliance
+  - analytics
+  - cfo
+category: department-head

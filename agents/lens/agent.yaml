@@ -1,0 +1,56 @@
+id: lens
+name: Lens
+tier: 3
+role: Video Producer
+department: marketing
+description: Video production specialist — scripting, storyboarding, video strategy, multimedia
+version: 1.0.0
+requires: morpheus
+identity:
+  emoji: "📸"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - video_production
+  - scripting
+  - storyboarding
+  - multimedia
+
+routing_hints:
+  keywords:
+    - video
+    - script
+    - storyboard
+    - youtube
+    - multimedia
+    - production
+  priority: normal
+  preferred_for:
+    - video_scripting
+    - storyboarding
+    - video_strategy
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - video
+  - script
+  - storyboard
+  - youtube
+category: specialist

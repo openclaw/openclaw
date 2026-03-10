@@ -2,6 +2,26 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.3.10
+
+### Changes
+
+- Agents/marketplace: full agent marketplace system with browse, install, create, remove, health check, and registry management via gateway RPCs (`agents.marketplace.*`)
+- Agents/manifests: YAML-based agent manifest schema with tier enforcement, dependency validation, deprecation tracking, and version lock files
+- Agents/config sync: automatic config synchronization from agent manifests — workspace deploy, allowAgents derivation, and drift detection
+- Agents/bundles: bundle support for installing groups of agents together with version conflict detection
+- Agents/registries: external agent registry support with sync, caching, and enable/disable controls
+- Agents/routing: keyword-based task routing with confidence scoring and priority tiebreakers
+- UI/agents: redesigned agent pages — Organization (React Flow hierarchy), Browse (marketplace grid), Installed (searchable list), Config (tabbed editor with Prompt/Identity/Tools/Workspace tabs), Health dashboard, Preview, and Registries management
+- UI/agents/config: smart Deploy/Upgrade button based on version drift detection, file categories (System/User/Memory) in workspace tab
+- UI/agents: clickable agent rows in table and grid views navigate to config editor
+
+### Fixes
+
+- Gateway: remove unused `agents.create`, `agents.update`, `agents.delete` RPCs (zero callers — replaced by marketplace RPCs)
+- CLI: remove old `agents add` and `agents delete` commands that bypassed the marketplace system
+- UI: remove legacy 1729-line agents page and associated components (org-chart, persona-tab, build-agent-hierarchy)
+
 ## Unreleased
 
 ### Changes

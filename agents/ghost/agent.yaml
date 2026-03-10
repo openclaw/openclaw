@@ -1,0 +1,61 @@
+id: ghost
+name: Ghost
+tier: 3
+role: Data Engineer
+department: engineering
+description: Data engineering specialist — ETL pipelines, data warehousing, data transformation
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "👻"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - data_engineering
+  - etl_pipelines
+  - data_warehousing
+  - data_transformation
+
+routing_hints:
+  keywords:
+    - data
+    - etl
+    - pipeline
+    - warehouse
+    - transform
+    - schema
+    - migration
+  priority: normal
+  preferred_for:
+    - data_pipeline
+    - etl_development
+    - data_migration
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - data
+  - etl
+  - pipeline
+  - warehouse
+category: specialist

@@ -1,0 +1,57 @@
+id: beacon
+name: Beacon
+tier: 3
+role: Tax Specialist
+department: finance
+description: Tax specialist — tax planning, compliance, filing, deductions, tax strategy
+version: 1.0.0
+requires: trinity
+identity:
+  emoji: "🔔"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+
+capabilities:
+  - tax_planning
+  - tax_compliance
+  - tax_filing
+  - deduction_optimization
+
+routing_hints:
+  keywords:
+    - tax
+    - filing
+    - deduction
+    - compliance
+    - irs
+    - return
+    - withholding
+  priority: normal
+  preferred_for:
+    - tax_planning
+    - tax_filing
+    - deduction_review
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - tax
+  - filing
+  - deduction
+  - compliance
+category: specialist

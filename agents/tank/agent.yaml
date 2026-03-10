@@ -1,0 +1,64 @@
+id: tank
+name: Tank
+tier: 3
+role: Backend Engineer
+department: engineering
+description: Backend development specialist — APIs, databases, server-side logic
+version: 1.0.0
+requires: neo
+identity:
+  emoji: "🛡️"
+
+model:
+  provider: anthropic
+  primary: claude-sonnet-4-5
+  fallbacks:
+    - claude-haiku-4-5-20251001
+
+tools:
+  allow:
+    - read
+    - write
+    - edit
+    - exec
+
+capabilities:
+  - backend_development
+  - api_design
+  - database_management
+  - server_optimization
+
+routing_hints:
+  keywords:
+    - backend
+    - api
+    - database
+    - server
+    - rest
+    - graphql
+    - sql
+    - orm
+  priority: normal
+  preferred_for:
+    - api_development
+    - database_queries
+    - backend_bugs
+
+skills:
+  - coding-agent
+
+limits:
+  timeout_seconds: 300
+  cost_limit_usd: 0.30
+  context_window_tokens: 100000
+
+author:
+  name: OpenClaw Team
+  url: https://openclaw.ai
+
+keywords:
+  - backend
+  - api
+  - database
+  - server
+category: specialist
