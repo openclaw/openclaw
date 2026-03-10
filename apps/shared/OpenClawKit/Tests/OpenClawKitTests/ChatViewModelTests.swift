@@ -729,6 +729,52 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4-pro")
     }
 
+    @Test func failedLatestModelSelectionDoesNotReplayAfterOlderCompletionFinishes() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+            ])
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+            modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.4" {
+                    try await Task.sleep(for: .milliseconds(200))
+                    return
+                }
+                if model == "openai/gpt-5.4-pro" {
+                    throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "boom"])
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run {
+            vm.selectModel("openai/gpt-5.4")
+            vm.selectModel("openai/gpt-5.4-pro")
+        }
+
+        try await waitUntil("older model completion wins after latest failure") {
+            await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model == "openai/gpt-5.4" }
+        }
+
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+    }
+
     @Test func switchingSessionsIgnoresLateModelPatchCompletionFromPreviousSession() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let sessions = OpenClawChatSessionsListResponse(

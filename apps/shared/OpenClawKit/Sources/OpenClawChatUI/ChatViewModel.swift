@@ -542,15 +542,18 @@ public final class OpenClawChatViewModel {
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
                 let latestSelectionID = self.latestModelSelectionIDsBySession[sessionKey] ?? next
                 let latest = self.modelRef(forSelectionID: latestSelectionID)
-                guard latest != nextModelRef else { return }
+                guard latest != nextModelRef else {
+                    self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
+                    return
+                }
                 try? await self.transport.setSessionModel(sessionKey: sessionKey, model: latest)
                 return
             }
             self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
         } catch {
-            guard sessionKey == self.sessionKey,
-                  requestID == self.latestModelSelectionRequestIDsBySession[sessionKey]
-            else { return }
+            guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else { return }
+            self.latestModelSelectionIDsBySession[sessionKey] = previous
+            guard sessionKey == self.sessionKey else { return }
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
             chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
