@@ -1,4 +1,5 @@
 import { resolveIrcAccount } from "./accounts.js";
+import { getLiveIrcClient } from "./client-registry.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
@@ -30,6 +31,23 @@ export async function probeIrc(
     };
   }
 
+  // If the monitor is already connected and healthy, report success without
+  // opening a second connection (which would collide on the same nick).
+  const liveClient = getLiveIrcClient(account.accountId);
+  if (liveClient) {
+    return {
+      ...base,
+      ok: true,
+      latencyMs: 0,
+    };
+  }
+
+  // No live monitor connection — open a temporary probe connection using the
+  // configured nick. If the nick is in use the client's built-in 433 handler
+  // will attempt NickServ GHOST recovery and then fall back to nick_ via
+  // buildFallbackNick, matching the same path the monitor would take. This
+  // keeps probe results representative of real startup success rather than
+  // depending on the availability of an unrelated alternate nick.
   const started = Date.now();
   try {
     const client = await connectIrcClient(

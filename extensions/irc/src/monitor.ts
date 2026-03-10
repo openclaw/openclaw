@@ -1,5 +1,6 @@
-import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/irc";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/irc";
 import { resolveIrcAccount } from "./accounts.js";
+import { registerIrcClient, unregisterIrcClient } from "./client-registry.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { handleIrcInbound } from "./inbound.js";
@@ -39,12 +40,13 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     accountId: opts.accountId,
   });
 
-  const runtime: RuntimeEnv =
-    opts.runtime ??
-    createLoggerBackedRuntime({
-      logger: core.logging.getChildLogger(),
-      exitError: () => new Error("Runtime exit not available"),
-    });
+  const runtime: RuntimeEnv = opts.runtime ?? {
+    log: (...args: unknown[]) => core.logging.getChildLogger().info(args.map(String).join(" ")),
+    error: (...args: unknown[]) => core.logging.getChildLogger().error(args.map(String).join(" ")),
+    exit: () => {
+      throw new Error("Runtime exit not available");
+    },
+  };
 
   if (!account.configured) {
     throw new Error(
@@ -137,8 +139,13 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
 
+  // Register the live client so outbound sends can reuse the existing
+  // connection rather than opening redundant transient connections.
+  registerIrcClient(account.accountId, client);
+
   return {
     stop: () => {
+      unregisterIrcClient(account.accountId);
       client?.quit("shutdown");
       client = null;
     },

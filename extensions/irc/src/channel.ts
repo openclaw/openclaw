@@ -16,6 +16,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/irc";
+import { waitForAbortSignal } from "./abort-signal.js";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -368,7 +369,18 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
         abortSignal: ctx.abortSignal,
         statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
-      return { stop };
+
+      // Keep the startAccount promise alive until the gateway signals shutdown.
+      // Without this the gateway sees an immediately-resolved promise, marks
+      // the channel as stopped, and schedules an auto-restart — creating a
+      // second IRC connection with the same nick and triggering 433 errors.
+      // The abort signal also fires the quit() listener registered inside
+      // connectIrcClient, so stop()'s quit() call is a safe no-op (closed
+      // guard in client.ts). stop() is still needed here to unregister the
+      // client from the registry.
+      await waitForAbortSignal(ctx.abortSignal);
+
+      stop();
     },
   },
 };
