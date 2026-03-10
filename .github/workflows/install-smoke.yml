@@ -48,6 +48,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          build-args: |
+            OPENCLAW_SKIP_UI_BUILD=1
           tags: openclaw-dockerfile-smoke:local
           load: true
           push: false
@@ -69,6 +71,7 @@ jobs:
           file: ./Dockerfile
           build-args: |
             OPENCLAW_EXTENSIONS=diagnostics-otel
+            OPENCLAW_SKIP_UI_BUILD=1
           tags: openclaw-ext-smoke:local
           load: true
           push: false

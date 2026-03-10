@@ -14,6 +14,7 @@
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+ARG OPENCLAW_SKIP_UI_BUILD=""
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:22-bookworm-slim@sha256:9c2c405e3ff9b9afb2873232d24bb06367d649aa3e6259cbe314da59578e81e9"
@@ -79,9 +80,16 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "stub" > src/canvas-host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 RUN pnpm build:docker
-# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
+# Force pnpm for UI build (Bun may fail on ARM/Synology architectures).
+# Install Smoke can skip the full UI build and use a minimal placeholder asset
+# because that workflow only validates image build + basic CLI startup.
 ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:build
+RUN if [ -n "$OPENCLAW_SKIP_UI_BUILD" ]; then \
+      mkdir -p dist/control-ui && \
+      printf '%s\n' '<!doctype html><title>OpenClaw Control UI</title><p>Smoke build placeholder.</p>' > dist/control-ui/index.html; \
+    else \
+      pnpm ui:build; \
+    fi
 
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
