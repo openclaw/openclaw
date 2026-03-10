@@ -126,11 +126,19 @@ export function applySetupAccountConfigPatch(params: {
   accountId: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
+  const normalizedAccountId = normalizeAccountId(params.accountId);
   return patchScopedAccountConfig({
     cfg: params.cfg,
     channelKey: params.channelKey,
     accountId: params.accountId,
     patch: params.patch,
+    accountPatch:
+      normalizedAccountId === DEFAULT_ACCOUNT_ID
+        ? undefined
+        : {
+            ...params.patch,
+            enabled: true,
+          },
   });
 }
 
