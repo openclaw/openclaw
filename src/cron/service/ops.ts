@@ -356,36 +356,7 @@ type PreparedManualRun =
     }
   | { ok: false };
 
-type ManualRunDisposition =
-  | Extract<PreparedManualRun, { ran: false }>
-  | { ok: true; runnable: true };
-
 let nextManualRunId = 1;
-
-async function inspectManualRunDisposition(
-  state: CronServiceState,
-  id: string,
-  mode?: "due" | "force",
-): Promise<ManualRunDisposition | { ok: false }> {
-  return await locked(state, async () => {
-    warnIfDisabled(state, "run");
-    await ensureLoaded(state, { skipRecompute: true });
-    // Normalize job tick state (clears stale runningAtMs markers) before
-    // checking if already running, so a stale marker from a crashed Phase-1
-    // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
-    recomputeNextRunsForMaintenance(state);
-    const job = findJobOrThrow(state, id);
-    if (typeof job.state.runningAtMs === "number") {
-      return { ok: true, ran: false, reason: "already-running" as const };
-    }
-    const now = state.deps.nowMs();
-    const due = isJobDue(job, now, { forced: mode === "force" });
-    if (!due) {
-      return { ok: true, ran: false, reason: "not-due" as const };
-    }
-    return { ok: true, runnable: true } as const;
-  });
-}
 
 async function prepareManualRun(
   state: CronServiceState,
@@ -525,23 +496,21 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
 }
 
 export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const disposition = await inspectManualRunDisposition(state, id, mode);
-  if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
-    return disposition;
+  // Reserve the job under lock *before* enqueuing so the job cannot be stolen
+  // by a concurrent timer tick between the eligibility check and the background
+  // execution (TOCTOU race that caused #42152: enqueueRun returned
+  // { enqueued: true } but the job never executed because prepareManualRun
+  // found runningAtMs already set when the background task finally ran).
+  const prepared = await prepareManualRun(state, id, mode);
+  if (!prepared.ok || !prepared.ran) {
+    return prepared;
   }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      const result = await run(state, id, mode);
-      if (result.ok && "ran" in result && !result.ran) {
-        state.deps.log.info(
-          { jobId: id, runId, reason: result.reason },
-          "cron: queued manual run skipped before execution",
-        );
-      }
-      return result;
+      await finishPreparedManualRun(state, prepared, mode);
     },
     {
       warnAfterMs: 5_000,
