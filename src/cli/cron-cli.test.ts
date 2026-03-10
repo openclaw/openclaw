@@ -548,6 +548,80 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+  });
+
+  it("warns when --agent is not specified on cron add with --message", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "No agent",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+    ]);
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+  });
+
+  it("warns when --agent is blank on cron add with --message", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Blank agent",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--agent",
+      "   ",
+    ]);
+
+    expect(params?.agentId).toBeUndefined();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+  });
+
+  it("does not warn when --system-event is used (no agent needed)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "System event",
+      "--cron",
+      "* * * * *",
+      "--system-event",
+      "tick",
+    ]);
+
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+  });
+
+  it("warns even when --session-key is provided (user should still specify agent explicitly)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "With session key",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--session-key",
+      "agent:my-agent:my-session",
+    ]);
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
   });
 
   it("sets lightContext on cron add when --light-context is passed", async () => {
