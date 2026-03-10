@@ -106,7 +106,7 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   }
   return {
     security: minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity),
-    ask: maxAsk(configuredAsk, requestedAsk ?? configuredAsk),
+    ask: opts.ask !== undefined ? (requestedAsk ?? configuredAsk) : configuredAsk, // CLI --ask overrides config
   };
 }
 
