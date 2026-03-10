@@ -199,6 +199,67 @@ describe("backup restore", () => {
     }
   });
 
+  it("matches workspace assets by canonical source path when manifest workspace roots are symlinked", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const workspaceA = path.join(tempHome.home, "workspace-a");
+    const workspaceB = path.join(tempHome.home, "workspace-b");
+    const linkA = path.join(tempHome.home, "workspace-a-link");
+    const linkB = path.join(tempHome.home, "workspace-b-link");
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-a"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-b"), { recursive: true });
+      await fs.mkdir(workspaceA, { recursive: true });
+      await fs.mkdir(workspaceB, { recursive: true });
+      await fs.symlink(workspaceA, linkA);
+      await fs.symlink(workspaceB, linkB);
+
+      const operations = await buildRestoreOperations({
+        mode: "workspace-only",
+        extractedRoot: rootDir,
+        manifest: {
+          schemaVersion: 1,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          archiveRoot: "archive-root",
+          runtimeVersion: "2026.3.9",
+          platform: process.platform,
+          nodeVersion: process.version,
+          paths: {
+            workspaceDirs: [linkB, linkA],
+          },
+          assets: [
+            {
+              kind: "workspace",
+              sourcePath: workspaceA,
+              archivePath: "archive-root/assets/workspace-a",
+            },
+            {
+              kind: "workspace",
+              sourcePath: workspaceB,
+              archivePath: "archive-root/assets/workspace-b",
+            },
+          ],
+        },
+      });
+
+      const workspaceOps = operations.filter((entry) => entry.kind === "workspace");
+      expect(workspaceOps).toEqual([
+        expect.objectContaining({ targetPath: linkA }),
+        expect.objectContaining({ targetPath: linkB }),
+      ]);
+    } finally {
+      await fs.rm(linkA, { force: true }).catch(() => undefined);
+      await fs.rm(linkB, { force: true }).catch(() => undefined);
+      await fs.rm(workspaceA, { recursive: true, force: true });
+      await fs.rm(workspaceB, { recursive: true, force: true });
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects restoring a workspace directly onto the home directory", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");
@@ -461,7 +522,7 @@ describe("backup restore", () => {
           archive: archivePath,
           mode: "full-host",
         }),
-      ).rejects.toThrow(/tar entry is a link|symbolic link/i);
+      ).rejects.toThrow(/unsupported tar link entry|tar entry is a link|symbolic link/i);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
       await fs.rm(sourceDir, { recursive: true, force: true });

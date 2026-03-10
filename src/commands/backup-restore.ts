@@ -81,6 +81,11 @@ async function canonicalizePathForContainment(inputPath: string): Promise<string
   }
 }
 
+async function canonicalWorkspacePathKey(value: string): Promise<string> {
+  const resolved = await canonicalizePathForContainment(value);
+  return workspacePathKey(resolved);
+}
+
 function selectWorkspaceTargets(params: {
   workspaceAssetCount: number;
   manifestWorkspaceDirs: string[];
@@ -386,11 +391,14 @@ export async function buildRestoreOperations(params: {
   const configAsset = assetByKind.get("config")?.[0];
   const credentialsAsset = assetByKind.get("credentials")?.[0];
   const workspaceAssets = assetByKind.get("workspace") ?? [];
-  const manifestWorkspaceMap = new Map(
-    manifestWorkspaceDirs.map((entry) => [workspacePathKey(entry), entry] as const),
+  const manifestWorkspaceEntries = await Promise.all(
+    manifestWorkspaceDirs.map(
+      async (entry) => [await canonicalWorkspacePathKey(entry), entry] as const,
+    ),
   );
-  const workspaceAssetSourceKeys = workspaceAssets.map((asset) =>
-    workspacePathKey(asset.sourcePath),
+  const manifestWorkspaceMap = new Map(manifestWorkspaceEntries);
+  const workspaceAssetSourceKeys = await Promise.all(
+    workspaceAssets.map(async (asset) => await canonicalWorkspacePathKey(asset.sourcePath)),
   );
   const canMatchWorkspaceTargetsBySourcePath =
     manifestWorkspaceMap.size === workspaceAssets.length &&
@@ -447,11 +455,19 @@ export async function buildRestoreOperations(params: {
       // The manifest records the exact workspace roots that were archived. Prefer it over
       // config-derived values because config parsing may fall back to the default workspace.
       const workspaceTargetsBySourcePath = canMatchWorkspaceTargetsBySourcePath
-        ? new Map(
-            workspaceAssets.map((asset) => [
-              workspacePathKey(asset.sourcePath),
-              manifestWorkspaceMap.get(workspacePathKey(asset.sourcePath)),
-            ]),
+        ? new Map<string, string>(
+            await Promise.all(
+              workspaceAssets.map(async (asset): Promise<readonly [string, string]> => {
+                const assetSourceKey = await canonicalWorkspacePathKey(asset.sourcePath);
+                const targetPath = manifestWorkspaceMap.get(assetSourceKey);
+                if (!targetPath) {
+                  throw new Error(
+                    `Workspace restore target mismatch for archived workspace: ${asset.sourcePath}`,
+                  );
+                }
+                return [assetSourceKey, targetPath] as const;
+              }),
+            ),
           )
         : undefined;
       const workspaceTargets = workspaceTargetsBySourcePath
@@ -468,9 +484,9 @@ export async function buildRestoreOperations(params: {
         );
       }
       for (const [index, asset] of workspaceAssets.entries()) {
+        const assetSourceKey = await canonicalWorkspacePathKey(asset.sourcePath);
         const targetPath =
-          workspaceTargetsBySourcePath?.get(workspacePathKey(asset.sourcePath)) ??
-          workspaceTargets?.[index];
+          workspaceTargetsBySourcePath?.get(assetSourceKey) ?? workspaceTargets?.[index];
         if (!targetPath) {
           continue;
         }
