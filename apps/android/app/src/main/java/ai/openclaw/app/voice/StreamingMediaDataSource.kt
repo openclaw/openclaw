@@ -71,6 +71,8 @@ internal class StreamingMediaDataSource : MediaDataSource() {
           index++
         }
       }
+      // Advance cache so the next sequential read resumes near where we left off
+      lastReadIndex = index
 
       return toRead - remaining
     }
