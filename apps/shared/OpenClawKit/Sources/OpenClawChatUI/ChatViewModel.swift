@@ -49,8 +49,14 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
-    private var modelSelectionRequestID: UInt64 = 0
-    private var thinkingSelectionRequestID: UInt64 = 0
+    // Session switches can overlap in-flight picker patches, so stale completions
+    // must compare against the latest request and latest desired value for that session.
+    private var nextModelSelectionRequestID: UInt64 = 0
+    private var latestModelSelectionRequestIDsBySession: [String: UInt64] = [:]
+    private var latestModelSelectionIDsBySession: [String: String] = [:]
+    private var nextThinkingSelectionRequestID: UInt64 = 0
+    private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
+    private var latestThinkingLevelsBySession: [String: String] = [:]
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -491,23 +497,26 @@ public final class OpenClawChatViewModel {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
         guard next != self.thinkingLevel else { return }
 
+        let sessionKey = self.sessionKey
         self.thinkingLevel = next
         self.onThinkingLevelChanged?(next)
-        self.thinkingSelectionRequestID &+= 1
-        let requestID = self.thinkingSelectionRequestID
-        let sessionKey = self.sessionKey
+        self.nextThinkingSelectionRequestID &+= 1
+        let requestID = self.nextThinkingSelectionRequestID
+        self.latestThinkingSelectionRequestIDsBySession[sessionKey] = requestID
+        self.latestThinkingLevelsBySession[sessionKey] = next
 
         do {
             try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: next)
-            guard sessionKey == self.sessionKey else { return }
-            guard requestID == self.thinkingSelectionRequestID else {
-                let latest = self.thinkingLevel
+            guard requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey] else {
+                let latest = self.latestThinkingLevelsBySession[sessionKey] ?? next
                 guard latest != next else { return }
                 try? await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: latest)
                 return
             }
         } catch {
-            guard sessionKey == self.sessionKey, requestID == self.thinkingSelectionRequestID else { return }
+            guard sessionKey == self.sessionKey,
+                  requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey]
+            else { return }
             // Best-effort. Persisting the user's local preference matters more than a patch error here.
         }
     }
@@ -516,11 +525,13 @@ public final class OpenClawChatViewModel {
         let next = self.normalizedSelectionID(selectionID)
         guard next != self.modelSelectionID else { return }
 
-        let previous = self.modelSelectionID
-        self.modelSelectionRequestID &+= 1
-        let requestID = self.modelSelectionRequestID
         let sessionKey = self.sessionKey
+        let previous = self.modelSelectionID
+        self.nextModelSelectionRequestID &+= 1
+        let requestID = self.nextModelSelectionRequestID
         let nextModelRef = self.modelRef(forSelectionID: next)
+        self.latestModelSelectionRequestIDsBySession[sessionKey] = requestID
+        self.latestModelSelectionIDsBySession[sessionKey] = next
         self.modelSelectionID = next
         self.errorText = nil
 
@@ -528,16 +539,18 @@ public final class OpenClawChatViewModel {
             try await self.transport.setSessionModel(
                 sessionKey: sessionKey,
                 model: nextModelRef)
-            guard sessionKey == self.sessionKey else { return }
-            guard requestID == self.modelSelectionRequestID else {
-                let latest = self.modelRef(forSelectionID: self.modelSelectionID)
+            guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
+                let latestSelectionID = self.latestModelSelectionIDsBySession[sessionKey] ?? next
+                let latest = self.modelRef(forSelectionID: latestSelectionID)
                 guard latest != nextModelRef else { return }
                 try? await self.transport.setSessionModel(sessionKey: sessionKey, model: latest)
                 return
             }
             self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
         } catch {
-            guard sessionKey == self.sessionKey, requestID == self.modelSelectionRequestID else { return }
+            guard sessionKey == self.sessionKey,
+                  requestID == self.latestModelSelectionRequestIDsBySession[sessionKey]
+            else { return }
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
             chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")

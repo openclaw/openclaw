@@ -774,6 +774,73 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.model } == nil)
     }
 
+    @Test func lateModelCompletionDoesNotReplayCurrentSessionSelectionIntoPreviousSession() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let initialSessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 2,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+                sessionEntry(key: "other", updatedAt: now - 1000, model: nil),
+            ])
+        let sessionsAfterOtherSelection = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 2,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+                sessionEntry(key: "other", updatedAt: now - 1000, model: "openai/gpt-5.4-pro"),
+            ])
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+            modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+            ],
+            sessionsResponses: [initialSessions, initialSessions, sessionsAfterOtherSelection],
+            modelResponses: [models, models, models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.4" {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        await MainActor.run { vm.switchSession(to: "other") }
+        try await waitUntil("switched to other session") {
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
+        }
+
+        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
+        try await waitUntil("both model patches issued") {
+            let patched = await transport.patchedModels()
+            return patched == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
+        }
+        await MainActor.run { vm.switchSession(to: "main") }
+        try await waitUntil("switched back to main session") {
+            await MainActor.run { vm.sessionKey == "main" && vm.sessionId == "sess-main" }
+        }
+
+        try await waitUntil("late model completion updates only the original session") {
+            await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model == "openai/gpt-5.4" }
+        }
+
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.model } == "openai/gpt-5.4-pro")
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+    }
+
     @Test func explicitThinkingLevelWinsOverHistoryAndPersistsChanges() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
