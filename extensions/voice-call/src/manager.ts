@@ -281,6 +281,11 @@ export class CallManager {
       return;
     }
 
+    const mode = (call.metadata?.mode as string) ?? "conversation";
+    if (this.config.streaming?.enabled && mode !== "notify") {
+      return;
+    }
+
     void this.speakInitialMessage(call.providerCallId);
   }
 
