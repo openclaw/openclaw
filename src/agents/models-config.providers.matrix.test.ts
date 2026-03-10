@@ -129,6 +129,20 @@ const MATRIX_CASES: MatrixCase[] = [
     },
   },
   {
+    name: "explicit secondary vllm config suppresses implicit default vllm injection",
+    env: { VLLM_API_KEY: "test-vllm-key" }, // pragma: allowlist secret
+    explicitProviders: {
+      "vllm-2": {
+        baseUrl: "http://127.0.0.1:8100/v1",
+        api: "openai-completions",
+        models: [],
+      },
+    },
+    assertProviders(providers) {
+      expect(providers?.vllm).toBeUndefined();
+    },
+  },
+  {
     name: "explicit ollama models still normalize the returned provider",
     env: {},
     explicitProviders: {

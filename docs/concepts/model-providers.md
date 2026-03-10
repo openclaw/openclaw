@@ -390,6 +390,7 @@ servers:
 - Provider: `vllm`
 - Auth: Optional (depends on your server)
 - Default base URL: `http://127.0.0.1:8000/v1`
+- Interactive setup can scan `/v1/models`, let you select multiple models, and manage multiple saved endpoints
 
 To opt in to auto-discovery locally (any value works if your server doesn’t enforce auth):
 
@@ -406,6 +407,8 @@ Then set a model (replace with one of the IDs returned by `/v1/models`):
   },
 }
 ```
+
+If you add multiple explicit vLLM endpoints, OpenClaw stores them under keys such as `vllm`, `vllm-2`, and `vllm-3`, and you select models with refs like `vllm-2/your-model-id`.
 
 See [/providers/vllm](/providers/vllm) for details.
 

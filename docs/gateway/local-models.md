@@ -142,6 +142,8 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 }
 ```
 
+If you run multiple local proxy endpoints at once, give each one its own provider key, for example `vllm`, `vllm-2`, or `local-lab`, and reference models with that exact key.
+
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 
 ## Troubleshooting
