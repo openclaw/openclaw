@@ -104,6 +104,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
+import { createRateLimitRetryStreamWrapper } from "../rate-limit-retry-stream-wrapper.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -1384,6 +1385,14 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      // Outermost wrapper: transparently retry on HTTP 429 (rate limit) before
+      // the error propagates to the agent loop / run loop. Applied to all
+      // providers — the wrapper is a no-op for non-429 errors.
+      activeSession.agent.streamFn = createRateLimitRetryStreamWrapper(
+        activeSession.agent.streamFn,
+        params.abortSignal,
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
