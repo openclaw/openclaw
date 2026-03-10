@@ -177,3 +177,60 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 });
+
+describe("Feishu post payload formatting", () => {
+  const createMock = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveFeishuSendTargetMock.mockReturnValue({
+      client: {
+        im: {
+          message: {
+            reply: vi.fn(),
+            create: createMock,
+          },
+        },
+      },
+      receiveId: "ou_target",
+      receiveIdType: "open_id",
+    });
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_new" },
+    });
+  });
+
+  it("uses an explicit link tag for bare URLs so underscores stay clickable", async () => {
+    const url = "https://dami-oss.oss-cn-guangzhou.aliyuncs.com/fdc/output_20260210_222435.png";
+
+    await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: url,
+    });
+
+    const payload = createMock.mock.calls[0]?.[0]?.data;
+    expect(payload.msg_type).toBe("post");
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [[{ tag: "a", text: url, href: url }]],
+      },
+    });
+  });
+
+  it("keeps markdown formatting for normal text payloads", async () => {
+    await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "Hello **world**",
+    });
+
+    const payload = createMock.mock.calls[0]?.[0]?.data;
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [[{ tag: "md", text: "Hello **world**" }]],
+      },
+    });
+  });
+});

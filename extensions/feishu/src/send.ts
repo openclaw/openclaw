@@ -253,22 +253,33 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
+const FEISHU_BARE_URL_RE = /^https?:\/\/\S+$/i;
+
 function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;
 } {
   const { messageText } = params;
+  const trimmed = messageText.trim();
+  const line =
+    FEISHU_BARE_URL_RE.test(trimmed) && !trimmed.includes("\n")
+      ? [
+          {
+            tag: "a",
+            text: trimmed,
+            href: trimmed,
+          },
+        ]
+      : [
+          {
+            tag: "md",
+            text: messageText,
+          },
+        ];
   return {
     content: JSON.stringify({
       zh_cn: {
-        content: [
-          [
-            {
-              tag: "md",
-              text: messageText,
-            },
-          ],
-        ],
+        content: [line],
       },
     }),
     msgType: "post",
