@@ -1529,6 +1529,18 @@ export const registerTelegramHandlers = ({
       }
       if (isGatewayDraining()) {
         const stateDir = resolveStateDir(process.env);
+        // Resolve the session key now so replay routes to the correct agent-scoped session.
+        const { route: drainRoute } = resolveTelegramConversationRoute({
+          cfg,
+          accountId,
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          resolvedThreadId: resolveTelegramForumThreadId({
+            isForum: event.isForum,
+            messageThreadId: event.messageThreadId,
+          }),
+          senderId: event.senderId,
+        });
         await writePendingInbound(stateDir, {
           channel: "telegram",
           id: String(event.msg.message_id ?? Date.now()),
@@ -1542,6 +1554,7 @@ export const registerTelegramHandlers = ({
             date: event.msg.date,
           },
           capturedAt: Date.now(),
+          sessionKey: drainRoute.sessionKey,
         });
         return; // provider already got 200, no retry needed
       }

@@ -25,7 +25,7 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
   clearActiveTurn,
-  clearPendingInbound,
+  clearPendingInboundEntries,
   readPendingInbound,
   readStaleActiveTurns,
 } from "../infra/pending-inbound-store.js";
@@ -157,8 +157,9 @@ export async function startGatewaySidecars(params: {
     const pending = await readPendingInbound(stateDir);
     if (pending.length > 0) {
       params.log.warn(`replaying ${pending.length} inbound message(s) captured during drain`);
-      // Consume-then-process: clear first to prevent infinite retry on crash.
-      await clearPendingInbound(stateDir);
+      // Consume-then-process: clear only inbound entries to prevent infinite retry on crash.
+      // Active turns remain intact in the shared file.
+      await clearPendingInboundEntries(stateDir);
       for (const entry of pending) {
         try {
           const payload = entry.payload as {
@@ -172,12 +173,16 @@ export async function startGatewaySidecars(params: {
           const senderLabel =
             payload.senderName ?? payload.senderUsername ?? payload.senderId ?? "unknown";
           const textPreview = (payload.text ?? "").slice(0, 200).replace(/\n/g, "\\n");
+          // Prefer the resolved session key stored at capture time; fall back to
+          // fabricated key for backward compatibility with entries captured before
+          // this change.
           const sessionKey =
-            entry.channel === "telegram"
+            entry.sessionKey ??
+            (entry.channel === "telegram"
               ? `telegram:${payload.chatId ?? "unknown"}`
               : entry.channel === "discord"
                 ? `discord:channel:${payload.channelId ?? "unknown"}`
-                : `${entry.channel}:unknown`;
+                : `${entry.channel}:unknown`);
           const eventText = `[pending-inbound] Missed message during restart from ${senderLabel}: "${textPreview || "(no text)"}"`;
           enqueueSystemEvent(eventText, {
             sessionKey,

@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearActiveTurn,
+  clearAllActiveTurns,
   clearPendingInbound,
+  clearPendingInboundEntries,
   readPendingInbound,
   readStaleActiveTurns,
   writeActiveTurn,
@@ -229,5 +231,137 @@ describe("pending-inbound-store", () => {
 
     const turnsAfter = await readStaleActiveTurns(stateDir);
     expect(turnsAfter).toEqual([]);
+  });
+
+  // --- Scoped clear functions ---
+
+  it("clearPendingInboundEntries removes entries but preserves active turns", async () => {
+    await writePendingInbound(stateDir, {
+      channel: "telegram",
+      id: "msg-200",
+      payload: { text: "hello" },
+      capturedAt: 1700000000000,
+    });
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-020",
+      sessionKey: "telegram:888",
+      channel: "telegram",
+      startedAt: 1700000001000,
+    });
+
+    await clearPendingInboundEntries(stateDir);
+
+    const pending = await readPendingInbound(stateDir);
+    expect(pending).toEqual([]);
+
+    // Active turns should still be there
+    const turns = await readStaleActiveTurns(stateDir);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].sessionId).toBe("sess-020");
+  });
+
+  it("clearAllActiveTurns removes turns but preserves inbound entries", async () => {
+    await writePendingInbound(stateDir, {
+      channel: "telegram",
+      id: "msg-300",
+      payload: { text: "preserved" },
+      capturedAt: 1700000000000,
+    });
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-030",
+      sessionKey: "telegram:999",
+      channel: "telegram",
+      startedAt: 1700000001000,
+    });
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-031",
+      sessionKey: "discord:channel:100",
+      channel: "discord",
+      startedAt: 1700000002000,
+    });
+
+    await clearAllActiveTurns(stateDir);
+
+    const turns = await readStaleActiveTurns(stateDir);
+    expect(turns).toEqual([]);
+
+    // Inbound entries should still be there
+    const pending = await readPendingInbound(stateDir);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe("msg-300");
+  });
+
+  it("clearPendingInboundEntries on missing file does not throw", async () => {
+    await expect(clearPendingInboundEntries(stateDir)).resolves.toBeUndefined();
+  });
+
+  it("clearAllActiveTurns on missing file does not throw", async () => {
+    await expect(clearAllActiveTurns(stateDir)).resolves.toBeUndefined();
+  });
+
+  // --- Session key stored at capture time ---
+
+  it("sessionKey is stored and readable on pending inbound entries", async () => {
+    const entry: PendingInboundEntry = {
+      channel: "telegram",
+      id: "msg-400",
+      payload: { text: "with key" },
+      capturedAt: 1700000000000,
+      sessionKey: "agent:main:telegram:direct:12345",
+    };
+
+    await writePendingInbound(stateDir, entry);
+    const result = await readPendingInbound(stateDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].sessionKey).toBe("agent:main:telegram:direct:12345");
+  });
+
+  it("entries without sessionKey remain backward compatible (undefined)", async () => {
+    const entry: PendingInboundEntry = {
+      channel: "telegram",
+      id: "msg-401",
+      payload: { text: "no key" },
+      capturedAt: 1700000000000,
+    };
+
+    await writePendingInbound(stateDir, entry);
+    const result = await readPendingInbound(stateDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].sessionKey).toBeUndefined();
+  });
+
+  // --- Concurrent write safety (lock serialization) ---
+
+  it("concurrent writes do not lose entries (lock serialization)", async () => {
+    // Fire 10 concurrent writes — without locking some would be lost.
+    const writes = Array.from({ length: 10 }, (_, i) =>
+      writePendingInbound(stateDir, {
+        channel: "telegram",
+        id: `concurrent-${i}`,
+        payload: { index: i },
+        capturedAt: 1700000000000 + i,
+      }),
+    );
+    await Promise.all(writes);
+
+    const result = await readPendingInbound(stateDir);
+    expect(result).toHaveLength(10);
+  });
+
+  it("concurrent active turn writes do not lose entries", async () => {
+    const writes = Array.from({ length: 10 }, (_, i) =>
+      writeActiveTurn(stateDir, {
+        sessionId: `sess-concurrent-${i}`,
+        sessionKey: `telegram:${i}`,
+        channel: "telegram",
+        startedAt: 1700000000000 + i,
+      }),
+    );
+    await Promise.all(writes);
+
+    const result = await readStaleActiveTurns(stateDir);
+    expect(result).toHaveLength(10);
   });
 });
