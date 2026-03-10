@@ -424,7 +424,7 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
     if (lastNormalized && normalized === lastNormalized) {
       continue;
     }
-    result.push(block.trim());
+    result.push(block);
     lastNormalized = normalized;
   }
 
