@@ -1,4 +1,8 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _resetLocalGatewayDispatch,
+  registerLocalGatewayDispatch,
+} from "../../gateway/local-dispatch.js";
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const callGatewayMock = vi.fn();
@@ -185,5 +189,41 @@ describe("gateway tool defaults", () => {
     await expect(
       callGatewayTool("health", { gatewayUrl: "ws://169.254.169.254", gatewayToken: "t" }, {}),
     ).rejects.toThrow(/gatewayUrl override rejected/i);
+  });
+});
+
+describe("callGatewayTool local dispatch (#40237)", () => {
+  afterEach(() => {
+    _resetLocalGatewayDispatch();
+    callGatewayMock.mockClear();
+  });
+
+  it("uses in-process dispatch when running inside the gateway", async () => {
+    const localDispatch = vi.fn().mockResolvedValue({ jobs: ["a", "b"] });
+    registerLocalGatewayDispatch(localDispatch);
+
+    const result = await callGatewayTool("cron.list", {}, { filter: "active" });
+
+    expect(result).toEqual({ jobs: ["a", "b"] });
+    expect(localDispatch).toHaveBeenCalledWith("cron.list", { filter: "active" });
+    // WS path must NOT be called
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to WS when no local dispatcher is registered", async () => {
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+
+    await callGatewayTool("cron.status", {}, {});
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes empty object when params is undefined", async () => {
+    const localDispatch = vi.fn().mockResolvedValue({});
+    registerLocalGatewayDispatch(localDispatch);
+
+    await callGatewayTool("health", {});
+
+    expect(localDispatch).toHaveBeenCalledWith("health", {});
   });
 });

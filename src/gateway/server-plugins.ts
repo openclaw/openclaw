@@ -3,6 +3,7 @@ import type { loadConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { registerLocalGatewayDispatch } from "./local-dispatch.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -43,6 +44,9 @@ const fallbackGatewayContextState = (() => {
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
   // TODO: This startup snapshot can become stale if runtime config/context changes.
   fallbackGatewayContextState.context = ctx;
+  // Enable in-process dispatch for agent tools running inside the gateway,
+  // avoiding WS self-contention during active LLM sessions (#40237).
+  registerLocalGatewayDispatch(dispatchGatewayMethod);
 }
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
