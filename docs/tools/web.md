@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Exa, Brave, Gemini, Grok, Kimi, and Perplexity providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Exa, Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -25,27 +25,29 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
 
-See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexity) for provider-specific details.
+See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexity) for provider-specific details. Exa setup is covered below.
 
 ## Choosing a search provider
 
-| Provider                  | Result shape                       | Provider-specific filters                    | Notes                                                                          | API key                                     |
-| ------------------------- | ---------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
-| **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
-| **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
-| **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| Provider                  | Result shape                       | Provider-specific filters                                   | Notes                                                                          | API key                                     |
+| ------------------------- | ---------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- |
+| **Exa**                   | Structured results with highlights | `numResults`, `highlightsMaxChars`, freshness (date ranges) | Neural/semantic search optimized for LLMs, supports ISO-8601 date filtering    | `EXA_API_KEY`                               |
+| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                      | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
+| **Gemini**                | AI-synthesized answers + citations | —                                                           | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
+| **Grok**                  | AI-synthesized answers + citations | —                                                           | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
+| **Kimi**                  | AI-synthesized answers + citations | —                                                           | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter`                | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 
 ### Auto-detection
 
-The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
+If no `provider` is explicitly set, runtime auto-detection checks providers in this precedence order:
 
-1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
-2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
-4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
+1. **Exa** — `EXA_API_KEY` env var or `tools.web.search.exa.apiKey` config
+2. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
+3. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
+4. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+5. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
+6. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -58,6 +60,32 @@ Runtime SecretRef behavior:
 ## Setting up web search
 
 Use `openclaw configure --section web` to set up your API key and choose a provider.
+
+### Exa setup
+
+1. Create an Exa account at [exa.ai](https://exa.ai)
+2. Generate an API key
+3. Run `openclaw configure --section web` to store the key in config, or set `EXA_API_KEY` in your environment.
+
+Exa is a neural/semantic search provider that returns structured search results with highlights. It also supports ISO-8601 date filtering via the standard `freshness`, `date_after`, and `date_before` tool parameters.
+
+**Exa config:**
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "exa",
+        exa: {
+          apiKey: "exa_...", // optional if EXA_API_KEY is set
+        },
+      },
+    },
+  },
+}
+```
 
 ### Brave Search
 
@@ -85,6 +113,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 
 **Via config:** run `openclaw configure --section web`. It stores the key under the provider-specific config path:
 
+- Exa: `tools.web.search.exa.apiKey`
 - Brave: `tools.web.search.apiKey`
 - Gemini: `tools.web.search.gemini.apiKey`
 - Grok: `tools.web.search.grok.apiKey`
@@ -95,6 +124,7 @@ All of these fields also support SecretRef objects.
 
 **Via environment:** set provider env vars in the Gateway process environment:
 
+- Exa: `EXA_API_KEY`
 - Brave: `BRAVE_API_KEY`
 - Gemini: `GEMINI_API_KEY`
 - Grok: `XAI_API_KEY`
@@ -233,6 +263,7 @@ Search the web using your configured provider.
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
+  - **Exa**: `EXA_API_KEY` or `tools.web.search.exa.apiKey`
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`

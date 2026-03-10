@@ -217,13 +217,13 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("kimi");
   });
 
-  it("follows alphabetical order — brave wins when multiple keys available", () => {
+  it("follows auto-detection precedence — exa wins when multiple keys available", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
     process.env.EXA_API_KEY = "test-exa-key"; // pragma: allowlist secret
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("brave");
+    expect(resolveSearchProvider({})).toBe("exa");
   });
 
   it("exa wins over gemini, grok, kimi, and perplexity when brave unavailable", () => {

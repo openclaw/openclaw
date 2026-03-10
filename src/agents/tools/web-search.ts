@@ -656,19 +656,19 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     return "perplexity";
   }
 
-  // Auto-detect provider from available API keys (alphabetical order)
+  // Auto-detect provider from available API keys (configured precedence order)
   if (raw === "") {
+    const exaConfig = resolveExaConfig(search);
+    if (resolveExaApiKey(exaConfig)) {
+      logVerbose('web_search: no provider configured, auto-detected "exa" from available API keys');
+      return "exa";
+    }
+
     if (resolveSearchApiKey(search)) {
       logVerbose(
         'web_search: no provider configured, auto-detected "brave" from available API keys',
       );
       return "brave";
-    }
-
-    const exaConfig = resolveExaConfig(search);
-    if (resolveExaApiKey(exaConfig)) {
-      logVerbose('web_search: no provider configured, auto-detected "exa" from available API keys');
-      return "exa";
     }
 
     const geminiConfig = resolveGeminiConfig(search);
