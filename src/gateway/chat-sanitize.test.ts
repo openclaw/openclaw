@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
+import { filterDeliveryMirrorMessages, stripEnvelopeFromMessage } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessage", () => {
   test("removes message_id hint lines from user messages", () => {
@@ -89,5 +89,40 @@ describe("stripEnvelopeFromMessage", () => {
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");
+  });
+});
+
+describe("filterDeliveryMirrorMessages", () => {
+  test("removes delivery-mirror messages", () => {
+    const messages = [
+      { role: "user", content: "hello", model: "user" },
+      { role: "assistant", content: "hi", model: "gpt-4o", provider: "openai" },
+      { role: "assistant", content: "hi", model: "delivery-mirror", provider: "openclaw" },
+    ];
+    const result = filterDeliveryMirrorMessages(messages);
+    expect(result).toHaveLength(2);
+    expect(result).toEqual([
+      { role: "user", content: "hello", model: "user" },
+      { role: "assistant", content: "hi", model: "gpt-4o", provider: "openai" },
+    ]);
+  });
+
+  test("preserves all messages when no delivery-mirror present", () => {
+    const messages = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi", model: "gpt-4o" },
+    ];
+    const result = filterDeliveryMirrorMessages(messages);
+    expect(result).toHaveLength(2);
+  });
+
+  test("handles empty array", () => {
+    expect(filterDeliveryMirrorMessages([])).toEqual([]);
+  });
+
+  test("handles non-object entries gracefully", () => {
+    const messages = [null, undefined, "string", { role: "assistant", model: "delivery-mirror" }];
+    const result = filterDeliveryMirrorMessages(messages);
+    expect(result).toEqual([null, undefined, "string"]);
   });
 });

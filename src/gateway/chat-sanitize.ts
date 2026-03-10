@@ -108,6 +108,17 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+/** Filter out delivery-mirror messages that duplicate assistant replies in chat history. */
+export function filterDeliveryMirrorMessages(messages: unknown[]): unknown[] {
+  return messages.filter((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return true;
+    }
+    const entry = msg as Record<string, unknown>;
+    return entry.model !== "delivery-mirror";
+  });
+}
+
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
