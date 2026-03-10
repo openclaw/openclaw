@@ -1,6 +1,7 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -15,6 +16,7 @@ import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
@@ -1698,27 +1700,40 @@ export const registerTelegramHandlers = ({
             const isReplyToServiceMessage =
               replyToBotMessage && isTelegramForumServiceMessage(event.msg.reply_to_message);
             const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
-            if (canDetectMention) {
-              const messageText = event.msg.text ?? event.msg.caption ?? "";
-              const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
-              const hasAnyMention = entities.some((e) => e.type === "mention");
-              const explicitlyMentioned = botUsername
-                ? hasBotMention(event.msg, botUsername)
-                : false;
-              const wasMentioned = matchesMentionWithExplicit({
-                text: messageText,
-                mentionRegexes,
-                explicit: {
-                  hasAnyMention,
-                  isExplicitlyMentioned: explicitlyMentioned,
-                  canResolveExplicit: Boolean(botUsername),
-                },
-              });
-              const effectiveWasMentioned = wasMentioned || implicitMention;
-              if (!effectiveWasMentioned) {
-                logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
-                return;
-              }
+            const messageText = event.msg.text ?? event.msg.caption ?? "";
+            const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
+            const hasAnyMention = entities.some((e) => e.type === "mention");
+            const explicitlyMentioned = botUsername ? hasBotMention(event.msg, botUsername) : false;
+            const wasMentioned = matchesMentionWithExplicit({
+              text: messageText,
+              mentionRegexes,
+              explicit: {
+                hasAnyMention,
+                isExplicitlyMentioned: explicitlyMentioned,
+                canResolveExplicit: Boolean(botUsername),
+              },
+            });
+            // Use resolveMentionGatingWithBypass so that slash commands (e.g. /status)
+            // bypass the mention gate even when the bot is not mentioned — matching the
+            // command bypass path in the normal (non-drain) message processing flow.
+            // The sender has already passed group access checks above, so commandAuthorized=true.
+            const hasControlCommandInMessage = hasControlCommand(messageText, cfg, {
+              agentId: drainRoute.agentId,
+            });
+            const mentionGate = resolveMentionGatingWithBypass({
+              isGroup: true,
+              requireMention: true,
+              canDetectMention,
+              wasMentioned,
+              implicitMention,
+              hasAnyMention,
+              allowTextCommands: true,
+              hasControlCommand: hasControlCommandInMessage,
+              commandAuthorized: true, // sender passed group access checks above
+            });
+            if (mentionGate.shouldSkip) {
+              logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
+              return;
             }
           }
         }
