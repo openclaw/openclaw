@@ -25,6 +25,23 @@ const JPG_PAYLOAD = {
   width: 1,
   height: 1,
 } as const;
+const PHOTOS_LATEST_ACTION_INPUT = { action: "photos_latest", node: NODE_ID } as const;
+const PHOTOS_LATEST_DEFAULT_PARAMS = {
+  limit: 1,
+  maxWidth: 1600,
+  quality: 0.85,
+} as const;
+const PHOTOS_LATEST_PAYLOAD = {
+  photos: [
+    {
+      format: "jpeg",
+      base64: "aGVsbG8=",
+      width: 1,
+      height: 1,
+      createdAt: "2026-03-04T00:00:00Z",
+    },
+  ],
+} as const;
 
 type GatewayCall = { method: string; params?: unknown };
 
@@ -150,6 +167,25 @@ function setupSystemRunGateway(params: {
       return await params.onApprovalRequest(gatewayParams);
     }
     return unexpectedGatewayMethod(method);
+  });
+}
+
+function setupPhotosLatestMock(params?: { remoteIp?: string }) {
+  setupNodeInvokeMock({
+    ...(params?.remoteIp ? { remoteIp: params.remoteIp } : {}),
+    onInvoke: (invokeParams) => {
+      expect(invokeParams).toMatchObject({
+        command: "photos.latest",
+        params: PHOTOS_LATEST_DEFAULT_PARAMS,
+      });
+      return { payload: PHOTOS_LATEST_PAYLOAD };
+    },
+  });
+}
+
+async function executePhotosLatest(params: { modelHasVision: boolean }) {
+  return executeNodes(PHOTOS_LATEST_ACTION_INPUT, {
+    modelHasVision: params.modelHasVision,
   });
 }
 
@@ -377,40 +413,9 @@ describe("nodes photos_latest", () => {
   });
 
   it("returns MEDIA paths and no inline images when model has no vision", async () => {
-    setupNodeInvokeMock({
-      remoteIp: "198.51.100.42",
-      onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
-          command: "photos.latest",
-          params: {
-            limit: 1,
-            maxWidth: 1600,
-            quality: 0.85,
-          },
-        });
-        return {
-          payload: {
-            photos: [
-              {
-                format: "jpeg",
-                base64: "aGVsbG8=",
-                width: 1,
-                height: 1,
-                createdAt: "2026-03-04T00:00:00Z",
-              },
-            ],
-          },
-        };
-      },
-    });
+    setupPhotosLatestMock({ remoteIp: "198.51.100.42" });
 
-    const result = await executeNodes(
-      {
-        action: "photos_latest",
-        node: NODE_ID,
-      },
-      { modelHasVision: false },
-    );
+    const result = await executePhotosLatest({ modelHasVision: false });
 
     expectNoImages(result);
     expect(result.content?.[0]).toMatchObject({
@@ -426,39 +431,9 @@ describe("nodes photos_latest", () => {
   });
 
   it("includes inline image blocks when model has vision", async () => {
-    setupNodeInvokeMock({
-      onInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
-          command: "photos.latest",
-          params: {
-            limit: 1,
-            maxWidth: 1600,
-            quality: 0.85,
-          },
-        });
-        return {
-          payload: {
-            photos: [
-              {
-                format: "jpeg",
-                base64: "aGVsbG8=",
-                width: 1,
-                height: 1,
-                createdAt: "2026-03-04T00:00:00Z",
-              },
-            ],
-          },
-        };
-      },
-    });
+    setupPhotosLatestMock();
 
-    const result = await executeNodes(
-      {
-        action: "photos_latest",
-        node: NODE_ID,
-      },
-      { modelHasVision: true },
-    );
+    const result = await executePhotosLatest({ modelHasVision: true });
 
     expect(result.content?.[0]).toMatchObject({
       type: "text",

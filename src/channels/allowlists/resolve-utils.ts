@@ -1,4 +1,6 @@
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
   input: string;
@@ -28,10 +30,7 @@ export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([
-    ...(params.existing ?? []).map((entry) => String(entry)),
-    ...params.additions,
-  ]);
+  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
 }
 
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
@@ -152,15 +151,10 @@ export function summarizeMapping(
 ): void {
   const lines: string[] = [];
   if (mapping.length > 0) {
-    const sample = mapping.slice(0, 6);
-    const suffix = mapping.length > sample.length ? ` (+${mapping.length - sample.length})` : "";
-    lines.push(`${label} resolved: ${sample.join(", ")}${suffix}`);
+    lines.push(`${label} resolved: ${summarizeStringEntries({ entries: mapping, limit: 6 })}`);
   }
   if (unresolved.length > 0) {
-    const sample = unresolved.slice(0, 6);
-    const suffix =
-      unresolved.length > sample.length ? ` (+${unresolved.length - sample.length})` : "";
-    lines.push(`${label} unresolved: ${sample.join(", ")}${suffix}`);
+    lines.push(`${label} unresolved: ${summarizeStringEntries({ entries: unresolved, limit: 6 })}`);
   }
   if (lines.length > 0) {
     runtime.log?.(lines.join("\n"));
