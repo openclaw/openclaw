@@ -573,16 +573,46 @@ const memoryPlugin = {
 
     // Auto-capture: analyze and store important information after agent ends
     if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
+      // Per-session cursor state with an epoch counter.  The epoch is bumped
+      // by compaction/reset hooks; agent_end handlers snapshot the epoch at
+      // the start and only write back if it hasn't changed, preventing a slow
+      // fire-and-forget handler from resurrecting a stale cursor after the
+      // history has been restructured.
+      // Keyed by sessionId (not sessionKey) so each post-reset session starts
+      // with a fresh cursor without depending on the async before_reset hook.
+      // Epochs start at 1 (not 0) so that a deleted entry (resolving to
+      // epoch 0 via ?? 0) never matches a live epochAtStart, preventing
+      // in-flight handlers from resurrecting deleted entries.
+      const INITIAL_EPOCH = 1;
+      const sessionState = new Map<string, { cursor: number; epoch: number }>();
+
+      api.on("agent_end", async (event, ctx) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
 
+        // Prefer sessionId so cursors are naturally isolated across resets.
+        const sid = ctx?.sessionId ?? ctx?.sessionKey ?? "";
+        const allMessages = event.messages;
+
+        const state = sessionState.get(sid);
+        const hadState = state !== undefined;
+        const epochAtStart = state?.epoch ?? 0;
+
+        // Clamp to allMessages.length as a safety net against any residual
+        // stale value that survived compaction/reset hook races.
+        const cursor = Math.min(state?.cursor ?? 0, allMessages.length);
+
+        // Only inspect messages added since our last scan.
+        const newMessages = allMessages.slice(cursor);
+        if (newMessages.length === 0) {
+          return;
+        }
+
         try {
-          // Extract text content from messages (handling unknown[] type)
+          // Extract text content from new messages (handling unknown[] type)
           const texts: string[] = [];
-          for (const msg of event.messages) {
-            // Type guard for message object
+          for (const msg of newMessages) {
             if (!msg || typeof msg !== "object") {
               continue;
             }
@@ -623,37 +653,97 @@ const memoryPlugin = {
           const toCapture = texts.filter(
             (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
           );
-          if (toCapture.length === 0) {
-            return;
-          }
 
-          // Store each capturable piece (limit to 3 per conversation)
-          let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const vector = await embeddings.embed(text);
+          if (toCapture.length > 0) {
+            // Store each capturable piece (limit to 3 per turn)
+            let stored = 0;
+            for (const text of toCapture.slice(0, 3)) {
+              const category = detectCategory(text);
+              const vector = await embeddings.embed(text);
 
-            // Check for duplicates (high similarity threshold)
-            const existing = await db.search(vector, 1, 0.95);
-            if (existing.length > 0) {
-              continue;
+              // Check for duplicates (high similarity threshold)
+              const existing = await db.search(vector, 1, 0.95);
+              if (existing.length > 0) {
+                continue;
+              }
+
+              await db.store({
+                text,
+                vector,
+                importance: 0.7,
+                category,
+              });
+              stored++;
             }
 
-            await db.store({
-              text,
-              vector,
-              importance: 0.7,
-              category,
-            });
-            stored++;
+            if (stored > 0) {
+              api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+            }
           }
 
-          if (stored > 0) {
-            api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+          // Only advance cursor if no compaction/reset occurred while we were
+          // processing.  This prevents a slow pre-compaction handler from
+          // overwriting the cleared state with a stale value.
+          // Write back only when the epoch is unchanged.  Three cases:
+          // 1. First run (no prior state): hadState=false, entry still absent
+          //    → create with INITIAL_EPOCH.
+          // 2. Subsequent run (state exists, epoch unchanged): update cursor.
+          // 3. Compaction/reset occurred: epoch bumped or entry deleted → skip
+          //    to avoid resurrecting stale state.
+          const currentState = sessionState.get(sid);
+          const epochNow = currentState?.epoch ?? 0;
+          if (epochNow === epochAtStart) {
+            if (!hadState && !currentState) {
+              // First-ever write for this session
+              sessionState.set(sid, {
+                cursor: allMessages.length,
+                epoch: INITIAL_EPOCH,
+              });
+            } else if (currentState) {
+              sessionState.set(sid, {
+                cursor: Math.max(currentState.cursor, allMessages.length),
+                epoch: epochAtStart,
+              });
+            }
+            // If hadState was true but currentState is now gone, a delete
+            // happened concurrently — do nothing.
           }
         } catch (err) {
           api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
         }
+      });
+
+      // Compaction restructures (and may shrink) the message array, which
+      // invalidates the numeric cursor.  Bump the epoch and reset cursor to 0
+      // so the next agent_end re-scans; vector-similarity dedup prevents
+      // duplicates.  When the context identifies the session we invalidate
+      // only that entry; when the context is empty (one runner code-path
+      // passes {}) we must reset all tracked sessions because we cannot tell
+      // which was compacted — not resetting would leave a stale cursor that
+      // permanently suppresses auto-capture for the affected session.
+      // Compaction is infrequent, so the cost of re-scanning other sessions
+      // (guarded by the dedup check) is acceptable.
+      api.on("after_compaction", (_event, ctx) => {
+        const sid = ctx?.sessionId ?? ctx?.sessionKey;
+        if (sid) {
+          const state = sessionState.get(sid);
+          sessionState.set(sid, { cursor: 0, epoch: (state?.epoch ?? INITIAL_EPOCH) + 1 });
+        } else {
+          for (const [key, s] of sessionState) {
+            sessionState.set(key, { cursor: 0, epoch: s.epoch + 1 });
+          }
+        }
+      });
+
+      // Delete cursor tracking on session reset.  Since state is keyed by
+      // sessionId, the entry becomes unreachable after reset (new sessionId).
+      // Deleting avoids unbounded map growth in long-running gateways.
+      // Because epochs start at INITIAL_EPOCH (1), a deleted entry resolves
+      // to epoch 0 via ??, which can never equal a live epochAtStart (>= 1),
+      // so in-flight handlers cannot resurrect the entry after deletion.
+      api.on("before_reset", (_event, ctx) => {
+        const sid = ctx?.sessionId ?? ctx?.sessionKey ?? "";
+        sessionState.delete(sid);
       });
     }
 
