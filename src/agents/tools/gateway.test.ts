@@ -80,15 +80,46 @@ describe("resolveGatewayTarget – env URL override classification", () => {
     expect(resolveGatewayTarget()).toBeUndefined();
   });
 
-  it("classifies OPENCLAW_GATEWAY_URL loopback env override as 'local'", () => {
+  it("classifies OPENCLAW_GATEWAY_URL loopback env override as 'local' (no remote config)", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
     setConfig({});
     expect(resolveGatewayTarget()).toBe("local");
   });
 
-  it("classifies CLAWDBOT_GATEWAY_URL loopback env override as 'local'", () => {
+  it("classifies CLAWDBOT_GATEWAY_URL loopback env override as 'local' (no remote config)", () => {
     process.env.CLAWDBOT_GATEWAY_URL = "ws://localhost:18789";
     setConfig({});
+    expect(resolveGatewayTarget()).toBe("local");
+  });
+
+  it("classifies loopback env URL as 'remote' when mode=remote with non-loopback remote URL (SSH tunnel, same port)", () => {
+    // Common SSH tunnel pattern: ssh -N -L 18789:remote-host:18789
+    // OPENCLAW_GATEWAY_URL points to the local tunnel endpoint but gateway is remote.
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("classifies loopback env URL with different port as 'remote' when mode=remote with non-loopback remote URL (SSH tunnel, different port)", () => {
+    // SSH tunnel to a non-default port: ssh -N -L 9000:remote-host:9000
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:9000";
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("classifies loopback env URL as 'local' when mode=remote but remote.url is absent (callGateway falls back to local)", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    setConfig({ gateway: { mode: "remote" } });
+    expect(resolveGatewayTarget()).toBe("local");
+  });
+
+  it("classifies loopback env URL as 'local' when mode=remote but remote.url is a loopback address (local-only setup)", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    setConfig({ gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } });
     expect(resolveGatewayTarget()).toBe("local");
   });
 
@@ -148,7 +179,16 @@ describe("resolveGatewayTarget – env URL override classification", () => {
     setConfig({
       gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
     });
-    // OPENCLAW_GATEWAY_URL wins (loopback) → "local"
+    // OPENCLAW_GATEWAY_URL wins (loopback); mode=remote with non-loopback remote.url
+    // means this loopback is an SSH tunnel → "remote"
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("OPENCLAW_GATEWAY_URL takes precedence over env CLAWDBOT_GATEWAY_URL (no remote config → 'local')", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    process.env.CLAWDBOT_GATEWAY_URL = "wss://remote.example.com";
+    setConfig({});
+    // OPENCLAW_GATEWAY_URL wins (loopback), no remote config → "local"
     expect(resolveGatewayTarget()).toBe("local");
   });
 });
@@ -161,7 +201,7 @@ describe("resolveGatewayTarget – explicit gatewayUrl override", () => {
     delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
-  it("returns 'local' for loopback explicit gatewayUrl", () => {
+  it("returns 'local' for loopback explicit gatewayUrl (no remote config)", () => {
     expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:18789" })).toBe("local");
   });
 
@@ -170,5 +210,12 @@ describe("resolveGatewayTarget – explicit gatewayUrl override", () => {
       gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
     });
     expect(resolveGatewayTarget({ gatewayUrl: "wss://remote.example.com" })).toBe("remote");
+  });
+
+  it("returns 'remote' for loopback explicit gatewayUrl when mode=remote with non-loopback remote URL (SSH tunnel)", () => {
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:18789" })).toBe("remote");
   });
 });

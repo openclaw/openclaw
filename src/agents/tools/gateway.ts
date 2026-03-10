@@ -53,6 +53,30 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   return { origin, key };
 }
 
+/**
+ * Returns true when gateway.mode=remote is configured with a non-loopback remote URL.
+ * This indicates the user is connecting to a remote gateway, possibly via SSH port forwarding
+ * (ssh -N -L <local_port>:remote-host:<remote_port>). In that case, a loopback gatewayUrl
+ * is a tunnel endpoint and should be classified as "remote" so deliveryContext is suppressed.
+ */
+function isNonLoopbackRemoteUrlConfigured(cfg: ReturnType<typeof loadConfig>): boolean {
+  if (cfg.gateway?.mode !== "remote") {
+    return false;
+  }
+  const remoteUrl =
+    typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
+  if (!remoteUrl) {
+    return false;
+  }
+  try {
+    const parsed = new URL(remoteUrl);
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return !(host === "127.0.0.1" || host === "localhost" || host === "::1");
+  } catch {
+    return false;
+  }
+}
+
 function validateGatewayUrlOverrideForAgentTools(params: {
   cfg: ReturnType<typeof loadConfig>;
   urlOverride: string;
@@ -82,7 +106,13 @@ function validateGatewayUrlOverrideForAgentTools(params: {
 
   const parsed = canonicalizeToolGatewayWsUrl(params.urlOverride);
   if (localAllowed.has(parsed.key)) {
-    return { url: parsed.origin, target: "local" };
+    // A loopback URL on the configured port is normally the local gateway, but when
+    // gateway.mode=remote is configured with a non-loopback remote URL, the user is
+    // likely using SSH port forwarding (ssh -N -L ...) and this loopback is a tunnel
+    // endpoint pointing to a remote gateway. Classify as "remote" so deliveryContext
+    // is not forwarded to the remote server, which would misroute post-restart wake messages.
+    const target = isNonLoopbackRemoteUrlConfigured(cfg) ? "remote" : "local";
+    return { url: parsed.origin, target };
   }
   if (remoteKey && parsed.key === remoteKey) {
     return { url: parsed.origin, target: "remote" };
@@ -117,17 +147,22 @@ function resolveGatewayOverrideToken(params: {
  * Resolves whether a GatewayCallOptions points to a local or remote gateway.
  * Returns "remote" when a remote gatewayUrl override is present, OR when
  * gateway.mode=remote is configured with a gateway.remote.url set.
- * Returns "local" for explicit loopback URL overrides (127.0.0.1, localhost, [::1]).
+ * Returns "local" for explicit loopback URL overrides (127.0.0.1, localhost, [::1])
+ * UNLESS gateway.mode=remote is configured with a non-loopback remote URL, which indicates
+ * the loopback is an SSH tunnel endpoint — in that case returns "remote".
  * Returns undefined when no override is present and the effective target is the local gateway
  * (including the gateway.mode=remote + missing gateway.remote.url fallback-to-local case).
  *
  * This mirrors the URL resolution path used by callGateway/buildGatewayConnectionDetails so
  * that deliveryContext suppression decisions are based on the actual connection target, not just
- * the configured mode. Two mismatches fixed vs the previous version:
+ * the configured mode. Mismatches fixed vs the previous version:
  * 1. gateway.mode=remote without gateway.remote.url: callGateway falls back to local loopback;
  *    classifying that as "remote" would incorrectly suppress deliveryContext.
  * 2. Env URL overrides (OPENCLAW_GATEWAY_URL / CLAWDBOT_GATEWAY_URL) are picked up by
  *    callGateway but were ignored here, causing incorrect local/remote classification.
+ * 3. Tunneled loopback URLs (ssh -N -L ...) when gateway.mode=remote with a non-loopback
+ *    remote.url is configured: classifying as "local" would forward deliveryContext to the
+ *    remote server, causing post-restart wake messages to be misrouted to the caller's chat.
  */
 export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverrideTarget | undefined {
   const cfg = loadConfig();
@@ -153,7 +188,12 @@ export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverride
           // Normalize IPv6 brackets: "[::1]" → "::1"
           const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
           const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-          return isLoopback ? "local" : "remote";
+          if (isLoopback) {
+            // When gateway.mode=remote is configured with a non-loopback remote URL, this
+            // loopback is likely an SSH tunnel endpoint — classify as "remote".
+            return isNonLoopbackRemoteUrlConfigured(cfg) ? "remote" : "local";
+          }
+          return "remote";
         } catch {
           // Truly malformed URL; callGateway will also fail. Fall through to config-based resolution.
         }
