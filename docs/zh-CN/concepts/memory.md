@@ -135,6 +135,7 @@ agents: {
 
 - `remote.baseUrl` 是可选的（默认为 Gemini API 基础 URL）。
 - `remote.headers` 让你可以在需要时添加额外的标头。
+- 远程 memory embedding 请求在设置时会遵循标准代理环境变量（`HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY` 和 `NO_PROXY`）。
 - 默认模型：`gemini-embedding-001`。
 
 如果你想使用**自定义 OpenAI 兼容端点**（OpenRouter、vLLM 或代理），可以使用 `remote` 配置与 OpenAI 提供商：

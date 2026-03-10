@@ -309,6 +309,7 @@ Notes:
 
 - `remote.baseUrl` is optional (defaults to the Gemini API base URL).
 - `remote.headers` lets you add extra headers if needed.
+- Remote memory embedding calls honor standard proxy env vars (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY`) when set.
 - Default model: `gemini-embedding-001`.
 
 If you want to use a **custom OpenAI-compatible endpoint** (OpenRouter, vLLM, or a proxy),
