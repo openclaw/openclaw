@@ -2166,11 +2166,14 @@ export function createWebSearchTool(options?: {
       }
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
-      // For Brave, accept both `language` (unified) and `search_lang`
+      // For Brave, accept both `language` (unified) and `search_lang`.
+      // For DuckDuckGo, preserve explicit `search_lang` when provided.
       const normalizedBraveLanguageParams =
         provider === "brave"
           ? normalizeBraveLanguageParams({ search_lang: search_lang || language, ui_lang })
-          : { search_lang: language, ui_lang };
+          : provider === "duckduckgo"
+            ? { search_lang: search_lang || language, ui_lang }
+            : { search_lang: language, ui_lang };
       if (normalizedBraveLanguageParams.invalidField === "search_lang") {
         return jsonResult({
           error: "invalid_search_lang",
