@@ -276,6 +276,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+  "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows browser navigation to RFC 2544 benchmark-range addresses (198.18.0.0/15). Useful on trusted networks that use fake-IP proxying for public destinations.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":

@@ -62,6 +62,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
       // allowPrivateNetwork: true, // legacy alias
+      // allowRfc2544BenchmarkRange: true, // allow fake-IP networks that map public domains into 198.18.0.0/15
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
     },
@@ -95,6 +96,7 @@ Notes:
 - Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
+- `browser.ssrfPolicy.allowRfc2544BenchmarkRange` allows RFC 2544 benchmark-range addresses (`198.18.0.0/15`) for fake-IP style networks.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "chrome"` to opt into the Chrome extension relay.

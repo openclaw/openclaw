@@ -2342,6 +2342,7 @@ See [Plugins](/tools/plugin).
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
       // allowPrivateNetwork: true, // legacy alias
+      // allowRfc2544BenchmarkRange: true, // allow fake-IP networks that map public domains into 198.18.0.0/15
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
     },
@@ -2365,6 +2366,7 @@ See [Plugins](/tools/plugin).
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
+- `ssrfPolicy.allowRfc2544BenchmarkRange` allows RFC 2544 benchmark-range addresses (`198.18.0.0/15`) for fake-IP or benchmark-network environments.
 - In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
