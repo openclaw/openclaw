@@ -18,10 +18,10 @@ describe("sessions_yield tool", () => {
     const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
     const result = await tool.execute("call-1", {});
     expect(result.details).toMatchObject({ status: "yielded", message: "Turn yielded." });
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.");
+    expect(onYield).toHaveBeenCalledOnce();
   });
 
-  it("passes custom message to onYield callback", async () => {
+  it("custom message appears in result but callback takes no args", async () => {
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
     const result = await tool.execute("call-1", { message: "Waiting for fact-checker" });
@@ -29,7 +29,7 @@ describe("sessions_yield tool", () => {
       status: "yielded",
       message: "Waiting for fact-checker",
     });
-    expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
+    expect(onYield).toHaveBeenCalledOnce();
   });
 
   it("succeeds without onYield callback", async () => {

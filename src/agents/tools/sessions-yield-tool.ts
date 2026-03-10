@@ -8,7 +8,7 @@ const SessionsYieldToolSchema = Type.Object({
 
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
-  onYield?: (message: string) => void;
+  onYield?: () => void;
 }): AnyAgentTool {
   return {
     label: "Yield",
@@ -22,7 +22,7 @@ export function createSessionsYieldTool(opts?: {
       if (!opts?.sessionId) {
         return jsonResult({ status: "error", error: "No session context" });
       }
-      opts.onYield?.(message);
+      opts.onYield?.();
       return jsonResult({ status: "yielded", message });
     },
   };
