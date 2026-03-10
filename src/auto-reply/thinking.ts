@@ -62,10 +62,6 @@ function buildXHighLookupCandidates(
 
   if (normalizedModel.includes("/")) {
     refs.add(normalizedModel);
-    const trailingId = normalizedModel.split("/").pop();
-    if (trailingId) {
-      ids.add(trailingId);
-    }
   } else {
     ids.add(normalizedModel);
   }

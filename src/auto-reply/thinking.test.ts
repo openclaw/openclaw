@@ -98,6 +98,10 @@ describe("supportsXHighThinking", () => {
     expect(supportsXHighThinking("vercel-ai-gateway", "openai/gpt-5.4")).toBe(true);
   });
 
+  it("does not treat arbitrary namespaced refs as allowlisted by trailing model id", () => {
+    expect(supportsXHighThinking("vercel-ai-gateway", "acme/gpt-5.4")).toBe(false);
+  });
+
   it("enables xhigh for provider aliases whose model id is in the allowlist", () => {
     expect(supportsXHighThinking("openai-compatible", "gpt-5.3-codex-spark")).toBe(true);
   });
