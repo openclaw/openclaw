@@ -1,5 +1,5 @@
-import type { Command } from "commander";
 import fs from "node:fs/promises";
+import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -387,7 +387,11 @@ export async function runConfigRestore(opts: { runtime?: RuntimeEnv } = {}) {
 
     runtime.log(success(`Config restored from backup: ${shortBackupPath}`));
     runtime.log("");
-    runtime.log(info(`Please run ${formatCliCommand("openclaw doctor --fix")} to verify, then run ${formatCliCommand("openclaw gateway restart")}.`));
+    runtime.log(
+      info(
+        `Please run ${formatCliCommand("openclaw doctor --fix")} to verify, then run ${formatCliCommand("openclaw gateway restart")}.`,
+      ),
+    );
   } catch (err) {
     runtime.error(danger(`Config restore failed: ${String(err)}`));
     runtime.exit(1);
