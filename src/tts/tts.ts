@@ -488,7 +488,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
-  if (resolveTtsApiKey(config, "volcengine")) {
+  if (isTtsProviderConfigured(config, "volcengine")) {
     return "volcengine";
   }
   return "edge";
@@ -564,6 +564,10 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
+export function resolveVolcengineAppId(config: ResolvedTtsConfig): string | undefined {
+  return config.volcengine.appId || process.env.VOLCENGINE_APP_ID || undefined;
+}
+
 export const TTS_PROVIDERS = ["openai", "elevenlabs", "volcengine", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
@@ -573,6 +577,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "volcengine") {
+    return Boolean(resolveTtsApiKey(config, provider)) && Boolean(resolveVolcengineAppId(config));
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -724,7 +731,12 @@ export async function textToSpeech(params: {
         });
         providerOutputFormat = output.elevenlabs;
       } else if (provider === "volcengine") {
-        const appId = config.volcengine.appId || process.env.VOLCENGINE_APP_ID || "";
+        const appId = resolveVolcengineAppId(config);
+        if (!appId) {
+          throw new Error(
+            "volcengine: missing appId (set messages.tts.volcengine.appId or VOLCENGINE_APP_ID)",
+          );
+        }
         audioBuffer = await volcengineTTS({
           text: params.text,
           appId,
@@ -769,7 +781,10 @@ export async function textToSpeech(params: {
         latencyMs,
         provider,
         outputFormat: providerOutputFormat,
-        voiceCompatible: provider === "volcengine" ? false : output.voiceCompatible,
+        voiceCompatible:
+          provider === "volcengine"
+            ? isVoiceCompatibleAudio({ fileName: audioPath })
+            : output.voiceCompatible,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
@@ -841,7 +856,12 @@ export async function textToSpeechTelephony(params: {
 
       if (provider === "volcengine") {
         const output = TELEPHONY_OUTPUT.volcengine;
-        const appId = config.volcengine.appId || process.env.VOLCENGINE_APP_ID || "";
+        const appId = resolveVolcengineAppId(config);
+        if (!appId) {
+          throw new Error(
+            "volcengine: missing appId (set messages.tts.volcengine.appId or VOLCENGINE_APP_ID)",
+          );
+        }
         const audioBuffer = await volcengineTTS({
           text: params.text,
           appId,
