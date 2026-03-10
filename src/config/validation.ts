@@ -256,7 +256,8 @@ function collectSlackBindingPeerWarnings(config: OpenClawConfig): ConfigValidati
     if (!canonical.usedTargetSyntax || canonical.id === rawPeerId) {
       continue;
     }
-    const preferredExample = kind === "direct" ? "U123ABC" : "C123ABC";
+    const preferredExample =
+      kind === "direct" ? "U123ABC" : kind === "group" ? "G123ABC" : "C123ABC";
     warnings.push({
       path: `bindings.${index}.match.peer.id`,
       message:
