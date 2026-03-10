@@ -297,7 +297,10 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   // callbacks do not execute in this drain cycle. Without this, a self-
   // scheduling action (one that pushes another action) could loop infinitely
   // because Array's for...of iterator is live and re-reads length each step.
-  await drainPostHookActions(event.postHookActions, (err) => {
+  // Default to empty array for legacy callers that construct hook events
+  // without the postHookActions field (pre-dates this PR's event shape change).
+  const actions = event.postHookActions ?? [];
+  await drainPostHookActions(actions, (err) => {
     const message = err instanceof Error ? err.message : String(err);
     log.error(`Post-hook action error [${event.type}:${event.action}]: ${message}`);
   });
