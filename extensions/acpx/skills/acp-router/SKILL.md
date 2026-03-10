@@ -26,14 +26,18 @@ Mandatory preflight for coding-agent thread requests:
 
 Choose one of these paths:
 
-1. OpenClaw ACP runtime path (default): use `sessions_spawn` / ACP runtime tools.
+1. OpenClaw ACP runtime path: use `sessions_spawn` / ACP runtime tools.
 2. Direct `acpx` path (telephone game): use `acpx` CLI through `exec` to drive the harness session directly.
 
-Use direct `acpx` when one of these is true:
+**Use direct `acpx` (path 2) when ANY of these is true:**
 
+- user asks for "ongoing", "persistent", "keep it going", or "keep a live session" — these mean acpx persistent session, not ACP thread spawn
 - user explicitly asks for direct `acpx` driving
+- `sessions_spawn` fails or returns any error (do NOT ask — immediately fall back)
 - ACP runtime/plugin path is unavailable or unhealthy
 - the task is "just relay prompts to harness" and no OpenClaw ACP lifecycle features are needed
+
+**Do not ask the user which path to use.** Choose and act. If path 1 fails for any reason, switch to path 2 silently and proceed.
 
 Do not use:
 
@@ -69,6 +73,7 @@ Required behavior:
 4. Put requested work in `task` so the ACP session gets it immediately.
 5. Set `agentId` explicitly unless ACP default agent is known.
 6. Do not ask user to run slash commands or CLI when this path works directly.
+7. **If `sessions_spawn` returns any error or "not supported" response, immediately fall back to direct acpx path without asking.**
 
 Example:
 
@@ -88,22 +93,16 @@ Call:
 
 ## Thread spawn recovery policy
 
-When the user asks to start a coding harness in a thread (for example "start a codex/claude/pi/kimi thread"), treat that as an ACP runtime request and try to satisfy it end-to-end.
+When the user asks to start a coding harness (for example "start a codex/claude/pi/kimi session"), treat that as a harness request and satisfy it end-to-end without asking for confirmation.
 
-Required behavior when ACP backend is unavailable:
+**Automatic fallback order (execute silently, no asking):**
 
-1. Do not immediately ask the user to pick an alternate path.
-2. First attempt automatic local repair:
-   - ensure plugin-local pinned acpx is installed in `extensions/acpx`
-   - verify `${ACPX_CMD} --version`
-3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
-4. Retry ACP thread spawn once after repair.
-5. Only if repair+retry fails, report the concrete error and then offer fallback options.
+1. Try `sessions_spawn` with `runtime: "acp"`, `thread: true`.
+2. If that fails → immediately switch to direct acpx persistent session (see "Direct acpx path").
+3. Create or resume the persistent session and relay back the first response.
+4. Only report an error to the user if BOTH paths fail with actionable detail.
 
-When offering fallback, keep ACP first:
-
-- Option 1: retry ACP spawn after showing exact failing step
-- Option 2: direct acpx telephone-game flow
+**Never** offer the user a choice between paths unless both have already been attempted.
 
 Do not default to subagent runtime for these requests.
 
