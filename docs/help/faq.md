@@ -200,7 +200,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I send a Discord message from Telegram? ("Cross-context messaging denied")](#how-do-i-send-a-discord-message-from-telegram-crosscontext-messaging-denied)
   - [Why does it feel like the bot "ignores" rapid-fire messages?](#why-does-it-feel-like-the-bot-ignores-rapidfire-messages)
 
-## First 60 seconds if something's broken
+## First 60 seconds if something is broken
 
 1. **Quick status (first check)**
 
@@ -267,7 +267,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### Im stuck what's the fastest way to get unstuck
+### I am stuck: what is the fastest way to get unstuck?
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
