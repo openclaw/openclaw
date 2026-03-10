@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   createVpsAwareOAuthHandlers: vi.fn(),
   runOpenAIOAuthTlsPreflight: vi.fn(),
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
+  withTemporaryEnvProxyDispatcher: vi.fn(),
 }));
 
 vi.mock("@mariozechner/pi-ai", () => ({
@@ -20,6 +21,10 @@ vi.mock("./oauth-flow.js", () => ({
 vi.mock("./oauth-tls-preflight.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
+}));
+
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  withTemporaryEnvProxyDispatcher: mocks.withTemporaryEnvProxyDispatcher,
 }));
 
 import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
@@ -60,6 +65,7 @@ describe("loginOpenAICodexOAuth", () => {
     vi.clearAllMocks();
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
+    mocks.withTemporaryEnvProxyDispatcher.mockImplementation(async (fn: () => unknown) => await fn());
   });
 
   it("returns credentials on successful oauth login", async () => {
@@ -80,6 +86,7 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(mocks.withTemporaryEnvProxyDispatcher).toHaveBeenCalledOnce();
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();
   });
