@@ -194,7 +194,7 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("falls back to default agent when no explicit heartbeat entries", () => {
+  it("enables all listed agents when defaults are set without explicit entries", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
@@ -205,13 +205,13 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("disables all agents when heartbeat is unset", () => {
+  it("falls back to the default agent when heartbeat is unset", () => {
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main" }, { id: "ops" }],
       },
     };
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
   });
 });
