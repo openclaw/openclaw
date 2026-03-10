@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
+  appendFileWithinRoot,
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -462,11 +463,23 @@ async function readOptionalUtf8File(params: {
 
 async function appendMemoryFlushContent(params: {
   absolutePath: string;
+  root: string;
   relativePath: string;
   content: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
 }) {
+  if (!params.sandbox) {
+    await appendFileWithinRoot({
+      rootDir: params.root,
+      relativePath: params.relativePath,
+      data: params.content,
+      mkdir: true,
+      prependNewlineIfNeeded: true,
+    });
+    return;
+  }
+
   const existing = await readOptionalUtf8File({
     absolutePath: params.absolutePath,
     relativePath: params.relativePath,
@@ -532,6 +545,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
 
       await appendMemoryFlushContent({
         absolutePath: allowedAbsolutePath,
+        root: options.root,
         relativePath: options.relativePath,
         content,
         sandbox: options.sandbox,

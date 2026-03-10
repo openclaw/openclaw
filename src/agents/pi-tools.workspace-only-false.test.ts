@@ -207,8 +207,7 @@ describe("FS tools with workspaceOnly=false", () => {
 
     const writeTool = tools.find((tool) => tool.name === "write");
     expect(writeTool).toBeDefined();
-    expect(tools.some((tool) => tool.name === "edit")).toBe(false);
-    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(tools.map((tool) => tool.name).toSorted()).toEqual(["read", "write"]);
 
     await expect(
       writeTool!.execute("test-call-memory-deny", {

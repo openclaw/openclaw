@@ -68,6 +68,7 @@ const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>>
   voice: ["tts"],
 };
 const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["web_search"]);
+const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();
@@ -528,6 +529,9 @@ export function createOpenClawCodingTools(options?: {
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
       ? tools.flatMap((tool) => {
+          if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
+            return [];
+          }
           if (tool.name === "write") {
             return [
               wrapToolMemoryFlushAppendOnlyWrite(tool, {
@@ -540,9 +544,6 @@ export function createOpenClawCodingTools(options?: {
                     : undefined,
               }),
             ];
-          }
-          if (tool.name === "edit" || tool.name === "apply_patch") {
-            return [];
           }
           return [tool];
         })
