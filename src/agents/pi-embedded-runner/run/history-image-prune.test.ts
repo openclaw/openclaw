@@ -49,6 +49,30 @@ describe("pruneProcessedHistoryImages", () => {
     expect(first.content[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
+  it("prunes image blocks from toolResult messages that already have assistant replies", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "screenshot bytes" }, { ...image }],
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: "ack",
+      }),
+    ];
+
+    const didMutate = pruneProcessedHistoryImages(messages);
+
+    expect(didMutate).toBe(true);
+    const firstTool = messages[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
+    if (!firstTool || !Array.isArray(firstTool.content)) {
+      throw new Error("expected toolResult array content");
+    }
+    expect(firstTool.content).toHaveLength(2);
+    expect(firstTool.content[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+  });
+
   it("does not change messages when no assistant turn exists", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
