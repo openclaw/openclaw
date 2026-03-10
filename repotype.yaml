@@ -24,12 +24,13 @@ files:
   - id: package-json
     glob: "packages/*/package.json"
 
-  - id: package-readme
-    glob: "packages/*/README.md"
+  # Package READMEs - commented out until packages have READMEs
+  # - id: package-readme
+  #   glob: "packages/*/README.md"
 
-  # Extension manifests
+  # Extension manifests (OpenClaw uses openclaw.plugin.json, not manifest.json)
   - id: extension-manifest
-    glob: "extensions/*/manifest.json"
+    glob: "extensions/*/openclaw.plugin.json"
 
   # Core documentation
   - id: root-docs
