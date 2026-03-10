@@ -1,21 +1,15 @@
 // scripts/setup-hooks.mjs
-import { execSync } from "node:child_process";
+import { execSync } from 'node:child_process';
 
 try {
-  // Step 1: Check if the current directory is inside a git work tree.
-  // This verifies that Git is installed and handles cases where
-  // the user might be running the installation from a subdirectory.
-  execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
-
-  // Step 2: If the check passes, safely set the git hooks path
-  // to the project's custom 'git-hooks' directory.
-  execSync("git config core.hooksPath git-hooks", { stdio: "ignore" });
-
-  console.log("✅ Git hooks configured successfully.");
-} catch {
-  // Silently catch all exceptions and exit with status code 0.
-  // This ensures that if a user downloads the source code as a ZIP file
-  // (without a .git directory) or doesn't have Git installed,
-  // the 'pnpm install' process will continue without failing.
+  execSync('git rev-parse --is-inside-work-tree', { stdio: 'ignore' });
+  execSync('git config core.hooksPath git-hooks', { stdio: 'ignore' });
+  console.log('✅ Git hooks configured successfully.');
+} catch (error) {
+  // 听取 Greptile 的建议：给开发者留下一条友好的警告线索
+  console.warn('⚠️ Note: Git hooks were not configured (expected if you downloaded a ZIP or are not in a git repository).');
+  console.warn(`   Details: ${error.message}`);
+  
+  // 依然以状态码 0 退出，绝对不阻断 pnpm install 的主流程
   process.exit(0);
 }
