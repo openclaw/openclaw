@@ -113,6 +113,20 @@ describe("registerBackupCommand", () => {
     );
   });
 
+  it("keeps backup create --json machine-readable by suppressing the deprecation banner", async () => {
+    await runCli(["backup", "create", "--json"]);
+
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("`backup create` is deprecated; use `backup export`."),
+    );
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        json: true,
+      }),
+    );
+  });
+
   it("honors --no-include-workspace", async () => {
     await runCli(["backup", "export", "--no-include-workspace"]);
 
@@ -199,6 +213,21 @@ describe("registerBackupCommand", () => {
         output: "/tmp/backups",
         verify: true,
         snapshotName: "nightly",
+        mode: "snapshot",
+      }),
+    );
+  });
+
+  it("keeps backup push --json machine-readable by suppressing the deprecation banner", async () => {
+    await runCli(["backup", "push", "--json"]);
+
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("`backup push` is deprecated; use `backup run`."),
+    );
+    expect(backupRunCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        json: true,
         mode: "snapshot",
       }),
     );

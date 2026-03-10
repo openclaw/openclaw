@@ -78,6 +78,37 @@ function expectedMirrorPath(mirrorRoot: string, sourcePath: string): string {
   return path.join(mirrorRoot, encodeAbsolutePathForBackupArchive(sourcePath));
 }
 
+async function canonicalizePathForContainment(inputPath: string): Promise<string> {
+  const resolved = path.resolve(inputPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+  while (true) {
+    try {
+      const real = await fs.realpath(probe);
+      return suffix.length === 0 ? real : path.join(real, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+async function assertPathContainedWithinRoot(
+  childPath: string,
+  rootPath: string,
+  label: string,
+): Promise<void> {
+  const canonicalChild = await canonicalizePathForContainment(childPath);
+  const canonicalRoot = await canonicalizePathForContainment(rootPath);
+  if (!isPathWithin(canonicalChild, canonicalRoot)) {
+    throw new Error(`Refusing to ${label} outside ${shortenHomePath(rootPath)}.`);
+  }
+}
+
 async function readWorkspaceBackupStatus(
   target: string,
 ): Promise<WorkspaceBackupStatusFile | undefined> {
@@ -141,16 +172,19 @@ async function replaceDirectoryAtomically(sourcePath: string, targetPath: string
   }
 }
 
-function assertWorkspaceBackupSafety(
+async function assertWorkspaceBackupSafety(
   target: string,
   stateDir: string,
   workspaceDirs: readonly string[],
-): void {
-  if (isPathWithin(target, stateDir)) {
+): Promise<void> {
+  const canonicalTarget = await canonicalizePathForContainment(target);
+  const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  if (isPathWithin(canonicalTarget, canonicalStateDir)) {
     throw new Error("backup.target must not be inside the live state directory.");
   }
   for (const workspaceDir of workspaceDirs) {
-    if (isPathWithin(target, workspaceDir)) {
+    const canonicalWorkspaceDir = await canonicalizePathForContainment(workspaceDir);
+    if (isPathWithin(canonicalTarget, canonicalWorkspaceDir)) {
       throw new Error(
         `backup.target must not live inside a workspace being mirrored: ${shortenHomePath(workspaceDir)}`,
       );
@@ -173,7 +207,7 @@ async function resolveWorkspaceBackupState(): Promise<{
   }
   const workspaceDirs = collectWorkspaceDirs(snapshot.config);
   const stateDir = resolveStateDir();
-  assertWorkspaceBackupSafety(target, stateDir, workspaceDirs);
+  await assertWorkspaceBackupSafety(target, stateDir, workspaceDirs);
   return {
     target,
     workspaceDirs,
@@ -201,7 +235,11 @@ export async function workspaceBackupInitCommand(
     );
   }
 
-  assertWorkspaceBackupSafety(target, resolveStateDir(), collectWorkspaceDirs(snapshot.config));
+  await assertWorkspaceBackupSafety(
+    target,
+    resolveStateDir(),
+    collectWorkspaceDirs(snapshot.config),
+  );
   await fs.mkdir(target, { recursive: true });
   const nextConfig: OpenClawConfig = {
     ...snapshot.resolved,
@@ -242,7 +280,13 @@ export async function workspaceBackupRunCommand(
   const stagingRoot = path.join(workspaceBackupRoot(target), ".staging");
   await fs.mkdir(mirrorRoot, { recursive: true });
   await fs.mkdir(stagingRoot, { recursive: true });
-  assertWorkspaceBackupSafety(target, stateDir, workspaceDirs);
+  await assertWorkspaceBackupSafety(target, stateDir, workspaceDirs);
+  await assertPathContainedWithinRoot(mirrorRoot, workspaceBackupRoot(target), "write mirrors");
+  await assertPathContainedWithinRoot(
+    stagingRoot,
+    workspaceBackupRoot(target),
+    "write staging data",
+  );
 
   const mirrored: WorkspaceBackupRunResult["workspaces"] = [];
   const activeSourcePaths = new Set<string>();
@@ -255,6 +299,8 @@ export async function workspaceBackupRunCommand(
     const relativeDir = encodeAbsolutePathForBackupArchive(workspaceDir);
     const stagedDir = path.join(stagingRoot, `${relativeDir}-${randomUUID()}`);
     const targetDir = expectedMirrorPath(mirrorRoot, workspaceDir);
+    await assertPathContainedWithinRoot(stagedDir, stagingRoot, "write staging data");
+    await assertPathContainedWithinRoot(targetDir, mirrorRoot, "write workspace mirror");
     await fs.mkdir(path.dirname(stagedDir), { recursive: true });
     await fs.cp(workspaceDir, stagedDir, {
       recursive: true,
@@ -272,9 +318,7 @@ export async function workspaceBackupRunCommand(
   for (const previous of previousStatus?.workspaces ?? []) {
     if (!activeSourcePaths.has(previous.sourcePath)) {
       const staleMirrorPath = expectedMirrorPath(mirrorRoot, previous.sourcePath);
-      if (!isPathWithin(staleMirrorPath, mirrorRoot)) {
-        continue;
-      }
+      await assertPathContainedWithinRoot(staleMirrorPath, mirrorRoot, "remove stale mirror");
       await fs.rm(staleMirrorPath, { recursive: true, force: true });
     }
   }

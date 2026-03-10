@@ -134,4 +134,30 @@ describe("workspace backup commands", () => {
       await fs.rm(protectedDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects backup targets that resolve into the live state directory via symlink", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(tempHome.home, "workspace");
+    const linkedTarget = path.join(tempHome.home, "BackupsLink");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.symlink(stateDir, linkedTarget);
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(
+      workspaceBackupInitCommand(runtime, {
+        target: linkedTarget,
+      }),
+    ).rejects.toThrow("backup.target must not be inside the live state directory.");
+  });
 });

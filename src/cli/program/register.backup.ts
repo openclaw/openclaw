@@ -47,7 +47,7 @@ async function runArchiveCommand(
   deprecated?: { oldCommand: string; replacement: string },
 ) {
   await runCommandWithRuntime(defaultRuntime, async () => {
-    if (deprecated) {
+    if (deprecated && !opts.json) {
       logDeprecatedCommand(deprecated.oldCommand, deprecated.replacement);
     }
     await backupCreateCommand(defaultRuntime, {
@@ -77,7 +77,7 @@ async function runSnapshotCommand(
   },
 ) {
   await runCommandWithRuntime(defaultRuntime, async () => {
-    if (params?.deprecated) {
+    if (params?.deprecated && !opts.json) {
       logDeprecatedCommand(params.deprecated.oldCommand, params.deprecated.replacement);
     }
     await backupRunCommand(defaultRuntime, {
