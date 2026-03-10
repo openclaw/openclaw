@@ -36,9 +36,10 @@ describe("remote-http", () => {
 
   describe("withRemoteHttpResponse", () => {
     it("delegates to SSRF-guarded fetch and releases response handle", async () => {
-      const release = vi.fn(async () => undefined);
+      const release = vi.fn(async () => {});
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
         response: new Response("ok", { status: 200 }),
+        finalUrl: "https://memory.example/v1/embed",
         release,
       });
 
@@ -60,9 +61,10 @@ describe("remote-http", () => {
     });
 
     it("releases response handle when onResponse throws", async () => {
-      const release = vi.fn(async () => undefined);
+      const release = vi.fn(async () => {});
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
         response: new Response("boom", { status: 500 }),
+        finalUrl: "https://memory.example/v1/embed",
         release,
       });
 
