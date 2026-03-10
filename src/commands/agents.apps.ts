@@ -151,7 +151,22 @@ export async function agentsAppsInstallCommand(
     next = applyAgentAppSelection(next, registryName, opts.agent);
   }
 
-  await writeConfigFile(next);
+  try {
+    await writeConfigFile(next);
+  } catch (err) {
+    if (
+      resolvedSource?.localSource &&
+      resolvedSource.localSource !== previousEntry?.source &&
+      !stillReferencesAgentAppSource(cfg, resolvedSource.localSource)
+    ) {
+      try {
+        await cleanupManagedAotuiAppArtifacts(resolvedSource.localSource);
+      } catch {
+        // Best-effort rollback only; surface the original config write failure.
+      }
+    }
+    throw err;
+  }
   if (
     previousEntry &&
     previousEntry.source !== source &&

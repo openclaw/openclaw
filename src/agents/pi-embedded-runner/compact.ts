@@ -955,6 +955,16 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        try {
+          await reinitializeAotuiDesktopForCompaction({
+            sessionKey: params.sessionKey,
+            reason: "context_compaction",
+          });
+        } catch (err) {
+          log.warn(
+            `AOTUI desktop reinitialize failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
+          );
+        }
         return {
           ok: result.ok,
           compacted: result.compacted,

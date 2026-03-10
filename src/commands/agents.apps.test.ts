@@ -245,6 +245,27 @@ describe("agents apps commands", () => {
     expect(cleanupManagedAotuiAppArtifactsMock).not.toHaveBeenCalled();
   });
 
+  it("cleans up a newly installed managed artifact when writing config fails", async () => {
+    const installedSource =
+      "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/2.0.0/node_modules/@agentina/aotui-ide";
+    loadConfigMock.mockReturnValue({});
+    installNpmAotuiPackageMock.mockResolvedValue({
+      localSource: installedSource,
+    });
+    writeConfigFileMock.mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(
+      agentsAppsInstallCommand(
+        {
+          source: "@agentina/aotui-ide@2.0.0",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("disk full");
+
+    expect(cleanupManagedAotuiAppArtifactsMock).toHaveBeenCalledWith(installedSource);
+  });
+
   it("uninstalls an Agent App, clears selections, and removes managed cache files", async () => {
     loadConfigMock.mockReturnValue({
       apps: {

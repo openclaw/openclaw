@@ -70,7 +70,7 @@ describe("AOTUI runtime registry", () => {
     expect(mocks.service.start).toHaveBeenCalledTimes(1);
   });
 
-  it("publishes the singleton before awaiting start so concurrent callers reuse it", async () => {
+  it("keeps the singleton hidden until start completes while concurrent callers reuse one start", async () => {
     let resolveStart: ((value: undefined) => void) | undefined;
     mocks.service.start.mockImplementationOnce(
       () =>
@@ -84,11 +84,12 @@ describe("AOTUI runtime registry", () => {
     const secondPromise = runtime.startAotuiGatewayRuntime();
 
     expect(mocks.createOpenClawKernelService).toHaveBeenCalledTimes(1);
-    expect(runtime.getAotuiGatewayRuntime()).toBe(mocks.service);
+    expect(runtime.getAotuiGatewayRuntime()).toBeNull();
 
     resolveStart?.(undefined);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
     expect(first).toBe(second);
+    expect(runtime.getAotuiGatewayRuntime()).toBe(mocks.service);
   });
 
   it("resets the desktop for new sessions and ensures for existing sessions", async () => {

@@ -4,6 +4,7 @@ import { createOpenClawKernelService } from "./kernel-service.js";
 import type { AotuiKernelService, OpenClawAgentHandle } from "./types.js";
 
 let gatewayKernelService: AotuiKernelService | null = null;
+let gatewayKernelServiceStart: Promise<AotuiKernelService> | null = null;
 
 export type { OpenClawAgentHandle } from "./types.js";
 
@@ -17,19 +18,32 @@ export async function startAotuiGatewayRuntime(
   if (gatewayKernelService) {
     return gatewayKernelService;
   }
+  if (gatewayKernelServiceStart) {
+    return await gatewayKernelServiceStart;
+  }
 
   const service = createOpenClawKernelService(config);
-  gatewayKernelService = service;
-  try {
-    await service.start();
-    return service;
-  } catch (err) {
-    gatewayKernelService = null;
-    throw err;
-  }
+  const startPromise = (async () => {
+    try {
+      await service.start();
+      gatewayKernelService = service;
+      return service;
+    } finally {
+      gatewayKernelServiceStart = null;
+    }
+  })();
+  gatewayKernelServiceStart = startPromise;
+  return await startPromise;
 }
 
 export async function stopAotuiGatewayRuntime(reason?: string): Promise<void> {
+  if (!gatewayKernelService && gatewayKernelServiceStart) {
+    try {
+      await gatewayKernelServiceStart;
+    } catch {
+      return;
+    }
+  }
   if (!gatewayKernelService) {
     return;
   }
