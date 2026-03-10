@@ -10,9 +10,8 @@ describe("formatNextRun", () => {
   it("includes weekday and relative time", () => {
     const ts = Date.UTC(2026, 1, 23, 15, 0, 0);
     const out = formatNextRun(ts);
-    const [weekday, rest] = out.split(", ", 2);
-    expect(weekday.length).toBeGreaterThan(0);
-    expect(rest?.length).toBeGreaterThan(0);
+    const expectedWeekday = new Date(ts).toLocaleDateString(undefined, { weekday: "short" });
+    expect(out.startsWith(`${expectedWeekday}, `)).toBe(true);
     expect(out).toContain("(");
     expect(out).toContain(")");
   });
