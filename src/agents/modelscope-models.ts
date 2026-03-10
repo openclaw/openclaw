@@ -64,16 +64,24 @@ interface OpenAIListModelsResponse {
  * You can expand this with context window or aliases if needed.
  */
 export const MODELSCOPE_MODEL_CATALOG: ModelDefinitionConfig[] = [
-  // Example: add known models with better names if desired
-  // {
-  //   id: "Qwen/Qwen3-8B",
-  //   name: "Qwen3 8B",
-  //   reasoning: false,
-  //   input: ["text"],
-  //   contextWindow: 32768,
-  //   maxTokens: 8192,
-  //   cost: MODELSCOPE_DEFAULT_COST,
-  // },
+  {
+    id: "Qwen/Qwen3-8B",
+    name: "Qwen3 8B",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 32768,
+    maxTokens: 8192,
+    cost: MODELSCOPE_DEFAULT_COST,
+  },
+  {
+    id: "Qwen/Qwen3-32B",
+    name: "Qwen3 32B",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 32768,
+    maxTokens: 8192,
+    cost: MODELSCOPE_DEFAULT_COST,
+  },
 ];
 
 export function buildModelScopeModelDefinition(
