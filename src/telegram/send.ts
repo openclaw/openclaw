@@ -735,6 +735,7 @@ export async function sendMessageTelegram(
     rawText: string,
     context: string,
   ): Promise<{ messageId: string; chatId: string }> => {
+    const fallbackText = opts.plainText ?? rawText;
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
@@ -744,13 +745,16 @@ export async function sendMessageTelegram(
           error,
         )}`,
       );
-      return await sendPlainChunkedText(opts.plainText ?? rawText, context);
+      return await sendPlainChunkedText(fallbackText, context);
     }
-    const plainTextChunks = splitTelegramPlainTextFallback(
-      opts.plainText ?? rawText,
-      htmlChunks.length,
-      4000,
-    );
+    const fixedPlainTextChunks = splitTelegramPlainTextChunks(fallbackText, 4000);
+    if (fixedPlainTextChunks.length > htmlChunks.length) {
+      logVerbose(
+        `telegram ${context} plain-text fallback needs more chunks than HTML; sending plain text`,
+      );
+      return await sendPlainChunkedText(fallbackText, context);
+    }
+    const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
     const chunks = htmlChunks.map((chunk, index) => ({
       rawText: chunk,
       htmlText: chunk,

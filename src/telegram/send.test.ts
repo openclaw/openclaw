@@ -1347,6 +1347,30 @@ describe("sendMessageTelegram", () => {
     expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
     expect(res.messageId).toBe("93");
   });
+
+  it("cuts over to plain text when fallback text needs more chunks than html", async () => {
+    const chatId = "123";
+    const htmlText = `<b>${"A".repeat(5000)}</b>`;
+    const plainText = "P".repeat(9000);
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 94, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 95, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 96, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, htmlText, {
+      token: "tok",
+      api,
+      textMode: "html",
+      plainText,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === undefined)).toBe(true);
+    expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
+    expect(res.messageId).toBe("96");
+  });
 });
 
 describe("reactMessageTelegram", () => {
