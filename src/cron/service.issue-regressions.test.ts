@@ -1,7 +1,13 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  clearCommandLane,
+  GatewayDrainingError,
+  markGatewayDraining,
+  resetAllLanes,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import * as schedule from "./schedule.js";
 import {
@@ -1648,6 +1654,53 @@ describe("Cron issue regressions", () => {
     expect(timerResult).toMatchObject({ ok: true });
 
     clearCommandLane(CommandLane.Cron);
+  });
+
+  it("enqueueRun releases runningAtMs reservation when lane rejects (e.g. GatewayDrainingError)", async () => {
+    vi.useRealTimers();
+    resetAllLanes();
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:05.000Z");
+    const job = createDueIsolatedJob({ id: "drain-release", nowMs: dueAt, nextRunAtMs: dueAt });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
+
+    const log = createNoopLogger();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    // Mark gateway as draining so enqueueCommandInLane immediately rejects
+    // with GatewayDrainingError. The reservation (runningAtMs) set by
+    // prepareManualRun must be released so the job is not stuck.
+    markGatewayDraining();
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expect(ack).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+    // Wait for the async release to propagate
+    await vi.waitFor(
+      () => {
+        const stored = state.store?.jobs.find((j) => j.id === job.id);
+        expect(stored?.state.runningAtMs).toBeUndefined();
+      },
+      { timeout: 2_000 },
+    );
+
+    // Error should be logged
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.stringContaining(GatewayDrainingError.name) }),
+      "cron: queued manual run background execution failed",
+    );
+
+    resetAllLanes();
   });
 
   // Regression: isolated cron runs must not abort at 1/3 of configured timeoutSeconds.

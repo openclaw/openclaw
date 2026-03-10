@@ -495,6 +495,37 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
   return { ok: true, ran: true } as const;
 }
 
+async function releaseManualRunReservation(
+  state: CronServiceState,
+  jobId: string,
+  runId: string,
+  err: unknown,
+): Promise<void> {
+  // Clear the runningAtMs reservation set by prepareManualRun so the job does
+  // not remain stuck as "already-running" until the stale-marker maintenance
+  // window fires. Best-effort: if this persist also fails, stale-marker
+  // cleanup will still recover the job after STUCK_RUN_MS.
+  try {
+    await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const job = state.store?.jobs.find((j) => j.id === jobId);
+      if (job && typeof job.state.runningAtMs === "number") {
+        job.state.runningAtMs = undefined;
+        await persist(state);
+      }
+    });
+  } catch (releaseErr) {
+    state.deps.log.warn(
+      { jobId, runId, releaseErr: String(releaseErr) },
+      "cron: failed to release runningAtMs after enqueue failure (stale-marker cleanup will recover)",
+    );
+  }
+  state.deps.log.error(
+    { jobId, runId, err: String(err) },
+    "cron: queued manual run background execution failed",
+  );
+}
+
 export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
   // Reserve the job under lock *before* enqueuing so the job cannot be stolen
   // by a concurrent timer tick between the eligibility check and the background
@@ -522,10 +553,10 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
       },
     },
   ).catch((err) => {
-    state.deps.log.error(
-      { jobId: id, runId, err: String(err) },
-      "cron: queued manual run background execution failed",
-    );
+    // Release the runningAtMs reservation so the job is not stuck as
+    // "already-running" for the full STUCK_RUN_MS window when the lane
+    // rejects the task (e.g. GatewayDrainingError on restart).
+    void releaseManualRunReservation(state, id, runId, err);
   });
   return { ok: true, enqueued: true, runId } as const;
 }
