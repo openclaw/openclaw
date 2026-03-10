@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -342,22 +342,81 @@ export async function backupCreateCommand(
       });
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-      await tar.c(
-        {
-          file: tempArchivePath,
-          gzip: true,
-          portable: true,
-          preservePaths: true,
-          onWriteEntry: (entry) => {
-            entry.path = remapArchiveEntryPath({
-              entryPath: entry.path,
-              manifestPath,
-              archiveRoot,
-            });
+      // Use the streaming API (no `file:` option) so tar never buffers the
+      // entire archive in memory — critical for 4 GB+ installations.
+      const PROGRESS_INTERVAL = 100 * 1024 * 1024; // 100 MB
+      let bytesWritten = 0;
+      let nextProgressAt = PROGRESS_INTERVAL;
+
+      await new Promise<void>((resolve, reject) => {
+        const destStream = createWriteStream(tempArchivePath);
+        let settled = false;
+
+        const fail = (err: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          try {
+            destStream.destroy();
+          } catch {
+            /* ignore */
+          }
+          const msg = err.message ?? "";
+          if (msg.includes("ENOMEM") || /heap out of memory|allocation failed/i.test(msg)) {
+            reject(
+              new Error(
+                `Backup failed: out of memory. Try --exclude-logs or --exclude-media to reduce archive size. (${msg})`,
+                { cause: err },
+              ),
+            );
+          } else {
+            reject(err);
+          }
+        };
+
+        // asyncNoFile is typed to return Pack (the readable stream class) directly,
+        // avoiding overload-resolution ambiguity when `file` is absent.
+        const tarStream = tar.c.asyncNoFile(
+          {
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            onWriteEntry: (entry) => {
+              entry.path = remapArchiveEntryPath({
+                entryPath: entry.path,
+                manifestPath,
+                archiveRoot,
+              });
+            },
           },
-        },
-        [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
-      );
+          [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+        );
+
+        tarStream.on("error", fail);
+        destStream.on("error", fail);
+        destStream.on("finish", () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve();
+        });
+
+        // Track bytes written for progress reporting on large archives.
+        tarStream.on("data", (chunk: unknown) => {
+          bytesWritten += Buffer.isBuffer(chunk) ? chunk.length : 0;
+          if (!opts.json && bytesWritten >= nextProgressAt) {
+            runtime.log(
+              `Backup progress: ${Math.floor(bytesWritten / (1024 * 1024))}MB written...`,
+            );
+            nextProgressAt = bytesWritten + PROGRESS_INTERVAL;
+          }
+        });
+
+        tarStream.pipe(destStream);
+      });
+
       await publishTempArchive({ tempArchivePath, outputPath });
     } finally {
       await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
