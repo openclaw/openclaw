@@ -136,7 +136,7 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
-  protected lastSessionSyncAt: number | null = null;
+  protected lastSessionSyncAt: Date | null = null;
   protected lastSessionSyncReason: string | null = null;
   protected lastSessionSyncError: string | null = null;
   private lastMetaSerialized: string | null = null;
@@ -932,7 +932,7 @@ export abstract class MemoryManagerSyncOps {
         });
         try {
           await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
-          this.lastSessionSyncAt = Date.now();
+          this.lastSessionSyncAt = new Date();
           log.debug("memory session sync complete", {
             reason: this.lastSessionSyncReason,
             dirtyFiles: this.sessionsDirtyFiles.size,
@@ -1112,8 +1112,14 @@ export abstract class MemoryManagerSyncOps {
         log.debug("memory sessions: sync starting", {
           pendingFiles: this.sessionPendingFiles.size,
           dirtyFiles: this.sessionsDirtyFiles.size,
-          pendingBytes: this.sessionDeltas.pendingBytes,
-          pendingMessages: this.sessionDeltas.pendingMessages,
+          pendingBytes: Array.from(this.sessionDeltas.values()).reduce(
+            (sum, entry) => sum + entry.pendingBytes,
+            0,
+          ),
+          pendingMessages: Array.from(this.sessionDeltas.values()).reduce(
+            (sum, entry) => sum + entry.pendingMessages,
+            0,
+          ),
           reason: this.lastSessionSyncReason,
         });
         try {
@@ -1206,8 +1212,14 @@ export abstract class MemoryManagerSyncOps {
       log.debug("memory sessions: sync starting", {
         pendingFiles: this.sessionPendingFiles.size,
         dirtyFiles: this.sessionsDirtyFiles.size,
-        pendingBytes: this.sessionDeltas.pendingBytes,
-        pendingMessages: this.sessionDeltas.pendingMessages,
+        pendingBytes: Array.from(this.sessionDeltas.values()).reduce(
+          (sum, entry) => sum + entry.pendingBytes,
+          0,
+        ),
+        pendingMessages: Array.from(this.sessionDeltas.values()).reduce(
+          (sum, entry) => sum + entry.pendingMessages,
+          0,
+        ),
         reason: this.lastSessionSyncReason,
       });
       try {
