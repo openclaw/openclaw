@@ -242,4 +242,11 @@ describe("partitionModelItems", () => {
   it("returns empty array for empty models list", () => {
     expect(partitionModelItems([], () => true)).toEqual([]);
   });
+
+  it("sanitizes control characters in model metadata", () => {
+    const models = [{ id: "model\x1b[31m-evil", provider: "bad\x1b]52;;base64\x07provider" }];
+    const items = partitionModelItems(models, () => true);
+    expect(items[0].label).not.toContain("\x1b");
+    expect(items[0].label).not.toContain("\x07");
+  });
 });

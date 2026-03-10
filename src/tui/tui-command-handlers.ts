@@ -123,7 +123,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             key: state.currentSessionKey,
             model: value,
           });
-          chatLog.addSystem(`model set to ${value}`);
+          chatLog.addSystem(`model set to ${sanitizeRenderableText(value)}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -554,8 +554,8 @@ export function partitionModelItems(
 
     const item: SelectItem = {
       value,
-      label: value,
-      description: descParts.join(" · "),
+      label: sanitizeRenderableText(value),
+      description: sanitizeRenderableText(descParts.join(" · ")),
     };
 
     if (hasAuth(model.provider)) {
