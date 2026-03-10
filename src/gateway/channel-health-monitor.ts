@@ -78,6 +78,10 @@ type RestartRecord = {
   restartsThisHour: { at: number }[];
   /** Number of health-monitor restarts without the channel becoming stable. */
   consecutiveRestarts: number;
+  /** Timestamp of the first healthy check after a restart.  Tracks continuous
+   *  uptime so a brief healthy→unhealthy flap does not satisfy the stability
+   *  window and prematurely reset consecutiveRestarts. */
+  healthySince?: number;
 };
 
 function resolveTimingPolicy(
@@ -168,22 +172,38 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             consecutiveRestarts: 0,
           };
 
-          // Stability check: if the channel is healthy and has been up long
-          // enough since the last restart, reset the consecutive counter.
+          // Stability check: if the channel is healthy and has been continuously
+          // healthy for STABLE_THRESHOLD_MS, reset the consecutive counter.
+          // We track healthySince (set on first healthy check after a restart)
+          // so a brief healthy→unhealthy flap does not satisfy the window.
           if (health.healthy) {
+            if (record.consecutiveRestarts > 0 && !record.healthySince) {
+              // First healthy check after a restart — start the stability clock.
+              record.healthySince = now;
+              restartRecords.set(key, record);
+            }
             if (
               record.consecutiveRestarts > 0 &&
-              record.lastRestartAt > 0 &&
-              now - record.lastRestartAt >= STABLE_THRESHOLD_MS
+              record.healthySince &&
+              now - record.healthySince >= STABLE_THRESHOLD_MS
             ) {
               log.info?.(
                 `[${channelId}:${accountId}] health-monitor: channel stable after ${record.consecutiveRestarts} restart(s), resetting counter`,
               );
               record.consecutiveRestarts = 0;
+              record.healthySince = undefined;
               restartRecords.set(key, record);
               onChannelStable?.({ channelId: channelId as ChannelId, accountId });
             }
             continue;
+          }
+
+          // Channel is unhealthy — clear the healthy-window timestamp so a
+          // prior brief health run does not carry forward into the next
+          // stability measurement.
+          if (record.healthySince !== undefined) {
+            record.healthySince = undefined;
+            restartRecords.set(key, record);
           }
 
           // Apply exponential backoff: base cooldown × 2^min(consecutiveRestarts, cap)

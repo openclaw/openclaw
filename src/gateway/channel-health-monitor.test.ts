@@ -661,6 +661,38 @@ describe("channel-health-monitor", () => {
       monitor.stop();
     });
 
+    it("does not reset consecutive restart counter on brief healthy→unhealthy flap", async () => {
+      const onChannelStable = vi.fn();
+      let currentStatus: Partial<ChannelAccountSnapshot> = managedStoppedAccount("crashed");
+
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => snapshotWith({ discord: { default: currentStatus } })),
+      });
+
+      const monitor = startDefaultMonitor(manager, {
+        checkIntervalMs: 1_000,
+        cooldownCycles: 1,
+        onChannelStable,
+      });
+
+      // Trigger a restart
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+      // Channel becomes briefly healthy (< STABLE_THRESHOLD_MS = 5 minutes)
+      currentStatus = { running: true, connected: true, enabled: true, configured: true };
+      await vi.advanceTimersByTimeAsync(2_000); // only 2 healthy check cycles
+
+      // Channel goes unhealthy again (flap)
+      currentStatus = managedStoppedAccount("crashed again");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // Stability callback must NOT fire — channel was not healthy for 5 minutes
+      expect(onChannelStable).not.toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
     it("applies exponential backoff to cooldown after consecutive restarts", async () => {
       const manager = createSnapshotManager({
         discord: {
