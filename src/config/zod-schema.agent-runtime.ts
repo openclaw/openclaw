@@ -16,6 +16,7 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 
 export const HeartbeatSchema = z
   .object({
@@ -158,7 +159,6 @@ const SandboxDockerSchema = z
           });
           continue;
         }
-import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 
 // Replace the colonCount block with:
 const windowsPrefix = /^[A-Za-z]:/;
