@@ -113,11 +113,19 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toContain("trailing ||");
   });
 
-  it("splits long html text without breaking balanced tags", () => {
-    const chunks = splitTelegramHtmlChunks(`<b>${"A".repeat(5000)}</b>`, 4000);
+  it("splits long multiline html text without breaking balanced tags", () => {
+    const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
-    expect(chunks[0]).toMatch(/^<b>.*<\/b>$/);
-    expect(chunks[1]).toMatch(/^<b>.*<\/b>$/);
+    expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
+  });
+
+  it("fails loudly when a leading entity cannot fit inside a chunk", () => {
+    expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
+  });
+
+  it("fails loudly when tag overhead leaves no room for text", () => {
+    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });
 });

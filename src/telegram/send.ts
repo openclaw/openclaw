@@ -108,6 +108,36 @@ function resolveTelegramMessageIdOrThrow(
   throw new Error(`Telegram ${context} returned no message_id`);
 }
 
+function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {
+  if (!text) {
+    return [];
+  }
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (chunkCount <= 1 || text.length <= normalizedLimit) {
+    return [text];
+  }
+  if (text.length > chunkCount * normalizedLimit) {
+    const chunks: string[] = [];
+    for (let start = 0; start < text.length; start += normalizedLimit) {
+      chunks.push(text.slice(start, start + normalizedLimit));
+    }
+    return chunks;
+  }
+  const chunks: string[] = [];
+  let offset = 0;
+  for (let index = 0; index < chunkCount && offset < text.length; index += 1) {
+    const remainingChars = text.length - offset;
+    const remainingChunks = chunkCount - index;
+    const nextChunkLength =
+      remainingChunks === 1
+        ? remainingChars
+        : Math.min(normalizedLimit, Math.ceil(remainingChars / remainingChunks));
+    chunks.push(text.slice(offset, offset + nextChunkLength));
+    offset += nextChunkLength;
+  }
+  return chunks;
+}
+
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
@@ -660,10 +690,14 @@ export async function sendMessageTelegram(
     rawText: string,
     context: string,
   ): Promise<{ messageId: string; chatId: string }> => {
-    const chunks = splitTelegramHtmlChunks(rawText, 4000).map((chunk) => ({
+    const htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
+    const plainTextChunks = opts.plainText
+      ? splitTelegramPlainTextFallback(opts.plainText, htmlChunks.length, 4000)
+      : [];
+    const chunks = htmlChunks.map((chunk, index) => ({
       rawText: chunk,
       htmlText: chunk,
-      plainText: chunk,
+      plainText: plainTextChunks[index],
     }));
 
     let lastMessageId = "";

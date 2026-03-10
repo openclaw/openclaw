@@ -270,13 +270,15 @@ function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
-  let splitAt = normalizedMaxLength;
   const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
-  const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
-  if (lastAmpersand > lastSemicolon) {
-    splitAt = lastAmpersand;
+  if (lastAmpersand === -1) {
+    return normalizedMaxLength;
   }
-  return splitAt > 0 ? splitAt : normalizedMaxLength;
+  const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
+  if (lastAmpersand < lastSemicolon) {
+    return normalizedMaxLength;
+  }
+  return lastAmpersand;
 }
 
 function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
@@ -300,15 +302,15 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
   const chunks: string[] = [];
   const openTags: TelegramHtmlTag[] = [];
   let current = "";
-  let chunkHasContent = false;
+  let chunkHasPayload = false;
 
   const resetCurrent = () => {
     current = buildTelegramHtmlOpenPrefix(openTags);
-    chunkHasContent = false;
+    chunkHasPayload = false;
   };
 
   const flushCurrent = () => {
-    if (!chunkHasContent) {
+    if (!chunkHasPayload) {
       return;
     }
     chunks.push(`${current}${buildTelegramHtmlCloseSuffix(openTags)}`);
@@ -321,24 +323,31 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
       const available =
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
       if (available <= 0) {
-        const prefix = buildTelegramHtmlOpenPrefix(openTags);
-        if (!chunkHasContent && current === prefix) {
-          current += remaining;
-          chunkHasContent = true;
-          remaining = "";
-          break;
+        if (!chunkHasPayload) {
+          throw new Error(
+            `Telegram HTML chunk limit exceeded by tag overhead (limit=${normalizedLimit})`,
+          );
         }
         flushCurrent();
         continue;
       }
       if (remaining.length <= available) {
         current += remaining;
-        chunkHasContent = true;
+        chunkHasPayload = true;
         break;
       }
       const splitAt = findTelegramHtmlSafeSplitIndex(remaining, available);
+      if (splitAt <= 0) {
+        if (!chunkHasPayload) {
+          throw new Error(
+            `Telegram HTML chunk limit exceeded by leading entity (limit=${normalizedLimit})`,
+          );
+        }
+        flushCurrent();
+        continue;
+      }
       current += remaining.slice(0, splitAt);
-      chunkHasContent = true;
+      chunkHasPayload = true;
       remaining = remaining.slice(splitAt);
       flushCurrent();
     }
@@ -363,7 +372,7 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
     if (!isClosing) {
       const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;
       if (
-        chunkHasContent &&
+        chunkHasPayload &&
         current.length +
           rawTag.length +
           buildTelegramHtmlCloseSuffixLength(openTags) +
@@ -375,7 +384,9 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
     }
 
     current += rawTag;
-    chunkHasContent = true;
+    if (isSelfClosing) {
+      chunkHasPayload = true;
+    }
     if (isClosing) {
       popTelegramHtmlTag(openTags, tagName);
     } else if (!isSelfClosing) {

@@ -1288,6 +1288,35 @@ describe("sendMessageTelegram", () => {
     });
     expect(res.messageId).toBe("91");
   });
+
+  it("preserves caller plain-text fallback across chunked html parse retries", async () => {
+    const chatId = "123";
+    const htmlText = `<b>${"A".repeat(5000)}</b>`;
+    const plainText = `${"P".repeat(2500)}${"Q".repeat(2500)}`;
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 90, chat: { id: chatId } })
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 91, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, htmlText, {
+      token: "tok",
+      api,
+      textMode: "html",
+      plainText,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+    const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
+    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
+    expect(plainFallbackCalls.every((call) => !String(call?.[1] ?? "").includes("<"))).toBe(true);
+    expect(res.messageId).toBe("91");
+  });
 });
 
 describe("reactMessageTelegram", () => {
