@@ -66,7 +66,10 @@ export function buildBackupArchiveBasename(nowMs = Date.now()): string {
 }
 
 export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
-  const normalized = sourcePath.replaceAll("\\", "/");
+  const normalized =
+    /^[A-Za-z]:[\\/]/.test(sourcePath) || sourcePath.startsWith("\\\\")
+      ? sourcePath.replaceAll("\\", "/")
+      : sourcePath;
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
   if (windowsMatch) {
     const drive = windowsMatch[1]?.toUpperCase() ?? "UNKNOWN";

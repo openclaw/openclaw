@@ -105,6 +105,14 @@ describe("backup commands", () => {
     );
   });
 
+  it("does not reinterpret POSIX backslashes as archive path separators", () => {
+    const trickyPath = "/tmp/state\\..\\escape.txt";
+    expect(encodeAbsolutePathForBackupArchive(trickyPath)).toBe("posix/tmp/state\\..\\escape.txt");
+    expect(buildBackupArchivePath("root", trickyPath)).toBe(
+      "root/payload/posix/tmp/state\\..\\escape.txt",
+    );
+  });
+
   it("creates an archive with a manifest and external workspace payload", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));

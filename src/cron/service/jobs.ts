@@ -36,6 +36,9 @@ import type { CronServiceState } from "./state.js";
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const MIN_BACKUP_CREATE_INTERVAL_MS = 60 * 60_000;
+const CRON_GAP_LOOKBACK_MS = 183 * 24 * 60 * 60_000;
+const CRON_GAP_HORIZON_MS = 400 * 24 * 60 * 60_000;
+const CRON_GAP_MAX_SAMPLES = 10_000;
 const staggerOffsetCache = new Map<string, number>();
 
 function isFiniteTimestamp(value: unknown): value is number {
@@ -147,20 +150,36 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
 }
 
 function computeCronScheduleGapMs(schedule: Extract<CronJob["schedule"], { kind: "cron" }>) {
-  const firstRunAtMs = computeNextRunAtMs(schedule, 0);
-  if (!isFiniteTimestamp(firstRunAtMs)) {
+  const windowStartMs = Math.max(0, Date.now() - CRON_GAP_LOOKBACK_MS);
+  const windowEndMs = windowStartMs + CRON_GAP_HORIZON_MS;
+  let previousRunAtMs = computeNextRunAtMs(schedule, Math.max(0, windowStartMs - 1));
+  if (!isFiniteTimestamp(previousRunAtMs)) {
     return undefined;
   }
-  const previousRunAtMs = computePreviousRunAtMs(schedule, firstRunAtMs);
-  const secondRunAtMs = computeNextRunAtMs(schedule, firstRunAtMs + 1);
-  const gaps = [
-    isFiniteTimestamp(previousRunAtMs) ? firstRunAtMs - previousRunAtMs : undefined,
-    isFiniteTimestamp(secondRunAtMs) ? secondRunAtMs - firstRunAtMs : undefined,
-  ].filter((gapMs): gapMs is number => typeof gapMs === "number" && gapMs > 0);
-  if (gaps.length === 0) {
-    return undefined;
+  let minimumGapMs: number | undefined;
+  let cursorMs = previousRunAtMs + 1;
+
+  for (
+    let sample = 0;
+    sample < CRON_GAP_MAX_SAMPLES && previousRunAtMs < windowEndMs;
+    sample += 1
+  ) {
+    const nextRunAtMs = computeNextRunAtMs(schedule, cursorMs);
+    if (!isFiniteTimestamp(nextRunAtMs)) {
+      break;
+    }
+    const gapMs = nextRunAtMs - previousRunAtMs;
+    if (gapMs > 0) {
+      minimumGapMs = minimumGapMs === undefined ? gapMs : Math.min(minimumGapMs, gapMs);
+      if (minimumGapMs < MIN_BACKUP_CREATE_INTERVAL_MS) {
+        return minimumGapMs;
+      }
+    }
+    previousRunAtMs = nextRunAtMs;
+    cursorMs = nextRunAtMs + 1;
   }
-  return Math.min(...gaps);
+
+  return minimumGapMs;
 }
 
 function assertBackupCreateScheduleSafety(job: Pick<CronJob, "payload" | "schedule">) {
