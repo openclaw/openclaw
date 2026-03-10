@@ -1,4 +1,4 @@
-import { resolveHumanDelayConfig } from "../../../agents/identity.js";
+import { resolveHumanDelayConfig, resolveTypingStatus } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -141,13 +141,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
+  const typingStatus = resolveTypingStatus(cfg, route.agentId);
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       didSetStatus = true;
       await ctx.setSlackThreadStatus({
         channelId: message.channel,
         threadTs: statusThreadTs,
-        status: "is typing...",
+        status: typingStatus,
       });
       if (typingReaction && message.ts) {
         await reactSlackMessage(message.channel, message.ts, typingReaction, {
