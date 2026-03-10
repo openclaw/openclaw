@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
+  projectConfigOntoRuntimeSourceSnapshot,
   type OpenClawConfig,
   loadConfig,
 } from "../config/config.js";
@@ -44,17 +44,13 @@ async function writeModelsFileAtomic(targetPath: string, contents: string): Prom
 
 function resolveModelsConfigInput(config?: OpenClawConfig): OpenClawConfig {
   const runtimeSource = getRuntimeConfigSourceSnapshot();
-  if (!runtimeSource) {
-    return config ?? loadConfig();
-  }
   if (!config) {
-    return runtimeSource;
+    return runtimeSource ?? loadConfig();
   }
-  const runtimeResolved = getRuntimeConfigSnapshot();
-  if (runtimeResolved && config === runtimeResolved) {
-    return runtimeSource;
+  if (!runtimeSource) {
+    return config;
   }
-  return config;
+  return projectConfigOntoRuntimeSourceSnapshot(config);
 }
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {

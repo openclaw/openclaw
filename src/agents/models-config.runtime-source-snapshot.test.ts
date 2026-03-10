@@ -101,6 +101,56 @@ describe("models-config runtime source snapshot", () => {
     });
   });
 
+  it("projects cloned runtime configs onto source snapshot when preserving provider auth", async () => {
+    await withTempHome(async () => {
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      const clonedRuntimeConfig: OpenClawConfig = {
+        ...runtimeConfig,
+        agents: {
+          defaults: {
+            imageModel: "openai/gpt-image-1",
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(clonedRuntimeConfig);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
   it("uses header markers from runtime source snapshot instead of resolved runtime values", async () => {
     await withTempHome(async () => {
       const sourceConfig: OpenClawConfig = {

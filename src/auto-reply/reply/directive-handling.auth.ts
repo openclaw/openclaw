@@ -6,9 +6,9 @@ import {
 } from "../../agents/auth-profiles.js";
 import {
   ensureAuthProfileStore,
-  getCustomProviderApiKey,
   resolveAuthProfileOrder,
   resolveEnvApiKey,
+  resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -204,7 +204,7 @@ export const resolveAuthLabel = async (
     const label = isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey);
     return { label, source: mode === "verbose" ? envKey.source : "" };
   }
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider })?.apiKey;
   if (customKey) {
     return {
       label: maskApiKey(customKey),

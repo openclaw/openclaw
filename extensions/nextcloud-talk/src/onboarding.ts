@@ -232,7 +232,7 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
           botSecret: value,
         }),
     });
-    next = secretStep.cfg;
+    next = secretStep.cfg as CoreConfig;
 
     if (secretStep.action === "keep" && baseUrl !== resolvedAccount.baseUrl) {
       next = setNextcloudTalkAccountConfig(next, accountId, {
@@ -278,7 +278,7 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       next =
         apiPasswordStep.action === "keep"
           ? setNextcloudTalkAccountConfig(next, accountId, { apiUser })
-          : apiPasswordStep.cfg;
+          : (apiPasswordStep.cfg as CoreConfig);
     }
 
     if (forceAllowFrom) {

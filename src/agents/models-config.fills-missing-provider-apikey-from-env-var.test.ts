@@ -477,6 +477,51 @@ describe("models-config", () => {
     });
   });
 
+  it("replaces stale merged apiKey when config key normalizes to a known env marker", async () => {
+    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
+      await withTempHome(async () => {
+        await writeAgentModelsJson({
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [{ id: "gpt-4.1", name: "GPT-4.1", input: ["text"] }],
+            },
+          },
+        });
+        const cfg: OpenClawConfig = {
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "gpt-4.1",
+                    name: "GPT-4.1",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 16384,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        await ensureOpenClawModelsJson(cfg);
+        const result = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+      });
+    });
+  });
+
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
