@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions.js";
+import type { ThreadForkPolicy } from "../../config/types.base.js";
 
 /**
  * Default max parent token count beyond which thread/session parent forking is skipped.
@@ -12,12 +13,27 @@ import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 
+/**
+ * Default thread fork policy.
+ * - "fork": Fork from parent channel session (backward compatible)
+ * - "none": Start fresh thread session (no inherited context)
+ */
+const DEFAULT_THREAD_FORK_POLICY: ThreadForkPolicy = "fork";
+
 export function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   const configured = cfg.session?.parentForkMaxTokens;
   if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
     return Math.floor(configured);
   }
   return DEFAULT_PARENT_FORK_MAX_TOKENS;
+}
+
+export function resolveThreadForkPolicy(cfg: OpenClawConfig): ThreadForkPolicy {
+  const configured = cfg.session?.threadForkPolicy;
+  if (configured === "none" || configured === "fork") {
+    return configured;
+  }
+  return DEFAULT_THREAD_FORK_POLICY;
 }
 
 export function forkSessionFromParent(params: {

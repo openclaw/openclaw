@@ -7,6 +7,7 @@ export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-ch
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+export type ThreadForkPolicy = "fork" | "none";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
@@ -123,6 +124,12 @@ export type SessionConfig = {
    * starts a fresh thread session instead. Set to 0 to disable this guard.
    */
   parentForkMaxTokens?: number;
+  /**
+   * Thread session fork policy.
+   * - "fork": Fork from parent channel session (inherits context) - DEFAULT for backward compatibility.
+   * - "none": Start fresh thread session (no inherited context) - recommended for Discord.
+   */
+  threadForkPolicy?: ThreadForkPolicy;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {
