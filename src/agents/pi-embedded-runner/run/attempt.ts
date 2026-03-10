@@ -228,16 +228,16 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
   return (model, context, options) =>
     streamFn(model, context, {
       ...options,
-      onPayload: (payload: unknown, payloadModel) => {
+      onPayload: (payload: unknown) => {
         if (!payload || typeof payload !== "object") {
-          return options?.onPayload?.(payload, payloadModel);
+          return options?.onPayload?.(payload, model);
         }
         const payloadRecord = payload as Record<string, unknown>;
         if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
           payloadRecord.options = {};
         }
         (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        return options?.onPayload?.(payload, payloadModel);
+        return options?.onPayload?.(payload, model);
       },
     });
 }
@@ -870,8 +870,6 @@ export async function runEmbeddedAttempt(
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
-          trigger: params.trigger,
-          memoryFlushWritePath: params.memoryFlushWritePath,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
           modelId: params.modelId,
@@ -1546,7 +1544,6 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
         didSendViaMessagingTool,
-        didSendDeterministicApprovalPrompt,
         getLastToolError,
         getUsageTotals,
         getCompactionCount,
@@ -2061,7 +2058,6 @@ export async function runEmbeddedAttempt(
         lastAssistant,
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),
-        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPrompt(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
