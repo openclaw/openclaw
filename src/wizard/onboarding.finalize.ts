@@ -514,7 +514,6 @@ export async function finalizeOnboardingWizard(
           webSearchProvider === "duckduckgo"
             ? "Docs: https://docs.openclaw.ai/tools/web"
             : `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
-          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",
       );
