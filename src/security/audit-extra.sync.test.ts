@@ -39,6 +39,7 @@ describe("collectAttackSurfaceSummaryFindings", () => {
 
 describe("collectSmallModelRiskFindings", () => {
   it.each([
+    ["OPENROUTER_API_KEY", "sk-or-v1-test"],
     ["GEMINI_API_KEY", "gemini-env-key"],
     ["XAI_API_KEY", "xai-env-key"],
     ["KIMI_API_KEY", "kimi-env-key"],
