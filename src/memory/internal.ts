@@ -2,8 +2,11 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { isFileMissingError } from "./fs-utils.js";
+
+const log = createSubsystemLogger("memory");
 
 export type MemoryFileEntry = {
   path: string;
@@ -23,7 +26,9 @@ export type MemoryChunk = {
 export function ensureDir(dir: string): string {
   try {
     fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  } catch (err) {
+    log.debug(`ensureDir: mkdir failed for ${dir}`, { error: String(err) });
+  }
   return dir;
 }
 
@@ -96,7 +101,9 @@ export async function listMemoryFiles(
         return;
       }
       result.push(absPath);
-    } catch {}
+    } catch (err) {
+      log.debug(`addMarkdownFile: lstat failed for ${absPath}`, { error: String(err) });
+    }
   };
 
   await addMarkdownFile(memoryFile);
@@ -106,7 +113,11 @@ export async function listMemoryFiles(
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       await walkDir(memoryDir, result);
     }
-  } catch {}
+  } catch (err) {
+    log.debug(`listMemoryFiles: memory directory not accessible: ${memoryDir}`, {
+      error: String(err),
+    });
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
@@ -123,7 +134,11 @@ export async function listMemoryFiles(
         if (stat.isFile() && inputPath.endsWith(".md")) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch (err) {
+        log.debug(`listMemoryFiles: extra path not accessible: ${inputPath}`, {
+          error: String(err),
+        });
+      }
     }
   }
   if (result.length <= 1) {
@@ -135,7 +150,9 @@ export async function listMemoryFiles(
     let key = entry;
     try {
       key = await fs.realpath(entry);
-    } catch {}
+    } catch (err) {
+      log.debug(`listMemoryFiles: realpath failed for ${entry}`, { error: String(err) });
+    }
     if (seen.has(key)) {
       continue;
     }

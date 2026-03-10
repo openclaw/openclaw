@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
+
+const log = createSubsystemLogger("workspace");
 
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -485,7 +488,11 @@ async function resolveMemoryBootstrapEntries(
     let key = entry.filePath;
     try {
       key = await fs.realpath(entry.filePath);
-    } catch {}
+    } catch (err) {
+      log.debug(`resolveMemoryBootstrapEntries: realpath failed for ${entry.filePath}`, {
+        error: String(err),
+      });
+    }
     if (seen.has(key)) {
       continue;
     }
