@@ -7,7 +7,7 @@ const OPENAI_CODEX_MODEL = {
   api: "openai-codex-responses",
   baseUrl: "https://chatgpt.com/backend-api",
   input: ["text"],
-  contextWindow: 272000,
+  contextWindow: 1_050_000,
   maxTokens: 128000,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
