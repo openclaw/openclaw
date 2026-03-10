@@ -187,7 +187,12 @@ export async function preflightDiscordMessage(
 
   if (author.bot) {
     if (allowBotsMode === "off" && !sender.isPluralKit) {
-      logVerbose("discord: drop bot message (allowBots=false)");
+      logDebug(
+        `[discord-preflight] drop: bot message blocked (allowBots=false, sender=${sender.id})`,
+      );
+      logVerbose(
+        'discord: drop bot message (allowBots=false; set channels.discord.allowBots=true or "mentions" to allow bot senders)',
+      );
       return null;
     }
   }

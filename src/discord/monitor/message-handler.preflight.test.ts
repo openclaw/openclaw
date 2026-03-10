@@ -2,10 +2,26 @@ import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const logDebugMock = vi.hoisted(() => vi.fn());
+const logVerboseMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../media-understanding/audio-preflight.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
+vi.mock("../../globals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../globals.js")>();
+  return {
+    ...actual,
+    logVerbose: (...args: unknown[]) => logVerboseMock(...args),
+  };
+});
+vi.mock("../../logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger.js")>();
+  return {
+    ...actual,
+    logDebug: (...args: unknown[]) => logDebugMock(...args),
+  };
+});
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
@@ -270,6 +286,8 @@ describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+    logDebugMock.mockReset();
+    logVerboseMock.mockReset();
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
@@ -407,6 +425,36 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("logs a diagnostic hint when bot messages are blocked by allowBots=false", async () => {
+    const channelId = "channel-bot-default-off";
+    const guildId = "guild-bot-default-off";
+    const message = createMessage({
+      id: "m-bot-default-off",
+      channelId,
+      content: "relay chatter",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "[discord-preflight] drop: bot message blocked (allowBots=false, sender=relay-bot-1)",
+    );
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      'discord: drop bot message (allowBots=false; set channels.discord.allowBots=true or "mentions" to allow bot senders)',
+    );
   });
 
   it("allows bot messages with explicit mention when allowBots=mentions", async () => {
