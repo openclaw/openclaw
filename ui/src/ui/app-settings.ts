@@ -1,5 +1,7 @@
 import { refreshChat } from "./app-chat.ts";
 import {
+  startChatPolling,
+  stopChatPolling,
   startLogsPolling,
   stopLogsPolling,
   startDebugPolling,
@@ -359,6 +361,9 @@ function applyTabSelection(
   }
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
+    startChatPolling(host as unknown as Parameters<typeof startChatPolling>[0]);
+  } else {
+    stopChatPolling(host as unknown as Parameters<typeof stopChatPolling>[0]);
   }
   if (next === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);

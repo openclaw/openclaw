@@ -3,8 +3,12 @@ import { setTabFromRoute } from "./app-settings.ts";
 import type { Tab } from "./navigation.ts";
 
 type SettingsHost = Parameters<typeof setTabFromRoute>[0] & {
+  chatPollInterval: number | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  chatLoading: boolean;
+  chatSending: boolean;
+  chatRunId: string | null;
 };
 
 const createHost = (tab: Tab): SettingsHost => ({
@@ -27,12 +31,16 @@ const createHost = (tab: Tab): SettingsHost => ({
   tab,
   connected: false,
   chatHasAutoScrolled: false,
+  chatLoading: false,
+  chatSending: false,
+  chatRunId: null,
   logsAtBottom: false,
   eventLog: [],
   eventLogBuffer: [],
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
+  chatPollInterval: null,
   logsPollInterval: null,
   debugPollInterval: null,
 });
@@ -50,11 +58,25 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "logs");
+    expect(host.chatPollInterval).toBeNull();
     expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
 
     setTabFromRoute(host, "chat");
+    expect(host.chatPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
+  });
+
+  it("starts and stops chat polling based on the tab", () => {
+    const host = createHost("logs");
+
+    setTabFromRoute(host, "chat");
+    expect(host.chatPollInterval).not.toBeNull();
+    expect(host.logsPollInterval).toBeNull();
+    expect(host.debugPollInterval).toBeNull();
+
+    setTabFromRoute(host, "debug");
+    expect(host.chatPollInterval).toBeNull();
   });
 
   it("starts and stops debug polling based on the tab", () => {

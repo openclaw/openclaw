@@ -1,7 +1,9 @@
 import { connectGateway } from "./app-gateway.ts";
 import {
+  startChatPolling,
   startLogsPolling,
   startNodesPolling,
+  stopChatPolling,
   stopLogsPolling,
   stopNodesPolling,
   startDebugPolling,
@@ -32,9 +34,11 @@ type LifecycleHost = {
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
   chatLoading: boolean;
+  chatSending: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string;
+  chatRunId: string | null;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -58,6 +62,9 @@ export function handleConnected(host: LifecycleHost) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   });
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  if (host.tab === "chat") {
+    startChatPolling(host as unknown as Parameters<typeof startChatPolling>[0]);
+  }
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   }
@@ -74,6 +81,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
+  stopChatPolling(host as unknown as Parameters<typeof stopChatPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   host.client?.stop();

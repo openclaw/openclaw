@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startChatPolling, stopChatPolling } from "../app-polling.ts";
+import * as chatController from "./chat.ts";
 import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
@@ -564,5 +566,66 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+});
+
+describe("startChatPolling", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("reloads chat history while the chat tab is idle", () => {
+    const loadHistorySpy = vi.spyOn(chatController, "loadChatHistory").mockResolvedValue(undefined);
+    const host = {
+      ...createState(),
+      chatPollInterval: null,
+      nodesPollInterval: null,
+      logsPollInterval: null,
+      debugPollInterval: null,
+      tab: "chat",
+      chatManualRefreshInFlight: false,
+    };
+
+    startChatPolling(host);
+    vi.advanceTimersByTime(3000);
+
+    expect(loadHistorySpy).toHaveBeenCalledTimes(1);
+
+    stopChatPolling(host);
+  });
+
+  it("skips reloads while chat is busy or disconnected", () => {
+    const loadHistorySpy = vi.spyOn(chatController, "loadChatHistory").mockResolvedValue(undefined);
+    const cases = [
+      { connected: false },
+      { tab: "logs" },
+      { chatLoading: true },
+      { chatSending: true },
+      { chatRunId: "run-1" },
+      { chatManualRefreshInFlight: true },
+    ];
+
+    for (const overrides of cases) {
+      const host = {
+        ...createState(),
+        chatPollInterval: null,
+        nodesPollInterval: null,
+        logsPollInterval: null,
+        debugPollInterval: null,
+        tab: "chat",
+        chatManualRefreshInFlight: false,
+        ...overrides,
+      };
+      startChatPolling(host);
+      vi.advanceTimersByTime(3000);
+      stopChatPolling(host);
+    }
+
+    expect(loadHistorySpy).not.toHaveBeenCalled();
   });
 });

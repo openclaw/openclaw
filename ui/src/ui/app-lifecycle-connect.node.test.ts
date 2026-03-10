@@ -24,8 +24,10 @@ vi.mock("./app-settings.ts", () => ({
 }));
 
 vi.mock("./app-polling.ts", () => ({
+  startChatPolling: vi.fn(),
   startLogsPolling: vi.fn(),
   startNodesPolling: vi.fn(),
+  stopChatPolling: vi.fn(),
   stopLogsPolling: vi.fn(),
   stopNodesPolling: vi.fn(),
   startDebugPolling: vi.fn(),
@@ -54,9 +56,12 @@ function createHost() {
     chatHasAutoScrolled: false,
     chatManualRefreshInFlight: false,
     chatLoading: false,
+    chatSending: false,
     chatMessages: [],
     chatToolMessages: [],
     chatStream: "",
+    chatRunId: null,
+    chatPollInterval: null,
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],
