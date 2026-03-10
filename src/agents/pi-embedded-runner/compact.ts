@@ -961,7 +961,7 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
-        if (result.ok && result.compacted) {
+        if (result.ok && result.compacted && contextEngine.info.id !== "legacy") {
           try {
             await reinitializeAotuiDesktopForCompaction({
               sessionKey: params.sessionKey,

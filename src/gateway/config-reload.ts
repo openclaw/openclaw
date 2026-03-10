@@ -25,11 +25,13 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     return [];
   }
   if (isPlainObject(prev) || isPlainObject(next)) {
-    const prevObject = isPlainObject(prev) ? prev : {};
-    const nextObject = isPlainObject(next) ? next : {};
+    const prevIsObject = isPlainObject(prev);
+    const nextIsObject = isPlainObject(next);
+    const prevObject = prevIsObject ? prev : {};
+    const nextObject = nextIsObject ? next : {};
     const keys = new Set([...Object.keys(prevObject), ...Object.keys(nextObject)]);
     if (keys.size === 0) {
-      return [prefix || "<root>"];
+      return prevIsObject && nextIsObject ? [] : [prefix || "<root>"];
     }
     const paths: string[] = [];
     for (const key of keys) {

@@ -19,6 +19,7 @@ const {
   ensureRuntimePluginsLoaded: vi.fn(),
   ensureContextEnginesInitializedMock: vi.fn(),
   resolveContextEngineMock: vi.fn(async () => ({
+    info: { id: "non-legacy" },
     compact: vi.fn(async () => ({
       ok: true,
       compacted: true,
@@ -315,6 +316,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       return params.messages;
     });
     resolveContextEngineMock.mockResolvedValue({
+      info: { id: "non-legacy" },
       compact: vi.fn(async () => ({
         ok: true,
         compacted: true,
@@ -497,8 +499,38 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
+  it("does not double-reinitialize when queued compaction uses the legacy context engine", async () => {
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { id: "legacy" },
+      compact: vi.fn(async () => ({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 120,
+          tokensAfter: 80,
+          details: { ok: true },
+        },
+      })),
+      dispose: vi.fn(async () => {}),
+    });
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(reinitializeAotuiDesktopForCompactionMock).not.toHaveBeenCalled();
+  });
+
   it("does not reinitialize the AOTUI desktop when queued context-engine compaction is a no-op", async () => {
     resolveContextEngineMock.mockResolvedValueOnce({
+      info: { id: "non-legacy" },
       compact: vi.fn(async () => ({
         ok: true,
         compacted: false,

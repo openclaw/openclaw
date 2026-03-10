@@ -118,6 +118,16 @@ describe("diffConfigPaths", () => {
     const next = {};
     expect(diffConfigPaths(prev, next)).toContain("apps");
   });
+
+  it("treats unchanged empty objects as no-op", () => {
+    const prev = {
+      apps: {},
+    };
+    const next = {
+      apps: {},
+    };
+    expect(diffConfigPaths(prev, next)).toEqual([]);
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {

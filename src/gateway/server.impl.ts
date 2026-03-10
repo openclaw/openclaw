@@ -1068,7 +1068,11 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
-      await stopAotuiGatewayRuntime(opts?.reason ?? "gateway stopping");
+      try {
+        await stopAotuiGatewayRuntime(opts?.reason ?? "gateway stopping");
+      } catch (err) {
+        logAotui.warn(`failed to stop AOTUI gateway runtime: ${String(err)}`);
+      }
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);
