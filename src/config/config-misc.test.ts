@@ -110,6 +110,26 @@ describe("web search provider config", () => {
   });
 });
 
+describe("agents.list[].params", () => {
+  it("accepts per-agent params overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            params: {
+              cacheRetention: "none",
+              temperature: 0.2,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
