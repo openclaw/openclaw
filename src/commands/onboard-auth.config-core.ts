@@ -53,7 +53,7 @@ export {
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
-import { select, spinner } from "@clack/prompts";
+import { cancel, isCancel, select, spinner } from "@clack/prompts";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { scanCommonstackModels } from "../agents/model-scan.js";
 import {
@@ -266,7 +266,8 @@ export async function applyCommonstackConfig(
       options: modelOptions,
     });
 
-    if (!selectedModel || typeof selectedModel !== "string") {
+    if (isCancel(selectedModel)) {
+      cancel("Setup cancelled.");
       throw new Error("Model selection cancelled.");
     }
 
