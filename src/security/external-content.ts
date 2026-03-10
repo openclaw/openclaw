@@ -102,6 +102,30 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   unknown: "External",
 };
 
+/**
+ * Regex matching all Unicode "Format" (Cf) category characters.
+ * These invisible characters can be inserted into boundary marker text
+ * to bypass string matching (e.g., splitting "EXTERNAL_UNTRUSTED_CONTENT"
+ * with a zero-width space so the keyword regex fails to match).
+ *
+ * Includes: ZWSP (U+200B), ZWNJ (U+200C), ZWJ (U+200D), soft hyphen (U+00AD),
+ * word joiner (U+2060), BOM/ZWNBSP (U+FEFF), bidi controls (U+200E-U+200F,
+ * U+202A-U+202E, U+2066-U+2069, U+061C), and others.
+ *
+ * @see https://unicode.org/reports/tr36/ — Unicode Security Considerations
+ * @see https://unicode.org/reports/tr39/ — Unicode Security Mechanisms
+ */
+const INVISIBLE_FORMAT_CHARS_RE = /\p{Cf}/gu;
+
+/**
+ * Strip invisible Unicode format characters from input.
+ * These characters have no visual representation and can bypass boundary
+ * marker detection by splitting keywords that security regexes rely on.
+ */
+function stripInvisibleChars(input: string): string {
+  return input.replace(INVISIBLE_FORMAT_CHARS_RE, "");
+}
+
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
 // Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
@@ -157,9 +181,13 @@ function foldMarkerText(input: string): string {
 }
 
 function replaceMarkers(content: string): string {
-  const folded = foldMarkerText(content);
+  // Strip invisible Unicode format characters first to prevent bypass.
+  // Without this, zero-width chars (e.g., U+200B) inserted into marker text
+  // break the keyword regex below, causing the early return to skip sanitization.
+  const stripped = stripInvisibleChars(content);
+  const folded = foldMarkerText(stripped);
   if (!/external_untrusted_content/i.test(folded)) {
-    return content;
+    return stripped;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
   // Match markers with or without id attribute (handles both legacy and spoofed markers)
@@ -187,7 +215,7 @@ function replaceMarkers(content: string): string {
   }
 
   if (replacements.length === 0) {
-    return content;
+    return stripped;
   }
   replacements.sort((a, b) => a.start - b.start);
 
@@ -197,11 +225,11 @@ function replaceMarkers(content: string): string {
     if (replacement.start < cursor) {
       continue;
     }
-    output += content.slice(cursor, replacement.start);
+    output += stripped.slice(cursor, replacement.start);
     output += replacement.value;
     cursor = replacement.end;
   }
-  output += content.slice(cursor);
+  output += stripped.slice(cursor);
   return output;
 }
 
