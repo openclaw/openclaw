@@ -701,6 +701,9 @@ export async function deliverReplies(params: {
         groupId: params.mirrorGroupId,
       });
     } catch (error) {
+      logVerbose(
+        `telegram reply delivery failed chat=${params.chatId} account=${params.accountId}: ${formatErrorMessage(error)}`,
+      );
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
