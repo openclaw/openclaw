@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { backupCreateCommand } from "./backup.js";
@@ -70,6 +71,66 @@ describe("backup catalog", () => {
         expect.stringContaining("Found 2 validated backup archives"),
       );
       expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Skipped 1 file"));
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips archives with invalid manifest createdAt and resolves the newest valid backup", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-catalog-bad-ts-"));
+
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const valid = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        nowMs: Date.parse("2026-03-10T00:00:00.000Z"),
+      });
+
+      const rootName = "9999-12-31T23-59-59.999Z-openclaw-backup";
+      const root = path.join(archiveDir, rootName);
+      const payloadDir = path.join(root, "payload", "posix", "tmp", ".openclaw");
+      await fs.mkdir(payloadDir, { recursive: true });
+      await fs.writeFile(path.join(payloadDir, "state.txt"), "bad\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            createdAt: "not-a-real-timestamp",
+            archiveRoot: rootName,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [
+              {
+                kind: "state",
+                sourcePath: "/tmp/.openclaw",
+                archivePath: `${rootName}/payload/posix/tmp/.openclaw`,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const invalidArchivePath = path.join(archiveDir, `${rootName}.tar.gz`);
+      await tar.c({ file: invalidArchivePath, gzip: true, cwd: archiveDir }, [rootName]);
+      await fs.rm(root, { recursive: true, force: true });
+
+      const listed = await backupListCommand(runtime, { path: archiveDir });
+      const resolved = await resolveLatestBackupArchiveForRestore({ searchPath: archiveDir });
+
+      expect(listed.skipped.some((entry) => entry.archivePath === invalidArchivePath)).toBe(true);
+      expect(resolved).toBe(await fs.realpath(valid.archivePath));
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

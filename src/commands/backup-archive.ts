@@ -136,6 +136,10 @@ function parseManifest(raw: string): BackupManifest {
   if (typeof parsed.createdAt !== "string" || !parsed.createdAt.trim()) {
     throw new Error("Backup manifest is missing createdAt.");
   }
+  const createdAt = parsed.createdAt.trim();
+  if (!Number.isFinite(Date.parse(createdAt))) {
+    throw new Error(`Backup manifest createdAt is not a valid timestamp: ${createdAt}`);
+  }
   if (!Array.isArray(parsed.assets)) {
     throw new Error("Backup manifest is missing assets.");
   }
@@ -164,7 +168,7 @@ function parseManifest(raw: string): BackupManifest {
   return {
     schemaVersion: 1,
     archiveRoot: parsed.archiveRoot,
-    createdAt: parsed.createdAt,
+    createdAt,
     runtimeVersion:
       typeof parsed.runtimeVersion === "string" && parsed.runtimeVersion.trim()
         ? parsed.runtimeVersion

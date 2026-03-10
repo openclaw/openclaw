@@ -39,8 +39,13 @@ const DEFAULT_BACKUP_DIRNAME = "Backups";
 function compareCatalogEntries(left: BackupCatalogEntry, right: BackupCatalogEntry): number {
   const leftTime = Date.parse(left.createdAt);
   const rightTime = Date.parse(right.createdAt);
-  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+  const leftValid = Number.isFinite(leftTime);
+  const rightValid = Number.isFinite(rightTime);
+  if (leftValid && rightValid && leftTime !== rightTime) {
     return rightTime - leftTime;
+  }
+  if (leftValid !== rightValid) {
+    return leftValid ? -1 : 1;
   }
   return right.archivePath.localeCompare(left.archivePath);
 }
