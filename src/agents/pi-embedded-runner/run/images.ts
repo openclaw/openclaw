@@ -198,6 +198,12 @@ export async function loadImageFromRef(
     maxBytes?: number;
     workspaceOnly?: boolean;
     sandbox?: { root: string; bridge: SandboxFsBridge };
+    /** Compression settings from imageCompression config */
+    compressionSettings?: {
+      optimize: boolean;
+      maxSide?: number;
+      quality?: number;
+    };
   },
 ): Promise<ImageContent | null> {
   try {
@@ -239,8 +245,16 @@ export async function loadImageFromRef(
           maxBytes: options.maxBytes,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
+          skipOptimization: options?.compressionSettings?.optimize === false,
+          maxSideOverride: options?.compressionSettings?.maxSide,
+          qualityOverride: options?.compressionSettings?.quality,
         })
-      : await loadWebMedia(targetPath, options?.maxBytes);
+      : await loadWebMedia(targetPath, {
+          maxBytes: options?.maxBytes,
+          skipOptimization: options?.compressionSettings?.optimize === false,
+          maxSideOverride: options?.compressionSettings?.maxSide,
+          qualityOverride: options?.compressionSettings?.quality,
+        });
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
@@ -291,6 +305,12 @@ export async function detectAndLoadPromptImages(params: {
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
   sandbox?: { root: string; bridge: SandboxFsBridge };
+  /** Compression settings from imageCompression config */
+  compressionSettings?: {
+    optimize: boolean;
+    maxSide?: number;
+    quality?: number;
+  };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
   images: ImageContent[];
@@ -332,6 +352,7 @@ export async function detectAndLoadPromptImages(params: {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
       sandbox: params.sandbox,
+      compressionSettings: params.compressionSettings,
     });
     if (image) {
       promptImages.push(image);
