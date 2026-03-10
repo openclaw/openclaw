@@ -107,6 +107,25 @@ describe("applyConfiguredContextWindows", () => {
     expect(cache.get("openrouter/anthropic/claude-sonnet-4-5")).toBe(200_000);
   });
 
+  it("normalizes provider keys before writing provider-qualified override entries", () => {
+    const cache = new Map<string, number>();
+    cache.set("openrouter/anthropic/claude-sonnet-4-5", 1_048_576);
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          " OpenRouter ": {
+            models: [{ id: "anthropic/claude-sonnet-4-5", contextWindow: 200_000 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("anthropic/claude-sonnet-4-5")).toBe(200_000);
+    expect(cache.get("openrouter/anthropic/claude-sonnet-4-5")).toBe(200_000);
+    expect(cache.has(" OpenRouter /anthropic/claude-sonnet-4-5")).toBe(false);
+  });
+
   it("adds config-only model context windows and ignores invalid entries", () => {
     const cache = new Map<string, number>();
     applyConfiguredContextWindows({

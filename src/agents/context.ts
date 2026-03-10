@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { normalizeProviderId } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
@@ -26,6 +27,10 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
+
+function resolveQualifiedContextWindowKey(providerId: string, modelId: string): string {
+  return `${normalizeProviderId(providerId)}/${modelId}`;
+}
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -78,7 +83,7 @@ export function applyConfiguredContextWindows(params: {
       // discovered values. This covers both bare IDs (e.g. "claude-opus-4" →
       // "anthropic/claude-opus-4") and slash-containing IDs common in OpenRouter
       // (e.g. "anthropic/claude-sonnet-4-5" → "openrouter/anthropic/claude-sonnet-4-5").
-      params.cache.set(`${providerId}/${modelId}`, contextWindow);
+      params.cache.set(resolveQualifiedContextWindowKey(providerId, modelId), contextWindow);
     }
   }
 }
@@ -232,13 +237,13 @@ function resolveProviderModelRef(params: {
   }
   const providerRaw = params.provider?.trim();
   if (providerRaw) {
-    return { provider: providerRaw.toLowerCase(), model: modelRaw };
+    return { provider: normalizeProviderId(providerRaw), model: modelRaw };
   }
   const slash = modelRaw.indexOf("/");
   if (slash <= 0) {
     return undefined;
   }
-  const provider = modelRaw.slice(0, slash).trim().toLowerCase();
+  const provider = normalizeProviderId(modelRaw.slice(0, slash));
   const model = modelRaw.slice(slash + 1).trim();
   if (!provider || !model) {
     return undefined;
@@ -282,7 +287,7 @@ export function resolveContextTokensForModel(params: {
   // When provider is known, prefer the provider-qualified key so the correct
   // entry is found even when the same bare model id is catalogued under
   // multiple providers with different context limits.
-  const qualifiedKey = ref ? `${ref.provider}/${ref.model}` : undefined;
+  const qualifiedKey = ref ? resolveQualifiedContextWindowKey(ref.provider, ref.model) : undefined;
   return (
     (qualifiedKey ? lookupContextTokens(qualifiedKey) : undefined) ??
     lookupContextTokens(params.model) ??

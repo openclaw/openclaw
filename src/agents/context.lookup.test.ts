@@ -138,4 +138,24 @@ describe("lookupContextTokens", () => {
     });
     expect(result).toBe(1_048_576);
   });
+
+  it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {
+    mockDiscoveryDeps(
+      [{ id: "openrouter/anthropic/claude-sonnet-4-5", contextWindow: 1_048_576 }],
+      {
+        " OpenRouter ": {
+          models: [{ id: "anthropic/claude-sonnet-4-5", contextWindow: 200_000 }],
+        },
+      },
+    );
+
+    const { resolveContextTokensForModel } = await import("./context.js");
+    await new Promise((r) => setTimeout(r, 0));
+
+    const result = resolveContextTokensForModel({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    expect(result).toBe(200_000);
+  });
 });
