@@ -162,6 +162,7 @@ export function execDockerRaw(
 }
 
 import { formatCliCommand } from "../../cli/command-format.js";
+import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
@@ -365,7 +366,7 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
+  const envSanitization = sanitizeEnvVars(markOpenClawExecEnv(params.cfg.env ?? {}));
   if (envSanitization.blocked.length > 0) {
     log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
   }
