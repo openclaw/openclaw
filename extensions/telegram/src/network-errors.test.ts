@@ -195,6 +195,27 @@ describe("isSafeToRetrySendError", () => {
     expect(isSafeToRetrySendError(err)).toBe(true);
   });
 
+  it("allows retry for 429 rate-limit with retry_after === 0 (edge value)", () => {
+    const err = Object.assign(new Error("Too Many Requests: retry after 0"), {
+      parameters: { retry_after: 0 },
+    });
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
+  it("allows retry for 429 rate-limit with retry_after nested under response.parameters", () => {
+    const err = Object.assign(new Error("Too Many Requests"), {
+      response: { parameters: { retry_after: 15 } },
+    });
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
+  it("allows retry for 429 rate-limit with retry_after nested under error.parameters", () => {
+    const err = Object.assign(new Error("Too Many Requests"), {
+      error: { parameters: { retry_after: 10 } },
+    });
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
   it("does NOT allow retry for error with parameters but no retry_after", () => {
     const err = Object.assign(new Error("Bad Request"), {
       parameters: {},

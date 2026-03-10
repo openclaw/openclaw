@@ -153,9 +153,45 @@ function hasTelegramRetryAfterParameter(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
+  const isValidRetryAfter = (v: unknown): boolean =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0;
+
   if ("parameters" in err && err.parameters && typeof err.parameters === "object") {
-    const retryAfter = (err.parameters as { retry_after?: unknown }).retry_after;
-    return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0;
+    if (isValidRetryAfter((err.parameters as { retry_after?: unknown }).retry_after)) {
+      return true;
+    }
+  }
+  if (
+    "response" in err &&
+    err.response &&
+    typeof err.response === "object" &&
+    "parameters" in err.response &&
+    (err.response as { parameters?: unknown }).parameters &&
+    typeof (err.response as { parameters?: unknown }).parameters === "object"
+  ) {
+    if (
+      isValidRetryAfter(
+        (err.response as { parameters: { retry_after?: unknown } }).parameters.retry_after,
+      )
+    ) {
+      return true;
+    }
+  }
+  if (
+    "error" in err &&
+    err.error &&
+    typeof err.error === "object" &&
+    "parameters" in err.error &&
+    (err.error as { parameters?: unknown }).parameters &&
+    typeof (err.error as { parameters?: unknown }).parameters === "object"
+  ) {
+    if (
+      isValidRetryAfter(
+        (err.error as { parameters: { retry_after?: unknown } }).parameters.retry_after,
+      )
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -188,7 +224,7 @@ export function isSafeToRetrySendError(err: unknown): boolean {
 
     // grammY "Network request for X failed after N attempts" indicates a
     // transport-level failure — the request never reached Telegram.
-    const message = formatErrorMessage(candidate).trim();
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
     if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
