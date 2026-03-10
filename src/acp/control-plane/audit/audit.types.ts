@@ -110,7 +110,6 @@ export type AuditLoggerConfig = {
   flushInterval?: number;
   retentionDays?: number;
   storageDir?: string;
-  compress?: boolean;
 };
 
 /**
@@ -162,5 +161,4 @@ export const DEFAULT_AUDIT_CONFIG: Required<AuditLoggerConfig> = {
   flushInterval: 30000, // 30 seconds
   retentionDays: 90,
   storageDir: ".audit",
-  compress: true,
 };

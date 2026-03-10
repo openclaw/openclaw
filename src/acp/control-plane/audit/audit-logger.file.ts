@@ -8,7 +8,9 @@
  * - Automatic flush on buffer full or timer
  * - JSONL format (one JSON per line)
  * - Daily rotation
- * - Optional gzip compression
+ * - Automatic log pruning
+ *
+ * TODO: Add gzip compression for old log files (disk space optimization)
  */
 
 import { promises as fs } from "node:fs";
@@ -120,6 +122,42 @@ export class FileAuditLogger implements IAuditLogger {
 
     const results: AuditLogEntry[] = [];
 
+    // Include buffered entries (most recent)
+    for (const entry of this.buffer) {
+      // Apply filters
+      if (filters.startTime && entry.timestamp < filters.startTime) {
+        continue;
+      }
+      if (filters.endTime && entry.timestamp > filters.endTime) {
+        continue;
+      }
+      if (filters.userId && entry.actor.userId !== filters.userId) {
+        continue;
+      }
+      if (filters.deviceId && entry.actor.deviceId !== filters.deviceId) {
+        continue;
+      }
+      if (filters.sessionKey && entry.sessionKey !== filters.sessionKey) {
+        continue;
+      }
+      if (filters.agentId && entry.agentId !== filters.agentId) {
+        continue;
+      }
+      if (filters.action && entry.action !== filters.action) {
+        continue;
+      }
+      if (filters.result && entry.result !== filters.result) {
+        continue;
+      }
+
+      results.push(entry);
+
+      // Apply limit
+      if (filters.limit && results.length >= filters.limit) {
+        return results;
+      }
+    }
+
     try {
       // Get all log files
       const files = await fs.readdir(this.config.storageDir!);
@@ -183,7 +221,7 @@ export class FileAuditLogger implements IAuditLogger {
    * Flush buffered logs to disk.
    */
   async flush(): Promise<void> {
-    if (!this.config.enabled || this.isClosed || this.buffer.length === 0) {
+    if (!this.config.enabled || this.buffer.length === 0) {
       return;
     }
 
