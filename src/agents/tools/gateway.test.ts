@@ -226,4 +226,58 @@ describe("callGatewayTool local dispatch (#40237)", () => {
 
     expect(localDispatch).toHaveBeenCalledWith("health", {});
   });
+
+  it("bypasses local dispatch when explicit gatewayUrl is provided", async () => {
+    const localDispatch = vi.fn().mockResolvedValue({ local: true });
+    registerLocalGatewayDispatch(localDispatch);
+    callGatewayMock.mockResolvedValueOnce({ remote: true });
+
+    const result = await callGatewayTool(
+      "health",
+      { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t", timeoutMs: 5000 },
+      {},
+    );
+
+    expect(localDispatch).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: "t",
+        timeoutMs: 5000,
+      }),
+    );
+    expect(result).toEqual({ remote: true });
+  });
+
+  it("bypasses local dispatch when expectFinal is true", async () => {
+    const localDispatch = vi.fn().mockResolvedValue({ local: true });
+    registerLocalGatewayDispatch(localDispatch);
+    callGatewayMock.mockResolvedValueOnce({ final: true });
+
+    const result = await callGatewayTool("agent", {}, { message: "hi" }, { expectFinal: true });
+
+    expect(localDispatch).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        expectFinal: true,
+      }),
+    );
+    expect(result).toEqual({ final: true });
+  });
+
+  it("respects timeoutMs from opts when falling through to WS", async () => {
+    const localDispatch = vi.fn().mockResolvedValue({});
+    registerLocalGatewayDispatch(localDispatch);
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "agent",
+      { timeoutMs: 60_000 },
+      { message: "test" },
+      { expectFinal: true },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
+  });
 });

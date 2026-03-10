@@ -146,9 +146,19 @@ export async function callGatewayTool<T = Record<string, unknown>>(
 ) {
   // When running inside the gateway process, dispatch directly in-process
   // to avoid WS self-contention during active LLM sessions (#40237).
-  const localResult = tryLocalGatewayDispatch<T>(method, (params ?? {}) as Record<string, unknown>);
-  if (localResult !== undefined) {
-    return await localResult;
+  // Skip local dispatch when:
+  //  - caller explicitly targets a specific gateway URL (may be remote)
+  //  - caller needs expectFinal semantics (completion-waiting not supported by local dispatch)
+  const hasExplicitUrl = trimToUndefined(opts.gatewayUrl) !== undefined;
+  const needsExpectFinal = extra?.expectFinal === true;
+  if (!hasExplicitUrl && !needsExpectFinal) {
+    const localResult = tryLocalGatewayDispatch<T>(
+      method,
+      (params ?? {}) as Record<string, unknown>,
+    );
+    if (localResult !== undefined) {
+      return await localResult;
+    }
   }
 
   const gateway = resolveGatewayOptions(opts);
