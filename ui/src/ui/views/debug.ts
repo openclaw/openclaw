@@ -9,7 +9,6 @@ export type DebugProps = {
   models: unknown[];
   heartbeat: unknown;
   eventLog: EventLogEntry[];
-  methods: string[];
   callMethod: string;
   callParams: string;
   callResult: string | null;
@@ -72,22 +71,14 @@ export function renderDebug(props: DebugProps) {
       <div class="card">
         <div class="card-title">Manual RPC</div>
         <div class="card-sub">Send a raw gateway method with JSON params.</div>
-        <div class="stack" style="margin-top: 16px;">
+        <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
             <span>Method</span>
-            <select
+            <input
               .value=${props.callMethod}
-              @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
-            >
-              ${
-                !props.callMethod
-                  ? html`
-                      <option value="" disabled>Select a method…</option>
-                    `
-                  : nothing
-              }
-              ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
-            </select>
+              @input=${(e: Event) => props.onCallMethodChange((e.target as HTMLInputElement).value)}
+              placeholder="system-presence"
+            />
           </label>
           <label class="field">
             <span>Params (JSON)</span>

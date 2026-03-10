@@ -39,15 +39,9 @@ export type AcpRuntimeEnsureInput = {
   env?: Record<string, string>;
 };
 
-export type AcpRuntimeTurnAttachment = {
-  mediaType: string;
-  data: string;
-};
-
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
-  attachments?: AcpRuntimeTurnAttachment[];
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;

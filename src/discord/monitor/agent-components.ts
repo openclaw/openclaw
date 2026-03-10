@@ -43,7 +43,6 @@ import {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "../../security/dm-policy-shared.js";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -1018,11 +1017,7 @@ async function dispatchDiscordComponentEvent(params: {
           replyToId,
           replyToMode,
           textLimit,
-          maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
-            cfg: ctx.cfg,
-            discordConfig: ctx.discordConfig,
-            accountId,
-          }),
+          maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
           mediaLocalRoots,

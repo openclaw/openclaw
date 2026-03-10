@@ -17,7 +17,6 @@ import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
-import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -46,12 +45,6 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   // Session key format: agent:<id>:discord:channel:<channelId> or agent:<id>:discord:group:<channelId>
   const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
   return match ? match[1] : null;
-}
-
-function buildDiscordApprovalDmRedirectNotice(): { content: string } {
-  return {
-    content: getExecApprovalApproverDmNoticeText(),
-  };
 }
 
 type PendingApproval = {
@@ -505,24 +498,6 @@ export class DiscordExecApprovalHandler {
     const sendToDm = target === "dm" || target === "both";
     const sendToChannel = target === "channel" || target === "both";
     let fallbackToDm = false;
-    const originatingChannelId =
-      request.request.sessionKey && target === "dm"
-        ? extractDiscordChannelId(request.request.sessionKey)
-        : null;
-
-    if (target === "dm" && originatingChannelId) {
-      try {
-        await discordRequest(
-          () =>
-            rest.post(Routes.channelMessages(originatingChannelId), {
-              body: buildDiscordApprovalDmRedirectNotice(),
-            }) as Promise<{ id: string; channel_id: string }>,
-          "send-approval-dm-redirect-notice",
-        );
-      } catch (err) {
-        logError(`discord exec approvals: failed to send DM redirect notice: ${String(err)}`);
-      }
-    }
 
     // Send to originating channel if configured
     if (sendToChannel) {
@@ -793,9 +768,9 @@ export class ExecApprovalButton extends Button {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       try {
-        await interaction.reply({
+        await interaction.update({
           content: "This approval is no longer valid.",
-          ephemeral: true,
+          components: [],
         });
       } catch {
         // Interaction may have expired
@@ -825,11 +800,12 @@ export class ExecApprovalButton extends Button {
           ? "Allowed (always)"
           : "Denied";
 
-    // Acknowledge immediately so Discord does not fail the interaction while
-    // the gateway resolve roundtrip completes. The resolved event will update
-    // the approval card in-place with the final state.
+    // Update the message immediately to show the decision
     try {
-      await interaction.acknowledge();
+      await interaction.update({
+        content: `Submitting decision: **${decisionLabel}**...`,
+        components: [], // Remove buttons
+      });
     } catch {
       // Interaction may have expired, try to continue anyway
     }
@@ -839,7 +815,8 @@ export class ExecApprovalButton extends Button {
     if (!ok) {
       try {
         await interaction.followUp({
-          content: `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
+          content:
+            "Failed to submit approval decision. The request may have expired or already been resolved.",
           ephemeral: true,
         });
       } catch {

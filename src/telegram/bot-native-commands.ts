@@ -64,7 +64,6 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
-import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -94,7 +93,6 @@ export type RegisterTelegramHandlerParams = {
   bot: Bot;
   mediaMaxBytes: number;
   opts: TelegramBotOptions;
-  telegramFetchImpl?: typeof fetch;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
@@ -179,7 +177,6 @@ async function resolveTelegramCommandAuth(params: {
     isForum,
     messageThreadId,
   });
-  const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
@@ -237,6 +234,7 @@ async function resolveTelegramCommandAuth(params: {
     : null;
 
   const sendAuthMessage = async (text: string) => {
+    const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () => bot.api.sendMessage(chatId, text, threadParams),
@@ -518,9 +516,6 @@ export const registerTelegramNativeCommands = ({
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
     accountId: string;
-    sessionKeyForInternalHooks?: string;
-    mirrorIsGroup?: boolean;
-    mirrorGroupId?: string;
     mediaLocalRoots?: readonly string[];
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
@@ -528,9 +523,6 @@ export const registerTelegramNativeCommands = ({
   }) => ({
     chatId: String(params.chatId),
     accountId: params.accountId,
-    sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-    mirrorIsGroup: params.mirrorIsGroup,
-    mirrorGroupId: params.mirrorGroupId,
     token: opts.token,
     runtime,
     bot,
@@ -582,8 +574,9 @@ export const registerTelegramNativeCommands = ({
             senderUsername,
             groupConfig,
             topicConfig,
-            commandAuthorized,
+            commandAuthorized: initialCommandAuthorized,
           } = auth;
+          let commandAuthorized = initialCommandAuthorized;
           const runtimeContext = await resolveCommandRuntimeContext({
             msg,
             isGroup,
@@ -596,6 +589,14 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
+            chatId,
+            accountId: route.accountId,
+            mediaLocalRoots,
+            threadSpec,
+            tableMode,
+            chunkMode,
+          });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
@@ -670,17 +671,6 @@ export const registerTelegramNativeCommands = ({
               userId: String(senderId || chatId),
               targetSessionKey: sessionKey,
             });
-          const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
-            chatId,
-            accountId: route.accountId,
-            sessionKeyForInternalHooks: commandSessionKey,
-            mirrorIsGroup: isGroup,
-            mirrorGroupId: isGroup ? String(chatId) : undefined,
-            mediaLocalRoots,
-            threadSpec,
-            tableMode,
-            chunkMode,
-          });
           const conversationLabel = isGroup
             ? msg.chat.title
               ? `${msg.chat.title} id:${chatId}`
@@ -752,16 +742,6 @@ export const registerTelegramNativeCommands = ({
             dispatcherOptions: {
               ...prefixOptions,
               deliver: async (payload, _info) => {
-                if (
-                  shouldSuppressLocalTelegramExecApprovalPrompt({
-                    cfg,
-                    accountId: route.accountId,
-                    payload,
-                  })
-                ) {
-                  deliveryState.delivered = true;
-                  return;
-                }
                 const result = await deliverReplies({
                   replies: [payload],
                   ...deliveryBaseOptions,
@@ -847,9 +827,6 @@ export const registerTelegramNativeCommands = ({
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,
-            sessionKeyForInternalHooks: route.sessionKey,
-            mirrorIsGroup: isGroup,
-            mirrorGroupId: isGroup ? String(chatId) : undefined,
             mediaLocalRoots,
             threadSpec,
             tableMode,
@@ -874,18 +851,10 @@ export const registerTelegramNativeCommands = ({
             messageThreadId: threadSpec.id,
           });
 
-          if (
-            !shouldSuppressLocalTelegramExecApprovalPrompt({
-              cfg,
-              accountId: route.accountId,
-              payload: result,
-            })
-          ) {
-            await deliverReplies({
-              replies: [result],
-              ...deliveryBaseOptions,
-            });
-          }
+          await deliverReplies({
+            replies: [result],
+            ...deliveryBaseOptions,
+          });
         });
       }
     }

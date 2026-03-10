@@ -1,1 +1,1 @@
-export { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
+export { MemoryIndexManager } from "./manager.js";

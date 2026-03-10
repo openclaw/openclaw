@@ -159,7 +159,6 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
           provider: queued.run.provider,
           model: queued.run.model,
-          runId,
           agentDir: queued.run.agentDir,
           fallbacksOverride: resolveRunModelFallbacksOverride({
             cfg: queued.run.config,

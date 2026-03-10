@@ -92,20 +92,12 @@ async function resolveTelegramFileWithRetry(
   }
 }
 
-function resolveRequiredFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
-  const resolved = fetchImpl ?? globalThis.fetch;
-  if (!resolved) {
+function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
+  const fetchImpl = proxyFetch ?? globalThis.fetch;
+  if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  return resolved;
-}
-
-function resolveOptionalFetchImpl(fetchImpl?: typeof fetch): typeof fetch | null {
-  try {
-    return resolveRequiredFetchImpl(fetchImpl);
-  } catch {
-    return null;
-  }
+  return fetchImpl;
 }
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */
@@ -142,7 +134,7 @@ async function resolveStickerMedia(params: {
   ctx: TelegramContext;
   maxBytes: number;
   token: string;
-  fetchImpl?: typeof fetch;
+  proxyFetch?: typeof fetch;
 }): Promise<
   | {
       path: string;
@@ -153,7 +145,7 @@ async function resolveStickerMedia(params: {
   | null
   | undefined
 > {
-  const { msg, ctx, maxBytes, token, fetchImpl } = params;
+  const { msg, ctx, maxBytes, token, proxyFetch } = params;
   if (!msg.sticker) {
     return undefined;
   }
@@ -173,15 +165,15 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
-    const resolvedFetchImpl = resolveOptionalFetchImpl(fetchImpl);
-    if (!resolvedFetchImpl) {
+    const fetchImpl = proxyFetch ?? globalThis.fetch;
+    if (!fetchImpl) {
       logVerbose("telegram: fetch not available for sticker download");
       return null;
     }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      fetchImpl: resolvedFetchImpl,
+      fetchImpl,
       maxBytes,
     });
 
@@ -237,7 +229,7 @@ export async function resolveMedia(
   ctx: TelegramContext,
   maxBytes: number,
   token: string,
-  fetchImpl?: typeof fetch,
+  proxyFetch?: typeof fetch,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -250,7 +242,7 @@ export async function resolveMedia(
     ctx,
     maxBytes,
     token,
-    fetchImpl,
+    proxyFetch,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -271,7 +263,7 @@ export async function resolveMedia(
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,
     token,
-    fetchImpl: resolveRequiredFetchImpl(fetchImpl),
+    fetchImpl: resolveRequiredFetchImpl(proxyFetch),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
   });

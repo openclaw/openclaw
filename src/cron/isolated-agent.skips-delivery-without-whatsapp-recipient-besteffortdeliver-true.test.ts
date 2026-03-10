@@ -23,7 +23,6 @@ async function runExplicitTelegramAnnounceTurn(params: {
   home: string;
   storePath: string;
   deps: CliDeps;
-  deliveryContract?: "cron-owned" | "shared";
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
   return runTelegramAnnounceTurn({
     ...params,
@@ -302,7 +301,6 @@ describe("runCronIsolatedAgentTurn", () => {
         home,
         storePath,
         deps,
-        deliveryContract: "shared",
       });
 
       expectDeliveredOk(res);

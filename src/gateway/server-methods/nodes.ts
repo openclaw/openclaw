@@ -47,9 +47,9 @@ import {
 } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
-export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
-export const NODE_WAKE_RECONNECT_POLL_MS = 150;
+const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
+const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
+const NODE_WAKE_RECONNECT_POLL_MS = 150;
 const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
@@ -208,9 +208,9 @@ function toPendingParamsJSON(params: unknown): string | undefined {
   }
 }
 
-export async function maybeWakeNodeWithApns(
+async function maybeWakeNodeWithApns(
   nodeId: string,
-  opts?: { force?: boolean; wakeReason?: string },
+  opts?: { force?: boolean },
 ): Promise<NodeWakeAttempt> {
   const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
   nodeWakeById.set(nodeId, state);
@@ -253,7 +253,7 @@ export async function maybeWakeNodeWithApns(
         auth: auth.value,
         registration,
         nodeId,
-        wakeReason: opts?.wakeReason ?? "node.invoke",
+        wakeReason: "node.invoke",
       });
       if (!wakeResult.ok) {
         return withDuration({
@@ -298,7 +298,7 @@ export async function maybeWakeNodeWithApns(
   }
 }
 
-export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
+async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
@@ -362,7 +362,7 @@ export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNu
   }
 }
 
-export async function waitForNodeReconnect(params: {
+async function waitForNodeReconnect(params: {
   nodeId: string;
   context: { nodeRegistry: { get: (nodeId: string) => unknown } };
   timeoutMs?: number;

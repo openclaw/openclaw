@@ -2,22 +2,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
 let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
-const undiciFetch = vi.hoisted(() => vi.fn());
-
-vi.mock("undici", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("undici")>();
-  return {
-    ...actual,
-    fetch: undiciFetch,
-  };
-});
 
 function mockGetChatMemberStatus(status: string) {
-  undiciFetch.mockResolvedValueOnce(
-    new Response(JSON.stringify({ ok: true, result: { status } }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true, result: { status } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
   );
 }
 
@@ -37,7 +31,7 @@ describe("telegram audit", () => {
   });
 
   beforeEach(() => {
-    undiciFetch.mockReset();
+    vi.unstubAllGlobals();
   });
 
   it("collects unmentioned numeric group ids and flags wildcard", async () => {

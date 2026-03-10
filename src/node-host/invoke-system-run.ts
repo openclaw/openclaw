@@ -57,7 +57,6 @@ type SystemRunExecutionContext = {
   sessionKey: string;
   runId: string;
   cmdText: string;
-  suppressNotifyOnExit: boolean;
 };
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
@@ -78,7 +77,6 @@ type SystemRunParsePhase = {
   timeoutMs: number | undefined;
   needsScreenRecording: boolean;
   approved: boolean;
-  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -169,7 +167,6 @@ async function sendSystemRunDenied(
       host: "node",
       command: execution.cmdText,
       reason: params.reason,
-      suppressNotifyOnExit: execution.suppressNotifyOnExit,
     }),
   );
   await opts.sendInvokeResult({
@@ -219,7 +216,6 @@ async function parseSystemRunPhase(
   const agentId = opts.params.agentId?.trim() || undefined;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
-  const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellCommand !== null,
@@ -232,7 +228,7 @@ async function parseSystemRunPhase(
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, cmdText, suppressNotifyOnExit },
+    execution: { sessionKey, runId, cmdText },
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
@@ -240,7 +236,6 @@ async function parseSystemRunPhase(
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,
-    suppressNotifyOnExit,
   };
 }
 
@@ -439,7 +434,6 @@ async function executeSystemRunPhase(
         runId: phase.runId,
         cmdText: phase.cmdText,
         result,
-        suppressNotifyOnExit: phase.suppressNotifyOnExit,
       });
       await opts.sendInvokeResult({
         ok: true,
@@ -507,7 +501,6 @@ async function executeSystemRunPhase(
     runId: phase.runId,
     cmdText: phase.cmdText,
     result,
-    suppressNotifyOnExit: phase.suppressNotifyOnExit,
   });
 
   await opts.sendInvokeResult({

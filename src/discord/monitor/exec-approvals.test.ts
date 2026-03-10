@@ -470,15 +470,15 @@ describe("ExecApprovalButton", () => {
 
   function createMockInteraction(userId: string) {
     const reply = vi.fn().mockResolvedValue(undefined);
-    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const update = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
     const interaction = {
       userId,
       reply,
-      acknowledge,
+      update,
       followUp,
     } as unknown as ButtonInteraction;
-    return { interaction, reply, acknowledge, followUp };
+    return { interaction, reply, update, followUp };
   }
 
   it("denies unauthorized users with ephemeral message", async () => {
@@ -486,7 +486,7 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, reply, acknowledge } = createMockInteraction("999");
+    const { interaction, reply, update } = createMockInteraction("999");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
@@ -495,7 +495,7 @@ describe("ExecApprovalButton", () => {
       content: "⛔ You are not authorized to approve exec requests.",
       ephemeral: true,
     });
-    expect(acknowledge).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
@@ -505,45 +505,50 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, reply, acknowledge } = createMockInteraction("222");
+    const { interaction, reply, update } = createMockInteraction("222");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
 
     expect(reply).not.toHaveBeenCalled();
-    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({
+      content: "Submitting decision: **Allowed (once)**...",
+      components: [],
+    });
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-once");
   });
 
-  it("acknowledges allow-always interactions before resolving", async () => {
+  it("shows correct label for allow-always", async () => {
     const handler = createMockHandler(["111"]);
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, acknowledge } = createMockInteraction("111");
+    const { interaction, update } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "allow-always" };
 
     await button.run(interaction, data);
 
-    expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
-    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-always");
+    expect(update).toHaveBeenCalledWith({
+      content: "Submitting decision: **Allowed (always)**...",
+      components: [],
+    });
   });
 
-  it("acknowledges deny interactions before resolving", async () => {
+  it("shows correct label for deny", async () => {
     const handler = createMockHandler(["111"]);
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, acknowledge } = createMockInteraction("111");
+    const { interaction, update } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "deny" };
 
     await button.run(interaction, data);
 
-    expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
-    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "deny");
+    expect(update).toHaveBeenCalledWith({
+      content: "Submitting decision: **Denied**...",
+      components: [],
+    });
   });
 
   it("handles invalid data gracefully", async () => {
@@ -551,20 +556,18 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, acknowledge, reply } = createMockInteraction("111");
+    const { interaction, update } = createMockInteraction("111");
     const data: ComponentData = { id: "", action: "invalid" };
 
     await button.run(interaction, data);
 
-    expect(reply).toHaveBeenCalledWith({
+    expect(update).toHaveBeenCalledWith({
       content: "This approval is no longer valid.",
-      ephemeral: true,
+      components: [],
     });
-    expect(acknowledge).not.toHaveBeenCalled();
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
-
   it("follows up with error when resolve fails", async () => {
     const handler = createMockHandler(["111"]);
     handler.resolveApproval = vi.fn().mockResolvedValue(false);
@@ -578,7 +581,7 @@ describe("ExecApprovalButton", () => {
 
     expect(followUp).toHaveBeenCalledWith({
       content:
-        "Failed to submit approval decision for **Allowed (once)**. The request may have expired or already been resolved.",
+        "Failed to submit approval decision. The request may have expired or already been resolved.",
       ephemeral: true,
     });
   });
@@ -593,14 +596,14 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, acknowledge, reply } = createMockInteraction("111");
+    const { interaction, update, reply } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
 
     // Should match because getApprovers returns [111] and button does String(id) === userId
     expect(reply).not.toHaveBeenCalled();
-    expect(acknowledge).toHaveBeenCalled();
+    expect(update).toHaveBeenCalled();
   });
 });
 
@@ -796,80 +799,6 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
           components: expect.any(Array),
         }),
       }),
-    );
-
-    clearPendingTimeouts(handler);
-  });
-
-  it("posts an in-channel note when target is dm and the request came from a non-DM discord conversation", async () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "dm",
-    });
-    const internals = getHandlerInternals(handler);
-
-    mockRestPost.mockImplementation(
-      async (route: string, params?: { body?: { content?: string } }) => {
-        if (route === Routes.channelMessages("999888777")) {
-          expect(params?.body?.content).toContain("I sent the allowed approvers DMs");
-          return { id: "note-1", channel_id: "999888777" };
-        }
-        if (route === Routes.userChannels()) {
-          return { id: "dm-1" };
-        }
-        if (route === Routes.channelMessages("dm-1")) {
-          return { id: "msg-1", channel_id: "dm-1" };
-        }
-        throw new Error(`unexpected route: ${route}`);
-      },
-    );
-
-    await internals.handleApprovalRequested(createRequest());
-
-    expect(mockRestPost).toHaveBeenCalledWith(
-      Routes.channelMessages("999888777"),
-      expect.objectContaining({
-        body: expect.objectContaining({
-          content: expect.stringContaining("I sent the allowed approvers DMs"),
-        }),
-      }),
-    );
-    expect(mockRestPost).toHaveBeenCalledWith(
-      Routes.channelMessages("dm-1"),
-      expect.objectContaining({
-        body: expect.any(Object),
-      }),
-    );
-
-    clearPendingTimeouts(handler);
-  });
-
-  it("does not post an in-channel note when the request already came from a discord DM", async () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "dm",
-    });
-    const internals = getHandlerInternals(handler);
-
-    mockRestPost.mockImplementation(async (route: string) => {
-      if (route === Routes.userChannels()) {
-        return { id: "dm-1" };
-      }
-      if (route === Routes.channelMessages("dm-1")) {
-        return { id: "msg-1", channel_id: "dm-1" };
-      }
-      throw new Error(`unexpected route: ${route}`);
-    });
-
-    await internals.handleApprovalRequested(
-      createRequest({ sessionKey: "agent:main:discord:dm:123" }),
-    );
-
-    expect(mockRestPost).not.toHaveBeenCalledWith(
-      Routes.channelMessages("999888777"),
-      expect.anything(),
     );
 
     clearPendingTimeouts(handler);

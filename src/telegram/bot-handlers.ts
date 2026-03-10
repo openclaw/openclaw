@@ -58,11 +58,6 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
-  isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
-  shouldEnableTelegramExecApprovalButtons,
-} from "./exec-approvals.js";
-import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
@@ -79,9 +74,6 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
-
-const APPROVE_CALLBACK_DATA_RE =
-  /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
 
 function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
@@ -123,7 +115,6 @@ export const registerTelegramHandlers = ({
   accountId,
   bot,
   opts,
-  telegramFetchImpl,
   runtime,
   mediaMaxBytes,
   telegramCfg,
@@ -372,7 +363,7 @@ export const registerTelegramHandlers = ({
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramFetchImpl);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
@@ -476,7 +467,7 @@ export const registerTelegramHandlers = ({
         },
         mediaMaxBytes,
         opts.token,
-        telegramFetchImpl,
+        opts.proxyFetch,
       );
       if (!media) {
         return [];
@@ -987,7 +978,7 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramFetchImpl);
+      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
@@ -1090,30 +1081,6 @@ export const registerTelegramHandlers = ({
           params,
         );
       };
-      const clearCallbackButtons = async () => {
-        const emptyKeyboard = { inline_keyboard: [] };
-        const replyMarkup = { reply_markup: emptyKeyboard };
-        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
-          .editMessageReplyMarkup;
-        if (typeof editReplyMarkupFn === "function") {
-          return await ctx.editMessageReplyMarkup(replyMarkup);
-        }
-        const apiEditReplyMarkupFn = (bot.api as { editMessageReplyMarkup?: unknown })
-          .editMessageReplyMarkup;
-        if (typeof apiEditReplyMarkupFn === "function") {
-          return await bot.api.editMessageReplyMarkup(
-            callbackMessage.chat.id,
-            callbackMessage.message_id,
-            replyMarkup,
-          );
-        }
-        // Fallback path for older clients that do not expose editMessageReplyMarkup.
-        const messageText = callbackMessage.text ?? callbackMessage.caption;
-        if (typeof messageText !== "string" || messageText.trim().length === 0) {
-          return undefined;
-        }
-        return await editCallbackMessage(messageText, replyMarkup);
-      };
       const deleteCallbackMessage = async () => {
         const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
         if (typeof deleteFn === "function") {
@@ -1132,31 +1099,22 @@ export const registerTelegramHandlers = ({
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
 
-      const chatId = callbackMessage.chat.id;
-      const isGroup =
-        callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
-      const isApprovalCallback = APPROVE_CALLBACK_DATA_RE.test(data);
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
       });
-      const execApprovalButtonsEnabled =
-        isApprovalCallback &&
-        shouldEnableTelegramExecApprovalButtons({
-          cfg,
-          accountId,
-          to: String(chatId),
-        });
-      if (!execApprovalButtonsEnabled) {
-        if (inlineButtonsScope === "off") {
-          return;
-        }
-        if (inlineButtonsScope === "dm" && isGroup) {
-          return;
-        }
-        if (inlineButtonsScope === "group" && !isGroup) {
-          return;
-        }
+      if (inlineButtonsScope === "off") {
+        return;
+      }
+
+      const chatId = callbackMessage.chat.id;
+      const isGroup =
+        callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+      if (inlineButtonsScope === "dm" && isGroup) {
+        return;
+      }
+      if (inlineButtonsScope === "group" && !isGroup) {
+        return;
       }
 
       const messageThreadId = callbackMessage.message_thread_id;
@@ -1178,9 +1136,7 @@ export const registerTelegramHandlers = ({
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
       const authorizationMode: TelegramEventAuthorizationMode =
-        !execApprovalButtonsEnabled && inlineButtonsScope === "allowlist"
-          ? "callback-allowlist"
-          : "callback-scope";
+        inlineButtonsScope === "allowlist" ? "callback-allowlist" : "callback-scope";
       const senderAuthorization = authorizeTelegramEventSender({
         chatId,
         chatTitle: callbackMessage.chat.title,
@@ -1192,29 +1148,6 @@ export const registerTelegramHandlers = ({
       });
       if (!senderAuthorization.allowed) {
         return;
-      }
-
-      if (isApprovalCallback) {
-        if (
-          !isTelegramExecApprovalClientEnabled({ cfg, accountId }) ||
-          !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
-        ) {
-          logVerbose(
-            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
-          );
-          return;
-        }
-        try {
-          await clearCallbackButtons();
-        } catch (editErr) {
-          const errStr = String(editErr);
-          if (
-            !errStr.includes("message is not modified") &&
-            !errStr.includes("there is no text in the message to edit")
-          ) {
-            logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
-          }
-        }
       }
 
       const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);

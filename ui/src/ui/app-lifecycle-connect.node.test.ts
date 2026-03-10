@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
-  applySettingsFromUrlMock: vi.fn(),
+const { connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
   connectGatewayMock: vi.fn(),
   loadBootstrapMock: vi.fn(),
 }));
@@ -15,7 +14,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 }));
 
 vi.mock("./app-settings.ts", () => ({
-  applySettingsFromUrl: applySettingsFromUrlMock,
+  applySettingsFromUrl: vi.fn(),
   attachThemeListener: vi.fn(),
   detachThemeListener: vi.fn(),
   inferBasePath: vi.fn(() => "/"),
@@ -66,12 +65,6 @@ function createHost() {
 }
 
 describe("handleConnected", () => {
-  beforeEach(() => {
-    applySettingsFromUrlMock.mockReset();
-    connectGatewayMock.mockReset();
-    loadBootstrapMock.mockReset();
-  });
-
   it("waits for bootstrap load before first gateway connect", async () => {
     let resolveBootstrap!: () => void;
     loadBootstrapMock.mockReturnValueOnce(
@@ -108,18 +101,5 @@ describe("handleConnected", () => {
     await Promise.resolve();
 
     expect(connectGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("scrubs URL settings before starting the bootstrap fetch", () => {
-    loadBootstrapMock.mockResolvedValueOnce(undefined);
-    const host = createHost();
-
-    handleConnected(host as never);
-
-    expect(applySettingsFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(loadBootstrapMock).toHaveBeenCalledTimes(1);
-    expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
-      loadBootstrapMock.mock.invocationCallOrder[0],
-    );
   });
 });

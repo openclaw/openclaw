@@ -37,70 +37,15 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
   return true;
 }
 
-/**
- * Abort embedded PI runs.
- *
- * - With a sessionId, aborts that single run.
- * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
- */
-export function abortEmbeddedPiRun(sessionId: string): boolean;
-export function abortEmbeddedPiRun(
-  sessionId: undefined,
-  opts: { mode: "all" | "compacting" },
-): boolean;
-export function abortEmbeddedPiRun(
-  sessionId?: string,
-  opts?: { mode?: "all" | "compacting" },
-): boolean {
-  if (typeof sessionId === "string" && sessionId.length > 0) {
-    const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-    if (!handle) {
-      diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
-      return false;
-    }
-    diag.debug(`aborting run: sessionId=${sessionId}`);
-    try {
-      handle.abort();
-    } catch (err) {
-      diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
-      return false;
-    }
-    return true;
+export function abortEmbeddedPiRun(sessionId: string): boolean {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
+    return false;
   }
-
-  const mode = opts?.mode;
-  if (mode === "compacting") {
-    let aborted = false;
-    for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      if (!handle.isCompacting()) {
-        continue;
-      }
-      diag.debug(`aborting compacting run: sessionId=${id}`);
-      try {
-        handle.abort();
-        aborted = true;
-      } catch (err) {
-        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
-      }
-    }
-    return aborted;
-  }
-
-  if (mode === "all") {
-    let aborted = false;
-    for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      diag.debug(`aborting run: sessionId=${id}`);
-      try {
-        handle.abort();
-        aborted = true;
-      } catch (err) {
-        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
-      }
-    }
-    return aborted;
-  }
-
-  return false;
+  diag.debug(`aborting run: sessionId=${sessionId}`);
+  handle.abort();
+  return true;
 }
 
 export function isEmbeddedPiRunActive(sessionId: string): boolean {
@@ -121,36 +66,6 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
 
 export function getActiveEmbeddedRunCount(): number {
   return ACTIVE_EMBEDDED_RUNS.size;
-}
-
-/**
- * Wait for active embedded runs to drain.
- *
- * Used during restarts so in-flight compaction runs can release session write
- * locks before the next lifecycle starts.
- */
-export async function waitForActiveEmbeddedRuns(
-  timeoutMs = 15_000,
-  opts?: { pollMs?: number },
-): Promise<{ drained: boolean }> {
-  const pollMsRaw = opts?.pollMs ?? 250;
-  const pollMs = Math.max(10, Math.floor(pollMsRaw));
-  const maxWaitMs = Math.max(pollMs, Math.floor(timeoutMs));
-
-  const startedAt = Date.now();
-  while (true) {
-    if (ACTIVE_EMBEDDED_RUNS.size === 0) {
-      return { drained: true };
-    }
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= maxWaitMs) {
-      diag.warn(
-        `wait for active embedded runs timed out: activeRuns=${ACTIVE_EMBEDDED_RUNS.size} timeoutMs=${maxWaitMs}`,
-      );
-      return { drained: false };
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
-  }
 }
 
 export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
@@ -234,18 +149,5 @@ export function clearActiveEmbeddedRun(
     diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
 }
-
-export const __testing = {
-  resetActiveEmbeddedRuns() {
-    for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        waiter.resolve(true);
-      }
-    }
-    EMBEDDED_RUN_WAITERS.clear();
-    ACTIVE_EMBEDDED_RUNS.clear();
-  },
-};
 
 export type { EmbeddedPiQueueHandle };

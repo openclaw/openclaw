@@ -61,7 +61,6 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
-import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -763,7 +762,6 @@ export async function runEmbeddedPiAgent(
           reason,
           cfg: params.config,
           agentDir,
-          runId: params.runId,
         });
       };
       const resolveAuthProfileFailureReason = (
@@ -850,7 +848,6 @@ export async function runEmbeddedPiAgent(
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             trigger: params.trigger,
-            memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,
@@ -1229,26 +1226,11 @@ export async function runEmbeddedPiAgent(
               reason: promptProfileFailureReason,
             });
             const promptFailoverFailure = isFailoverErrorMessage(errorText);
-            // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
-            const failedPromptProfileId = lastProfileId;
-            const logPromptFailoverDecision = createFailoverDecisionLogger({
-              stage: "prompt",
-              runId: params.runId,
-              rawError: errorText,
-              failoverReason: promptFailoverReason,
-              profileFailureReason: promptProfileFailureReason,
-              provider,
-              model: modelId,
-              profileId: failedPromptProfileId,
-              fallbackConfigured,
-              aborted,
-            });
             if (
               promptFailoverFailure &&
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
-              logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
             }
@@ -1267,19 +1249,14 @@ export async function runEmbeddedPiAgent(
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
             if (fallbackConfigured && promptFailoverFailure) {
-              const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
-              logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw new FailoverError(errorText, {
                 reason: promptFailoverReason ?? "unknown",
                 provider,
                 model: modelId,
                 profileId: lastProfileId,
-                status,
+                status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
               });
-            }
-            if (promptFailoverFailure || promptFailoverReason) {
-              logPromptFailoverDecision("surface_error");
             }
             throw promptError;
           }
@@ -1305,21 +1282,6 @@ export async function runEmbeddedPiAgent(
             resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
-          // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
-          const failedAssistantProfileId = lastProfileId;
-          const logAssistantFailoverDecision = createFailoverDecisionLogger({
-            stage: "assistant",
-            runId: params.runId,
-            rawError: lastAssistant?.errorMessage?.trim(),
-            failoverReason: assistantFailoverReason,
-            profileFailureReason: assistantProfileFailureReason,
-            provider: activeErrorContext.provider,
-            model: activeErrorContext.model,
-            profileId: failedAssistantProfileId,
-            fallbackConfigured,
-            timedOut,
-            aborted,
-          });
 
           if (
             authFailure &&
@@ -1377,7 +1339,6 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
-              logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
@@ -1410,7 +1371,6 @@ export async function runEmbeddedPiAgent(
               const status =
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
-              logAssistantFailoverDecision("fallback_model", { status });
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
                 provider: activeErrorContext.provider,
@@ -1419,7 +1379,6 @@ export async function runEmbeddedPiAgent(
                 status,
               });
             }
-            logAssistantFailoverDecision("surface_error");
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
@@ -1458,7 +1417,6 @@ export async function runEmbeddedPiAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
@@ -1481,7 +1439,6 @@ export async function runEmbeddedPiAgent(
                 systemPromptReport: attempt.systemPromptReport,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
@@ -1529,7 +1486,6 @@ export async function runEmbeddedPiAgent(
                 : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,

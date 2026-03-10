@@ -23,7 +23,6 @@ const COMMAND_SECRET_TARGETS = {
     "skills.entries.",
     "messages.tts.",
     "tools.web.search",
-    "tools.web.fetch.firecrawl.",
   ]),
   status: idsByPrefix([
     "channels.",

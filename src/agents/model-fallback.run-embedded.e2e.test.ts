@@ -207,7 +207,6 @@ async function runEmbeddedFallback(params: {
     cfg,
     provider: "openai",
     model: "mock-1",
-    runId: params.runId,
     agentDir: params.agentDir,
     run: (provider, model, options) =>
       runEmbeddedPiAgent({

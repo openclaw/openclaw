@@ -47,12 +47,8 @@ describe("isLikelyInterimCronMessage", () => {
       false,
     );
   });
-  it("does not treat empty as interim (empty = NO_REPLY was stripped)", () => {
-    expect(isLikelyInterimCronMessage("")).toBe(false);
-  });
-
-  it("does not treat whitespace-only as interim", () => {
-    expect(isLikelyInterimCronMessage("   ")).toBe(false);
+  it("treats empty as interim", () => {
+    expect(isLikelyInterimCronMessage("")).toBe(true);
   });
 });
 

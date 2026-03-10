@@ -439,7 +439,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     accountId: account.accountId,
     bot,
     opts,
-    telegramFetchImpl: fetchImpl as unknown as typeof fetch | undefined,
     runtime,
     mediaMaxBytes,
     telegramCfg,

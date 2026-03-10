@@ -4,7 +4,6 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
-import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
@@ -214,7 +213,7 @@ export function resolveCommandEnv(params: {
       resolvedEnv.npm_config_fund = "false";
     }
   }
-  return markOpenClawExecEnv(resolvedEnv);
+  return resolvedEnv;
 }
 
 export async function runCommandWithTimeout(

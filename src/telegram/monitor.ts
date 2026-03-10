@@ -8,7 +8,6 @@ import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
-import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingSession } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
@@ -74,7 +73,6 @@ const isGrammyHttpError = (err: unknown): boolean => {
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
-  let execApprovalsHandler: TelegramExecApprovalHandler | undefined;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
@@ -112,14 +110,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
-
-    execApprovalsHandler = new TelegramExecApprovalHandler({
-      token,
-      accountId: account.accountId,
-      cfg,
-      runtime: opts.runtime,
-    });
-    await execApprovalsHandler.start();
 
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
@@ -188,7 +178,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
-    await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
 }

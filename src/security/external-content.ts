@@ -132,8 +132,6 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x276d: ">", // medium right-pointing angle bracket ornament
   0x276e: "<", // heavy left-pointing angle quotation mark ornament
   0x276f: ">", // heavy right-pointing angle quotation mark ornament
-  0x02c2: "<", // modifier letter left arrowhead
-  0x02c3: ">", // modifier letter right arrowhead
 };
 
 function foldMarkerChar(char: string): string {
@@ -153,27 +151,25 @@ function foldMarkerChar(char: string): string {
 
 function foldMarkerText(input: string): string {
   return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F]/g,
     (char) => foldMarkerChar(char),
   );
 }
 
 function replaceMarkers(content: string): string {
   const folded = foldMarkerText(content);
-  // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
-  // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
-  if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
+  if (!/external_untrusted_content/i.test(folded)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
   // Match markers with or without id attribute (handles both legacy and spoofed markers)
   const patterns: Array<{ regex: RegExp; value: string }> = [
     {
-      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex: /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
       value: "[[MARKER_SANITIZED]]",
     },
     {
-      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
       value: "[[END_MARKER_SANITIZED]]",
     },
   ];

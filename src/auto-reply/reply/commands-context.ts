@@ -26,7 +26,6 @@ export function buildCommandContext(params: {
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
     isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
-    { botUsername: ctx.BotUsername },
   );
 
   return {

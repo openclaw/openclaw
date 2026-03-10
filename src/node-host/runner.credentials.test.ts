@@ -76,7 +76,6 @@ describe("resolveNodeHostGatewayCredentials", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
         REMOTE_GATEWAY_TOKEN: "token-from-ref",
       },
       async () => {
@@ -92,7 +91,6 @@ describe("resolveNodeHostGatewayCredentials", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: "token-from-env",
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
         REMOTE_GATEWAY_TOKEN: "token-from-ref",
       },
       async () => {
@@ -108,7 +106,6 @@ describe("resolveNodeHostGatewayCredentials", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
         MISSING_REMOTE_GATEWAY_TOKEN: undefined,
       },
       async () => {

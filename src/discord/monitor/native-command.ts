@@ -56,7 +56,6 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -1572,7 +1571,7 @@ async function dispatchDiscordCommandInteraction(params: {
       textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
         fallbackLimit: 2000,
       }),
-      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+      maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
       preferFollowUp,
       chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
@@ -1707,7 +1706,7 @@ async function dispatchDiscordCommandInteraction(params: {
             textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
-            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             preferFollowUp: preferFollowUp || didReply,
             chunkMode: resolveChunkMode(cfg, "discord", accountId),
           });

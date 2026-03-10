@@ -76,8 +76,6 @@ const BASE_METHODS = [
   "node.rename",
   "node.list",
   "node.describe",
-  "node.pending.drain",
-  "node.pending.enqueue",
   "node.invoke",
   "node.pending.pull",
   "node.pending.ack",

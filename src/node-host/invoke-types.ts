@@ -13,7 +13,6 @@ export type SystemRunParams = {
   approved?: boolean | null;
   approvalDecision?: string | null;
   runId?: string | null;
-  suppressNotifyOnExit?: boolean | null;
 };
 
 export type RunResult = {
@@ -36,7 +35,6 @@ export type ExecEventPayload = {
   success?: boolean;
   output?: string;
   reason?: string;
-  suppressNotifyOnExit?: boolean;
 };
 
 export type ExecFinishedResult = {
@@ -53,7 +51,6 @@ export type ExecFinishedEventParams = {
   runId: string;
   cmdText: string;
   result: ExecFinishedResult;
-  suppressNotifyOnExit?: boolean;
 };
 
 export type SkillBinsProvider = {

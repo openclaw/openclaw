@@ -36,7 +36,6 @@ import {
   createSandboxedWriteTool,
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
-  wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
@@ -68,7 +67,6 @@ const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>>
   voice: ["tts"],
 };
 const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["web_search"]);
-const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();
@@ -209,10 +207,6 @@ export function createOpenClawCodingTools(options?: {
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
-  /** What initiated this run (for trigger-specific tool restrictions). */
-  trigger?: string;
-  /** Relative workspace path that memory-triggered writes may append to. */
-  memoryFlushWritePath?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -264,11 +258,6 @@ export function createOpenClawCodingTools(options?: {
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
-  const isMemoryFlushRun = options?.trigger === "memory";
-  if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
-    throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
-  }
-  const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
   const {
     agentId,
     globalPolicy,
@@ -333,7 +322,7 @@ export function createOpenClawCodingTools(options?: {
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
-    workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+    workspaceOnly: fsConfig.workspaceOnly,
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
@@ -526,32 +515,7 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
     }),
   ];
-  const toolsForMemoryFlush =
-    isMemoryFlushRun && memoryFlushWritePath
-      ? tools.flatMap((tool) => {
-          if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
-            return [];
-          }
-          if (tool.name === "write") {
-            return [
-              wrapToolMemoryFlushAppendOnlyWrite(tool, {
-                root: sandboxRoot ?? workspaceRoot,
-                relativePath: memoryFlushWritePath,
-                containerWorkdir: sandbox?.containerWorkdir,
-                sandbox:
-                  sandboxRoot && sandboxFsBridge
-                    ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                    : undefined,
-              }),
-            ];
-          }
-          return [tool];
-        })
-      : tools;
-  const toolsForMessageProvider = applyMessageProviderToolPolicy(
-    toolsForMemoryFlush,
-    options?.messageProvider,
-  );
+  const toolsForMessageProvider = applyMessageProviderToolPolicy(tools, options?.messageProvider);
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,

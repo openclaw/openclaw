@@ -2,16 +2,10 @@ import type { AgentSideConnection } from "@agentclientprotocol/sdk";
 import { vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 
-export type TestAcpConnection = AgentSideConnection & {
-  __sessionUpdateMock: ReturnType<typeof vi.fn>;
-};
-
-export function createAcpConnection(): TestAcpConnection {
-  const sessionUpdate = vi.fn(async () => {});
+export function createAcpConnection(): AgentSideConnection {
   return {
-    sessionUpdate,
-    __sessionUpdateMock: sessionUpdate,
-  } as unknown as TestAcpConnection;
+    sessionUpdate: vi.fn(async () => {}),
+  } as unknown as AgentSideConnection;
 }
 
 export function createAcpGateway(
