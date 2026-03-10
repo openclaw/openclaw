@@ -226,6 +226,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       if (sm.pingPongLoggingEnabled !== undefined) {
         socketClient.pingPongLoggingEnabled = sm.pingPongLoggingEnabled;
       }
+    } else {
+      runtime.log?.(
+        "[slack] socketMode config is set but receiver.client was not found, " +
+          "ping/pong tuning will not be applied. This may indicate a @slack/bolt version mismatch.",
+      );
     }
   }
 
