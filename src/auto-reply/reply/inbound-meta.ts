@@ -123,6 +123,9 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
       Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
         ? ctx.InboundHistory.length
         : undefined,
+    // Marker to indicate this metadata uses the new separator format.
+    // Used by stripInboundMetadata to avoid stripping legacy user content.
+    _sep: true,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
