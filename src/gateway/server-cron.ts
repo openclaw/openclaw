@@ -326,11 +326,10 @@ export function buildGatewayCronService(params: {
 
       runLaneReset(CommandLane.Cron);
 
-      const jobAgentId =
-        typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
+      const { agentId: resolvedAgentId } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronAgentSessionKey({
         sessionKey: `cron:${job.id}`,
-        agentId: jobAgentId,
+        agentId: resolvedAgentId,
       });
       runLaneReset(`session:${sessionKey}`);
     },
