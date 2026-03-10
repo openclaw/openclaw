@@ -5,11 +5,12 @@ try {
   execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
   execSync("git config core.hooksPath git-hooks", { stdio: "ignore" });
   console.log("✅ Git hooks configured successfully.");
-} catch (error) {
-  console.warn(
-    "⚠️ Note: Git hooks were not configured (expected if you downloaded a ZIP or are not in a git repository).",
-  );
-  console.warn(`   Details: ${error.message}`);
-
+} catch (err) {
+  // Expected failures: git not installed, or not inside a git work tree
+  // (e.g., ZIP download). Exit gracefully so `pnpm install` isn't blocked.
+  if (process.env.CI) {
+    // Surface unexpected errors in CI so they aren't silently ignored.
+    console.warn("⚠️  Git hooks setup skipped:", err.message);
+  }
   process.exit(0);
 }
