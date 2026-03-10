@@ -104,8 +104,13 @@ export const slackOutbound: ChannelOutboundAdapter = {
     // Adaptive card rendering: convert card markers to Slack Block Kit
     const parsed = parseAdaptiveCardMarkers(text);
     if (parsed) {
-      const rendered = slackStrategy.render(parsed);
-      if (rendered.type === "slack" && rendered.blocks.length > 0) {
+      let rendered: ReturnType<typeof slackStrategy.render> | null = null;
+      try {
+        rendered = slackStrategy.render(parsed);
+      } catch {
+        // strategy error — fall through to fallback text
+      }
+      if (rendered?.type === "slack" && rendered.blocks.length > 0) {
         const send = deps?.sendSlack ?? sendMessageSlack;
         const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
         const slackIdentity = resolveSlackSendIdentity(identity);

@@ -92,8 +92,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
     // Adaptive card rendering: convert card markers to Discord embeds + components
     const parsed = parseAdaptiveCardMarkers(text);
     if (parsed) {
-      const rendered = discordStrategy.render(parsed);
-      if (rendered.type === "discord") {
+      let rendered: ReturnType<typeof discordStrategy.render> | null = null;
+      try {
+        rendered = discordStrategy.render(parsed);
+      } catch {
+        // strategy error — fall through to fallback text
+      }
+      if (rendered?.type === "discord") {
         const send = deps?.sendDiscord ?? sendMessageDiscord;
         const target = resolveDiscordOutboundTarget({ to, threadId });
         const result = await send(target, rendered.fallback, {
