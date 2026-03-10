@@ -482,6 +482,82 @@ export type SingleChannelSecretInputPromptResult =
   | { action: "use-env" }
   | { action: "set"; value: SecretInput; resolvedValue: string };
 
+export async function runSingleChannelSecretStep(params: {
+  cfg: OpenClawConfig;
+  prompter: Pick<WizardPrompter, "confirm" | "text" | "select" | "note">;
+  providerHint: string;
+  credentialLabel: string;
+  secretInputMode?: "plaintext" | "ref";
+  accountConfigured: boolean;
+  hasConfigToken: boolean;
+  allowEnv: boolean;
+  envValue?: string;
+  envPrompt: string;
+  keepPrompt: string;
+  inputPrompt: string;
+  preferredEnvVar?: string;
+  onMissingConfigured?: () => Promise<void>;
+  applyUseEnv?: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>;
+  applySet?: (
+    cfg: OpenClawConfig,
+    value: SecretInput,
+    resolvedValue: string,
+  ) => OpenClawConfig | Promise<OpenClawConfig>;
+}): Promise<{
+  cfg: OpenClawConfig;
+  action: SingleChannelSecretInputPromptResult["action"];
+  resolvedValue?: string;
+}> {
+  const promptState = buildSingleChannelSecretPromptState({
+    accountConfigured: params.accountConfigured,
+    hasConfigToken: params.hasConfigToken,
+    allowEnv: params.allowEnv,
+    envValue: params.envValue,
+  });
+
+  if (!promptState.accountConfigured && params.onMissingConfigured) {
+    await params.onMissingConfigured();
+  }
+
+  const result = await promptSingleChannelSecretInput({
+    cfg: params.cfg,
+    prompter: params.prompter,
+    providerHint: params.providerHint,
+    credentialLabel: params.credentialLabel,
+    secretInputMode: params.secretInputMode,
+    accountConfigured: promptState.accountConfigured,
+    canUseEnv: promptState.canUseEnv,
+    hasConfigToken: promptState.hasConfigToken,
+    envPrompt: params.envPrompt,
+    keepPrompt: params.keepPrompt,
+    inputPrompt: params.inputPrompt,
+    preferredEnvVar: params.preferredEnvVar,
+  });
+
+  if (result.action === "use-env") {
+    return {
+      cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
+      action: result.action,
+      resolvedValue: params.envValue?.trim() || undefined,
+    };
+  }
+
+  if (result.action === "set") {
+    return {
+      cfg: params.applySet
+        ? await params.applySet(params.cfg, result.value, result.resolvedValue)
+        : params.cfg,
+      action: result.action,
+      resolvedValue: result.resolvedValue,
+    };
+  }
+
+  return {
+    cfg: params.cfg,
+    action: result.action,
+  };
+}
+
 export async function promptSingleChannelSecretInput(params: {
   cfg: OpenClawConfig;
   prompter: Pick<WizardPrompter, "confirm" | "text" | "select" | "note">;
