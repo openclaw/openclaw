@@ -231,6 +231,12 @@ Notes:
 - `channels.matrix.replyToMode` controls reply-to metadata when not replying in a thread:
   - `off` (default), `first`, `all`
 
+## Reasoning stream
+
+- When reasoning streaming is enabled, Matrix writes reasoning updates into one transient message instead of sending a new reasoning message for every update.
+- OpenClaw edits that transient message as reasoning evolves, then redacts it before sending the final answer so the room keeps the final reply without leftover reasoning drafts.
+- Reasoning-only payloads are skipped from the normal Matrix reply path while the transient reasoning message is active.
+
 ## Capabilities
 
 | Feature         | Status                                                                                |
