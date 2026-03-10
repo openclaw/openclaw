@@ -55,6 +55,7 @@
     "src/plugin-sdk/voice-call.ts",
     "src/plugin-sdk/zalo.ts",
     "src/plugin-sdk/zalouser.ts",
+    "src/plugin-sdk/backup.ts",
     "src/types/**/*.d.ts"
   ],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
