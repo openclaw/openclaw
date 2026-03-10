@@ -1103,6 +1103,50 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.threadId).toBeUndefined();
   });
 
+  it("rejects Telegram topic bindings with non-numeric chat ids", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:@mygroup:topic:2",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:@mygroup:2",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("Could not resolve a telegram conversation");
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram topic bindings without a delivery target", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:2",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentThreadId: "2",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("Could not resolve a telegram conversation");
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("binds Discord DMs to the current conversation instead of attempting a child thread", async () => {
     const result = await spawnAcpDirect(
       {

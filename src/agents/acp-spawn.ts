@@ -49,7 +49,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-key-utils.js";
-import { parseTelegramTarget } from "../telegram/targets.js";
+import { isNumericTelegramChatId, parseTelegramTarget } from "../telegram/targets.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
@@ -331,12 +331,12 @@ function resolveConversationIdForThreadBinding(params: {
   if (channel === "telegram") {
     const rawTarget = params.to?.trim() || "";
     if (!rawTarget) {
-      return explicitThreadId;
+      return undefined;
     }
     const parsedTarget = parseTelegramTarget(rawTarget);
     const chatId = parsedTarget.chatId.trim();
     if (!chatId) {
-      return explicitThreadId;
+      return undefined;
     }
     const topicId =
       explicitThreadId ??
@@ -344,11 +344,16 @@ function resolveConversationIdForThreadBinding(params: {
         ? String(parsedTarget.messageThreadId).trim()
         : undefined);
     if (topicId) {
+      // Telegram topic bindings must stay canonical so later delivery never
+      // mistakes a topic id for a standalone chat id.
+      if (!isNumericTelegramChatId(chatId)) {
+        return undefined;
+      }
       return (
         buildTelegramTopicConversationId({
           chatId,
           topicId,
-        }) ?? topicId
+        }) ?? undefined
       );
     }
     return chatId;
