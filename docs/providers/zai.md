@@ -15,9 +15,17 @@ with a Z.AI API key.
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
-# or non-interactive
-openclaw onboard --zai-api-key "$ZAI_API_KEY"
+# General API
+openclaw onboard --auth-choice zai-global
+
+# Coding Plan Global
+openclaw onboard --auth-choice zai-coding-global
+
+# Coding Plan CN (China region)
+openclaw onboard --auth-choice zai-coding-cn
+
+# General API CN (China region)
+openclaw onboard --auth-choice zai-cn
 ```
 
 ## Config snippet

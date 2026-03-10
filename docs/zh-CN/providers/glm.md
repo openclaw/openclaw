@@ -20,7 +20,17 @@ GLM 是一个**模型系列**（而非公司），通过 Z.AI 平台提供。在
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
+# 通用 API
+openclaw onboard --auth-choice zai-global
+
+# 编程套餐（全球）
+openclaw onboard --auth-choice zai-coding-global
+
+# 编程套餐（中国区域）
+openclaw onboard --auth-choice zai-coding-cn
+
+# 通用 API 中国区域
+openclaw onboard --auth-choice zai-cn
 ```
 
 ## 配置片段
@@ -35,5 +45,5 @@ openclaw onboard --auth-choice zai-api-key
 ## 注意事项
 
 - GLM 版本和可用性可能会变化；请查阅 Z.AI 的文档获取最新信息。
-- 示例模型 ID 包括 `glm-4.7` 和 `glm-4.6`。
+- 示例模型 ID 包括 `glm-5`、`glm-4.7` 和 `glm-4.6`。
 - 有关提供商的详细信息，请参阅 [/providers/zai](/providers/zai)。

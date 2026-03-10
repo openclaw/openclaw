@@ -14,7 +14,17 @@ models are accessed via the `zai` provider and model IDs like `zai/glm-5`.
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
+# General API
+openclaw onboard --auth-choice zai-global
+
+# Coding Plan Global
+openclaw onboard --auth-choice zai-coding-global
+
+# Coding Plan CN (China region)
+openclaw onboard --auth-choice zai-coding-cn
+
+# General API CN (China region)
+openclaw onboard --auth-choice zai-cn
 ```
 
 ## Config snippet
