@@ -217,6 +217,28 @@ describe("OpenClawSnapshotProjector", () => {
 
     expect(bindings.filter((binding) => binding.toolName === "open_file")).toHaveLength(1);
   });
+
+  it("does not throw when structured snapshots omit both viewStates and appStates", () => {
+    const projector = new OpenClawSnapshotProjector(createKernel() as never);
+    const snapshot = {
+      ...createSnapshot(),
+      structured: {
+        systemInstruction: "follow the desktop",
+        desktopState: "",
+        desktopTimestamp: 1_700_000_000_050,
+      } as unknown as CachedSnapshot["structured"],
+    } satisfies CachedSnapshot;
+
+    const messages = projector.projectMessages(snapshot, createRecord()) as Array<
+      AgentMessage & { metadata?: Record<string, unknown> }
+    >;
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.metadata?.aotui).toMatchObject({
+      aotui: true,
+      kind: "system_instruction",
+    });
+  });
 });
 
 describe("AOTUI injected message replacement", () => {

@@ -26,16 +26,29 @@ export class DefaultAotuiKernelService implements AotuiKernelService {
 
     this.kernel = createRuntime({});
     this.appRegistry = new AppRegistry();
-    const registryEntries = resolveAotuiRegistryEntries(this.config);
-    if (registryEntries.length > 0) {
-      await this.appRegistry.loadFromEntries(registryEntries, { replace: true });
+    try {
+      const registryEntries = resolveAotuiRegistryEntries(this.config);
+      if (registryEntries.length > 0) {
+        await this.appRegistry.loadFromEntries(registryEntries, { replace: true });
+      }
+      this.desktopManager = new InMemorySessionDesktopManager(this.kernel, {
+        afterCreate: async (record) => {
+          await this.installConfiguredApps(record);
+        },
+      });
+      this.started = true;
+    } catch (error) {
+      try {
+        await this.kernel.shutdown("start_failed");
+      } catch {
+        // Best-effort cleanup: preserve the original startup failure.
+      }
+      this.desktopManager = undefined;
+      this.appRegistry = undefined;
+      this.kernel = undefined;
+      this.started = false;
+      throw error;
     }
-    this.desktopManager = new InMemorySessionDesktopManager(this.kernel, {
-      afterCreate: async (record) => {
-        await this.installConfiguredApps(record);
-      },
-    });
-    this.started = true;
   }
 
   async stop(reason?: string): Promise<void> {

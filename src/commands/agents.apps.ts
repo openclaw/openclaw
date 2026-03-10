@@ -317,7 +317,7 @@ function pruneAgentApp(cfg: OpenClawConfig, appName: string): OpenClawConfig {
 
 function appendUnique(values: string[], nextValue: string): string[] {
   const normalized = nextValue.trim();
-  return values.includes(normalized) ? values : [...values, normalized];
+  return values.some((value) => value.trim() === normalized) ? values : [...values, normalized];
 }
 
 function removeName(values: string[] | undefined, target: string): string[] | undefined {

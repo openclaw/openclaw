@@ -83,4 +83,35 @@ describe("DefaultAotuiKernelService", () => {
     expect(() => service.getKernel()).toThrow("AOTUI kernel service has not been started");
     expect(() => service.getDesktopManager()).toThrow("AOTUI kernel service has not been started");
   });
+
+  it("shuts down the runtime and clears local state when start fails mid-initialization", async () => {
+    const runtime = { getDesktop: vi.fn(), shutdown: mocks.shutdown };
+    mocks.createRuntime.mockReturnValueOnce(runtime);
+    const registry = {
+      loadFromEntries: vi.fn(async () => {
+        throw new Error("registry load failed");
+      }),
+      has: vi.fn(() => false),
+      installSelected: vi.fn(async () => []),
+    };
+    mocks.AppRegistry.mockImplementationOnce(function MockAppRegistry() {
+      return registry;
+    });
+    mocks.resolveAotuiRegistryEntries.mockReturnValueOnce([
+      { name: "ide", source: "npm:test" } as never,
+    ]);
+
+    const { createOpenClawKernelService } = await import("./kernel-service.js");
+    const service = createOpenClawKernelService();
+
+    await expect(service.start()).rejects.toThrow("registry load failed");
+
+    expect(registry.loadFromEntries).toHaveBeenCalledWith([{ name: "ide", source: "npm:test" }], {
+      replace: true,
+    });
+    expect(mocks.shutdown).toHaveBeenCalledWith("start_failed");
+    expect(service.isStarted()).toBe(false);
+    expect(() => service.getKernel()).toThrow("AOTUI kernel service has not been started");
+    expect(() => service.getDesktopManager()).toThrow("AOTUI kernel service has not been started");
+  });
 });

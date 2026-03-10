@@ -415,7 +415,7 @@ function projectStructuredMessages(snapshot: CachedSnapshot, meta: DesktopRecord
       });
     }
   } else {
-    for (const fragment of structured.appStates) {
+    for (const fragment of structured.appStates ?? []) {
       dynamicEntries.push({
         id: fragment.appId,
         kind: "app_state",
