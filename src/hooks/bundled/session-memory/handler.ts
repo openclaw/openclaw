@@ -26,6 +26,25 @@ import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
+function generateLocalSlug(sessionContent: string | null): string {
+  if (!sessionContent) {
+    return "session";
+  }
+  const candidate = sessionContent
+    .toLowerCase()
+    .replace(/\b(user|assistant):/g, " ")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((token) => token.length >= 3)
+    .slice(0, 2)
+    .join("-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return candidate || "session";
+}
+
 const log = createSubsystemLogger("hooks/session-memory");
 
 function resolveDisplaySessionKey(params: {
@@ -288,31 +307,43 @@ const saveSessionToMemory: HookHandler = async (event) => {
         messageCount,
       });
 
-      // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
+      // /new and /reset must not depend on LLM. Use local slug by default.
+      slug = generateLocalSlug(sessionContent);
+
+      // Optional enhancement: enable LLM slug explicitly via hook config.
       const isTestEnv =
         process.env.OPENCLAW_TEST_FAST === "1" ||
         process.env.VITEST === "true" ||
         process.env.VITEST === "1" ||
         process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
-        log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        const configuredTimeoutMs =
+          Number(process.env.OPENCLAW_SESSION_MEMORY_SLUG_TIMEOUT_MS) ||
+          (typeof (hookConfig as Record<string, unknown> | undefined)?.slugTimeoutMs === "number"
+            ? ((hookConfig as Record<string, unknown>).slugTimeoutMs as number)
+            : undefined) ||
+          5000;
+        log.debug("Calling generateSlugViaLLM...", { timeoutMs: configuredTimeoutMs });
+        const llmSlug = await generateSlugViaLLM({
+          sessionContent,
+          cfg,
+          timeoutMs: configuredTimeoutMs,
+        });
+        if (llmSlug) {
+          slug = llmSlug;
+        }
         log.debug("Generated slug", { slug });
       }
     }
 
-    // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      slug = timeSlug.slice(0, 4); // HHMM
-      log.debug("Using fallback timestamp slug", { slug });
+      slug = "session";
     }
 
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
+    // Canonical daily filename; avoids reader/writer mismatch (YYYY-MM-DD.md).
+    const filename = `${dateStr}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
@@ -328,7 +359,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
+      `## Session: ${dateStr} ${timeStr} UTC (${slug})`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -343,11 +374,27 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const entry = entryParts.join("\n");
 
+    let existing = "";
+    try {
+      existing = await fs.readFile(memoryFilePath, "utf-8");
+    } catch {
+      // New daily file.
+    }
+
+    const dailyHeader = `# ${dateStr}`;
+    const normalizedExisting = existing.trim();
+    const base = normalizedExisting
+      ? normalizedExisting.startsWith("# ")
+        ? normalizedExisting
+        : `${dailyHeader}\n\n${normalizedExisting}`
+      : dailyHeader;
+    const combined = `${base}\n\n${entry}`;
+
     // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
       rootDir: memoryDir,
       relativePath: filename,
-      data: entry,
+      data: `${combined.trimEnd()}\n`,
       encoding: "utf-8",
     });
     log.debug("Memory file written successfully");
