@@ -413,6 +413,11 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
+  "optionalDependencies": {
+    "nice-grpc": "^2.1.14",
+    "nice-grpc-client-middleware-deadline": "^2.0.17",
+    "nice-grpc-client-middleware-retry": "^3.1.13"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
