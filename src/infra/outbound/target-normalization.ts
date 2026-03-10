@@ -48,7 +48,10 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   const normalized =
     typeof candidate === "string"
       ? candidate
-      : isLegacyTargetNormalizerResult(candidate)
+      : // Some older/out-of-tree plugins returned `{ ok, to }` instead of a plain
+        // string. Keep the runtime path tolerant so generic message sends keep
+        // working even when plugin typings lag behind core.
+        isLegacyTargetNormalizerResult(candidate)
         ? readLegacyTarget(candidate)
         : fallback;
   return normalized || undefined;

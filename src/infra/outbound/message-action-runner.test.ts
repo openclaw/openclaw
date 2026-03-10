@@ -15,6 +15,8 @@ import { loadWebMedia } from "../../web/media.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+// Current local dependency resolution can miss the oauth subpath export; this
+// keeps the runner tests focused on outbound behavior.
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [],
@@ -903,6 +905,10 @@ describe("runMessageAction legacy target normalization compatibility", () => {
       channel: "qqbot",
       messageId: "qq-msg-1",
     });
+    const legacyNormalizeTarget = ((raw: string) => ({
+      ok: true,
+      to: `qqbot:${raw}`,
+    })) as unknown as NonNullable<ChannelPlugin["messaging"]>["normalizeTarget"];
 
     setActivePluginRegistry(
       createTestRegistry([
@@ -922,12 +928,12 @@ describe("runMessageAction legacy target normalization compatibility", () => {
               },
             }),
             messaging: {
-              normalizeTarget: (raw: string) => ({ ok: true, to: `qqbot:${raw}` }),
+              normalizeTarget: legacyNormalizeTarget,
               targetResolver: {
                 looksLikeId: (raw: string) => /^(c2c|group|channel):/i.test(raw),
               },
             },
-          } as ChannelPlugin,
+          },
         },
       ]),
     );
