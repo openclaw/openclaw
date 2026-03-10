@@ -1,0 +1,30 @@
+[Unit]
+Description=Hive Resurrection - Watchdog Daemon
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+
+# 修改节点名和配置路径
+ExecStart=/usr/bin/node /opt/hive-resurrection/watchdog.js /opt/hive-resurrection/config.json node-a
+
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+MemoryMax=256M
+CPUQuota=20%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hive-watchdog
+
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/hive-resurrection
+
+[Install]
+WantedBy=multi-user.target
