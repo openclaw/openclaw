@@ -19,7 +19,7 @@ These are hard-won discoveries from production fleet debugging — not theory.
 
 ## The Core Constraints (Read These First)
 
-### 1. Subagents can't spawn subagents
+### 1. Subagents Cannot Spawn Subagents
 
 `sessions_spawn` creates a **subagent session** with a reduced tool set. Session management tools — including `sessions_spawn` itself and `sessions_send` — are **not available** inside a subagent context.
 
@@ -27,7 +27,7 @@ This means: if your agent needs to delegate downstream (e.g., a dev manager spaw
 
 **Rule:** Any agent that needs to coordinate other agents must run as a **top-level persistent session**, not as a spawned subagent.
 
-### 2. The `message` tool is outbound-only — it doesn't task agents
+### 2. The message Tool Is Outbound-Only
 
 Sending a Telegram message via `message action=send` delivers a message through the bot's Telegram API. It appears in the chat. But the **target agent does not process it as an inbound task**.
 
@@ -35,7 +35,7 @@ The `message` tool is for human-facing notifications — letting Sir know someth
 
 ```python
 # ❌ This does NOT task an agent — it just sends a Telegram message
-message(action="send", channel="telegram", target="8298379200", message="Do X")
+message(action="send", channel="telegram", target="YOUR_CHAT_ID", message="Do X")
 
 # ✅ This tasks a persistent agent session
 sessions_send(sessionKey="agent:code-monkey:main", message="Do X")
@@ -58,7 +58,7 @@ Manager agents that need to coordinate teams should run as **top-level persisten
 **Examples:**
 
 - `agent:code-monkey:main` — Code Monkey's persistent session (has full tools)
-- `agent:main:telegram:direct:8298379200` — Babbage's Telegram session with Sir
+- `agent:main:telegram:direct:YOUR_CHAT_ID` — Babbage's Telegram session with Sir
 - `agent:ralph:subagent:d22a63f7-...` — a one-shot Ralph QA review (no session tools)
 
 ---
@@ -120,19 +120,19 @@ Ralph's result arrives as a push-based completion event. The manager reads it an
 
 ```python
 # Notify Sir on Telegram (human-facing)
-message(action="send", channel="telegram", target="8298379200",
+message(action="send", channel="telegram", target="YOUR_CHAT_ID",
         message="✅ Feature X done and Ralph-approved.")
 
 # Report back to orchestrator
 sessions_send(
-    sessionKey="agent:main:telegram:direct:8298379200",
+    sessionKey="agent:main:telegram:direct:YOUR_CHAT_ID",
     message="✅ Feature X done. [summary]"
 )
 ```
 
 ---
 
-## `sessions_spawn` vs `sessions_send` — When to Use Each
+## sessions_spawn vs sessions_send: When to Use Each
 
 | Situation                                                     | Use                                                |
 | ------------------------------------------------------------- | -------------------------------------------------- |
@@ -148,7 +148,7 @@ sessions_send(
 
 ## Troubleshooting
 
-### "My agent isn't responding to messages"
+### My Agent Is Not Responding to Messages
 
 Check whether you're using the `message` tool or `sessions_send`. The `message` tool sends a Telegram message — the agent sees it in the chat log but does **not** process it as a new task. Use `sessions_send` with the correct `sessionKey`.
 
@@ -156,11 +156,11 @@ Check whether you're using the `message` tool or `sessions_send`. The `message` 
 
 Your agent is running as a subagent. Subagents don't have session tools. The agent that needs to spawn others must be a **persistent top-level session**. Check whether it was originally spawned with `sessions_spawn` — if so, restructure so it runs persistently and is tasked via `sessions_send`.
 
-### "I don't know the session key for an agent"
+### I Do Not Know the Session Key for an Agent
 
 Persistent sessions follow `agent:<agent-id>:main`. The `agent-id` is defined in your `openclaw.json` agents list. You can also call `sessions_list()` from a parent session to discover active session keys.
 
-### "Ralph rejected 3 times — what now?"
+### Ralph Rejected Three Times
 
 Escalate to the orchestrator. Send a `sessions_send` to Babbage's session with the subject "QA ESCALATION: [task]" and include Ralph's notes from all 3 rounds. Don't keep looping — 3 rejections means the task needs human judgment.
 
@@ -189,11 +189,11 @@ mode: "run"
 → Ralph returns APPROVED
 
 [CM → Sir via message tool]
-message(action="send", channel="telegram", target="8298379200",
+message(action="send", channel="telegram", target="YOUR_CHAT_ID",
         message="✅ Login form done, Ralph approved.")
 
 [CM → Babbage via sessions_send]
-sessions_send(sessionKey="agent:main:telegram:direct:8298379200",
+sessions_send(sessionKey="agent:main:telegram:direct:YOUR_CHAT_ID",
               message="✅ Login form done. Ralph approved. Files: src/components/Login.tsx")
 ```
 
