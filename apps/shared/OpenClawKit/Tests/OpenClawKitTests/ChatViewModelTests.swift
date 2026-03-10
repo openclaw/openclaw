@@ -173,6 +173,21 @@ private final class CallbackBox {
     var values: [String] = []
 }
 
+private actor AsyncGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func open() {
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+}
+
 private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
@@ -727,6 +742,53 @@ extension TestChatTransportState {
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4-pro")
+    }
+
+    @Test func sendWaitsForInFlightModelPatchToFinish() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+            ])
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+        ]
+        let gate = AsyncGate()
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.4" {
+                    await gate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("model patch started") {
+            let patched = await transport.patchedModels()
+            return patched == ["openai/gpt-5.4"]
+        }
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("send entered waiting state") {
+            await MainActor.run { vm.isSending }
+        }
+        #expect(await transport.lastSentRunId() == nil)
+
+        await gate.open()
+
+        try await waitUntil("send released after model patch") {
+            await transport.lastSentRunId() != nil
+        }
     }
 
     @Test func failedLatestModelSelectionDoesNotReplayAfterOlderCompletionFinishes() async throws {

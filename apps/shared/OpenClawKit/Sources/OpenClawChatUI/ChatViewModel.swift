@@ -54,6 +54,8 @@ public final class OpenClawChatViewModel {
     private var nextModelSelectionRequestID: UInt64 = 0
     private var latestModelSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestModelSelectionIDsBySession: [String: String] = [:]
+    private var inFlightModelPatchCountsBySession: [String: Int] = [:]
+    private var modelPatchWaitersBySession: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var nextThinkingSelectionRequestID: UInt64 = 0
     private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestThinkingLevelsBySession: [String: String] = [:]
@@ -366,6 +368,7 @@ public final class OpenClawChatViewModel {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+        let sessionKey = self.sessionKey
 
         guard self.healthOK else {
             self.errorText = "Gateway health not OK; cannot send"
@@ -428,8 +431,9 @@ public final class OpenClawChatViewModel {
         self.attachments = []
 
         do {
+            await self.waitForPendingModelPatches(in: sessionKey)
             let response = try await self.transport.sendMessage(
-                sessionKey: self.sessionKey,
+                sessionKey: sessionKey,
                 message: messageText,
                 thinking: self.thinkingLevel,
                 idempotencyKey: runId,
@@ -532,8 +536,10 @@ public final class OpenClawChatViewModel {
         let nextModelRef = self.modelRef(forSelectionID: next)
         self.latestModelSelectionRequestIDsBySession[sessionKey] = requestID
         self.latestModelSelectionIDsBySession[sessionKey] = next
+        self.beginModelPatch(for: sessionKey)
         self.modelSelectionID = next
         self.errorText = nil
+        defer { self.endModelPatch(for: sessionKey) }
 
         do {
             try await self.transport.setSessionModel(
@@ -557,6 +563,30 @@ public final class OpenClawChatViewModel {
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
             chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func beginModelPatch(for sessionKey: String) {
+        self.inFlightModelPatchCountsBySession[sessionKey, default: 0] += 1
+    }
+
+    private func endModelPatch(for sessionKey: String) {
+        let remaining = max(0, (self.inFlightModelPatchCountsBySession[sessionKey] ?? 0) - 1)
+        if remaining == 0 {
+            self.inFlightModelPatchCountsBySession.removeValue(forKey: sessionKey)
+            let waiters = self.modelPatchWaitersBySession.removeValue(forKey: sessionKey) ?? []
+            for waiter in waiters {
+                waiter.resume()
+            }
+            return
+        }
+        self.inFlightModelPatchCountsBySession[sessionKey] = remaining
+    }
+
+    private func waitForPendingModelPatches(in sessionKey: String) async {
+        guard (self.inFlightModelPatchCountsBySession[sessionKey] ?? 0) > 0 else { return }
+        await withCheckedContinuation { continuation in
+            self.modelPatchWaitersBySession[sessionKey, default: []].append(continuation)
         }
     }
 
