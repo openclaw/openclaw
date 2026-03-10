@@ -1,5 +1,5 @@
 $ProjectDir = (Get-Item $PSScriptRoot).Parent.FullName
-$LauncherPs1 = Join-Path $ProjectDir "scripts\launchers\launch-desktop-stack.ps1"
+$LauncherPs1 = Join-Path $ProjectDir "scripts\clawdbot-master.ps1"
 $IconPath = Join-Path $ProjectDir "assets\clawdbot.ico"
 $WshShell = New-Object -ComObject WScript.Shell
 $DesktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
@@ -15,7 +15,7 @@ $Shortcut.TargetPath = "powershell.exe"
 $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$LauncherPs1`" -SpeakOnReady"
 $Shortcut.WorkingDirectory = $ProjectDir
 $Shortcut.IconLocation = if (Test-Path $IconPath) { "$IconPath,0" } else { "powershell.exe,0" }
-$Shortcut.Description = "Launch OpenClaw desktop stack with dynamic environment sync"
+$Shortcut.Description = "Legacy alias for Clawdbot unified desktop stack"
 $Shortcut.Save()
 
-Write-Host "Integrated dynamic setup into 'Hakua.lnk'." -ForegroundColor Green
+Write-Host "Updated 'Hakua.lnk' to the unified launcher." -ForegroundColor Green
