@@ -327,7 +327,6 @@ export type PluginHookName =
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
-  | "before_reset"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -353,7 +352,6 @@ export const PLUGIN_HOOK_NAMES = [
   "agent_end",
   "before_compaction",
   "after_compaction",
-  "before_reset",
   "message_received",
   "message_sending",
   "message_sent",
@@ -536,13 +534,6 @@ export type PluginHookBeforeCompactionEvent = {
    *  before compaction starts, so plugins can read this file asynchronously
    *  and process in parallel with the compaction LLM call. */
   sessionFile?: string;
-};
-
-// before_reset hook — fired when /new or /reset clears a session
-export type PluginHookBeforeResetEvent = {
-  sessionFile?: string;
-  messages?: unknown[];
-  reason?: string;
 };
 
 export type PluginHookAfterCompactionEvent = {
@@ -812,10 +803,6 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   after_compaction: (
     event: PluginHookAfterCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  before_reset: (
-    event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
   message_received: (

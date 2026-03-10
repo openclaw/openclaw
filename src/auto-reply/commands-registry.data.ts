@@ -566,6 +566,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "save",
+      nativeName: "save",
+      description:
+        "Review conversation and save context to memory files. Optionally: /save: <extra instructions>",
+      textAlias: "/save",
+      category: "session",
+      args: [
+        {
+          name: "instructions",
+          description: "Extra memory-save instructions",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "think",
       nativeName: "think",
       description: "Set thinking level.",
