@@ -115,7 +115,8 @@ function normalizeHostPath(raw: string): string {
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
-  if (!sourceRaw.startsWith("/")) {
+  const windowsPrefix = /^[A-Z]:/;
+  if (!sourceRaw.startsWith("/") && !windowsPrefix.test(sourceRaw)) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
   }
 
