@@ -233,7 +233,7 @@ export async function handleToolExecutionStart(
   // Best-effort typing signal; do not block tool summaries on slow emitters.
   void ctx.params.onAgentEvent?.({
     stream: "tool",
-    data: { phase: "start", name: toolName, toolCallId },
+    data: { phase: "start", name: toolName, toolCallId, meta },
   });
 
   if (

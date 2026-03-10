@@ -413,8 +413,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming: !streamingEnabled,
-      onToolStart: () => {
+      onToolStart: (payload) => {
         hadToolUse = true;
+        if (payload.phase === "start" && payload.name) {
+          const label = payload.meta
+            ? `▶ ${payload.name} ${payload.meta}`.slice(0, 80)
+            : `▶ ${payload.name}`;
+          historyEntries.push(`\`${label}\``);
+        }
       },
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
