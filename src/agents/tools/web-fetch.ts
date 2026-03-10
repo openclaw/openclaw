@@ -218,10 +218,14 @@ function resolveParallelExtractConfig(fetch?: WebFetchConfig): ParallelExtractCo
 }
 
 function resolveParallelExtractApiKey(parallel?: ParallelExtractConfig): string | undefined {
-  const fromConfig =
-    parallel && "apiKey" in parallel && typeof parallel.apiKey === "string"
-      ? normalizeSecretInput(parallel.apiKey)
-      : "";
+  const fromConfigRaw =
+    parallel && "apiKey" in parallel
+      ? normalizeResolvedSecretInputString({
+          value: parallel.apiKey,
+          path: "tools.web.fetch.parallel.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.PARALLEL_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
