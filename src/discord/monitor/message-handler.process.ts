@@ -60,6 +60,12 @@ function sleep(ms: number): Promise<void> {
 
 const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
 
+function resolveDiscordThreadParentInheritanceMode(params: {
+  discordConfig?: { threadContext?: { parentInheritance?: string } } | null;
+}): "fork" | "fresh" {
+  return params.discordConfig?.threadContext?.parentInheritance === "fresh" ? "fresh" : "fork";
+}
+
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
@@ -273,6 +279,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
+  const threadParentInheritanceMode = resolveDiscordThreadParentInheritanceMode({ discordConfig });
   if (threadChannel) {
     const includeThreadStarter = channelConfig?.includeThreadStarter !== false;
     if (includeThreadStarter) {
@@ -292,7 +299,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     threadLabel = threadName
       ? `Discord thread #${normalizeDiscordSlug(parentName)} › ${threadName}`
       : `Discord thread #${normalizeDiscordSlug(parentName)}`;
-    if (threadParentId) {
+    if (threadParentId && threadParentInheritanceMode === "fork") {
       parentSessionKey = buildAgentSessionKey({
         agentId: route.agentId,
         channel: route.channel,

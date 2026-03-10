@@ -56,6 +56,17 @@ export type DiscordGuildChannelConfig = {
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
+export type DiscordThreadParentInheritanceMode = "fork" | "fresh";
+
+export type DiscordThreadContextConfig = {
+  /**
+   * Controls whether native Discord thread sessions inherit the parent channel transcript.
+   * - "fork": branch from the parent session transcript (default)
+   * - "fresh": start a fresh thread session without parent transcript inheritance
+   */
+  parentInheritance?: DiscordThreadParentInheritanceMode;
+};
+
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
@@ -305,6 +316,8 @@ export type DiscordAccountConfig = {
   slashCommand?: DiscordSlashCommandConfig;
   /** Thread binding lifecycle settings (focus/subagent thread sessions). */
   threadBindings?: DiscordThreadBindingsConfig;
+  /** Native Discord thread session bootstrap behavior. */
+  threadContext?: DiscordThreadContextConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */

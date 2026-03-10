@@ -514,6 +514,12 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    threadContext: z
+      .object({
+        parentInheritance: z.enum(["fork", "fresh"]).optional(),
+      })
+      .strict()
+      .optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),

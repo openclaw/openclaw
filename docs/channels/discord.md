@@ -632,6 +632,7 @@ Default slash command settings:
 
     - Discord threads are routed as channel sessions
     - parent thread metadata can be used for parent-session linkage
+    - `channels.discord.threadContext.parentInheritance` controls whether native Discord thread sessions fork the parent transcript (`"fork"`, default) or start fresh (`"fresh"`)
     - thread config inherits parent channel config unless a thread-specific entry exists
 
     Channel topics are injected as **untrusted** context (not as system prompt).

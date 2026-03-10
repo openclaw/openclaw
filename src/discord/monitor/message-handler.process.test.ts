@@ -181,11 +181,21 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      ParentSessionKey?: string;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          ParentSessionKey?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -452,6 +462,47 @@ describe("processDiscordMessage session routing", () => {
       to: "channel:thread-1",
       accountId: "default",
     });
+  });
+
+  it("keeps parent session linkage for native Discord threads by default", async () => {
+    const ctx = await createBaseContext({
+      messageChannelId: "thread-1",
+      threadChannel: { id: "thread-1", name: "topic" },
+      threadParentId: "c-parent",
+      threadParentName: "system",
+      baseSessionKey: "agent:main:discord:channel:thread-1",
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      SessionKey: "agent:main:discord:channel:thread-1",
+      MessageThreadId: "thread-1",
+      ParentSessionKey: "agent:main:discord:channel:c-parent",
+    });
+  });
+
+  it("can start native Discord threads fresh without parent session linkage", async () => {
+    const ctx = await createBaseContext({
+      discordConfig: { threadContext: { parentInheritance: "fresh" } },
+      messageChannelId: "thread-1",
+      threadChannel: { id: "thread-1", name: "topic" },
+      threadParentId: "c-parent",
+      threadParentName: "system",
+      baseSessionKey: "agent:main:discord:channel:thread-1",
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      SessionKey: "agent:main:discord:channel:thread-1",
+      MessageThreadId: "thread-1",
+    });
+    expect(getLastDispatchCtx()?.ParentSessionKey).toBeUndefined();
   });
 });
 
