@@ -6,8 +6,8 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 
-const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
-const OBSERVATION_COOKIE_VALUE = "session-cookie-token";
+const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token"; // pragma: allowlist secret
+const OBSERVATION_COOKIE_VALUE = "session-cookie-token"; // pragma: allowlist secret
 
 afterEach(() => {
   vi.restoreAllMocks();
