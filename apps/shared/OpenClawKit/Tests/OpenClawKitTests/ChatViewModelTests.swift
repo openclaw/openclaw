@@ -794,11 +794,17 @@ extension TestChatTransportState {
         }
         #expect(await transport.lastSentRunId() == nil)
 
+        await MainActor.run { vm.selectThinkingLevel("high") }
+        try await waitUntil("thinking level changed while send is blocked") {
+            await MainActor.run { vm.thinkingLevel == "high" }
+        }
+
         await gate.open()
 
         try await waitUntil("send released after model patch") {
             await transport.lastSentRunId() != nil
         }
+        #expect(await transport.sentThinkingLevels() == ["off"])
     }
 
     @Test func failedLatestModelSelectionDoesNotReplayAfterOlderCompletionFinishes() async throws {

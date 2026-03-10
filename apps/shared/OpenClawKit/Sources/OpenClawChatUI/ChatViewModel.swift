@@ -379,6 +379,7 @@ public final class OpenClawChatViewModel {
         self.errorText = nil
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
+        let thinkingLevel = self.thinkingLevel
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.pendingToolCallsById = [:]
@@ -435,7 +436,7 @@ public final class OpenClawChatViewModel {
             let response = try await self.transport.sendMessage(
                 sessionKey: sessionKey,
                 message: messageText,
-                thinking: self.thinkingLevel,
+                thinking: thinkingLevel,
                 idempotencyKey: runId,
                 attachments: encodedAttachments)
             if response.runId != runId {
