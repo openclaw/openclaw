@@ -30,6 +30,7 @@ import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -433,6 +434,9 @@ export const dispatchTelegramMessage = async ({
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
+    sessionKeyForInternalHooks: ctxPayload.SessionKey,
+    mirrorIsGroup: isGroup,
+    mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
     runtime,
     bot,
@@ -523,6 +527,16 @@ export const dispatchTelegramMessage = async ({
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
           }
+          if (
+            shouldSuppressLocalTelegramExecApprovalPrompt({
+              cfg,
+              accountId: route.accountId,
+              payload,
+            })
+          ) {
+            queuedFinal = true;
+            return;
+          }
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
@@ -556,7 +570,10 @@ export const dispatchTelegramMessage = async ({
               info.kind === "final" &&
               reasoningStepState.shouldBufferFinalAnswer()
             ) {
-              reasoningStepState.bufferFinalAnswer({ payload, text: segment.text });
+              reasoningStepState.bufferFinalAnswer({
+                payload,
+                text: segment.text,
+              });
               continue;
             }
             if (segment.lane === "reasoning") {
