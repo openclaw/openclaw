@@ -17,11 +17,28 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
+/**
+ * Clean up whitespace artifacts left by stripping directive tags.
+ * Only collapses inline multi-spaces and trailing line-spaces, then trims the
+ * whole string.  Leading indentation on each line is intentionally preserved so
+ * that code blocks in outbound replies are not corrupted (see #41699).
+ *
+ * Key invariant: `(?<=\S)` ensures we only collapse spaces that immediately
+ * follow a non-whitespace character (i.e. truly "inline" double-spaces left by
+ * tag removal).  Spaces at the start of a line are always preceded by `\n` or
+ * another space, so they are never touched.
+ */
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  return (
+    text
+      // Collapse multiple consecutive spaces/tabs that follow a non-whitespace
+      // character.  This removes inline double-spaces created by tag removal
+      // without ever touching leading indentation.
+      .replace(/(?<=\S)[ \t]{2,}/g, " ")
+      // Strip trailing horizontal whitespace before each newline.
+      .replace(/[ \t]+(?=\n)/g, "")
+      .trim()
+  );
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -97,8 +114,10 @@ export function parseInlineDirectives(
     };
   }
   if (!text.includes("[[")) {
+    // No directive tags present – return the original text unchanged so that
+    // code-block indentation and intentional whitespace are fully preserved.
     return {
-      text: normalizeDirectiveWhitespace(text),
+      text,
       audioAsVoice: false,
       replyToCurrent: false,
       hasAudioTag: false,
