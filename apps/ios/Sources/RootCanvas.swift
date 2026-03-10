@@ -534,63 +534,6 @@ private struct CanvasContent: View {
     }
 }
 
-private struct OverlayButton: View {
-    let systemImage: String
-    let brighten: Bool
-    var tint: Color?
-    var isActive: Bool = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: self.action) {
-            Image(systemName: self.systemImage)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(self.isActive ? (self.tint ?? .primary) : .primary)
-                .padding(10)
-                .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            .white.opacity(self.brighten ? 0.26 : 0.18),
-                                            .white.opacity(self.brighten ? 0.08 : 0.04),
-                                            .clear,
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing))
-                                .blendMode(.overlay)
-                        }
-                        .overlay {
-                            if let tint {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                tint.opacity(self.isActive ? 0.22 : 0.14),
-                                                tint.opacity(self.isActive ? 0.10 : 0.06),
-                                                .clear,
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing))
-                                    .blendMode(.overlay)
-                            }
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(
-                                    (self.tint ?? .white).opacity(self.isActive ? 0.34 : (self.brighten ? 0.24 : 0.18)),
-                                    lineWidth: self.isActive ? 0.7 : 0.5)
-                        }
-                        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-                }
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 private struct CameraFlashOverlay: View {
     var nonce: Int
 
