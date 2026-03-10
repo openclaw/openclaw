@@ -5,6 +5,7 @@ import type {
   OutboundReplyPayload,
 } from "openclaw/plugin-sdk/zalo";
 import {
+  buildPendingHistoryContextFromMap,
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
@@ -532,8 +533,26 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
+  const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const combinedBody = isGroup
+    ? buildPendingHistoryContextFromMap({
+        historyMap: groupHistories,
+        historyKey: chatId,
+        limit: historyLimit,
+        currentMessage: body,
+        formatEntry: (entry) =>
+          core.channel.reply.formatInboundEnvelope({
+            channel: "Zalo",
+            from: fromLabel,
+            timestamp: entry.timestamp,
+            body: entry.body,
+            senderLabel: entry.sender,
+          }),
+      })
+    : body;
+
   const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
+    Body: combinedBody,
     BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,

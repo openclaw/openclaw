@@ -1,6 +1,7 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
+  buildPendingHistoryContextFromMap,
   DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
   createReplyPrefixOptions,
@@ -611,9 +612,32 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderLabel,
       });
 
+      const historyLimit =
+        (
+          (cfg as Record<string, unknown>).messages as
+            | { groupChat?: { historyLimit?: number } }
+            | undefined
+        )?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+      const combinedBody = isRoom
+        ? buildPendingHistoryContextFromMap({
+            historyMap: roomHistories,
+            historyKey: roomId,
+            limit: historyLimit,
+            currentMessage: body,
+            formatEntry: (entry) =>
+              core.channel.reply.formatInboundEnvelope({
+                channel: "Matrix",
+                from: envelopeFrom,
+                timestamp: entry.timestamp,
+                body: entry.body,
+                senderLabel: entry.sender,
+              }),
+          })
+        : body;
+
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
-        Body: body,
+        Body: combinedBody,
         BodyForAgent: resolveMatrixBodyForAgent({
           isDirectMessage,
           bodyText,

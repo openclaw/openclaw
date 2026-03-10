@@ -10,6 +10,7 @@ export {
 } from "../agents/tools/common.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export {
+  buildPendingHistoryContextFromMap,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
