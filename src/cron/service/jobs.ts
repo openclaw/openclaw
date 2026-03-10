@@ -151,12 +151,16 @@ function computeCronScheduleGapMs(schedule: Extract<CronJob["schedule"], { kind:
   if (!isFiniteTimestamp(firstRunAtMs)) {
     return undefined;
   }
+  const previousRunAtMs = computePreviousRunAtMs(schedule, firstRunAtMs);
   const secondRunAtMs = computeNextRunAtMs(schedule, firstRunAtMs + 1);
-  if (!isFiniteTimestamp(secondRunAtMs)) {
+  const gaps = [
+    isFiniteTimestamp(previousRunAtMs) ? firstRunAtMs - previousRunAtMs : undefined,
+    isFiniteTimestamp(secondRunAtMs) ? secondRunAtMs - firstRunAtMs : undefined,
+  ].filter((gapMs): gapMs is number => typeof gapMs === "number" && gapMs > 0);
+  if (gaps.length === 0) {
     return undefined;
   }
-  const gapMs = secondRunAtMs - firstRunAtMs;
-  return gapMs > 0 ? gapMs : undefined;
+  return Math.min(...gaps);
 }
 
 function assertBackupCreateScheduleSafety(job: Pick<CronJob, "payload" | "schedule">) {

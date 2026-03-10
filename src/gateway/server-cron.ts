@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -48,26 +49,59 @@ function isPathWithinBase(baseDir: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function resolveCronBackupOutput(rawOutput?: string): string {
+async function assertCronBackupParentSafe(baseDir: string, parentDir: string): Promise<void> {
+  const normalizedParent = path.resolve(parentDir);
+  if (!isPathWithinBase(baseDir, normalizedParent)) {
+    throw new Error(`cron backup output must stay within ~/${CRON_BACKUP_OUTPUT_DIRNAME}`);
+  }
+  const relative = path.relative(baseDir, normalizedParent);
+  if (!relative) {
+    return;
+  }
+
+  let current = baseDir;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`cron backup output must stay within ~/${CRON_BACKUP_OUTPUT_DIRNAME}`);
+    }
+    const realCurrent = await fs.realpath(current);
+    if (!isPathWithinBase(baseDir, realCurrent)) {
+      throw new Error(`cron backup output must stay within ~/${CRON_BACKUP_OUTPUT_DIRNAME}`);
+    }
+    current = realCurrent;
+  }
+}
+
+async function resolveCronBackupOutput(rawOutput?: string): Promise<string> {
   const homeDir = resolveHomeDir() ?? os.homedir();
   const baseDir = path.resolve(homeDir, CRON_BACKUP_OUTPUT_DIRNAME);
   const trimmed = rawOutput?.trim();
   const appendTrailingSeparator = (target: string) => `${target}${path.sep}`;
+  await fs.mkdir(baseDir, { recursive: true });
+  const baseReal = await fs.realpath(baseDir);
 
   if (!trimmed) {
-    return appendTrailingSeparator(baseDir);
+    return appendTrailingSeparator(baseReal);
   }
 
   const candidate =
     trimmed.startsWith("~") || path.isAbsolute(trimmed)
       ? resolveUserPath(trimmed)
-      : path.resolve(baseDir, trimmed);
+      : path.resolve(baseReal, trimmed);
 
-  if (!isPathWithinBase(baseDir, candidate)) {
+  if (!isPathWithinBase(baseReal, candidate)) {
     throw new Error(`cron backup output must stay within ~/${CRON_BACKUP_OUTPUT_DIRNAME}`);
   }
 
-  if (candidate === baseDir || trimmed.endsWith("/") || trimmed.endsWith("\\")) {
+  const treatAsDirectory =
+    candidate === baseReal || trimmed.endsWith("/") || trimmed.endsWith("\\");
+  const parentDir = treatAsDirectory ? candidate : path.dirname(candidate);
+  await fs.mkdir(parentDir, { recursive: true });
+  await assertCronBackupParentSafe(baseReal, parentDir);
+
+  if (treatAsDirectory) {
     return appendTrailingSeparator(candidate);
   }
   return candidate;
@@ -335,7 +369,7 @@ export function buildGatewayCronService(params: {
         return { status: "error", error: 'cron backup jobs require payload.kind="backupCreate"' };
       }
 
-      const output = resolveCronBackupOutput(job.payload.output);
+      const output = await resolveCronBackupOutput(job.payload.output);
       const result = await backupCreateCommand(
         {
           log: () => {},

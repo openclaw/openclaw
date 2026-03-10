@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -178,7 +179,7 @@ describe("buildGatewayCronService", () => {
         wakeMode: "now",
         payload: {
           kind: "backupCreate",
-          output: "~/Backups/",
+          output: "daily/",
           includeWorkspace: false,
           verify: true,
         },
@@ -193,7 +194,7 @@ describe("buildGatewayCronService", () => {
           exit: expect.any(Function),
         }),
         expect.objectContaining({
-          output: `${path.join(os.homedir(), "Backups")}${path.sep}`,
+          output: expect.stringContaining(`${path.sep}Backups${path.sep}daily${path.sep}`),
           includeWorkspace: false,
           verify: true,
           signal: expect.any(AbortSignal),
@@ -240,6 +241,56 @@ describe("buildGatewayCronService", () => {
       expect(backupCreateCommandMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("rejects scheduled backup outputs that traverse through symlinked backup subdirectories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tmpDir = path.join(os.tmpdir(), `server-cron-backup-symlink-${Date.now()}`);
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "server-cron-backup-outside-"));
+    const backupsDir = path.join(os.homedir(), "Backups");
+    const symlinkPath = path.join(backupsDir, `escaped-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    await fs.mkdir(backupsDir, { recursive: true });
+    await fs.symlink(outsideDir, symlinkPath);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "scheduled-backup-symlink-output",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "backupCreate",
+          output: `${path.basename(symlinkPath)}/target.tar.gz`,
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(backupCreateCommandMock).not.toHaveBeenCalled();
+    } finally {
+      state.cron.stop();
+      await fs.rm(symlinkPath, { force: true }).catch(() => undefined);
+      await fs.rm(outsideDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
 });

@@ -5,6 +5,7 @@ import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
+  buildBackupArchivePath,
   buildBackupArchiveRoot,
   encodeAbsolutePathForBackupArchive,
   resolveBackupPlanFromDisk,
@@ -93,6 +94,15 @@ describe("backup commands", () => {
     } finally {
       await fs.rm(symlinkDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps UNC-like archive paths relative inside the tarball layout", () => {
+    expect(encodeAbsolutePathForBackupArchive("//server/share/workspace")).toBe(
+      "posix/server/share/workspace",
+    );
+    expect(buildBackupArchivePath("root", "//server/share/workspace")).toBe(
+      "root/payload/posix/server/share/workspace",
+    );
   });
 
   it("creates an archive with a manifest and external workspace payload", async () => {

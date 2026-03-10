@@ -74,7 +74,7 @@ export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
     return path.posix.join("windows", drive, rest);
   }
   if (normalized.startsWith("/")) {
-    return path.posix.join("posix", normalized.slice(1));
+    return path.posix.join("posix", normalized.replace(/^\/+/, ""));
   }
   return path.posix.join("relative", normalized);
 }
