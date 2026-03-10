@@ -695,7 +695,7 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   } catch (err) {
     const errorText = String(err);
-    const isTimeoutAbort = isAborted() || errorText.trim() === abortReason();
+    const isTimeoutAbort = isAborted();
     return withRunSession({
       status: "error",
       error: errorText,
