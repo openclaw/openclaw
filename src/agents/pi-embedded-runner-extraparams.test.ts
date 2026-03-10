@@ -732,7 +732,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
   });
 
-  it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
+  it("does not rewrite tool schema for kimi-coding even with stale compat metadata", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -762,6 +762,9 @@ describe("applyExtraParamsToAgent", () => {
       provider: "kimi-coding",
       id: "k2p5",
       baseUrl: "https://api.kimi.com/coding/",
+      compat: {
+        requiresOpenAiAnthropicToolPayload: true,
+      },
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
