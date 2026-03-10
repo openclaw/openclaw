@@ -79,6 +79,22 @@ function appendBaseUrlBit(bits: string[], account: Record<string, unknown>) {
   }
 }
 
+function appendDirectMessageRoutingBits(bits: string[], account: Record<string, unknown>) {
+  if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
+    bits.push(`dm:${account.dmPolicy}`);
+  }
+  if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
+    bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
+  }
+  if (Array.isArray(account.allowSendTo)) {
+    bits.push(
+      account.allowSendTo.length > 0
+        ? `sendTo:${account.allowSendTo.slice(0, 2).join(",")}`
+        : "sendTo:none",
+    );
+  }
+}
+
 function buildChannelAccountLine(
   provider: ChatChannel,
   account: Record<string, unknown>,
@@ -138,19 +154,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (botUsername) {
         bits.push(`bot:${botUsername}`);
       }
-      if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
-        bits.push(`dm:${account.dmPolicy}`);
-      }
-      if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
-        bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
-      }
-      if (Array.isArray(account.allowSendTo)) {
-        bits.push(
-          account.allowSendTo.length > 0
-            ? `sendTo:${account.allowSendTo.slice(0, 2).join(",")}`
-            : "sendTo:none",
-        );
-      }
+      appendDirectMessageRoutingBits(bits, account);
       appendTokenSourceBits(bits, account);
       const application = account.application as
         | { intents?: { messageContent?: string } }
@@ -238,6 +242,7 @@ export async function formatConfigChannelsStatusLines(
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
       appendModeBit(bits, account);
+      appendDirectMessageRoutingBits(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
       return buildChannelAccountLine(provider, account, bits);
