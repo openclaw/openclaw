@@ -178,13 +178,15 @@ describe("extractKeywords", () => {
   describe("with trigram tokenizer", () => {
     const trigramOpts = { ftsTokenizer: "trigram" as const };
 
-    it("skips Chinese bigrams in trigram mode", () => {
+    it("emits whole CJK block instead of unigrams in trigram mode", () => {
       const defaultKeywords = extractKeywords("之前讨论的那个方案");
       const trigramKeywords = extractKeywords("之前讨论的那个方案", trigramOpts);
       // Default mode produces bigrams
       expect(defaultKeywords).toContain("讨论");
       expect(defaultKeywords).toContain("方案");
-      // Trigram mode skips bigrams — only unigrams remain
+      // Trigram mode emits the whole contiguous CJK block (FTS5 trigram
+      // requires >= 3 chars per term; individual characters return no results)
+      expect(trigramKeywords).toContain("之前讨论的那个方案");
       expect(trigramKeywords).not.toContain("讨论");
       expect(trigramKeywords).not.toContain("方案");
     });
