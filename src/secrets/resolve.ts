@@ -293,11 +293,28 @@ async function readFileProviderPayload(params: {
         `secrets.providers.${params.providerName}.path allowInsecurePath is only supported on Windows.`,
       );
     }
-    const secureFilePath = await assertSecurePath({
-      targetPath: filePath,
-      label: `secrets.providers.${params.providerName}.path`,
-      allowInsecurePath: params.providerConfig.allowInsecurePath,
-    });
+    const label = `secrets.providers.${params.providerName}.path`;
+    let secureFilePath: string;
+    try {
+      secureFilePath = await assertSecurePath({
+        targetPath: filePath,
+        label,
+      });
+    } catch (error) {
+      const isWindowsAclFallback =
+        params.providerConfig.allowInsecurePath &&
+        process.platform === "win32" &&
+        error instanceof Error &&
+        error.message.includes("ACL verification unavailable on Windows");
+      if (!isWindowsAclFallback) {
+        throw error;
+      }
+      secureFilePath = await assertSecurePath({
+        targetPath: filePath,
+        label,
+        allowInsecurePath: true,
+      });
+    }
     const timeoutMs = normalizePositiveInt(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
