@@ -214,8 +214,12 @@ export async function startGatewaySidecars(params: {
       // Phase 2: enqueue per-session, capping at REPLAY_CAP_PER_SESSION to avoid silent
       // truncation when the session accumulates more than MAX_EVENTS during a long drain.
       for (const [sessionKey, entries] of bySession) {
-        const skipped = Math.max(0, entries.length - REPLAY_CAP_PER_SESSION);
-        const toReplay = skipped > 0 ? entries.slice(skipped) : entries;
+        // When a skip notice is needed it consumes one queue slot, so body messages
+        // must be capped at REPLAY_CAP_PER_SESSION - 1 to keep the total ≤ MAX_EVENTS.
+        const hasOverflow = entries.length > REPLAY_CAP_PER_SESSION;
+        const bodyCap = hasOverflow ? REPLAY_CAP_PER_SESSION - 1 : entries.length;
+        const toReplay = entries.slice(entries.length - bodyCap);
+        const skipped = entries.length - toReplay.length;
 
         if (skipped > 0) {
           params.log.warn(
