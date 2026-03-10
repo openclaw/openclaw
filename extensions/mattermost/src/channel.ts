@@ -35,6 +35,7 @@ import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
+import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
 import { getMattermostRuntime } from "./runtime.js";
@@ -340,6 +341,21 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     targetResolver: {
       looksLikeId: looksLikeMattermostTargetId,
       hint: "<channelId|user:ID|channel:ID>",
+      resolveTarget: async ({ cfg, accountId, input }) => {
+        const resolved = await resolveMattermostOpaqueTarget({
+          input,
+          cfg,
+          accountId,
+        });
+        if (!resolved) {
+          return null;
+        }
+        return {
+          to: resolved.to,
+          kind: resolved.kind,
+          source: "directory",
+        };
+      },
     },
   },
   outbound: {

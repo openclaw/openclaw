@@ -153,7 +153,14 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 - `user:<id>` for a DM
 - `@username` for a DM (resolved via the Mattermost API)
 
-Bare IDs are treated as channels.
+Bare opaque IDs (like `64ifufp...`) are **ambiguous** in Mattermost (user ID vs channel ID).
+
+OpenClaw resolves them **user-first**:
+
+- If the ID exists as a user (`GET /api/v4/users/<id>` succeeds), OpenClaw sends a **DM** by resolving the direct channel via `/api/v4/channels/direct`.
+- Otherwise the ID is treated as a **channel ID**.
+
+If you need deterministic behavior, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
 
 ## Reactions (message tool)
 

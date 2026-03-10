@@ -40,6 +40,44 @@ export async function resolveChannelTarget(params: {
   return resolveMessagingTarget(params);
 }
 
+export async function maybeResolveIdLikeTarget(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  input: string;
+  accountId?: string | null;
+  preferredKind?: TargetResolveKind;
+}): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(params.channel);
+  const resolver = plugin?.messaging?.targetResolver;
+  if (!resolver?.resolveTarget) {
+    return undefined;
+  }
+  const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
+  if (resolver.looksLikeId && !resolver.looksLikeId(raw, normalized)) {
+    return undefined;
+  }
+  const resolved = await resolver.resolveTarget({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: raw,
+    normalized,
+    preferredKind: params.preferredKind,
+  });
+  if (!resolved) {
+    return undefined;
+  }
+  return {
+    to: resolved.to,
+    kind: resolved.kind,
+    display: resolved.display,
+    source: resolved.source ?? "normalized",
+  };
+}
+
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
@@ -388,6 +426,19 @@ export async function resolveMessagingTarget(params: {
     return false;
   };
   if (looksLikeTargetId()) {
+    const resolvedIdLikeTarget = await maybeResolveIdLikeTarget({
+      cfg: params.cfg,
+      channel: params.channel,
+      input: raw,
+      accountId: params.accountId,
+      preferredKind: params.preferredKind,
+    });
+    if (resolvedIdLikeTarget) {
+      return {
+        ok: true,
+        target: resolvedIdLikeTarget,
+      };
+    }
     return buildNormalizedResolveResult({
       channel: params.channel,
       raw,
