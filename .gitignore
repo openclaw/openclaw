@@ -142,3 +142,7 @@ _mnemo_stderr.log
 _start_mnemo.py
 tmp-coverage.txt
 tmp/
+
+# MAIBOT temp artifacts
+output/
+temp/
