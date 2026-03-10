@@ -32,9 +32,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             return result.models.map(Self.mapModelChoice)
         } catch {
             webChatSwiftLogger.warning(
-                "models.list failed; falling back to local catalog: \(error.localizedDescription, privacy: .public)")
-            let models = try await ModelCatalogLoader.load(from: ModelCatalogLoader.defaultPath)
-            return models.map(Self.mapFallbackModelChoice)
+                "models.list failed; hiding model picker: \(error.localizedDescription, privacy: .public)")
+            return []
         }
     }
 
@@ -179,14 +178,6 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             name: model.name,
             provider: model.provider,
             contextWindow: model.contextwindow)
-    }
-
-    private static func mapFallbackModelChoice(_ model: ModelChoice) -> OpenClawChatModelChoice {
-        OpenClawChatModelChoice(
-            modelID: model.id,
-            name: model.name,
-            provider: model.provider,
-            contextWindow: model.contextWindow)
     }
 }
 
