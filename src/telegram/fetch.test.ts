@@ -280,6 +280,24 @@ describe("resolveTelegramFetch", () => {
     expect(firstDispatcher?.options?.connect?.family).not.toBe(4);
   });
 
+  it("fails closed when explicit proxy dispatcher initialization fails", async () => {
+    const { makeProxyFetch } = await import("./proxy.js");
+    const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
+    ProxyAgentCtor.mockClear();
+    ProxyAgentCtor.mockImplementationOnce(function ThrowingProxyAgent() {
+      throw new Error("invalid proxy config");
+    });
+
+    expect(() =>
+      resolveTelegramFetchOrThrow(proxyFetch, {
+        network: {
+          autoSelectFamily: true,
+          dnsResultOrder: "ipv4first",
+        },
+      }),
+    ).toThrow("explicit proxy dispatcher init failed: invalid proxy config");
+  });
+
   it("falls back to Agent when env proxy dispatcher initialization fails", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
     EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {

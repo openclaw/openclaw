@@ -155,11 +155,8 @@ function createTelegramDispatcher(params: {
     try {
       return new ProxyAgent(proxyOptions);
     } catch (err) {
-      log.warn(
-        `proxy dispatcher init failed; falling back to direct dispatcher: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
     }
   }
   if (params.useEnvProxy) {
