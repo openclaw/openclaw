@@ -857,11 +857,17 @@ describeLive("memory plugin live tests", () => {
     memoryPlugin.register(makeApi("support", supportTools) as any);
 
     // oxlint-disable-next-line typescript/no-explicit-any
-    const paymentsStore = (paymentsTools as any[]).find((t) => t.opts?.name === "memory_store")?.tool;
+    const paymentsStore = (paymentsTools as any[]).find(
+      (t) => t.opts?.name === "memory_store",
+    )?.tool;
     // oxlint-disable-next-line typescript/no-explicit-any
-    const supportRecall = (supportTools as any[]).find((t) => t.opts?.name === "memory_recall")?.tool;
+    const supportRecall = (supportTools as any[]).find(
+      (t) => t.opts?.name === "memory_recall",
+    )?.tool;
     // oxlint-disable-next-line typescript/no-explicit-any
-    const paymentsRecall = (paymentsTools as any[]).find((t) => t.opts?.name === "memory_recall")?.tool;
+    const paymentsRecall = (paymentsTools as any[]).find(
+      (t) => t.opts?.name === "memory_recall",
+    )?.tool;
 
     // Payments agent stores a memory
     await paymentsStore.execute("payments-store", {
@@ -876,7 +882,8 @@ describeLive("memory plugin live tests", () => {
       limit: 5,
     });
 
-    const supportTexts = supportResult.details?.memories?.map((m: { text: string }) => m.text) ?? [];
+    const supportTexts =
+      supportResult.details?.memories?.map((m: { text: string }) => m.text) ?? [];
     expect(supportTexts).not.toContain("Payment confirmed order #99887");
 
     // Payments agent CAN recall its own memory
