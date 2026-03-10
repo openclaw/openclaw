@@ -316,10 +316,10 @@ See `SessionsPatchParamsSchema` in `src/gateway/protocol/schema/sessions.ts` for
 #### Example: Session Patch Logger Hook
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
+import { isSessionPatchEvent, type HookHandler } from "../../src/hooks/hooks.js";
 
 const handler: HookHandler = async (event) => {
-  if (event.type !== "session" || event.action !== "patch") {
+  if (!isSessionPatchEvent(event)) {
     return;
   }
   const { patch } = event.context;
