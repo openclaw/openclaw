@@ -1,5 +1,6 @@
 import path from "node:path";
 import * as tar from "tar";
+import { isBlockedTarEntryType } from "../infra/archive.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -278,6 +279,12 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+export function findUnsupportedTarSpecialEntry(
+  entries: Array<{ path: string; type?: string }>,
+): { path: string; type?: string } | undefined {
+  return entries.find((entry) => isBlockedTarEntryType(entry.type ?? ""));
+}
+
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,
@@ -287,11 +294,11 @@ export async function backupVerifyCommand(
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
-  const unsupportedLinkEntry = rawEntries.find(
-    (entry) => entry.type === "SymbolicLink" || entry.type === "Link",
-  );
-  if (unsupportedLinkEntry) {
-    throw new Error(`Archive contains unsupported tar link entry: ${unsupportedLinkEntry.path}`);
+  const unsupportedSpecialEntry = findUnsupportedTarSpecialEntry(rawEntries);
+  if (unsupportedSpecialEntry) {
+    throw new Error(
+      `Archive contains unsupported tar special entry (${unsupportedSpecialEntry.type}): ${unsupportedSpecialEntry.path}`,
+    );
   }
 
   const entries = rawEntries.map((entry) => ({

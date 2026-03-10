@@ -55,6 +55,26 @@ describe("backupRunCommand", () => {
     });
   });
 
+  it("keeps workspace fallback when only the encryption key is configured", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      config: {
+        backup: {
+          encryption: { key: "secret" },
+        },
+      },
+    });
+
+    const result = await backupRunCommand(runtime, {});
+
+    expect(workspaceBackupRunCommand).toHaveBeenCalled();
+    expect(backupPushCommand).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      kind: "workspace",
+      workspace: { workspaceCount: 1 },
+    });
+  });
+
   it("uses snapshot backup when encryption is configured", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       valid: true,

@@ -5,7 +5,11 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { ResolvedSnapshotStoreConfig } from "./config.js";
 import { isValidInstallationId } from "./installation-id.js";
-import type { BackupSnapshotEnvelope, BackupSnapshotStore } from "./types.js";
+import {
+  parseBackupSnapshotEnvelope,
+  type BackupSnapshotEnvelope,
+  type BackupSnapshotStore,
+} from "./types.js";
 
 const SNAPSHOT_ID_PATTERN = /^snap_[0-9TZ-]+_[0-9a-f]{8}$/;
 
@@ -70,7 +74,7 @@ async function copyFileAtomic(sourcePath: string, destinationPath: string): Prom
 
 async function readEnvelopeFile(filePath: string): Promise<BackupSnapshotEnvelope> {
   const raw = await fs.readFile(filePath, "utf8");
-  return JSON.parse(raw) as BackupSnapshotEnvelope;
+  return parseBackupSnapshotEnvelope(raw);
 }
 
 export function createFolderSnapshotStore(
@@ -93,8 +97,12 @@ export function createFolderSnapshotStore(
       let entries: string[] = [];
       try {
         entries = await fs.readdir(root);
-      } catch {
-        return [];
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ENOENT") {
+          return [];
+        }
+        throw error;
       }
       const envelopes = entries.filter((entry) => entry.endsWith(".envelope.json")).toSorted();
       const listed = await Promise.all(

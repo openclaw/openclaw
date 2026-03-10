@@ -30,7 +30,9 @@ function hasSnapshotBackupConfigured(): Promise<boolean> {
     if (!snapshot.valid) {
       throw new Error("Config is invalid. Backup commands require a valid config file.");
     }
-    return Boolean(snapshot.config.backup?.encryption?.key);
+    return Boolean(
+      snapshot.config.backup?.target?.trim() && snapshot.config.backup?.encryption?.key,
+    );
   });
 }
 

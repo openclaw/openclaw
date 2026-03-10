@@ -166,4 +166,48 @@ describe("folder snapshot store", () => {
       }),
     ).resolves.toEqual([validEnvelope]);
   });
+
+  it("skips structurally invalid envelope files while listing healthy snapshots", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-invalid-shape-");
+    const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
+    const validEnvelope = createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID);
+    await fs.mkdir(snapshotRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.envelope.json`),
+      `${JSON.stringify(validEnvelope, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(snapshotRoot, "snap_2026-03-10T00-00-02-000Z_deadbeef.envelope.json"),
+      "{}\n",
+      "utf8",
+    );
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+
+    await expect(
+      store.listSnapshots({
+        installationId: VALID_INSTALLATION_ID,
+      }),
+    ).resolves.toEqual([validEnvelope]);
+  });
+
+  it("surfaces snapshot directory read failures other than ENOENT", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-readdir-");
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+    const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    vi.spyOn(fs, "readdir").mockRejectedValueOnce(denied);
+
+    await expect(
+      store.listSnapshots({
+        installationId: VALID_INSTALLATION_ID,
+      }),
+    ).rejects.toThrow("permission denied");
+  });
 });
