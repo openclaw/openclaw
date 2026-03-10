@@ -171,8 +171,8 @@ function detectTargetKind(
     return "user";
   }
 
-  // Allow channel plugins to declare a default target kind (e.g., WeChat where
-  // bare Chinese names are contacts, not groups).
+  // Allow channel plugins to declare a default target kind for bare names
+  // (e.g., plugin channels where plain-text names are direct contacts).
   const pluginDefaultKind = getChannelPlugin(channel)?.messaging?.targetResolver?.defaultTargetKind;
   if (pluginDefaultKind === "user" || pluginDefaultKind === "group") {
     return pluginDefaultKind;
