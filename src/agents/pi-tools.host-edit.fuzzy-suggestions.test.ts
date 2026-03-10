@@ -162,6 +162,26 @@ describe("scoreWindows", () => {
     expect(results.length).toBeLessThanOrEqual(3);
   });
 
+  it("finds match when only indentation differs (review feedback: pre-filter trims leading whitespace)", () => {
+    // The pre-filter must trim leading whitespace so indentation mismatches
+    // (the most common edit failure) are not rejected by the 8-char prefix check.
+    const fileLines = ["    function indented() {", "        return true;", "    }"];
+    const oldTextLines = ["  function indented() {", "      return true;", "  }"];
+    const results = scoreWindows(fileLines, oldTextLines);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].startLine).toBe(1);
+    expect(results[0].score).toBeGreaterThan(0.8);
+  });
+
+  it("keeps short multi-line near-matches for LCS scoring", () => {
+    const fileLines = ["let x", "ok"];
+    const oldTextLines = ["const x", "on"];
+    const results = scoreWindows(fileLines, oldTextLines);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].startLine).toBe(1);
+    expect(results[0].score).toBeGreaterThan(0.4);
+  });
+
   it("handles single-line oldText", () => {
     const fileLines = ["const foo = 1;", "const bar = 2;", "const baz = 3;"];
     const oldTextLines = ["const bar = 22;"];
@@ -178,6 +198,26 @@ describe("scoreWindows", () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].startLine).toBe(1);
     expect(results[0].score).toBeGreaterThan(0.8);
+  });
+
+  it("collects all near-perfect windows before sorting the top matches", () => {
+    const oldTextLines = ["const stableIdentifier = formatResult(payload);"];
+    const fileLines = [
+      "const stableIdentifier = formatResult(payload)",
+      "doSomethingElse();",
+      "const stableIdentifier = formatResult(payload);",
+      "doSomethingElseAgain();",
+      "const stableIdentifier = formatResult(payload)?",
+    ];
+
+    const results = scoreWindows(fileLines, oldTextLines);
+
+    expect(results.map((result) => result.startLine)).toEqual([3, 1, 5]);
+    expect(results.map((result) => result.score)).toEqual(
+      expect.arrayContaining([expect.any(Number), expect.any(Number), expect.any(Number)]),
+    );
+    expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
+    expect(results[1]?.score).toBeGreaterThan(results[2]?.score ?? 0);
   });
 });
 
@@ -369,6 +409,53 @@ describe("wrapEditToolWithFuzzyMatchSuggestions", () => {
       // Should find the exact match at lines 1-3 plus similar blocks
       expect(msg).toContain("Lines 1-3");
       expect(msg).toContain("similarity:");
+    }
+  });
+
+  it("rethrows original error when file does not exist (review feedback: FS errors don't mask not-found)", async () => {
+    // When the fallback file read fails (e.g. ENOENT race), the wrapper must
+    // rethrow the original "not found" error, not the FS error.
+    const base = makeMockTool("not-found");
+    const wrapped = wrapEditToolWithFuzzyMatchSuggestions(base, "/nonexistent/path");
+
+    try {
+      await wrapped.execute(
+        "call-1",
+        { path: "missing.ts", oldText: "some text", newText: "replaced" },
+        undefined,
+      );
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      const msg = (err as Error).message;
+      // Must be the original "not found" error, not ENOENT
+      expect(msg).toContain("Could not find the exact text in");
+      expect(msg).not.toContain("ENOENT");
+    }
+  });
+
+  it("uses fs.stat before reading file (review feedback: no full read before size check)", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fuzzy-"));
+    const filePath = path.join(tmpDir, "large.ts");
+    // Create a file > 100KB
+    const largeLine = "x".repeat(200) + "\n";
+    await fs.writeFile(filePath, largeLine.repeat(600), "utf-8");
+
+    const base = makeMockTool("not-found");
+    const wrapped = wrapEditToolWithFuzzyMatchSuggestions(base, tmpDir);
+
+    try {
+      await wrapped.execute(
+        "call-1",
+        { path: filePath, oldText: "not here", newText: "replaced" },
+        undefined,
+      );
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      const msg = (err as Error).message;
+      // Must mention performance skip, proving stat() was checked before read
+      expect(msg).toContain("Fuzzy matching skipped for performance");
+      expect(msg).toContain("File is large");
     }
   });
 

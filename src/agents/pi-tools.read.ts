@@ -621,9 +621,13 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  // Note: fuzzy match suggestions wrapper is NOT applied to sandbox edits because the
-  // wrapper uses host fs.readFile/fs.stat which cannot access sandbox-only paths.
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const withSuggestions = wrapEditToolWithFuzzyMatchSuggestions(base, params.root, {
+    readFile: (absolutePath, signal) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root, signal }),
+    stat: (absolutePath, signal) =>
+      params.bridge.stat({ filePath: absolutePath, cwd: params.root, signal }),
+  });
+  return wrapToolParamNormalization(withSuggestions, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {

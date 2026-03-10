@@ -9,12 +9,22 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 const FUZZY_MAX_FILE_SIZE_BYTES = 100_000;
 const FUZZY_MAX_SUGGESTIONS = 3;
 const FUZZY_MIN_SIMILARITY = 0.4;
-const FUZZY_NEAR_PERFECT = 0.95;
 const FUZZY_MAX_LINE_LEN = 500;
 const FUZZY_CONTEXT_LINES = 2;
 const FUZZY_MAX_OUTPUT_CHARS = 2000;
 const FUZZY_BINARY_CHECK_BYTES = 8192;
 const FUZZY_PREFILTER_CHUNK_LEN = 8;
+
+type FuzzyMatchReadFile = (absolutePath: string, signal?: AbortSignal) => Promise<Buffer | string>;
+
+type FuzzyMatchStat = {
+  size: number;
+};
+
+type FuzzyMatchSuggestionOptions = {
+  readFile?: FuzzyMatchReadFile;
+  stat?: (absolutePath: string, signal?: AbortSignal) => Promise<FuzzyMatchStat | null>;
+};
 
 /** Resolve path for host edit: expand ~ and resolve relative paths against root. */
 function resolveHostEditPath(root: string, pathParam: string): string {
@@ -143,7 +153,8 @@ function hasSharedPreFilterChunk(fileLine: string, oldLine: string): boolean {
     oldTrimmed.length < FUZZY_PREFILTER_CHUNK_LEN ||
     fileTrimmed.length < FUZZY_PREFILTER_CHUNK_LEN
   ) {
-    return fileTrimmed.includes(oldTrimmed) || oldTrimmed.includes(fileTrimmed);
+    // Short lines are cheap to score with LCS, so skip the substring gate entirely.
+    return true;
   }
 
   const lastChunkStart = oldTrimmed.length - FUZZY_PREFILTER_CHUNK_LEN;
@@ -205,13 +216,9 @@ export function scoreWindows(fileLines: string[], oldTextLines: string[]): Score
         lines: fileLines.slice(start, start + windowSize),
       });
     }
-
-    if (avgScore >= FUZZY_NEAR_PERFECT) {
-      break;
-    }
   }
 
-  results.sort((a, b) => b.score - a.score);
+  results.sort((a, b) => b.score - a.score || a.startLine - b.startLine);
   return results.slice(0, FUZZY_MAX_SUGGESTIONS);
 }
 
@@ -290,7 +297,14 @@ const NOT_FOUND_PATTERN = /Could not find the exact text in /;
 export function wrapEditToolWithFuzzyMatchSuggestions(
   base: AnyAgentTool,
   root: string,
+  options?: FuzzyMatchSuggestionOptions,
 ): AnyAgentTool {
+  const readFile: FuzzyMatchReadFile =
+    options?.readFile ??
+    ((absolutePath, signal) => fs.readFile(absolutePath, { encoding: "utf-8", signal }));
+  const statFile =
+    options?.stat ?? ((absolutePath: string) => fs.stat(absolutePath) as Promise<FuzzyMatchStat>);
+
   return {
     ...base,
     execute: async (
@@ -324,7 +338,10 @@ export function wrapEditToolWithFuzzyMatchSuggestions(
           const absolutePath = resolveHostEditPath(root, pathParam);
 
           // Check file size before reading to avoid loading huge files into memory.
-          const stat = await fs.stat(absolutePath);
+          const stat = await statFile(absolutePath, signal);
+          if (!stat) {
+            throw new Error(`File not found: ${absolutePath}`, { cause: err });
+          }
           if (stat.size > FUZZY_MAX_FILE_SIZE_BYTES) {
             throw new Error(
               `Could not find the exact text in ${pathParam}.\n\n` +
@@ -335,7 +352,9 @@ export function wrapEditToolWithFuzzyMatchSuggestions(
             );
           }
 
-          const content = await fs.readFile(absolutePath, "utf-8");
+          const rawContent = await readFile(absolutePath, signal);
+          const content =
+            typeof rawContent === "string" ? rawContent : rawContent.toString("utf-8");
 
           if (isBinaryContent(content)) {
             throw new Error(
