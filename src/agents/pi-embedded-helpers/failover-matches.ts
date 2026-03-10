@@ -32,6 +32,7 @@ const ERROR_PATTERNS = {
     "deadline exceeded",
     "context deadline exceeded",
     "connection error",
+    "connection lost",
     "network error",
     "network request failed",
     "fetch failed",
