@@ -2188,4 +2188,63 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, { messages: [] }, {});
     expect(calls[0]?.temperature).toBe(0.3);
   });
+
+  it("applies dynamic temperature when thinking is disabled via config even if thinkingLevel is active", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+        thinking: "off",
+      },
+      "high",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("does not apply dynamic temperature when thinking is enabled via config even if thinkingLevel is off", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+        thinking: "high",
+      },
+      "off",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when thinking is enabled via object without 'type' field", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: { budget_tokens: 1000 },
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
 });

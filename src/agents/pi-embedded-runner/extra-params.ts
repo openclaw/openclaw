@@ -324,11 +324,18 @@ function isThinkingDisabled(value: unknown): boolean {
   }
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    return ["off", "none", "disabled", "disable", "false", "0"].includes(normalized);
+    return ["off", "none", "disabled", "disable", "false", "0", "no", "hide", "hidden"].includes(
+      normalized,
+    );
   }
   if (typeof value === "object" && !Array.isArray(value)) {
-    const typeValue = (value as Record<string, unknown>).type;
-    return isThinkingDisabled(typeValue);
+    const obj = value as Record<string, unknown>;
+    if ("type" in obj) {
+      return isThinkingDisabled(obj.type);
+    }
+    // If it's an object without a 'type' field, it's disabled only if empty.
+    // Non-empty objects (e.g. { budget_tokens: 1000 }) imply enabled thinking.
+    return Object.keys(obj).length === 0;
   }
   return false;
 }
@@ -342,10 +349,13 @@ function resolveDynamicTemperature(params: {
     return undefined;
   }
 
-  const thinkingLevelDisabled = !params.thinkingLevel || params.thinkingLevel === "off";
-  const mergedThinkingDisabled = isThinkingDisabled(params.merged.thinking);
+  const explicitThinking = params.merged.thinking;
+  const isThinkingActive =
+    explicitThinking != null
+      ? !isThinkingDisabled(explicitThinking)
+      : params.thinkingLevel != null && params.thinkingLevel !== "off";
 
-  if (!thinkingLevelDisabled || !mergedThinkingDisabled) {
+  if (isThinkingActive) {
     return undefined;
   }
   const toolNames = normalizeToolNames(params.override?.availableToolNames);
