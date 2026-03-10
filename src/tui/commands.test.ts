@@ -15,10 +15,14 @@ describe("getSlashCommands", () => {
   it("provides level completions for built-in toggles", () => {
     const commands = getSlashCommands();
     const verbose = commands.find((command) => command.name === "verbose");
+    const reasoning = commands.find((command) => command.name === "reasoning");
     const activation = commands.find((command) => command.name === "activation");
     expect(verbose?.getArgumentCompletions?.("o")).toEqual([
       { value: "on", label: "on" },
       { value: "off", label: "off" },
+    ]);
+    expect(reasoning?.getArgumentCompletions?.("s")).toEqual([
+      { value: "stream", label: "stream" },
     ]);
     expect(activation?.getArgumentCompletions?.("a")).toEqual([
       { value: "always", label: "always" },
