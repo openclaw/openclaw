@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { getA2AResult } from "../../infra/a2a-result-cache.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
@@ -485,7 +486,24 @@ export function createAgentCallTool(opts?: {
         } as AgentCallResult);
       }
 
-      // Get result
+      // RFC-A2A-RESPONSE-ROUTING: Try cache first for run-scoped result retrieval
+      // This fixes the race condition where concurrent callers could grab wrong results
+      const cachedResult = getA2AResult(correlationId);
+      if (cachedResult) {
+        return jsonResult({
+          status: cachedResult.status,
+          output: cachedResult.output,
+          confidence: cachedResult.confidence,
+          assumptions: cachedResult.assumptions,
+          caveats: cachedResult.caveats,
+          error: cachedResult.error,
+          taskId: runId,
+          correlationId,
+        } as AgentCallResult);
+      }
+
+      // Fallback: Get result from chat.history (legacy path)
+      // Note: This is subject to race conditions with concurrent callers
       const history = await callGateway<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: targetSessionKey, limit: 50 },

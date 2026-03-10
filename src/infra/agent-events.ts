@@ -61,11 +61,17 @@ export function resetAgentRunContextForTest() {
 
 /**
  * RFC-A2A-RESPONSE-ROUTING: Extract routing info from skill_invocation message.
- * Returns { correlationId, returnTo, timeout? } if message is a valid skill_invocation.
+ * Returns { correlationId, returnTo, timeout?, skill?, targetSessionKey? } if message is a valid skill_invocation.
  */
 export function extractSkillInvocationRouting(
   message: string,
-): { correlationId: string; returnTo: string; timeout?: number } | null {
+): {
+  correlationId: string;
+  returnTo: string;
+  timeout?: number;
+  skill?: string;
+  targetSessionKey?: string;
+} | null {
   try {
     const parsed = JSON.parse(message);
     if (parsed?.kind === "skill_invocation") {
@@ -79,8 +85,14 @@ export function extractSkillInvocationRouting(
           : undefined;
       const timeout =
         typeof parsed.timeout === "number" && parsed.timeout > 0 ? parsed.timeout : undefined;
+      const skill =
+        typeof parsed.skill === "string" && parsed.skill.trim() ? parsed.skill.trim() : undefined;
+      const targetSessionKey =
+        typeof parsed.targetSessionKey === "string" && parsed.targetSessionKey.trim()
+          ? parsed.targetSessionKey.trim()
+          : undefined;
       if (correlationId && returnTo) {
-        return { correlationId, returnTo, timeout };
+        return { correlationId, returnTo, timeout, skill, targetSessionKey };
       }
     }
   } catch {

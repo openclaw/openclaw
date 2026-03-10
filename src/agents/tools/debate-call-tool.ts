@@ -15,6 +15,7 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, readNumberParam } from "./common.js";
@@ -286,6 +287,58 @@ async function resolveAgentSession(agentRef: string, _requesterAgentId: string):
   return `agent:${normalized}:main`;
 }
 
+/**
+ * Check if an agent has a specific skill declared.
+ *
+ * @param agentId - The agent ID to check
+ * @param skillName - The skill name to look for
+ * @param cfg - The config object
+ * @returns true if the skill is declared or if no declarations exist (fallback)
+ */
+function hasDeclaredSkill(
+  agentId: string,
+  skillName: string,
+  cfg: ReturnType<typeof loadConfig>,
+): boolean {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const declaredSkills = agentConfig?.declaredSkills;
+
+  // If no skills are declared, assume all skills are available (fallback)
+  if (!declaredSkills?.skills?.length) {
+    return true;
+  }
+
+  // Check if the skill is in the declared list
+  return declaredSkills.skills.some((s) => s.name.toLowerCase() === skillName.toLowerCase());
+}
+
+/**
+ * Get the refinement skill for a proposer agent.
+ * First checks if "refine" is declared, falls back to first available skill
+ * that matches refinement patterns.
+ */
+function getRefinementSkill(agentId: string, cfg: ReturnType<typeof loadConfig>): string | null {
+  // Check if "refine" is explicitly declared
+  if (hasDeclaredSkill(agentId, "refine", cfg)) {
+    return "refine";
+  }
+
+  // Check for common refinement skill patterns
+  const refinementPatterns = ["refine", "revise", "improve", "update", "iterate"];
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const declaredSkills = agentConfig?.declaredSkills?.skills ?? [];
+
+  for (const pattern of refinementPatterns) {
+    const match = declaredSkills.find((s) => s.name.toLowerCase().includes(pattern));
+    if (match) {
+      return match.name;
+    }
+  }
+
+  // No refinement skill found - will need fallback behavior
+  return null;
+}
+
 export function createDebateCallTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
@@ -439,6 +492,22 @@ export function createDebateCallTool(opts?: {
         criticSkills,
         resolverSkill,
       });
+
+      // Fix: Check if proposer has a refinement skill declared
+      // BMendonca3 concern: debate_call hardcodes "refine" skill without checking
+      // if proposer declares it. We now check declared skills and fall back appropriately.
+      const proposerAgentId = isAgentSessionKeyRef(proposer.agent)
+        ? validateAgentSessionKey(proposer.agent).split(":")[1]
+        : validateAgentId(proposer.agent);
+      const refinementSkill = getRefinementSkill(proposerAgentId, cfg);
+      const useRefineFallback = refinementSkill === null;
+
+      if (useRefineFallback) {
+        logAudit("no_refine_skill", {
+          proposer: proposerAgentId,
+          fallback: "proposer_skill_with_critique_context",
+        });
+      }
 
       const rounds: DebateRound[] = [];
       let currentProposal: unknown = null;
@@ -601,19 +670,39 @@ export function createDebateCallTool(opts?: {
           }
 
           // Refine based on critiques
+          // Fix: Use declared refinement skill or fallback to proposer skill with context
+          const skillToUse = useRefineFallback ? proposerSkill : (refinementSkill ?? "refine");
+
           const refinement = await invokeAgentSkill({
             sessionKey: proposerSession,
-            skill: "refine", // Standard refinement skill
-            input: {
-              originalProposal: currentProposal,
-              critiques: critiques.map((c) => ({
-                agent: c.agent,
-                flaws: c.flaws,
-                alternatives: c.alternatives,
-              })),
-              addressedConcerns:
-                rounds.length > 0 ? rounds[rounds.length - 1]?.refinement?.addressedCritiques : [],
-            },
+            skill: skillToUse,
+            input: useRefineFallback
+              ? {
+                  // Fallback: Use proposer skill with critique context
+                  ...input,
+                  originalProposal: currentProposal,
+                  critiquedBy: critics.map((c) => c.agent),
+                  critiqueFeedback: critiques.map((c) => ({
+                    agent: c.agent,
+                    flaws: c.flaws,
+                    alternatives: c.alternatives,
+                  })),
+                  revisionInstructions:
+                    "Based on the critiques above, revise your proposal to address the identified flaws while maintaining your core reasoning.",
+                  round: rounds.length + 1,
+                }
+              : {
+                  originalProposal: currentProposal,
+                  critiques: critiques.map((c) => ({
+                    agent: c.agent,
+                    flaws: c.flaws,
+                    alternatives: c.alternatives,
+                  })),
+                  addressedConcerns:
+                    rounds.length > 0
+                      ? rounds[rounds.length - 1]?.refinement?.addressedCritiques
+                      : [],
+                },
             timeoutMs,
             requesterSessionKey,
           });
