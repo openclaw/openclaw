@@ -102,6 +102,14 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        enhanced: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxConcurrency: z.number().int().min(1).max(16).optional(),
+            sharedContext: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

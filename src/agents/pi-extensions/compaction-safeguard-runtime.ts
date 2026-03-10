@@ -1,4 +1,5 @@
-import type { EnhancedCompactionConfig } from "../compaction-enhanced.js";
+import type { EnhancedCompactionConfig, ParallelCompactionConfig } from "../compaction-enhanced.js";
+import type { SharedContextConfig } from "../shared-context.js";
 
 export type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
@@ -6,7 +7,12 @@ export type CompactionSafeguardRuntimeValue = {
   // 增强版压缩配置
   enhancedCompaction?: {
     enabled?: boolean;
-    config?: Partial<EnhancedCompactionConfig>;
+    config?: {
+      metrics?: Partial<EnhancedCompactionConfig["metrics"]>;
+      parallel?: Partial<ParallelCompactionConfig>;
+      sharedContext?: Partial<SharedContextConfig>;
+      strategy?: Partial<EnhancedCompactionConfig["strategy"]>;
+    };
   };
 };
 

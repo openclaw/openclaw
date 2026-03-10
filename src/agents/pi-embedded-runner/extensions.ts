@@ -88,9 +88,30 @@ export function buildEmbeddedExtensionPaths(params: {
       modelContextWindow: params.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
+
+    // 读取 enhanced 配置
+    const enhancedCfg = compactionCfg?.enhanced;
+    const enhancedEnabled = enhancedCfg?.enabled ?? false;
+
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,
       contextWindowTokens: contextWindowInfo.tokens,
+      enhancedCompaction: enhancedEnabled
+        ? {
+            enabled: true,
+            config: {
+              parallel: {
+                maxConcurrency: enhancedCfg?.maxConcurrency ?? 4,
+                taskTimeoutMs: 60_000,
+                minChunksForParallel: 2,
+                enabled: true,
+              },
+              sharedContext: {
+                enabled: enhancedCfg?.sharedContext ?? false,
+              },
+            },
+          }
+        : undefined,
     });
     paths.push(resolvePiExtensionPath("compaction-safeguard"));
   }

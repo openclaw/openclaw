@@ -254,6 +254,17 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Enhanced compaction options (parallel processing, metrics, shared context). */
+  enhanced?: AgentCompactionEnhancedConfig;
+};
+
+export type AgentCompactionEnhancedConfig = {
+  /** Enable enhanced compaction with parallel processing. */
+  enabled?: boolean;
+  /** Maximum concurrent summarization tasks (default: 4). */
+  maxConcurrency?: number;
+  /** Enable shared context across agents. */
+  sharedContext?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
