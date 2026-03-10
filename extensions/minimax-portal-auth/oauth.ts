@@ -65,22 +65,30 @@ async function requestOAuthCode(params: {
   region: MiniMaxRegion;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.codeEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "x-request-id": randomUUID(),
-    },
-    body: toFormUrlEncoded({
-      response_type: "code",
-      client_id: endpoints.clientId,
-      scope: MINIMAX_OAUTH_SCOPE,
-      code_challenge: params.challenge,
-      code_challenge_method: "S256",
-      state: params.state,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoints.codeEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "x-request-id": randomUUID(),
+      },
+      body: toFormUrlEncoded({
+        response_type: "code",
+        client_id: endpoints.clientId,
+        scope: MINIMAX_OAUTH_SCOPE,
+        code_challenge: params.challenge,
+        code_challenge_method: "S256",
+        state: params.state,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `MiniMax OAuth authorization failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -106,19 +114,28 @@ async function pollOAuthToken(params: {
   region: MiniMaxRegion;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.tokenEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body: toFormUrlEncoded({
-      grant_type: MINIMAX_OAUTH_GRANT_TYPE,
-      client_id: endpoints.clientId,
-      user_code: params.userCode,
-      code_verifier: params.verifier,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoints.tokenEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: toFormUrlEncoded({
+        grant_type: MINIMAX_OAUTH_GRANT_TYPE,
+        client_id: endpoints.clientId,
+        user_code: params.userCode,
+        code_verifier: params.verifier,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    return {
+      status: "error" as const,
+      message: `MiniMax token poll failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 
   const text = await response.text();
   let payload:
