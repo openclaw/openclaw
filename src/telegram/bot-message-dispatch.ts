@@ -9,6 +9,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
@@ -171,7 +172,9 @@ export const dispatchTelegramMessage = async ({
     accountId: route.accountId,
   });
   const renderDraftPreview = (text: string) => ({
-    text: renderTelegramHtmlText(text, { tableMode }),
+    // Defense-in-depth: strip any leaked inbound metadata from model responses
+    // before rendering for streaming previews in Telegram DMs.
+    text: renderTelegramHtmlText(stripLeadingInboundMetadata(text), { tableMode }),
     parseMode: "HTML" as const,
   });
   const accountBlockStreamingEnabled =
@@ -491,7 +494,9 @@ export const dispatchTelegramMessage = async ({
       await lane.stream?.stop();
     },
     editPreview: async ({ messageId, text, previewButtons }) => {
-      await editMessageTelegram(chatId, messageId, text, {
+      // Defense-in-depth: strip any leaked inbound metadata before editing preview
+      const sanitizedText = stripLeadingInboundMetadata(text);
+      await editMessageTelegram(chatId, messageId, sanitizedText, {
         api: bot.api,
         cfg,
         accountId: route.accountId,

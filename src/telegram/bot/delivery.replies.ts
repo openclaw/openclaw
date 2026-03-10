@@ -1,5 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
+import { stripLeadingInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -632,6 +633,16 @@ export async function deliverReplies(params: {
       }
       if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
         reply = { ...reply, text: hookResult.content };
+      }
+    }
+
+    // Defense-in-depth: strip any leaked inbound metadata from model responses
+    // before delivering to users. This prevents the "Human: Conversation info..."
+    // prefix from appearing in Telegram DMs when the model echoes raw prompt format.
+    if (reply.text) {
+      const sanitizedText = stripLeadingInboundMetadata(reply.text);
+      if (sanitizedText !== reply.text) {
+        reply = { ...reply, text: sanitizedText };
       }
     }
 
