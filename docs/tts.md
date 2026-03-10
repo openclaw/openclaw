@@ -9,13 +9,14 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Volcengine, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Volcengine** (primary or fallback provider; ByteDance TTS V3 API)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -32,10 +33,11 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Volcengine:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
+- `VOLCENGINE_ACCESS_KEY` (also requires `volcengine.appId` in config or `VOLCENGINE_APP_ID`)
 
 Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
@@ -50,6 +52,7 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Volcengine TTS (ByteDance)](https://www.volcengine.com/docs/6561/1598757)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -59,7 +62,7 @@ No. Auto‑TTS is **off** by default. Enable it in config with
 `messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
 
 Edge TTS **is** enabled by default once TTS is on, and is used automatically
-when no OpenAI or ElevenLabs API keys are available.
+when no OpenAI, ElevenLabs, or Volcengine API keys are available.
 
 ## Config
 
@@ -139,6 +142,25 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Volcengine TTS (ByteDance)
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "volcengine",
+      volcengine: {
+        appId: "your-app-id",
+        accessKey: "your-access-key",
+        resourceId: "seed-tts-2.0",
+        speaker: "zh_female_vv_uranus_bigtts",
+      },
+    },
+  },
+}
+```
+
 ### Disable Edge TTS
 
 ```json5
@@ -205,9 +227,9 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"volcengine"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `volcengine` (if key), otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
@@ -215,7 +237,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, `VOLCENGINE_ACCESS_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -236,6 +258,14 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `volcengine.appId`: Volcengine application ID.
+- `volcengine.accessKey`: Volcengine access key (falls back to `VOLCENGINE_ACCESS_KEY` env var).
+- `volcengine.resourceId`: TTS resource ID (default `seed-tts-2.0`).
+- `volcengine.speaker`: voice speaker (default `zh_female_vv_uranus_bigtts`).
+- `volcengine.format`: audio format (default `mp3`).
+- `volcengine.sampleRate`: sample rate in Hz (default `24000`).
+- `volcengine.speechRate`: speech rate, `-50` (0.5x) to `100` (2x), `0` = normal.
+- `volcengine.baseUrl`: override Volcengine TTS API base URL (default `https://openspeech.bytedance.com`).
 
 ## Model-driven overrides (default on)
 
@@ -260,7 +290,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
+- `provider` (`openai` | `elevenlabs` | `edge` | `volcengine`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`

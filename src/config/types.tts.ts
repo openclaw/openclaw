@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "volcengine";
 
 export type TtsMode = "final" | "all";
 
@@ -75,6 +75,17 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Volcengine (ByteDance) TTS V3 configuration. */
+  volcengine?: {
+    appId?: string;
+    accessKey?: SecretInput;
+    resourceId?: string;
+    speaker?: string;
+    format?: string;
+    sampleRate?: number;
+    speechRate?: number;
+    baseUrl?: string;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

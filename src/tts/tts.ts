@@ -29,6 +29,7 @@ import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_VOLCENGINE_BASE_URL,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
@@ -41,6 +42,7 @@ import {
   parseTtsDirectives,
   scheduleCleanup,
   summarizeText,
+  volcengineTTS,
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
@@ -57,6 +59,12 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+
+const DEFAULT_VOLCENGINE_RESOURCE_ID = "seed-tts-2.0";
+const DEFAULT_VOLCENGINE_SPEAKER = "zh_female_vv_uranus_bigtts";
+const DEFAULT_VOLCENGINE_FORMAT = "mp3";
+const DEFAULT_VOLCENGINE_SAMPLE_RATE = 24000;
+const DEFAULT_VOLCENGINE_SPEECH_RATE = 0;
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -85,6 +93,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  volcengine: { format: "pcm" as const, sampleRate: 24000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -130,6 +139,16 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  volcengine: {
+    appId?: string;
+    accessKey?: string;
+    resourceId: string;
+    speaker: string;
+    format: string;
+    sampleRate: number;
+    speechRate: number;
+    baseUrl: string;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -318,6 +337,19 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    volcengine: {
+      appId: raw.volcengine?.appId?.trim() || undefined,
+      accessKey: normalizeResolvedSecretInputString({
+        value: raw.volcengine?.accessKey,
+        path: "messages.tts.volcengine.accessKey",
+      }),
+      resourceId: raw.volcengine?.resourceId?.trim() || DEFAULT_VOLCENGINE_RESOURCE_ID,
+      speaker: raw.volcengine?.speaker?.trim() || DEFAULT_VOLCENGINE_SPEAKER,
+      format: raw.volcengine?.format?.trim() || DEFAULT_VOLCENGINE_FORMAT,
+      sampleRate: raw.volcengine?.sampleRate ?? DEFAULT_VOLCENGINE_SAMPLE_RATE,
+      speechRate: raw.volcengine?.speechRate ?? DEFAULT_VOLCENGINE_SPEECH_RATE,
+      baseUrl: raw.volcengine?.baseUrl?.trim() || DEFAULT_VOLCENGINE_BASE_URL,
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -456,6 +488,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "volcengine")) {
+    return "volcengine";
+  }
   return "edge";
 }
 
@@ -523,10 +558,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "volcengine") {
+    return config.volcengine.accessKey || process.env.VOLCENGINE_ACCESS_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "volcengine", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -660,6 +698,7 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let providerOutputFormat: string;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -683,6 +722,22 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.elevenlabs;
+      } else if (provider === "volcengine") {
+        const appId = config.volcengine.appId || process.env.VOLCENGINE_APP_ID || "";
+        audioBuffer = await volcengineTTS({
+          text: params.text,
+          appId,
+          accessKey: apiKey,
+          resourceId: config.volcengine.resourceId,
+          speaker: config.volcengine.speaker,
+          format: config.volcengine.format,
+          sampleRate: config.volcengine.sampleRate,
+          speechRate: config.volcengine.speechRate,
+          baseUrl: config.volcengine.baseUrl,
+          timeoutMs: config.timeoutMs,
+        });
+        providerOutputFormat = config.volcengine.format;
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -695,6 +750,7 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.openai;
       }
 
       const latencyMs = Date.now() - providerStart;
@@ -702,7 +758,8 @@ export async function textToSpeech(params: {
       const tempRoot = resolvePreferredOpenClawTmpDir();
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      const ext = provider === "volcengine" ? `.${config.volcengine.format}` : output.extension;
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${ext}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -711,8 +768,8 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        outputFormat: providerOutputFormat,
+        voiceCompatible: provider === "volcengine" ? false : output.voiceCompatible,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
@@ -769,6 +826,32 @@ export async function textToSpeechTelephony(params: {
           applyTextNormalization: config.elevenlabs.applyTextNormalization,
           languageCode: config.elevenlabs.languageCode,
           voiceSettings: config.elevenlabs.voiceSettings,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "volcengine") {
+        const output = TELEPHONY_OUTPUT.volcengine;
+        const appId = config.volcengine.appId || process.env.VOLCENGINE_APP_ID || "";
+        const audioBuffer = await volcengineTTS({
+          text: params.text,
+          appId,
+          accessKey: apiKey,
+          resourceId: config.volcengine.resourceId,
+          speaker: config.volcengine.speaker,
+          format: output.format,
+          sampleRate: output.sampleRate,
+          speechRate: config.volcengine.speechRate,
+          baseUrl: config.volcengine.baseUrl,
           timeoutMs: config.timeoutMs,
         });
 
