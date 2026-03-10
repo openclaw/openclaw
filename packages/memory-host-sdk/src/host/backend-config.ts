@@ -485,7 +485,10 @@ function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig
     healthCheckInterval: chainConfig.global?.healthCheckInterval ?? 30000,
   };
 
-  const resolvedProviders: ResolvedChainProvider[] = chainConfig.providers.map((provider) => ({
+  // Ensure providers array exists (defensive programming)
+  const providers = chainConfig.providers ?? [];
+
+  const resolvedProviders: ResolvedChainProvider[] = providers.map((provider) => ({
     name: provider.name,
     priority: provider.priority,
     backend: provider.backend,
