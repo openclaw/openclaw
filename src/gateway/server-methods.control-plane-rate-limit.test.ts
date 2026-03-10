@@ -145,6 +145,42 @@ describe("gateway control-plane write rate limit", () => {
       connId: "conn-fallback",
       clientIp: "10.0.0.10",
     });
-    expect(key).toBe("unknown-device|10.0.0.10");
+    expect(key).toBe("unknown-device|10.0.0.10|conn=conn-fallback");
+  });
+
+  it("isolates write budgets across concurrent gateway sessions", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const base = buildClient();
+    const firstClient = { ...base, connId: "conn-a" };
+    const secondClient = { ...base, connId: "conn-b" };
+
+    await runRequest({ method: "config.patch", context, client: firstClient, handler });
+    await runRequest({ method: "config.patch", context, client: firstClient, handler });
+    await runRequest({ method: "config.patch", context, client: firstClient, handler });
+
+    const blocked = await runRequest({
+      method: "config.patch",
+      context,
+      client: firstClient,
+      handler,
+    });
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+
+    const allowed = await runRequest({
+      method: "config.patch",
+      context,
+      client: secondClient,
+      handler,
+    });
+    expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
   });
 });
