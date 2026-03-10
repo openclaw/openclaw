@@ -1,0 +1,25 @@
+[Unit]
+Description=Hive Resurrection - Cluster Monitor
+After=network.target hive-watchdog.service
+Wants=hive-watchdog.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+
+# 修改节点名和配置路径
+ExecStart=/usr/bin/node /opt/hive-resurrection/monitor.js /opt/hive-resurrection/config.json node-a
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hive-monitor
+
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/hive-resurrection
+
+[Install]
+WantedBy=multi-user.target
