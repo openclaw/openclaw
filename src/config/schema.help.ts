@@ -1317,6 +1317,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Regex-like patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels.",
   "messages.groupChat.historyLimit":
     "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
+  "messages.groupChat.persistPending":
+    "When enabled, non-triggering group messages (those without an @mention) are persisted to the session JSONL transcript as passive user entries. This makes them survive restarts and searchable in session history.",
   "messages.queue":
     "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
   "messages.queue.mode":

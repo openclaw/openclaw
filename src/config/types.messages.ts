@@ -4,6 +4,8 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /** Persist non-triggering group messages to the session JSONL transcript. */
+  persistPending?: boolean;
 };
 
 export type DmConfig = {

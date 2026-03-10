@@ -660,6 +660,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",
+  "messages.groupChat.persistPending": "Persist Pending Group Messages",
   "messages.queue": "Inbound Queue",
   "messages.queue.mode": "Queue Mode",
   "messages.queue.byChannel": "Queue Mode by Channel",

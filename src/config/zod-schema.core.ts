@@ -266,6 +266,7 @@ export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
+    persistPending: z.boolean().optional(),
   })
   .strict()
   .optional();

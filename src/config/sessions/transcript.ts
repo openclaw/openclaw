@@ -207,3 +207,67 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };
 }
+
+/**
+ * Append a passive (non-triggering) group user message to the session transcript.
+ * Written as raw JSONL to avoid breaking the SessionManager parent chain —
+ * these are observational log entries, not conversation turns.
+ */
+export async function appendPassiveUserMessageToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  sender: string;
+  body: string;
+  timestamp?: number;
+  /** Optional override for store path (mostly for tests). */
+  storePath?: string;
+}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+  const body = params.body?.trim();
+  if (!body) {
+    return { ok: false, reason: "empty body" };
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+
+  const line = JSON.stringify({
+    role: "user",
+    passive: true,
+    sender: params.sender,
+    content: [{ type: "text", text: `[${params.sender}]: ${body}` }],
+    timestamp: params.timestamp ?? Date.now(),
+  });
+  await fs.promises.appendFile(sessionFile, `${line}\n`, "utf-8");
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return { ok: true, sessionFile };
+}

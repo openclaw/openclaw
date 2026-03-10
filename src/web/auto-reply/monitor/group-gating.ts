@@ -3,6 +3,7 @@ import { parseActivationCommand } from "../../../auto-reply/group-activation.js"
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
+import { appendPassiveUserMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
@@ -70,12 +71,30 @@ function recordPendingGroupHistoryEntry(params: {
 
 function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verboseMessage: string) {
   params.logVerbose(verboseMessage);
+  const sender =
+    params.msg.senderName && params.msg.senderE164
+      ? `${params.msg.senderName} (${params.msg.senderE164})`
+      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
   recordPendingGroupHistoryEntry({
     msg: params.msg,
     groupHistories: params.groupHistories,
     groupHistoryKey: params.groupHistoryKey,
     groupHistoryLimit: params.groupHistoryLimit,
   });
+
+  // Persist to JSONL transcript when persistPending is enabled
+  if (params.cfg.messages?.groupChat?.persistPending && params.msg.body?.trim()) {
+    appendPassiveUserMessageToSessionTranscript({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sender,
+      body: params.msg.body,
+      timestamp: params.msg.timestamp,
+    }).catch(() => {
+      // Best-effort: don't block message flow on transcript write failures
+    });
+  }
+
   return { shouldProcess: false } as const;
 }
 
