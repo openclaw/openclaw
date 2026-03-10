@@ -67,7 +67,7 @@ function normalizeQuery(value: string): string {
 
 function stripTargetPrefixes(value: string): string {
   return value
-    .replace(/^(channel|user):/i, "")
+    .replace(/^(channel|group|user):/i, "")
     .replace(/^[@#]/, "")
     .trim();
 }
