@@ -19,7 +19,14 @@ private val cardMarkerRegex =
 fun parseAdaptiveCardMarkers(text: String): ParsedAdaptiveCard? {
   val match = cardMarkerRegex.find(text) ?: return null
   val jsonStr = match.groupValues[1].trim()
-  val fallback = text.substring(0, match.range.first).trim()
+  val prefix = text.substring(0, match.range.first).trim()
+  val markerEnd = match.range.last + 1
+  // Strip any adaptive-card-data blocks from the suffix
+  val dataPattern =
+    Regex("<!--adaptive-card-data-->.*?<!--/adaptive-card-data-->", RegexOption.DOT_MATCHES_ALL)
+  val remaining = text.substring(markerEnd)
+  val suffix = dataPattern.replace(remaining, "").trim()
+  val fallback = listOf(prefix, suffix).filter { it.isNotBlank() }.joinToString("\n\n")
 
   return try {
     val json = JSONObject(jsonStr)

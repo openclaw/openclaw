@@ -71,12 +71,13 @@ fun AdaptiveCardView(card: Map<String, Any>, modifier: Modifier = Modifier) {
 // -- Element rendering --
 
 @Composable
-private fun RenderElement(element: Map<String, Any>) {
+private fun RenderElement(element: Map<String, Any>, depth: Int = 0) {
+  if (depth > 10) return // Guard against unbounded recursion
   when (element["type"] as? String) {
     "TextBlock" -> RenderTextBlock(element)
     "FactSet" -> RenderFactSet(element)
-    "ColumnSet" -> RenderColumnSet(element)
-    "Container" -> RenderContainer(element)
+    "ColumnSet" -> RenderColumnSet(element, depth + 1)
+    "Container" -> RenderContainer(element, depth + 1)
     "Image" -> RenderImagePlaceholder(element)
     else -> {
       // Skip unknown element types gracefully
@@ -142,7 +143,7 @@ private fun RenderFactSet(element: Map<String, Any>) {
 }
 
 @Composable
-private fun RenderColumnSet(element: Map<String, Any>) {
+private fun RenderColumnSet(element: Map<String, Any>, depth: Int = 0) {
   val columns = element.typedList("columns")
   if (columns.isEmpty()) return
 
@@ -152,17 +153,15 @@ private fun RenderColumnSet(element: Map<String, Any>) {
   ) {
     for (column in columns) {
       val items = column.typedList("items")
-      // Use width property for weight; default to equal distribution
       val widthStr = column["width"] as? String
-      val weight = widthStr?.removeSuffix("px")?.toFloatOrNull()
-        ?: if (widthStr == "stretch" || widthStr == "auto" || widthStr == null) 1f else 1f
+      val weight = widthStr?.removeSuffix("px")?.toFloatOrNull() ?: 1f
 
       Column(
         modifier = Modifier.weight(weight),
         verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         for (item in items) {
-          RenderElement(item)
+          RenderElement(item, depth)
         }
       }
     }
@@ -170,11 +169,11 @@ private fun RenderColumnSet(element: Map<String, Any>) {
 }
 
 @Composable
-private fun RenderContainer(element: Map<String, Any>) {
+private fun RenderContainer(element: Map<String, Any>, depth: Int = 0) {
   val items = element.typedList("items")
   Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
     for (item in items) {
-      RenderElement(item)
+      RenderElement(item, depth)
     }
   }
 }
@@ -219,10 +218,11 @@ private fun RenderAction(action: Map<String, Any>, modifier: Modifier = Modifier
     }
     "Action.Submit" -> {
       OutlinedButton(
-        onClick = { Log.d(TAG, "Action.Submit tapped: $title, data=${action["data"]}") },
+        onClick = { },
+        enabled = false,
         modifier = modifier,
       ) {
-        Text(text = title, style = mobileCallout, color = mobileAccent)
+        Text(text = title, style = mobileCallout)
       }
     }
     else -> {
