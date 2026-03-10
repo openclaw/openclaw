@@ -11,6 +11,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import {
   buildMentionRegexes,
+  matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
@@ -596,18 +597,24 @@ export async function preflightDiscordMessage(
   }
 
   const mentionText = hasTypedText ? baseText : "";
+  const transcriptMentioned =
+    !hasTypedText && preflightTranscript
+      ? matchesMentionPatterns(preflightTranscript, mentionRegexes)
+      : false;
   const wasMentioned =
     !isDirectMessage &&
-    matchesMentionWithExplicit({
-      text: mentionText,
-      mentionRegexes,
-      explicit: {
-        hasAnyMention,
-        isExplicitlyMentioned: explicitlyMentioned,
-        canResolveExplicit: Boolean(botId),
-      },
-      transcript: preflightTranscript,
-    });
+    (botId
+      ? explicitlyMentioned || transcriptMentioned
+      : matchesMentionWithExplicit({
+          text: mentionText,
+          mentionRegexes,
+          explicit: {
+            hasAnyMention,
+            isExplicitlyMentioned: explicitlyMentioned,
+            canResolveExplicit: false,
+          },
+          transcript: preflightTranscript,
+        }));
   const implicitMention = Boolean(
     !isDirectMessage &&
     botId &&

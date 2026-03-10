@@ -282,7 +282,7 @@ function captureThreadDispatchCtx() {
 
 describe("discord tool result dispatch", () => {
   it(
-    "accepts guild messages when mentionPatterns match",
+    "does not accept guild messages when only mentionPatterns match plain text",
     async () => {
       const cfg = createMentionRequiredGuildConfig({
         messages: {
@@ -299,9 +299,9 @@ describe("discord tool result dispatch", () => {
         client,
       );
 
-      await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
-      expect(sendMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(0));
+      expect(dispatchMock).toHaveBeenCalledTimes(0);
+      expect(sendMock).toHaveBeenCalledTimes(0);
     },
     MENTION_PATTERNS_TEST_TIMEOUT_MS,
   );
