@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/zalo";
 import {
   buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
@@ -648,6 +649,13 @@ async function processMessageWithPipeline(params: {
       onModelSelected,
     },
   });
+  if (isGroup) {
+    clearHistoryEntriesIfEnabled({
+      historyMap: groupHistories,
+      historyKey: combinedHistoryKey,
+      limit: historyLimit,
+    });
+  }
 }
 
 async function deliverZaloReply(params: {

@@ -165,6 +165,25 @@ export async function resolveTelegramInboundBody(params: {
     return null;
   }
 
+  // Check neverReply early to avoid unnecessary audio transcription
+  if (isGroup && resolveNeverReply({ cfg, channel: "telegram", accountId })) {
+    logVerbose("Telegram group message stored for context (neverReply: true)");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: groupHistories,
+      historyKey: historyKey ?? "",
+      limit: historyLimit,
+      entry: historyKey
+        ? {
+            sender: buildSenderLabel(msg, senderId || chatId),
+            body: rawBody,
+            timestamp: msg.date ? msg.date * 1000 : undefined,
+            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+          }
+        : null,
+    });
+    return null;
+  }
+
   let bodyText = rawBody;
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
   const disableAudioPreflight =
@@ -255,23 +274,6 @@ export async function resolveTelegramInboundBody(params: {
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGroup && resolveNeverReply({ cfg, channel: "telegram", accountId })) {
-    logVerbose("Telegram group message stored for context (neverReply: true)");
-    recordPendingHistoryEntryIfEnabled({
-      historyMap: groupHistories,
-      historyKey: historyKey ?? "",
-      limit: historyLimit,
-      entry: historyKey
-        ? {
-            sender: buildSenderLabel(msg, senderId || chatId),
-            body: rawBody,
-            timestamp: msg.date ? msg.date * 1000 : undefined,
-            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-          }
-        : null,
-    });
-    return null;
-  }
   if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
     recordPendingHistoryEntryIfEnabled({

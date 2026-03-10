@@ -1,6 +1,7 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
   dispatchInboundReplyWithBase,
@@ -411,6 +412,13 @@ export async function handleIrcInbound(params: {
           : undefined,
     },
   });
+  if (message.isGroup) {
+    clearHistoryEntriesIfEnabled({
+      historyMap: channelHistories,
+      historyKey,
+      limit: historyLimit,
+    });
+  }
 }
 
 export const __testing = {

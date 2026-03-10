@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import {
   buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   createWebhookInFlightLimiter,
   createReplyPrefixOptions,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -365,6 +366,13 @@ async function processMessageWithPipeline(params: {
       onModelSelected,
     },
   });
+  if (isGroup) {
+    clearHistoryEntriesIfEnabled({
+      historyMap: spaceHistories,
+      historyKey,
+      limit: historyLimit,
+    });
+  }
 }
 
 async function downloadAttachment(

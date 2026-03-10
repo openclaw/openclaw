@@ -2,6 +2,7 @@ import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matri
 import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
   createReplyPrefixOptions,
@@ -803,7 +804,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       if (!queuedFinal) {
+        if (isRoom) {
+          clearHistoryEntriesIfEnabled({
+            historyMap: roomHistories,
+            historyKey: combinedHistoryKey,
+            limit: historyLimit,
+          });
+        }
         return;
+      }
+      if (isRoom) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: roomHistories,
+          historyKey: combinedHistoryKey,
+          limit: historyLimit,
+        });
       }
       didSendReply = true;
       const finalCount = counts.final;

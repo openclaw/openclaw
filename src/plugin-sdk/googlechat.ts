@@ -62,6 +62,7 @@ export {
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export {
   buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
