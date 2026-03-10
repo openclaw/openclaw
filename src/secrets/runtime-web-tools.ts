@@ -385,6 +385,11 @@ export async function resolveRuntimeWebTools(params: {
     };
     diagnostics.push(diagnostic);
     searchMetadata.diagnostics.push(diagnostic);
+    pushWarning(params.context, {
+      code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
+      path: "tools.web.search.provider",
+      message: diagnostic.message,
+    });
   }
 
   if (configuredProvider) {

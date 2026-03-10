@@ -245,6 +245,47 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("warns when provider is invalid and falls back to auto-detect", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "invalid-provider",
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GEMINI_API_KEY_REF: "gemini-runtime-key",
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBeUndefined();
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe("gemini-runtime-key");
+    expect(metadata.search.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
+          path: "tools.web.search.provider",
+        }),
+      ]),
+    );
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
+          path: "tools.web.search.provider",
+        }),
+      ]),
+    );
+  });
+
   it("fails fast when configured provider ref is unresolved with no fallback", async () => {
     const sourceConfig = asConfig({
       tools: {
