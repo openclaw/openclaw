@@ -18,6 +18,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { isGatewayNonLoopbackBindMode } from "../config/gateway-control-ui-origins.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -460,6 +461,8 @@ export async function startGatewayServer(
     config: cfgAtStart,
     writeConfig: writeConfigFile,
     log,
+    bindOverride: isGatewayNonLoopbackBindMode(opts.bind) ? opts.bind : undefined,
+    defaultPort: port,
   });
 
   initSubagentRegistry();
