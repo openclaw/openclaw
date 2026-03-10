@@ -500,6 +500,32 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("sends inline buffers without loading media URLs", async () => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 73,
+      chat: { id: chatId },
+    });
+    const api = { sendDocument } as unknown as {
+      sendDocument: typeof sendDocument;
+    };
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      buffer: Buffer.from("hello world").toString("base64"),
+      filename: "note.txt",
+      contentType: "text/plain",
+    });
+
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(res.messageId).toBe("73");
+  });
+
   it("splits long captions into media + text messages when text exceeds 1024 chars", async () => {
     const chatId = "123";
     const longText = "A".repeat(1100);
