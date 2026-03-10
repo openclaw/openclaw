@@ -244,6 +244,13 @@ export class ChainMemoryManager implements MemorySearchManager {
   status(): MemoryProviderStatus {
     const providerStats = Array.from(this.providers.values()).map((p) => p.getStats());
 
+    // Convert Map to plain object for JSON serialization (P2 fix)
+    const healthMap = this.healthMonitor.getHealthStatus();
+    const healthObj: Record<string, string> = {};
+    healthMap.forEach((status, name) => {
+      healthObj[name] = status;
+    });
+
     return {
       backend: "chain",
       provider: "chain",
@@ -253,7 +260,7 @@ export class ChainMemoryManager implements MemorySearchManager {
         : undefined,
       custom: {
         providers: providerStats,
-        health: this.healthMonitor.getHealthStatus(),
+        health: healthObj,
       },
     };
   }
