@@ -37,6 +37,7 @@ const whatsappConfig = {
     whatsapp: {
       allowFrom: ["*"],
     },
+    imessage: {},
   },
 } as OpenClawConfig;
 
@@ -447,9 +448,16 @@ describe("runMessageAction context isolation", () => {
   });
 
   it("blocks cross-provider sends by default", async () => {
+    const crossProviderCfg = {
+      channels: {
+        slack: { botToken: "xoxb-test", appToken: "xapp-test" },
+        telegram: {},
+      },
+    } as OpenClawConfig;
+
     await expect(
       runDrySend({
-        cfg: slackConfig,
+        cfg: crossProviderCfg,
         actionParams: {
           channel: "telegram",
           target: "@opsbot",
@@ -1126,7 +1134,7 @@ describe("runMessageAction components parsing", () => {
       buttons: [{ label: "A", customId: "a" }],
     };
     const result = await runMessageAction({
-      cfg: {} as OpenClawConfig,
+      cfg: { channels: { discord: {} } } as OpenClawConfig,
       action: "send",
       params: {
         channel: "discord",
@@ -1145,7 +1153,7 @@ describe("runMessageAction components parsing", () => {
   it("throws on invalid components JSON strings", async () => {
     await expect(
       runMessageAction({
-        cfg: {} as OpenClawConfig,
+        cfg: { channels: { discord: {} } } as OpenClawConfig,
         action: "send",
         params: {
           channel: "discord",
@@ -1203,7 +1211,7 @@ describe("runMessageAction accountId defaults", () => {
 
   it("propagates defaultAccountId into params", async () => {
     await runMessageAction({
-      cfg: {} as OpenClawConfig,
+      cfg: { channels: { discord: {} } } as OpenClawConfig,
       action: "send",
       params: {
         channel: "discord",
@@ -1230,6 +1238,7 @@ describe("runMessageAction accountId defaults", () => {
   it("falls back to the agent's bound account when accountId is omitted", async () => {
     await runMessageAction({
       cfg: {
+        channels: { discord: {} },
         bindings: [{ agentId: "agent-b", match: { channel: "discord", accountId: "account-b" } }],
       } as OpenClawConfig,
       action: "send",

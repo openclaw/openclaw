@@ -112,11 +112,11 @@ export async function resolveMessageChannelSelection(params: {
       throw new Error(`Unknown channel: ${String(normalized)}`);
     }
 
-    // Known channel — verify it's actually configured before accepting (#42080).
-    // Throw on mismatch so the agent/caller sees a clear error and can retry
-    // with a valid channel instead of silently rerouting to a different one.
-    const configured = await listConfiguredMessageChannels(params.cfg);
-    if (!configured.includes(normalized as MessageChannelId)) {
+    // Known channel — verify it has a config entry before accepting (#42080).
+    // Check config presence, not full plugin auth (isConfigured), so channels
+    // with valid config but pending auth (e.g. WhatsApp web linking) still work.
+    if (params.cfg.channels?.[normalized] === undefined) {
+      const configured = await listConfiguredMessageChannels(params.cfg);
       throw new Error(
         configured.length > 0
           ? `Channel ${String(normalized)} is not configured. Configured channels: ${configured.join(", ")}`
@@ -125,7 +125,7 @@ export async function resolveMessageChannelSelection(params: {
     }
     return {
       channel: normalized as MessageChannelId,
-      configured,
+      configured: await listConfiguredMessageChannels(params.cfg),
       source: "explicit",
     };
   }

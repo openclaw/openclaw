@@ -62,9 +62,7 @@ describe("resolveMessageChannelSelection", () => {
         cfg: {} as never,
         channel: "whatsapp",
       }),
-    ).rejects.toThrow(
-      "Channel whatsapp is not configured (no message channels are configured).",
-    );
+    ).rejects.toThrow("Channel whatsapp is not configured (no message channels are configured).");
   });
 
   it("falls back to tool context channel when explicit channel is unknown", async () => {
