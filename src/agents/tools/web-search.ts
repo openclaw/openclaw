@@ -194,6 +194,33 @@ function createWebSearchSchema(params: {
     ),
   } as const;
 
+  const perplexityStructuredFilterSchema = {
+    country: Type.Optional(
+      Type.String({
+        description:
+          "Native Perplexity Search API only. 2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
+      }),
+    ),
+    language: Type.Optional(
+      Type.String({
+        description:
+          "Native Perplexity Search API only. ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
+      }),
+    ),
+    date_after: Type.Optional(
+      Type.String({
+        description:
+          "Native Perplexity Search API only. Only results published after this date (YYYY-MM-DD).",
+      }),
+    ),
+    date_before: Type.Optional(
+      Type.String({
+        description:
+          "Native Perplexity Search API only. Only results published before this date (YYYY-MM-DD).",
+      }),
+    ),
+  } as const;
+
   if (params.provider === "brave") {
     return Type.Object({
       ...querySchema,
@@ -222,7 +249,8 @@ function createWebSearchSchema(params: {
     }
     return Type.Object({
       ...querySchema,
-      ...filterSchema,
+      freshness: filterSchema.freshness,
+      ...perplexityStructuredFilterSchema,
       domain_filter: Type.Optional(
         Type.Array(Type.String(), {
           description:

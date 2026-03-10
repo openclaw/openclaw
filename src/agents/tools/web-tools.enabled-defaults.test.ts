@@ -536,6 +536,42 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(properties?.domain_filter).toBeDefined();
     expect(properties?.max_tokens).toBeDefined();
     expect(properties?.max_tokens_per_page).toBeDefined();
+    expect(
+      (
+        properties?.country as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
+    expect(
+      (
+        properties?.language as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
+    expect(
+      (
+        properties?.date_after as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
+    expect(
+      (
+        properties?.date_before as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
   });
 
   it("keeps structured schema params on the native Search API path", () => {

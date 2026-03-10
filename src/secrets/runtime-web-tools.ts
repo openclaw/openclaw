@@ -703,7 +703,3 @@ export async function resolveRuntimeWebTools(params: {
     diagnostics,
   };
 }
-
-export const __testing = {
-  WEB_SEARCH_PROVIDERS,
-};
