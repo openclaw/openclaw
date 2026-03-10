@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   withTemporaryEnvProxyDispatcher: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
   loginOpenAICodex: mocks.loginOpenAICodex,
 }));
 
