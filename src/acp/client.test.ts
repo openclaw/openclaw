@@ -117,8 +117,8 @@ describe("resolveAcpClientSpawnEnv", () => {
     const stripKeys = new Set(["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"]);
     const env = resolveAcpClientSpawnEnv(
       {
-        OPENAI_API_KEY: "openai-secret",
-        GITHUB_TOKEN: "gh-secret",
+        OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
+        GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
         HF_TOKEN: "hf-secret",
         OPENCLAW_API_KEY: "keep-me",
         PATH: "/usr/bin",

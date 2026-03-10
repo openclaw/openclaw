@@ -19,8 +19,8 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
-import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
