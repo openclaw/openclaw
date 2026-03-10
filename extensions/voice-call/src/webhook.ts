@@ -15,6 +15,7 @@ import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
+import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -60,6 +61,9 @@ export class VoiceCallWebhookServer {
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
 
+  /** Realtime voice handler — present when config.realtime.enabled is true */
+  private realtimeHandler: RealtimeCallHandler | null = null;
+
   constructor(
     config: VoiceCallConfig,
     manager: CallManager,
@@ -82,6 +86,13 @@ export class VoiceCallWebhookServer {
    */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
+  }
+
+  /**
+   * Wire the realtime call handler (called from runtime.ts before server starts).
+   */
+  setRealtimeHandler(handler: RealtimeCallHandler): void {
+    this.realtimeHandler = handler;
   }
 
   /**
@@ -229,9 +240,15 @@ export class VoiceCallWebhookServer {
         });
       });
 
-      // Handle WebSocket upgrades for media streams
-      if (this.mediaStreamHandler) {
+      // Handle WebSocket upgrades for realtime voice and media streams
+      if (this.realtimeHandler || this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
+          // Realtime voice takes precedence when the path matches
+          if (this.realtimeHandler && this.isRealtimeMode(request)) {
+            console.log("[voice-call] WebSocket upgrade for realtime voice");
+            this.realtimeHandler.handleWebSocketUpgrade(request, socket, head);
+            return;
+          }
           const path = this.getUpgradePathname(request);
           if (path === streamPath) {
             console.log("[voice-call] WebSocket upgrade for media stream");
@@ -338,10 +355,29 @@ export class VoiceCallWebhookServer {
     this.writeWebhookResponse(res, payload);
   }
 
+  /**
+   * Returns true for WebSocket upgrade paths that belong to the realtime handler.
+   * Used only for upgrade routing — not for the inbound HTTP webhook POST.
+   */
+  private isRealtimeMode(req: http.IncomingMessage): boolean {
+    return (req.url ?? "/").includes("/realtime");
+  }
+
   private async runWebhookPipeline(
     req: http.IncomingMessage,
     webhookPath: string,
   ): Promise<WebhookResponsePayload> {
+    // Realtime mode: whenever the realtime handler is active, ALL inbound calls
+    // use it. The handler returns TwiML <Connect><Stream> so Twilio opens a
+    // WebSocket to the /voice/stream/realtime path, which is routed back here
+    // via the upgrade handler's isRealtimeMode() check.
+    if (this.realtimeHandler && req.method === "POST") {
+      const url = buildRequestUrl(req.url, req.headers.host);
+      if (this.isWebhookPathMatch(url.pathname, webhookPath)) {
+        return this.realtimeHandler.buildTwiMLPayload(req);
+      }
+    }
+
     const url = buildRequestUrl(req.url, req.headers.host);
 
     if (url.pathname === "/voice/hold-music") {
