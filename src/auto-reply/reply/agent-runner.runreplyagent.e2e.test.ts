@@ -21,7 +21,7 @@ type AgentRunParams = {
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
@@ -593,6 +593,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expect(onToolResult).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("preserves channelData on forwarded tool results", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+      channelData: {
+        execApproval: {
+          approvalId: "117ba06d-1111-2222-3333-444444444444",
+          approvalSlug: "117ba06d",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+        },
+      },
+    });
   });
 
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
@@ -2043,3 +2077,4 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 });
+import type { ReplyPayload } from "../types.js";

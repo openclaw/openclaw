@@ -300,6 +300,9 @@ function normalizePayloadForChannelDelivery(
 function normalizePayloadsForChannelDelivery(
   payloads: ReplyPayload[],
   channel: Exclude<OutboundChannel, "none">,
+  _cfg: OpenClawConfig,
+  _to: string,
+  _accountId?: string,
 ): ReplyPayload[] {
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
@@ -307,10 +310,13 @@ function normalizePayloadsForChannelDelivery(
     // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
     // Models occasionally produce <br>, <b>, etc. that render as literal text.
     // See https://github.com/openclaw/openclaw/issues/31884
-    if (isPlainTextSurface(channel) && payload.text) {
+    if (isPlainTextSurface(channel) && sanitizedPayload.text) {
       // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
-      if (!(channel === "telegram" && payload.channelData)) {
-        sanitizedPayload = { ...payload, text: sanitizeForPlainText(payload.text) };
+      if (!(channel === "telegram" && sanitizedPayload.channelData)) {
+        sanitizedPayload = {
+          ...sanitizedPayload,
+          text: sanitizeForPlainText(sanitizedPayload.text),
+        };
       }
     }
     const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
@@ -662,7 +668,13 @@ async function deliverOutboundPayloadsCore(
       })),
     };
   };
-  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel);
+  const normalizedPayloads = normalizePayloadsForChannelDelivery(
+    payloads,
+    channel,
+    cfg,
+    to,
+    accountId,
+  );
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;

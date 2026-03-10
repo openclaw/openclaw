@@ -6,6 +6,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { shouldSuppressLocalDiscordExecApprovalPrompt } from "../../discord/exec-approvals.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -375,7 +376,26 @@ export async function dispatchReplyFromConfig(params: {
     let blockCount = 0;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
+      if (
+        normalizeMessageChannel(ctx.Surface ?? ctx.Provider) === "discord" &&
+        shouldSuppressLocalDiscordExecApprovalPrompt({
+          cfg,
+          accountId: ctx.AccountId,
+          payload,
+        })
+      ) {
+        return null;
+      }
       if (shouldSendToolSummaries) {
+        return payload;
+      }
+      const execApproval =
+        payload.channelData &&
+        typeof payload.channelData === "object" &&
+        !Array.isArray(payload.channelData)
+          ? payload.channelData.execApproval
+          : undefined;
+      if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
       // Group/native flows intentionally suppress tool summary text, but media-only

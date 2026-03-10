@@ -450,8 +450,8 @@ export async function runAgentTurnWithFallback(params: {
                           }
                           await params.typingSignals.signalTextDelta(text);
                           await onToolResult({
+                            ...payload,
                             text,
-                            mediaUrls: payload.mediaUrls,
                           });
                         })
                         .catch((err) => {

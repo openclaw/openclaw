@@ -579,6 +579,23 @@ describe("notifications changed events", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
     expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
   });
+
+  it("suppresses exec notifyOnExit events when payload opts out", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n7", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "approval-1",
+        exitCode: 0,
+        output: "ok",
+        suppressNotifyOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("agent request events", () => {

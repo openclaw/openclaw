@@ -102,6 +102,7 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -125,14 +126,17 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
+  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText = params.lastAssistant
-    ? formatAssistantErrorText(params.lastAssistant, {
-        cfg: params.config,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        model: params.model,
-      })
+    ? suppressAssistantArtifacts
+      ? undefined
+      : formatAssistantErrorText(params.lastAssistant, {
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          provider: params.provider,
+          model: params.model,
+        })
     : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined
@@ -184,8 +188,9 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText =
-    params.lastAssistant && params.reasoningLevel === "on"
+  const reasoningText = suppressAssistantArtifacts
+    ? ""
+    : params.lastAssistant && params.reasoningLevel === "on"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
@@ -243,13 +248,14 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
-  ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts = suppressAssistantArtifacts
+    ? []
+    : (params.assistantTexts.length
+        ? params.assistantTexts
+        : fallbackAnswerText
+          ? [fallbackAnswerText]
+          : []
+      ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

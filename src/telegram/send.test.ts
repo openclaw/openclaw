@@ -18,6 +18,7 @@ const {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendTypingTelegram,
   sendPollTelegram,
   sendStickerTelegram,
 } = await importTelegramSendModule();
@@ -195,6 +196,25 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("sends typing to the resolved chat and topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction.mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890:topic:271", {
+      accountId: "default",
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledWith("-1001234567890", "typing", {
+      message_thread_id: 271,
+    });
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
