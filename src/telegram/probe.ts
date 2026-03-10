@@ -27,6 +27,10 @@ export type TelegramProbeOptions = {
 const probeFetcherCache = new Map<string, typeof fetch>();
 const MAX_PROBE_FETCHER_CACHE_SIZE = 64;
 
+export function resetTelegramProbeFetcherCacheForTests(): void {
+  probeFetcherCache.clear();
+}
+
 function resolveProbeOptions(
   proxyOrOptions?: string | TelegramProbeOptions,
 ): TelegramProbeOptions | undefined {

@@ -11,13 +11,19 @@ type ProxyFetchWithMetadata = typeof fetch & {
  * Uses undici's ProxyAgent under the hood.
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
-  const agent = new ProxyAgent(proxyUrl);
+  let agent: ProxyAgent | null = null;
+  const resolveAgent = (): ProxyAgent => {
+    if (!agent) {
+      agent = new ProxyAgent(proxyUrl);
+    }
+    return agent;
+  };
   // undici's fetch is runtime-compatible with global fetch but the types diverge
   // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
   const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
     undiciFetch(input as string | URL, {
       ...(init as Record<string, unknown>),
-      dispatcher: agent,
+      dispatcher: resolveAgent(),
     }) as unknown as Promise<Response>) as ProxyFetchWithMetadata;
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
     value: proxyUrl,

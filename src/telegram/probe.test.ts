@@ -1,6 +1,6 @@
 import { afterEach, type Mock, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { probeTelegram } from "./probe.js";
+import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
@@ -56,6 +56,7 @@ describe("probeTelegram retry logic", () => {
   }
 
   afterEach(() => {
+    resetTelegramProbeFetcherCacheForTests();
     resolveTelegramFetch.mockReset();
     makeProxyFetch.mockReset();
     vi.unstubAllEnvs();

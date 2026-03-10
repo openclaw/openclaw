@@ -118,6 +118,10 @@ const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
 const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
 
+export function resetTelegramClientOptionsCacheForTests(): void {
+  telegramClientOptionsCache.clear();
+}
+
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
   if (!enabled) {

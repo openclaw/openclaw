@@ -51,7 +51,12 @@ vi.mock("grammy", () => ({
   InputFile: class {},
 }));
 
-import { deleteMessageTelegram, reactMessageTelegram, sendMessageTelegram } from "./send.js";
+import {
+  deleteMessageTelegram,
+  reactMessageTelegram,
+  resetTelegramClientOptionsCacheForTests,
+  sendMessageTelegram,
+} from "./send.js";
 
 describe("telegram proxy client", () => {
   const proxyUrl = "http://proxy.test:8080";
@@ -76,6 +81,7 @@ describe("telegram proxy client", () => {
   };
 
   beforeEach(() => {
+    resetTelegramClientOptionsCacheForTests();
     vi.unstubAllEnvs();
     botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     botApi.setMessageReaction.mockResolvedValue(undefined);
