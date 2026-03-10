@@ -1,7 +1,10 @@
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  loadAgentLocalAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store.js";
 import type { MediaToolsConfig, MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -18,13 +21,19 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
 
   function addFromModels(models: MediaUnderstandingModelConfig[] | undefined): void {
     for (const m of models ?? []) {
-      if (m.profile) ids.add(m.profile);
-      if (m.preferredProfile) ids.add(m.preferredProfile);
+      if (m.profile) {
+        ids.add(m.profile);
+      }
+      if (m.preferredProfile) {
+        ids.add(m.preferredProfile);
+      }
     }
   }
 
   const media = cfg.tools?.media;
-  if (!media) return ids;
+  if (!media) {
+    return ids;
+  }
 
   addFromModels(media.models);
   addFromModels(media.image?.models);
@@ -34,7 +43,9 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
   // Also cover per-agent tool overrides
   for (const agent of cfg.agents?.list ?? []) {
     const agentMedia = (agent as { tools?: { media?: MediaToolsConfig } }).tools?.media;
-    if (!agentMedia) continue;
+    if (!agentMedia) {
+      continue;
+    }
     addFromModels(agentMedia.models);
     addFromModels(agentMedia.image?.models);
     addFromModels(agentMedia.audio?.models);
@@ -57,10 +68,16 @@ export async function modelsAuthCleanCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   const cfg = await loadModelsConfig({ commandName: "models auth clean", runtime });
-  const agentId =
-    resolveKnownAgentId({ cfg, rawAgentId: opts.agent }) ?? resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent }) ?? defaultAgentId;
   const agentDir = resolveAgentDir(cfg, agentId);
   const authStorePath = shortenHomePath(`${agentDir}/auth-profiles.json`);
+
+  // For non-default agents, ensureAuthProfileStore returns a merged (main + agent-local)
+  // view. toRemove must be derived from the agent-local-only profile set because the
+  // write via updateAuthProfileStoreWithLock targets only the agent-local file. Profiles
+  // that exist exclusively in the main store must never appear in toRemove.
+  const isDefaultAgent = agentId === defaultAgentId;
 
   // Collect profile ids that are explicitly configured: union of auth.profiles keys,
   // ids referenced in auth.order, and ids pinned in tools.media model entries.
@@ -73,7 +90,9 @@ export async function modelsAuthCleanCommand(
   for (const ids of Object.values(cfg.auth?.order ?? {})) {
     if (Array.isArray(ids)) {
       for (const id of ids) {
-        if (typeof id === "string" && id.trim()) configuredProfiles.add(id.trim());
+        if (typeof id === "string" && id.trim()) {
+          configuredProfiles.add(id.trim());
+        }
       }
     }
   }
@@ -81,7 +100,9 @@ export async function modelsAuthCleanCommand(
     configuredProfiles.add(id);
   }
 
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = isDefaultAgent
+    ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
+    : loadAgentLocalAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const storeProfileIds = Object.keys(store.profiles);
 
   const toRemove = storeProfileIds.filter((id) => !configuredProfiles.has(id));
@@ -137,7 +158,9 @@ export async function modelsAuthCleanCommand(
         2,
       ),
     );
-    if (opts.dryRun || toRemove.length === 0) return;
+    if (opts.dryRun || toRemove.length === 0) {
+      return;
+    }
   } else {
     runtime.log(`Agent:      ${agentId}`);
     runtime.log(`Auth file:  ${authStorePath}`);
@@ -146,19 +169,27 @@ export async function modelsAuthCleanCommand(
   }
 
   if (toRemove.length === 0) {
-    if (!opts.json) runtime.log("Nothing to clean up.");
+    if (!opts.json) {
+      runtime.log("Nothing to clean up.");
+    }
     return;
   }
 
   if (!opts.json) {
     runtime.log(`\nProfiles to remove (${toRemove.length}):`);
-    for (const id of toRemove) runtime.log(`  - ${id}`);
+    for (const id of toRemove) {
+      runtime.log(`  - ${id}`);
+    }
     runtime.log(`Profiles to keep (${toKeep.length}):`);
-    for (const id of toKeep) runtime.log(`  + ${id}`);
+    for (const id of toKeep) {
+      runtime.log(`  + ${id}`);
+    }
   }
 
   if (opts.dryRun) {
-    if (!opts.json) runtime.log("\n(dry run -- no changes written)");
+    if (!opts.json) {
+      runtime.log("\n(dry run -- no changes written)");
+    }
     return;
   }
 
