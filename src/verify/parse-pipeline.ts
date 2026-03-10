@@ -32,13 +32,25 @@ function extractReturnArrayElements(func: ts.FunctionDeclaration): ts.Expression
     return elements;
   }
 
-  ts.forEachChild(func.body, (node) => {
+  let foundReturn = false;
+  const visit = (node: ts.Node) => {
     if (ts.isReturnStatement(node) && node.expression) {
+      foundReturn = true;
       if (ts.isArrayLiteralExpression(node.expression)) {
         elements.push(...node.expression.elements);
+      } else {
+        throw new Error(
+          "[parse-pipeline] buildDefaultToolPolicyPipelineSteps must return an array literal",
+        );
       }
     }
-  });
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(func.body, visit);
+  if (!foundReturn) {
+    throw new Error("[parse-pipeline] No return statement found in tool policy pipeline function");
+  }
   return elements;
 }
 
