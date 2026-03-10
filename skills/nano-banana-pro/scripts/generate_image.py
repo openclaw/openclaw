@@ -4,6 +4,7 @@
 # dependencies = [
 #     "google-genai>=1.0.0",
 #     "pillow>=10.0.0",
+#     "socksio",
 # ]
 # ///
 """
@@ -33,6 +34,12 @@ SUPPORTED_ASPECT_RATIOS = [
     "16:9",
     "21:9",
 ]
+
+# Force proxy settings for local environment
+os.environ['HTTP_PROXY'] = 'http://127.0.0.1:7890'
+os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:7890'
+# Also set for httpx compatibility
+os.environ['all_proxy'] = 'socks5://127.0.0.1:7891'
 
 
 def get_api_key(provided_key: str | None) -> str | None:

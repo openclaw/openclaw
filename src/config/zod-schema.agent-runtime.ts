@@ -269,6 +269,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("tavily"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -311,6 +312,16 @@ export const ToolsWebSearchSchema = z
     brave: z
       .object({
         mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        searchDepth: z.union([z.literal("basic"), z.literal("advanced")]).optional(),
+        includeAnswer: z.boolean().optional(),
+        includeRawContent: z.boolean().optional(),
+        maxResults: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
