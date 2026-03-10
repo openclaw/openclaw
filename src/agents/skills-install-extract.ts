@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
-  createTarEntrySafetyChecker,
+  createTarEntryPreflightChecker,
   extractArchive as extractArchiveSafe,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,
@@ -102,7 +102,7 @@ export async function extractArchive(params: {
           code: 1,
         };
       }
-      const checkTarEntrySafety = createTarEntrySafetyChecker({
+      const checkTarEntrySafety = createTarEntryPreflightChecker({
         rootDir: destinationRealDir,
         stripComponents: strip,
         escapeLabel: "targetDir",
