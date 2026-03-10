@@ -228,7 +228,7 @@ export class MemoryDB {
       };
     });
 
-    return mapped.filter((r) => r.score >= minScore);
+    return mapped.filter((r) => r.score >= minScore).slice(0, limit);
   }
 
   /**
@@ -286,7 +286,9 @@ export class MemoryDB {
       }
     }
 
-    return [...initialResults, ...associativeResults].sort((a, b) => b.score - a.score);
+    return [...initialResults, ...associativeResults]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
   async getById(id: string): Promise<MemoryEntry | null> {
