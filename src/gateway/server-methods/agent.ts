@@ -16,6 +16,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { storeA2AResult, type A2AResult } from "../../infra/a2a-result-cache.js";
 import {
   registerAgentRunContext,
   extractSkillInvocationRouting,
@@ -204,6 +205,8 @@ function dispatchAgentRunFromGateway(params: {
   skillRouting?: {
     returnTo: string;
     correlationId: string;
+    skill?: string;
+    targetSessionKey?: string;
   };
 }) {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
@@ -231,6 +234,9 @@ function dispatchAgentRunFromGateway(params: {
           params.skillRouting.returnTo,
           params.skillRouting.correlationId,
           result,
+          undefined,
+          params.skillRouting.skill,
+          params.skillRouting.targetSessionKey,
         );
         if (routed) {
           params.context.logGateway.debug(
@@ -269,6 +275,8 @@ function dispatchAgentRunFromGateway(params: {
           params.skillRouting.correlationId,
           undefined,
           String(err),
+          params.skillRouting.skill,
+          params.skillRouting.targetSessionKey,
         );
       }
 
@@ -281,6 +289,7 @@ function dispatchAgentRunFromGateway(params: {
 
 /**
  * RFC-A2A-RESPONSE-ROUTING: Send skill response to returnTo session via node-to-session messaging
+ * Also stores the result in the A2A result cache for run-scoped retrieval.
  */
 function sendSkillResponseToSession(
   context: GatewayRequestHandlerOptions["context"],
@@ -288,23 +297,40 @@ function sendSkillResponseToSession(
   correlationId: string,
   output?: unknown,
   error?: string,
+  skill?: string,
+  targetSessionKey?: string,
 ): boolean {
   try {
+    const status = error ? "error" : "completed";
     const skillResponse: SkillResponse = {
       kind: "skill_response",
       correlationId,
       returnToSessionKey,
       output,
-      status: error ? "error" : "completed",
+      status,
       timestamp: Date.now(),
       error,
     };
+
+    // Store in A2A result cache for run-scoped retrieval (fixes concurrent caller race)
+    const a2aResult: A2AResult = {
+      status,
+      correlationId,
+      returnToSessionKey,
+      targetSessionKey: targetSessionKey ?? returnToSessionKey,
+      skill: skill ?? "unknown",
+      output,
+      error,
+      createdAt: skillResponse.timestamp,
+      completedAt: skillResponse.timestamp,
+    };
+    storeA2AResult(correlationId, a2aResult);
 
     // Deliver to the returnTo session via node-to-session messaging
     context.nodeSendToSession(returnToSessionKey, "skill_response", skillResponse);
 
     context.logGateway.debug(
-      `[A2A] Routed skill_response to ${returnToSessionKey}: correlationId=${correlationId}, status=${error ? "error" : "completed"}`,
+      `[A2A] Routed skill_response to ${returnToSessionKey}: correlationId=${correlationId}, status=${status}`,
     );
 
     return true;
@@ -854,7 +880,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       respond,
       context,
       skillRouting: skillRouting
-        ? { returnTo: skillRouting.returnTo, correlationId: skillRouting.correlationId }
+        ? {
+            returnTo: skillRouting.returnTo,
+            correlationId: skillRouting.correlationId,
+            skill: skillRouting.skill,
+            targetSessionKey: skillRouting.targetSessionKey,
+          }
         : undefined,
     });
   },

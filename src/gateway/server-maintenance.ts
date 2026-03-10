@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import { cleanupExpiredResults } from "../infra/a2a-result-cache.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -150,6 +151,13 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
+    }
+
+    // RFC-A2A-RESPONSE-ROUTING: Cleanup expired A2A results (bounded storage)
+    try {
+      cleanupExpiredResults();
+    } catch (err) {
+      params.logHealth.error(`A2A result cleanup failed: ${formatError(err)}`);
     }
   }, 60_000);
 
