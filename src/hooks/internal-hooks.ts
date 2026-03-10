@@ -274,6 +274,11 @@ export function getRegisteredEventKeys(): string[] {
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+  // Normalize postHookActions before entering the handler loop — handlers
+  // may push to this array during execution. Legacy callers that construct
+  // hook events without the field would otherwise hit a TypeError on .push().
+  event.postHookActions ??= [];
+
   const typeHandlers = handlers.get(event.type) ?? [];
   const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
 
@@ -297,10 +302,7 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   // callbacks do not execute in this drain cycle. Without this, a self-
   // scheduling action (one that pushes another action) could loop infinitely
   // because Array's for...of iterator is live and re-reads length each step.
-  // Default to empty array for legacy callers that construct hook events
-  // without the postHookActions field (pre-dates this PR's event shape change).
-  const actions = event.postHookActions ?? [];
-  await drainPostHookActions(actions, (err) => {
+  await drainPostHookActions(event.postHookActions, (err) => {
     const message = err instanceof Error ? err.message : String(err);
     log.error(`Post-hook action error [${event.type}:${event.action}]: ${message}`);
   });
