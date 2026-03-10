@@ -1142,6 +1142,27 @@ describe("resolveOutboundSessionRoute", () => {
     });
   });
 
+  it("routes bare targets as direct sessions when resolvedTarget kind is user", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "custom" as never,
+      agentId: "main",
+      target: "alice",
+      resolvedTarget: {
+        to: "alice",
+        kind: "user",
+        source: "normalized",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:custom:direct:alice",
+      from: "custom:alice",
+      to: "user:alice",
+      chatType: "direct",
+    });
+  });
+
   it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
     await expect(
       resolveOutboundSessionRoute({
