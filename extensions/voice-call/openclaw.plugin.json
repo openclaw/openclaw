@@ -134,6 +134,23 @@
       "label": "ElevenLabs Base URL",
       "advanced": true
     },
+    "tts.volcengine.appId": {
+      "label": "Volcengine App ID",
+      "advanced": true
+    },
+    "tts.volcengine.accessKey": {
+      "label": "Volcengine Access Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "tts.volcengine.resourceId": {
+      "label": "Volcengine Resource ID",
+      "advanced": true
+    },
+    "tts.volcengine.speaker": {
+      "label": "Volcengine Speaker",
+      "advanced": true
+    },
     "publicUrl": {
       "label": "Public Webhook URL",
       "advanced": true
@@ -421,7 +438,7 @@
           },
           "provider": {
             "type": "string",
-            "enum": ["openai", "elevenlabs", "edge"]
+            "enum": ["openai", "elevenlabs", "edge", "volcengine"]
           },
           "summaryModel": {
             "type": "string"
@@ -565,6 +582,39 @@
                 "type": "integer",
                 "minimum": 1000,
                 "maximum": 120000
+              }
+            }
+          },
+          "volcengine": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "type": "string"
+              },
+              "accessKey": {
+                "type": "string"
+              },
+              "resourceId": {
+                "type": "string"
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string"
+              },
+              "sampleRate": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "speechRate": {
+                "type": "integer",
+                "minimum": -50,
+                "maximum": 100
+              },
+              "baseUrl": {
+                "type": "string"
               }
             }
           },

@@ -464,6 +464,11 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
+    const volcengineCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: { volcengine: { appId: "test-app-id" } } },
+    };
+
     it("selects provider based on available API keys", () => {
       const cases = [
         {
@@ -472,6 +477,7 @@ describe("tts", () => {
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
+          cfg: baseCfg,
           prefsPath: "/tmp/tts-prefs-openai.json",
           expected: "openai",
         },
@@ -481,6 +487,7 @@ describe("tts", () => {
             ELEVENLABS_API_KEY: "test-elevenlabs-key",
             XI_API_KEY: undefined,
           },
+          cfg: baseCfg,
           prefsPath: "/tmp/tts-prefs-elevenlabs.json",
           expected: "elevenlabs",
         },
@@ -489,7 +496,20 @@ describe("tts", () => {
             OPENAI_API_KEY: undefined,
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
+            VOLCENGINE_ACCESS_KEY: "test-volcengine-key",
           },
+          cfg: volcengineCfg,
+          prefsPath: "/tmp/tts-prefs-volcengine.json",
+          expected: "volcengine",
+        },
+        {
+          env: {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            VOLCENGINE_ACCESS_KEY: undefined,
+          },
+          cfg: baseCfg,
           prefsPath: "/tmp/tts-prefs-edge.json",
           expected: "edge",
         },
@@ -497,11 +517,28 @@ describe("tts", () => {
 
       for (const testCase of cases) {
         withEnv(testCase.env, () => {
-          const config = resolveTtsConfig(baseCfg);
+          const config = resolveTtsConfig(testCase.cfg);
           const provider = getTtsProvider(config, testCase.prefsPath);
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+
+    it("falls back to edge when volcengine has accessKey but no appId", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+          VOLCENGINE_ACCESS_KEY: "test-volcengine-key",
+          VOLCENGINE_APP_ID: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-no-appid.json");
+          expect(provider).toBe("edge");
+        },
+      );
     });
   });
 
@@ -553,6 +590,58 @@ describe("tts", () => {
       withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" }, () => {
         const config = resolveTtsConfig(baseCfg);
         expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
+    });
+  });
+
+  describe("resolveTtsConfig – volcengine", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("uses volcengine defaults when no config is provided", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.volcengine.resourceId).toBe("seed-tts-2.0");
+      expect(config.volcengine.speaker).toBe("zh_female_vv_uranus_bigtts");
+      expect(config.volcengine.format).toBe("mp3");
+      expect(config.volcengine.sampleRate).toBe(24000);
+      expect(config.volcengine.speechRate).toBe(0);
+      expect(config.volcengine.baseUrl).toBe("https://openspeech.bytedance.com");
+    });
+
+    it("resolves volcengine config from explicit values", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            volcengine: {
+              appId: "my-app",
+              resourceId: "seed-tts-1.0",
+              speaker: "zh_male_test",
+              format: "wav",
+              sampleRate: 16000,
+              speechRate: 10,
+              baseUrl: "https://custom.example.com",
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.volcengine.appId).toBe("my-app");
+      expect(config.volcengine.resourceId).toBe("seed-tts-1.0");
+      expect(config.volcengine.speaker).toBe("zh_male_test");
+      expect(config.volcengine.format).toBe("wav");
+      expect(config.volcengine.sampleRate).toBe(16000);
+      expect(config.volcengine.speechRate).toBe(10);
+      expect(config.volcengine.baseUrl).toBe("https://custom.example.com");
+    });
+
+    it("resolves Volcengine access key from env var", () => {
+      const key = "volc-key-from-env";
+      withEnv({ VOLCENGINE_ACCESS_KEY: key }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(tts.resolveTtsApiKey(config, "volcengine")).toBe(key);
       });
     });
   });

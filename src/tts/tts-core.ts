@@ -151,7 +151,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "volcengine"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -655,6 +660,131 @@ export async function openaiTTS(params: {
     }
 
     return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export const DEFAULT_VOLCENGINE_BASE_URL = "https://openspeech.bytedance.com";
+
+function normalizeVolcengineBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_VOLCENGINE_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+type VolcengineV3Chunk = {
+  code: number;
+  data?: string;
+  message?: string;
+};
+
+const VOLCENGINE_AUDIO_CHUNK_CODE = 0;
+const VOLCENGINE_STREAM_COMPLETE_CODE = 20000000;
+
+export async function volcengineTTS(params: {
+  text: string;
+  appId: string;
+  accessKey: string;
+  resourceId: string;
+  speaker: string;
+  format: string;
+  sampleRate: number;
+  speechRate: number;
+  baseUrl: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    appId,
+    accessKey,
+    resourceId,
+    speaker,
+    format,
+    sampleRate,
+    speechRate,
+    baseUrl,
+    timeoutMs,
+  } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = `${normalizeVolcengineBaseUrl(baseUrl)}/api/v3/tts/unidirectional`;
+
+    const body = {
+      user: { uid: "openclaw" },
+      req_params: {
+        text,
+        speaker,
+        audio_params: {
+          format,
+          sample_rate: sampleRate,
+          speech_rate: speechRate,
+        },
+      },
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-App-Id": appId,
+        "X-Api-Access-Key": accessKey,
+        "X-Api-Resource-Id": resourceId,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`Volcengine TTS V3 API error (${response.status}): ${errText}`);
+    }
+
+    const responseText = await response.text();
+    if (!responseText.trim()) {
+      throw new Error("Volcengine TTS returned empty response");
+    }
+
+    const audioChunks: Buffer[] = [];
+    const lines = responseText.split("\n");
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let chunk: VolcengineV3Chunk;
+      try {
+        chunk = JSON.parse(trimmed) as VolcengineV3Chunk;
+      } catch {
+        throw new Error("Volcengine TTS: invalid JSON in stream response");
+      }
+
+      if (chunk.code === VOLCENGINE_AUDIO_CHUNK_CODE) {
+        if (chunk.data) {
+          const decoded = Buffer.from(chunk.data, "base64");
+          if (decoded.length > 0) {
+            audioChunks.push(decoded);
+          }
+        }
+      } else if (chunk.code === VOLCENGINE_STREAM_COMPLETE_CODE) {
+        break;
+      } else {
+        throw new Error(`Volcengine TTS error: ${chunk.message ?? "unknown"} (code ${chunk.code})`);
+      }
+    }
+
+    if (audioChunks.length === 0) {
+      throw new Error("Volcengine TTS returned no audio data");
+    }
+
+    return Buffer.concat(audioChunks);
   } finally {
     clearTimeout(timeout);
   }

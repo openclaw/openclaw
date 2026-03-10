@@ -43,4 +43,19 @@ export function collectTtsApiKeyAssignments(params: {
       },
     });
   }
+  const volcengine = params.tts.volcengine;
+  if (isRecord(volcengine)) {
+    collectSecretInputAssignment({
+      value: volcengine.accessKey,
+      path: `${params.pathPrefix}.volcengine.accessKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        volcengine.accessKey = value;
+      },
+    });
+  }
 }
