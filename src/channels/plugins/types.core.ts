@@ -290,6 +290,18 @@ export type ChannelMessagingAdapter = {
     /** Default target kind for bare names without `@`/`#`/`user:`/`channel:` prefixes. */
     defaultTargetKind?: "user" | "group";
     hint?: string;
+    resolveTarget?: (params: {
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      input: string;
+      normalized: string;
+      preferredKind?: ChannelDirectoryEntryKind | "channel";
+    }) => Promise<{
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source?: "normalized" | "directory";
+    } | null>;
   };
   formatTargetDisplay?: (params: {
     target: string;
