@@ -779,11 +779,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       releaseEarlyGatewayErrorGuard,
     });
   } finally {
+    deactivateMessageHandler?.();
     forgetDiscordManagedBotIdentity({
       botUserId,
       accountId: account.accountId,
     });
-    deactivateMessageHandler?.();
     autoPresenceController?.stop();
     opts.setStatus?.({ connected: false });
     releaseEarlyGatewayErrorGuard();
