@@ -21,8 +21,13 @@ function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean 
 
 function mapThinkingLevelToOpenRouterReasoningEffort(
   thinkingLevel: ThinkLevel,
-): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
+): "none" | "low" | "medium" | "high" | "xhigh" {
   if (thinkingLevel === "off") {
+    return "none";
+  }
+  // OpenRouter's reasoning.effort does not accept "minimal".
+  // Treat "minimal" as "none" for forward compatibility.
+  if (thinkingLevel === "minimal") {
     return "none";
   }
   if (thinkingLevel === "adaptive") {
