@@ -163,6 +163,10 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
   if (timer) {
     // Keep retry cooldown as a hard minimum delay. This prevents the
     // finally-path reschedule (often delay=0) from collapsing backoff.
+    // NOTE: This means a failing target's retry timer can delay wakes for
+    // other targets by up to MAX_RETRY_BACKOFF_MS. The per-target breaker
+    // bounds this: after MAX_CONSECUTIVE_FAILURES the target is open-circuited
+    // and stops scheduling retries, so the delay window is finite.
     if (timerKind === "retry") {
       return;
     }
@@ -240,8 +244,8 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           });
           schedule(DEFAULT_RETRY_MS, "retry");
         } else {
-          // Success or benign skip — reset the failure streak for this target.
-          breaker.failures = 0;
+          // Success or benign skip — evict the breaker entry to bound map size.
+          breakerByTarget.delete(targetKey);
         }
       }
     } catch {
