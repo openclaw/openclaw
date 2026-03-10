@@ -70,10 +70,14 @@ func maskLinkURLs(text string, nextPlaceholder func() string, placeholders *[]st
 	return out.String()
 }
 
-func unmaskMarkdown(text string, placeholders []string, mapping map[string]string) string {
+func unmaskMarkdown(text string, placeholders []string, mapping map[string]string, tgtLang string) string {
 	out := text
 	for _, placeholder := range placeholders {
 		original := mapping[placeholder]
+		// Add locale prefix for non-English targets if it's an internal link
+		if tgtLang != "" && tgtLang != "en" && strings.HasPrefix(original, "/") && !strings.HasPrefix(original, "/"+tgtLang+"/") && !strings.HasPrefix(original, "/"+tgtLang) {
+			original = "/" + tgtLang + original
+		}
 		out = strings.ReplaceAll(out, placeholder, original)
 	}
 	return out

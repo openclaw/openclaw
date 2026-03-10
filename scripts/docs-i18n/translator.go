@@ -19,7 +19,8 @@ const (
 var errEmptyTranslation = errors.New("empty translation")
 
 type PiTranslator struct {
-	client *pi.OneShotClient
+	client  *pi.OneShotClient
+	tgtLang string
 }
 
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
@@ -37,7 +38,7 @@ func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking
 	if err != nil {
 		return nil, err
 	}
-	return &PiTranslator{client: client}, nil
+	return &PiTranslator{client: client, tgtLang: tgtLang}, nil
 }
 
 func (t *PiTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
@@ -102,7 +103,7 @@ func (t *PiTranslator) translateMasked(ctx context.Context, core string) (string
 	if err := validatePlaceholders(translated, placeholders); err != nil {
 		return "", err
 	}
-	return unmaskMarkdown(translated, placeholders, mapping), nil
+	return unmaskMarkdown(translated, placeholders, mapping, t.tgtLang), nil
 }
 
 func (t *PiTranslator) translateRaw(ctx context.Context, core string) (string, error) {
