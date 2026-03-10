@@ -192,7 +192,6 @@ function buildCoveredAssetArchivePath(params: {
 
   const backupStateAliases = buildPathAliases(path.resolve(params.backupStateDir));
   const coveredSourceAliases = buildPathAliases(path.resolve(params.coveredSourcePath));
-  let fallbackCandidate: string | undefined;
 
   for (const backupStateAlias of backupStateAliases) {
     for (const coveredSourceAlias of coveredSourceAliases) {
@@ -206,7 +205,6 @@ function buildCoveredAssetArchivePath(params: {
       }
 
       const candidate = path.posix.join(params.stateArchivePath, toArchiveSubpath(relative));
-      fallbackCandidate ??= candidate;
       const hasExactEntry = params.entryPaths.has(candidate);
       const hasNestedEntry = [...params.entryPaths].some(
         (entryPath) => entryPath !== candidate && isArchivePathWithin(entryPath, candidate),
@@ -216,7 +214,32 @@ function buildCoveredAssetArchivePath(params: {
       }
     }
   }
-  return fallbackCandidate;
+  return undefined;
+}
+
+function resolvePathRelativeToStateDir(params: {
+  targetPath: string;
+  stateDir: string | undefined;
+}): string | undefined {
+  if (!params.stateDir) {
+    return undefined;
+  }
+
+  const stateAliases = buildPathAliases(path.resolve(params.stateDir));
+  const targetAliases = buildPathAliases(path.resolve(params.targetPath));
+  for (const stateAlias of stateAliases) {
+    for (const targetAlias of targetAliases) {
+      if (!isPathWithin(targetAlias, stateAlias)) {
+        continue;
+      }
+      const relative = path.relative(stateAlias, targetAlias);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
+      return toArchiveSubpath(relative);
+    }
+  }
+  return undefined;
 }
 
 function buildCoveredAssetManifestEntries(params: {
@@ -241,10 +264,6 @@ function buildCoveredAssetManifestEntries(params: {
     }
 
     const activeTargetPath = kind === "config" ? params.currentConfigPath : params.currentOauthDir;
-    if (isPathWithin(activeTargetPath, params.currentStateDir)) {
-      continue;
-    }
-
     const skippedCoveredEntry = coveredEntries.find(
       (entry) =>
         entry?.kind === kind &&
@@ -256,6 +275,18 @@ function buildCoveredAssetManifestEntries(params: {
       kind === "config" ? manifest.paths?.configPath : manifest.paths?.oauthDir;
     const coveredSourcePath = skippedCoveredEntry?.sourcePath ?? legacyCoveredSourcePath;
     if (!coveredSourcePath?.trim()) {
+      continue;
+    }
+
+    const coveredRelativePath = resolvePathRelativeToStateDir({
+      targetPath: coveredSourcePath,
+      stateDir: manifest.paths?.stateDir,
+    });
+    const activeRelativePath = resolvePathRelativeToStateDir({
+      targetPath: activeTargetPath,
+      stateDir: params.currentStateDir,
+    });
+    if (coveredRelativePath && activeRelativePath && coveredRelativePath === activeRelativePath) {
       continue;
     }
 
