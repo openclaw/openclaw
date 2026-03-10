@@ -219,6 +219,45 @@ describe("modelsAuthCleanCommand", () => {
     expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 
+  it("always passes readOnly:true to ensureAuthProfileStore even when not dry-run (default agent)", async () => {
+    // P2 (#2914164081): store was previously loaded readOnly:false before the empty-config
+    // safety guard ran, causing unwanted write side-effects (external CLI sync, legacy migration).
+    // The probe load must always be read-only; the write-enabled load is deferred to
+    // updateAuthProfileStoreWithLock which only runs when cleanup actually proceeds.
+    const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime()); // no dryRun
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+  });
+
+  it("always passes readOnly:true to loadAgentLocalAuthProfileStore even when not dry-run (non-default agent)", async () => {
+    // P2 (#2914199338): for non-dry non-main-agent runs, the store was loaded readOnly:false
+    // before any validation, triggering write side-effects before guards were checked.
+    // The probe load must always be read-only regardless of dry-run or agent type.
+    const store = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime()); // no dryRun
+
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+  });
+
   it("keeps profiles referenced only in store.order (not in cfg.auth.profiles or cfg.auth.order)", async () => {
     // anthropic:store-override is in store.order (set via 'models auth order set')
     // but NOT in openclaw.json auth.profiles or auth.order — must be treated as kept
