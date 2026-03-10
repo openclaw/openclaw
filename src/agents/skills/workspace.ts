@@ -477,11 +477,23 @@ function loadSkillEntries(
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
   });
+  if (personalAgentsSkills.length > 0) {
+    skillsLogger.debug(`Loaded ${personalAgentsSkills.length} skills from ~/.agents/skills`, {
+      dir: personalAgentsSkillsDir,
+      skills: personalAgentsSkills.map((s) => s.name),
+    });
+  }
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
     source: "agents-skills-project",
   });
+  if (projectAgentsSkills.length > 0) {
+    skillsLogger.debug(`Loaded ${projectAgentsSkills.length} skills from workspace/.agents/skills`, {
+      dir: projectAgentsSkillsDir,
+      skills: projectAgentsSkills.map((s) => s.name),
+    });
+  }
   const workspaceSkills = loadSkills({
     dir: workspaceSkillsDir,
     source: "openclaw-workspace",
