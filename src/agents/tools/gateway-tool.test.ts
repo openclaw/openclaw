@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   isRestartEnabled: vi.fn(() => true),
@@ -52,46 +52,54 @@ function getCallArg<T>(mockFn: { mock: { calls: unknown[] } }, callIdx: number, 
   return calls[callIdx]?.[argIdx] as T;
 }
 
-describe("createGatewayTool – live delivery context guard", () => {
-  it("does not forward liveDeliveryContextForRpc when agentTo is missing", async () => {
-    mocks.callGatewayTool.mockClear();
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: undefined, // intentionally missing
-    });
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers to build common test fixtures
+// ─────────────────────────────────────────────────────────────────────────────
 
-    await execTool(tool, {
-      action: "config.patch",
-      raw: '{"key":"value"}',
-      baseHash: "abc123",
-      sessionKey: "agent:main:main",
-      note: "test patch",
-    });
+function makePatchParams(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "config.patch",
+    raw: '{"key":"value"}',
+    baseHash: "abc123",
+    sessionKey: "agent:main:main",
+    note: "test patch",
+    ...overrides,
+  };
+}
 
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    // deliveryContext should be undefined — falling back to server-side extractDeliveryInfo
-    expect(forwardedParams?.deliveryContext).toBeUndefined();
+function makeTool(
+  opts: {
+    agentSessionKey?: string;
+    agentChannel?: string;
+    agentTo?: string;
+    agentThreadId?: string;
+    agentAccountId?: string;
+  } = {},
+) {
+  return createGatewayTool({
+    agentSessionKey: "agent:main:main",
+    agentChannel: "discord",
+    agentTo: "123456789",
+    ...opts,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 1 — Live delivery context for RPC actions (config.apply / config.patch / update.run)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("createGatewayTool – RPC delivery context forwarding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("forwards liveDeliveryContextForRpc when both agentChannel and agentTo are present", async () => {
-    mocks.callGatewayTool.mockClear();
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
+  // ── Happy path: full live context forwarded ──────────────────────────────
 
-    await execTool(tool, {
-      action: "config.patch",
-      raw: '{"key":"value"}',
-      baseHash: "abc123",
-      sessionKey: "agent:main:main",
-      note: "test patch",
-    });
+  it("forwards liveDeliveryContext when agentChannel and agentTo are both present", async () => {
+    await execTool(makeTool(), makePatchParams());
 
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    expect(forwardedParams?.deliveryContext).toEqual({
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toEqual({
       channel: "discord",
       to: "123456789",
       accountId: undefined,
@@ -99,207 +107,343 @@ describe("createGatewayTool – live delivery context guard", () => {
     });
   });
 
-  it("includes threadId in liveDeliveryContextForRpc when agentThreadId is present", async () => {
-    mocks.callGatewayTool.mockClear();
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "slack",
-      agentTo: "C012AB3CD",
-      agentThreadId: "1234567890.123456",
-    });
+  it("includes agentAccountId in forwarded context when provided", async () => {
+    await execTool(makeTool({ agentAccountId: "acct-99" }), makePatchParams());
 
-    await execTool(tool, {
-      action: "config.patch",
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect((p?.deliveryContext as Record<string, unknown>)?.accountId).toBe("acct-99");
+  });
+
+  it("includes agentThreadId in forwarded context when provided", async () => {
+    await execTool(
+      makeTool({ agentChannel: "slack", agentTo: "C012AB3CD", agentThreadId: "1234567890.123" }),
+      makePatchParams({ sessionKey: "agent:main:main" }),
+    );
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect((p?.deliveryContext as Record<string, unknown>)?.threadId).toBe("1234567890.123");
+    expect((p?.deliveryContext as Record<string, unknown>)?.channel).toBe("slack");
+  });
+
+  it("forwards live context for config.apply as well as config.patch", async () => {
+    await execTool(makeTool(), {
+      action: "config.apply",
       raw: '{"key":"value"}',
       baseHash: "abc123",
       sessionKey: "agent:main:main",
-      note: "test patch",
     });
 
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    expect(forwardedParams?.deliveryContext).toEqual({
-      channel: "slack",
-      to: "C012AB3CD",
-      accountId: undefined,
-      threadId: "1234567890.123456",
-    });
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
+    expect((p?.deliveryContext as Record<string, unknown>)?.channel).toBe("discord");
   });
 
-  it("does not forward live restart context when agentTo is missing", async () => {
-    mocks.writeRestartSentinel.mockClear();
+  it("forwards live context for update.run", async () => {
+    await execTool(makeTool(), {
+      action: "update.run",
+      sessionKey: "agent:main:main",
+    });
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
+    expect((p?.deliveryContext as Record<string, unknown>)?.channel).toBe("discord");
+  });
+
+  // ── Partial live context — must be suppressed ────────────────────────────
+
+  it("suppresses deliveryContext when agentTo is missing", async () => {
+    await execTool(makeTool({ agentTo: undefined }), makePatchParams());
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  it("suppresses deliveryContext when agentChannel is missing", async () => {
+    await execTool(makeTool({ agentChannel: undefined }), makePatchParams());
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  it("suppresses deliveryContext when agentChannel is an empty string", async () => {
+    await execTool(makeTool({ agentChannel: "" }), makePatchParams());
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  it("falls back to server extractDeliveryInfo when live context is suppressed", async () => {
+    // Confirm the RPC call still goes through — server side will use extractDeliveryInfo
+    await execTool(makeTool({ agentTo: undefined }), makePatchParams());
+
+    expect(mocks.callGatewayTool).toHaveBeenCalled();
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  // ── Stale heartbeat override prevention ─────────────────────────────────
+
+  it("overrides stale heartbeat deliveryContext from extractDeliveryInfo with live context", async () => {
+    // extractDeliveryInfo returning heartbeat sink — must not win over live context
     mocks.extractDeliveryInfo.mockReturnValueOnce({
-      deliveryContext: { channel: "telegram", to: "+19995550001", accountId: undefined },
+      deliveryContext: { channel: "webchat", to: "heartbeat", accountId: undefined },
       threadId: undefined,
     });
 
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: undefined, // intentionally missing
-    });
+    await execTool(makeTool(), makePatchParams());
 
-    await execTool(tool, { action: "restart" });
-
-    const sentinelPayload = getCallArg<{ deliveryContext?: { channel?: string; to?: string } }>(
-      mocks.writeRestartSentinel,
-      0,
-      0,
-    );
-    // Should fall back to extractDeliveryInfo() result, not the incomplete live context
-    expect(sentinelPayload?.deliveryContext?.channel).toBe("telegram");
-    expect(sentinelPayload?.deliveryContext?.to).toBe("+19995550001");
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect((p?.deliveryContext as Record<string, unknown>)?.channel).toBe("discord");
+    expect((p?.deliveryContext as Record<string, unknown>)?.to).toBe("123456789");
   });
 
-  it("uses live restart context when both agentChannel and agentTo are present", async () => {
-    mocks.writeRestartSentinel.mockClear();
+  // ── Session key targeting: same-session ─────────────────────────────────
 
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
-
-    await execTool(tool, { action: "restart" });
-
-    const sentinelPayload = getCallArg<{ deliveryContext?: { channel?: string; to?: string } }>(
-      mocks.writeRestartSentinel,
-      0,
-      0,
+  it("forwards live context when sessionKey matches own session key exactly", async () => {
+    await execTool(
+      makeTool({ agentSessionKey: "agent:main:main" }),
+      makePatchParams({ sessionKey: "agent:main:main" }),
     );
-    expect(sentinelPayload?.deliveryContext?.channel).toBe("discord");
-    expect(sentinelPayload?.deliveryContext?.to).toBe("123456789");
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
   });
 
-  it("does not forward live RPC delivery context when gateway.mode=remote is configured (no URL override)", async () => {
-    // When gateway.mode=remote is set in config, callGatewayTool() routes to
-    // gateway.remote.url without an explicit gatewayUrl param.  resolveGatewayTarget
-    // must return "remote" in this case so deliveryContext is suppressed, preventing
-    // the remote sentinel from being stamped with the local chat route.
-    mocks.callGatewayTool.mockClear();
-    // No gatewayUrl override — config-based remote mode
+  it("forwards live context when 'main' alias resolves to own default-agent session", async () => {
+    // agentSessionKey is "agent:main:main"; sessionKey "main" should canonicalize to the same
+    await execTool(
+      makeTool({ agentSessionKey: "agent:main:main" }),
+      makePatchParams({ sessionKey: "main" }),
+    );
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
+    expect((p?.deliveryContext as Record<string, unknown>)?.channel).toBe("discord");
+  });
+
+  it("forwards live context when sessionKey is omitted (defaults to own session)", async () => {
+    await execTool(makeTool(), makePatchParams({ sessionKey: undefined }));
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
+  });
+
+  // ── Session key targeting: cross-session / cross-agent ───────────────────
+
+  it("suppresses deliveryContext when sessionKey targets a different session", async () => {
+    await execTool(
+      makeTool({ agentSessionKey: "agent:main:main" }),
+      makePatchParams({ sessionKey: "agent:other-claw:main" }),
+    );
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  it("suppresses deliveryContext when non-default agent passes sessionKey='main' (cross-agent alias)", async () => {
+    // "main" resolves to "agent:main:main" (default), not "agent:shopping-claw:main"
+    await execTool(
+      makeTool({ agentSessionKey: "agent:shopping-claw:main" }),
+      makePatchParams({ sessionKey: "main" }),
+    );
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  // ── Remote gateway targeting ─────────────────────────────────────────────
+
+  it("suppresses deliveryContext when resolveGatewayTarget returns 'remote' (explicit URL)", async () => {
+    mocks.readGatewayCallOptions.mockReturnValueOnce({ gatewayUrl: "wss://remote.example.com" });
+    mocks.resolveGatewayTarget.mockReturnValueOnce("remote");
+
+    await execTool(
+      makeTool(),
+      makePatchParams({ gatewayUrl: "wss://remote.example.com", sessionKey: "agent:main:main" }),
+    );
+
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
+  });
+
+  it("suppresses deliveryContext when resolveGatewayTarget returns 'remote' (config gateway.mode=remote)", async () => {
     mocks.readGatewayCallOptions.mockReturnValueOnce({});
     mocks.resolveGatewayTarget.mockReturnValueOnce("remote");
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
 
-    await execTool(tool, {
-      action: "config.patch",
-      raw: '{"key":"value"}',
-      baseHash: "abc123",
-      sessionKey: "agent:main:main",
-      note: "config-remote patch (no URL override)",
-    });
+    await execTool(makeTool(), makePatchParams({ sessionKey: "agent:main:main" }));
 
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    expect(forwardedParams?.deliveryContext).toBeUndefined();
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeUndefined();
   });
 
-  it("does not forward live RPC delivery context when gatewayUrl targets a remote gateway", async () => {
-    // A remote gateway has its own extractDeliveryInfo(sessionKey) — forwarding
-    // the local agent's deliveryContext would write a sentinel with the wrong
-    // destination on the remote host.
-    mocks.callGatewayTool.mockClear();
-    mocks.readGatewayCallOptions.mockReturnValueOnce({ gatewayUrl: "wss://remote-gw.example.com" });
-    mocks.resolveGatewayTarget.mockReturnValueOnce("remote");
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
-
-    await execTool(tool, {
-      action: "config.patch",
-      raw: '{"key":"value"}',
-      baseHash: "abc123",
-      sessionKey: "agent:main:main",
-      note: "remote patch",
-      gatewayUrl: "wss://remote-gw.example.com",
-    });
-
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    expect(forwardedParams?.deliveryContext).toBeUndefined();
-  });
-
-  it("forwards live RPC delivery context when gatewayUrl is a local loopback override", async () => {
-    // A gatewayUrl pointing to 127.0.0.1/localhost/[::1] is still the local server;
-    // deliveryContext must be forwarded so restart sentinels use the correct chat destination.
-    mocks.callGatewayTool.mockClear();
-    mocks.readGatewayCallOptions.mockReturnValueOnce({
-      gatewayUrl: "ws://127.0.0.1:18789",
-    });
+  it("forwards deliveryContext when resolveGatewayTarget returns 'local' (loopback URL)", async () => {
+    mocks.readGatewayCallOptions.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
     mocks.resolveGatewayTarget.mockReturnValueOnce("local");
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
 
-    await execTool(tool, {
-      action: "config.patch",
-      raw: '{"key":"value"}',
-      baseHash: "abc123",
-      sessionKey: "agent:main:main",
-      note: "local loopback patch",
-      gatewayUrl: "ws://127.0.0.1:18789",
-    });
+    await execTool(
+      makeTool(),
+      makePatchParams({ gatewayUrl: "ws://127.0.0.1:18789", sessionKey: "agent:main:main" }),
+    );
 
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    expect(forwardedParams?.deliveryContext).toEqual({
-      channel: "discord",
-      to: "123456789",
-      accountId: undefined,
-    });
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
+    expect((p?.deliveryContext as Record<string, unknown>)?.channel).toBe("discord");
   });
 
-  it("does not forward live RPC delivery context when a non-default agent passes sessionKey='main'", async () => {
-    // "main" resolves to "agent:main:main" (default agent), which differs from the
-    // current session "agent:shopping-claw:main". Live context must NOT be forwarded.
-    mocks.callGatewayTool.mockClear();
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:shopping-claw:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
+  it("forwards deliveryContext when resolveGatewayTarget returns undefined (default local)", async () => {
+    mocks.resolveGatewayTarget.mockReturnValueOnce(undefined);
 
-    await execTool(tool, {
-      action: "config.patch",
-      raw: '{"key":"value"}',
-      baseHash: "abc123",
-      sessionKey: "main", // targets default agent — different from current shopping-claw session
-      note: "cross-agent patch",
-    });
+    await execTool(makeTool(), makePatchParams({ sessionKey: "agent:main:main" }));
 
-    const forwardedParams = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
-    expect(forwardedParams?.deliveryContext).toBeUndefined();
+    const p = getCallArg<Record<string, unknown>>(mocks.callGatewayTool, 0, 2);
+    expect(p?.deliveryContext).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 2 — Restart sentinel context (local restart action)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("createGatewayTool – restart sentinel delivery context", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("does not forward live restart context when a non-default agent passes sessionKey='main'", async () => {
-    // "main" resolves to "agent:main:main" (default agent), which differs from the
-    // current session "agent:shopping-claw:main". Sentinel must not carry this session's thread.
-    mocks.writeRestartSentinel.mockClear();
+  it("uses live context when both agentChannel and agentTo are present", async () => {
+    await execTool(makeTool(), { action: "restart" });
+
+    const p = getCallArg<{ deliveryContext?: Record<string, unknown> }>(
+      mocks.writeRestartSentinel,
+      0,
+      0,
+    );
+    expect(p?.deliveryContext?.channel).toBe("discord");
+    expect(p?.deliveryContext?.to).toBe("123456789");
+  });
+
+  it("falls back to extractDeliveryInfo when agentTo is missing", async () => {
     mocks.extractDeliveryInfo.mockReturnValueOnce({
       deliveryContext: { channel: "telegram", to: "+19995550001", accountId: undefined },
       threadId: undefined,
     });
 
-    const tool = createGatewayTool({
-      agentSessionKey: "agent:shopping-claw:main",
-      agentChannel: "discord",
-      agentTo: "123456789",
-    });
+    await execTool(makeTool({ agentTo: undefined }), { action: "restart" });
 
-    await execTool(tool, { action: "restart", sessionKey: "main" });
-
-    const sentinelPayload = getCallArg<{ deliveryContext?: { channel?: string; to?: string } }>(
+    const p = getCallArg<{ deliveryContext?: Record<string, unknown> }>(
       mocks.writeRestartSentinel,
       0,
       0,
     );
-    // Should fall back to extractDeliveryInfo() for the targeted session, not current session's live context
-    expect(sentinelPayload?.deliveryContext?.channel).toBe("telegram");
-    expect(sentinelPayload?.deliveryContext?.to).toBe("+19995550001");
+    expect(p?.deliveryContext?.channel).toBe("telegram");
+    expect(p?.deliveryContext?.to).toBe("+19995550001");
+  });
+
+  it("falls back to extractDeliveryInfo when agentChannel is missing", async () => {
+    mocks.extractDeliveryInfo.mockReturnValueOnce({
+      deliveryContext: { channel: "whatsapp", to: "+10000000001", accountId: undefined },
+      threadId: undefined,
+    });
+
+    await execTool(makeTool({ agentChannel: undefined }), { action: "restart" });
+
+    const p = getCallArg<{ deliveryContext?: Record<string, unknown> }>(
+      mocks.writeRestartSentinel,
+      0,
+      0,
+    );
+    expect(p?.deliveryContext?.channel).toBe("whatsapp");
+  });
+
+  it("overrides stale heartbeat context from extractDeliveryInfo with live context", async () => {
+    mocks.extractDeliveryInfo.mockReturnValueOnce({
+      deliveryContext: { channel: "webchat", to: "heartbeat", accountId: undefined },
+      threadId: undefined,
+    });
+
+    await execTool(makeTool(), { action: "restart" });
+
+    const p = getCallArg<{ deliveryContext?: Record<string, unknown> }>(
+      mocks.writeRestartSentinel,
+      0,
+      0,
+    );
+    expect(p?.deliveryContext?.channel).toBe("discord");
+    expect(p?.deliveryContext?.to).toBe("123456789");
+  });
+
+  it("includes threadId in sentinel when agentThreadId is provided (same session)", async () => {
+    await execTool(makeTool({ agentThreadId: "ts.123456" }), { action: "restart" });
+
+    const p = getCallArg<{ threadId?: string }>(mocks.writeRestartSentinel, 0, 0);
+    expect(p?.threadId).toBe("ts.123456");
+  });
+
+  it("uses extractDeliveryInfo threadId when targeting a different session", async () => {
+    mocks.extractDeliveryInfo.mockReturnValueOnce({
+      deliveryContext: { channel: "telegram", to: "+19995550001", accountId: undefined },
+      threadId: "extracted-thread",
+    });
+
+    await execTool(makeTool({ agentThreadId: "local-thread" }), {
+      action: "restart",
+      sessionKey: "agent:other-claw:main",
+    });
+
+    const p = getCallArg<{ threadId?: string }>(mocks.writeRestartSentinel, 0, 0);
+    expect(p?.threadId).toBe("extracted-thread");
+  });
+
+  it("suppresses live context and uses extractDeliveryInfo when sessionKey targets another session", async () => {
+    mocks.extractDeliveryInfo.mockReturnValueOnce({
+      deliveryContext: { channel: "signal", to: "+15550001", accountId: undefined },
+      threadId: undefined,
+    });
+
+    await execTool(makeTool(), { action: "restart", sessionKey: "agent:other-agent:main" });
+
+    const p = getCallArg<{ deliveryContext?: Record<string, unknown> }>(
+      mocks.writeRestartSentinel,
+      0,
+      0,
+    );
+    expect(p?.deliveryContext?.channel).toBe("signal");
+    expect(p?.deliveryContext?.to).toBe("+15550001");
+  });
+
+  it("suppresses live context when non-default agent targets sessionKey='main' (cross-agent alias)", async () => {
+    mocks.extractDeliveryInfo.mockReturnValueOnce({
+      deliveryContext: { channel: "telegram", to: "+19995550001", accountId: undefined },
+      threadId: undefined,
+    });
+
+    await execTool(makeTool({ agentSessionKey: "agent:shopping-claw:main" }), {
+      action: "restart",
+      sessionKey: "main", // resolves to "agent:main:main" — different agent
+    });
+
+    const p = getCallArg<{ deliveryContext?: Record<string, unknown> }>(
+      mocks.writeRestartSentinel,
+      0,
+      0,
+    );
+    expect(p?.deliveryContext?.channel).toBe("telegram");
+    expect(p?.deliveryContext?.to).toBe("+19995550001");
+  });
+
+  it("sets status=ok and kind=restart on the sentinel payload", async () => {
+    await execTool(makeTool(), { action: "restart" });
+
+    const p = getCallArg<{ kind?: string; status?: string }>(mocks.writeRestartSentinel, 0, 0);
+    expect(p?.kind).toBe("restart");
+    expect(p?.status).toBe("ok");
+  });
+
+  it("includes sessionKey in sentinel payload", async () => {
+    await execTool(makeTool({ agentSessionKey: "agent:main:main" }), {
+      action: "restart",
+    });
+
+    const p = getCallArg<{ sessionKey?: string }>(mocks.writeRestartSentinel, 0, 0);
+    expect(p?.sessionKey).toBe("agent:main:main");
   });
 });

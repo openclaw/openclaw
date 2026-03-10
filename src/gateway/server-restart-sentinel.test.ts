@@ -93,15 +93,19 @@ vi.mock("../infra/system-events.js", () => ({
 
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
-describe("scheduleRestartSentinelWake", () => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 1 — Core two-step delivery + resume flow
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("scheduleRestartSentinelWake – two-step delivery + resume", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("delivers restart notice directly then resumes agent after restart", async () => {
+  it("delivers restart notice directly (model-independent) then resumes agent", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    // Step 1: deterministic delivery (model-independent)
+    // Step 1: deterministic delivery
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "whatsapp",
@@ -112,7 +116,7 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
 
-    // Step 2: agent resume turn
+    // Step 2: agent resume
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "restart message",
@@ -128,26 +132,56 @@ describe("scheduleRestartSentinelWake", () => {
       {},
     );
 
-    // Verify delivery happened before resume
-    const deliverOrder = mocks.deliverOutboundPayloads.mock.invocationCallOrder[0];
-    const agentOrder = mocks.agentCommand.mock.invocationCallOrder[0];
-    expect(deliverOrder).toBeLessThan(agentOrder);
-
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("falls back to enqueueSystemEvent when agentCommand throws", async () => {
-    mocks.agentCommand.mockRejectedValueOnce(new Error("agent failed"));
+  it("delivers notification before triggering agent resume (ordering guarantee)", async () => {
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const deliverOrder = mocks.deliverOutboundPayloads.mock.invocationCallOrder[0];
+    const agentOrder = mocks.agentCommand.mock.invocationCallOrder[0];
+    expect(deliverOrder).toBeLessThan(agentOrder);
+  });
+
+  it("passes senderIsOwner=false to agentCommand (no privilege escalation)", async () => {
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const opts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(opts.senderIsOwner).toBe(false);
+  });
+
+  it("no-ops when there is no sentinel file", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce(null);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining("restart summary"),
-      { sessionKey: "agent:main:main" },
-    );
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 2 — Fallback paths
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("falls back to enqueueSystemEvent when channel cannot be resolved (no channel in origin)", async () => {
+  it("falls back to enqueueSystemEvent on main session key when sentinel has no sessionKey", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({ payload: { sessionKey: "" } } as never);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("falls back to enqueueSystemEvent when outbound target cannot be resolved", async () => {
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: false,
       error: new Error("no-target"),
@@ -161,13 +195,187 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("falls back to enqueueSystemEvent on main session key when sentinel has no sessionKey", async () => {
-    mocks.consumeRestartSentinel.mockResolvedValueOnce({ payload: { sessionKey: "" } } as never);
+  it("falls back to enqueueSystemEvent when channel is missing from merged delivery context", async () => {
+    // mergeDeliveryContext is called twice (inner + outer merge); mock the outer to drop channel
+    mocks.mergeDeliveryContext
+      .mockReturnValueOnce(undefined) // inner: sessionDeliveryContext merge
+      .mockReturnValueOnce({ to: "+15550002" }); // outer: sentinelContext wins, no channel
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
     });
   });
+
+  it("falls back to enqueueSystemEvent when to is missing from merged delivery context", async () => {
+    // Mock outer merge to return a context with no `to`
+    mocks.mergeDeliveryContext
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce({ channel: "whatsapp" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("falls back to enqueueSystemEvent (with error) when agentCommand throws", async () => {
+    mocks.agentCommand.mockRejectedValueOnce(new Error("agent failed"));
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    // Direct delivery should still have been attempted
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
+    // Then fallback for the resume
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("restart summary"),
+      { sessionKey: "agent:main:main" },
+    );
+  });
+
+  it("still calls agentCommand even if deliverOutboundPayloads throws (bestEffort guard)", async () => {
+    // bestEffort: true means it shouldn't normally throw, but even if it does, resume continues
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("deliver failed"));
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.agentCommand).toHaveBeenCalled();
+  });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 3 — Thread routing (Slack vs non-Slack)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("scheduleRestartSentinelWake – thread routing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("maps threadId to replyToId and clears threadId for Slack deliverOutboundPayloads", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "slack", to: "C012AB3CD", accountId: undefined },
+        threadId: "1234567890.123456",
+      },
+    });
+    mocks.normalizeChannelId.mockReturnValueOnce("slack");
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const deliverArgs = getArg<Record<string, unknown>>(mocks.deliverOutboundPayloads, 0);
+    expect(deliverArgs.replyToId).toBe("1234567890.123456");
+    expect(deliverArgs.threadId).toBeUndefined();
+  });
+
+  it("passes threadId directly (not replyToId) for non-Slack channels", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "discord", to: "123456789", accountId: undefined },
+        threadId: "discord-thread-id",
+      },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const deliverArgs = getArg<Record<string, unknown>>(mocks.deliverOutboundPayloads, 0);
+    expect(deliverArgs.threadId).toBe("discord-thread-id");
+    expect(deliverArgs.replyToId).toBeUndefined();
+  });
+
+  it("passes threadId to agentCommand for non-Slack threading", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "discord", to: "123456789", accountId: undefined },
+        threadId: "discord-thread-id",
+      },
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const agentOpts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(agentOpts.threadId).toBe("discord-thread-id");
+  });
+
+  it("sentinel payload threadId takes precedence over session-derived threadId", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: { channel: "whatsapp", to: "+15550002" },
+        threadId: "sentinel-thread",
+      },
+    });
+    // parseSessionThreadInfo would derive a different threadId from the session key
+    mocks.parseSessionThreadInfo.mockReturnValueOnce({
+      baseSessionKey: null,
+      threadId: "session-thread",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const agentOpts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(agentOpts.threadId).toBe("sentinel-thread");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 4 — Delivery context priority: sentinel > session store > parsed target
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("scheduleRestartSentinelWake – delivery context priority", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("prefers sentinel deliveryContext over session store (handles heartbeat-overwritten store)", async () => {
+    // Session store has been overwritten with heartbeat sink
+    mocks.deliveryContextFromSession.mockReturnValueOnce({
+      channel: "webchat",
+      to: "heartbeat",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    // agentCommand should use the sentinel's whatsapp/+15550002, not webchat/heartbeat
+    const agentOpts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(agentOpts.channel).toBe("whatsapp");
+    expect(agentOpts.to).toBe("+15550002");
+  });
+
+  it("falls back to session store when sentinel has no deliveryContext", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: { sessionKey: "agent:main:main" }, // no deliveryContext
+    });
+    mocks.deliveryContextFromSession.mockReturnValueOnce({
+      channel: "telegram",
+      to: "+19990001",
+    });
+    // Mock both merge calls: inner produces session ctx; outer passes it through
+    mocks.mergeDeliveryContext
+      .mockReturnValueOnce({ channel: "telegram", to: "+19990001" }) // inner
+      .mockReturnValueOnce({ channel: "telegram", to: "+19990001" }); // outer
+    // resolveOutboundTarget must reflect the session-store to value
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true as const, to: "+19990001" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    const agentOpts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(agentOpts.channel).toBe("telegram");
+    expect(agentOpts.to).toBe("+19990001");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getArg<T>(mockFn: { mock: { calls: unknown[][] } }, argIdx: number): T {
+  return mockFn.mock.calls[0]?.[argIdx] as T;
+}
