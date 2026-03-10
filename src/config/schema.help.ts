@@ -457,7 +457,7 @@ export const FIELD_HELP: Record<string, string> = {
   "bindings[].match.peer.kind":
     'Peer conversation type: "direct", "group", "channel", or legacy "dm" (deprecated alias for direct). Prefer "direct" for new configs and keep kind aligned with channel semantics.',
   "bindings[].match.peer.id":
-    "Conversation identifier used with peer matching, such as a chat ID, channel ID, or group ID from the provider. Keep this exact to avoid silent non-matches.",
+    "Conversation identifier used with peer matching, such as a chat ID, channel ID, or group ID from the provider. Use the raw provider id, not messaging target syntax (for Slack use C123/U123, not channel:C123/user:U123), to avoid silent non-matches.",
   "bindings[].match.guildId":
     "Optional Discord-style guild/server ID constraint for binding evaluation in multi-server deployments. Use this when the same peer identifiers can appear across different guilds.",
   "bindings[].match.teamId":

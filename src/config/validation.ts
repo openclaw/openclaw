@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
@@ -16,6 +17,7 @@ import {
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
+import { canonicalizeSlackRoutePeerId } from "../slack/targets.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
@@ -220,6 +222,50 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
         '(use gateway.bind="loopback" or gateway.bind="custom" with gateway.customBindHost="127.0.0.1")',
     },
   ];
+}
+
+function collectSlackBindingPeerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const bindings = Array.isArray(config.bindings) ? config.bindings : [];
+  const warnings: ConfigValidationIssue[] = [];
+  for (const [index, binding] of bindings.entries()) {
+    const match = binding?.match;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
+    if (normalizeChatChannelId(match.channel) !== "slack") {
+      continue;
+    }
+    const peer = match.peer;
+    if (!peer || typeof peer !== "object") {
+      continue;
+    }
+    const kind = normalizeChatType(peer.kind);
+    if (kind !== "direct" && kind !== "group" && kind !== "channel") {
+      continue;
+    }
+    const rawPeerId =
+      typeof peer.id === "string"
+        ? peer.id.trim()
+        : typeof peer.id === "number" || typeof peer.id === "bigint"
+          ? String(peer.id).trim()
+          : "";
+    if (!rawPeerId) {
+      continue;
+    }
+    const canonical = canonicalizeSlackRoutePeerId({ kind, raw: rawPeerId });
+    if (!canonical.usedTargetSyntax || canonical.id === rawPeerId) {
+      continue;
+    }
+    const preferredExample = kind === "direct" ? "U123ABC" : "C123ABC";
+    warnings.push({
+      path: `bindings.${index}.match.peer.id`,
+      message:
+        `Slack binding peer ids should use raw Slack ids like "${preferredExample}", ` +
+        `not messaging target syntax. OpenClaw will normalize "${rawPeerId}" ` +
+        `to "${canonical.id}" for compatibility.`,
+    });
+  }
+  return warnings;
 }
 
 /**
@@ -453,6 +499,8 @@ function validateConfigObjectWithPluginsBase(
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
     }
   }
+
+  warnings.push(...collectSlackBindingPeerWarnings(config));
 
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {

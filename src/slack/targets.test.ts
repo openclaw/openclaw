@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSlackMessagingTarget } from "../channels/plugins/normalize/slack.js";
-import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
+import {
+  canonicalizeSlackRoutePeerId,
+  parseSlackTarget,
+  resolveSlackChannelId,
+} from "./targets.js";
 
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {
@@ -59,5 +63,33 @@ describe("resolveSlackChannelId", () => {
 describe("normalizeSlackMessagingTarget", () => {
   it("defaults raw ids to channels", () => {
     expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
+  });
+});
+
+describe("canonicalizeSlackRoutePeerId", () => {
+  it("normalizes Slack target syntax for channel bindings", () => {
+    expect(canonicalizeSlackRoutePeerId({ kind: "channel", raw: "channel:c123abc" })).toEqual({
+      id: "C123ABC",
+      didNormalize: true,
+      usedTargetSyntax: true,
+    });
+    expect(canonicalizeSlackRoutePeerId({ kind: "group", raw: "<#C123ABC|general>" })).toEqual({
+      id: "C123ABC",
+      didNormalize: true,
+      usedTargetSyntax: true,
+    });
+  });
+
+  it("normalizes Slack target syntax for direct bindings", () => {
+    expect(canonicalizeSlackRoutePeerId({ kind: "direct", raw: "user:u123abc" })).toEqual({
+      id: "U123ABC",
+      didNormalize: true,
+      usedTargetSyntax: true,
+    });
+    expect(canonicalizeSlackRoutePeerId({ kind: "direct", raw: "<@U123ABC>" })).toEqual({
+      id: "U123ABC",
+      didNormalize: true,
+      usedTargetSyntax: true,
+    });
   });
 });
