@@ -8,6 +8,7 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-grou
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type {
@@ -176,6 +177,17 @@ function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string 
   return ctx.messageChannelId;
 }
 
+function shouldBypassDiscordSessionQueue(params: {
+  cfg: DiscordMessageHandlerParams["cfg"];
+  ctx: DiscordMessagePreflightContext;
+}): boolean {
+  const resolved = resolveQueueSettings({
+    cfg: params.cfg,
+    channel: "discord",
+  });
+  return resolved.mode === "steer";
+}
+
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageHandlerWithLifecycle {
@@ -195,30 +207,33 @@ export function createDiscordMessageHandler(
   });
 
   const enqueueDiscordRun = (ctx: DiscordMessagePreflightContext) => {
-    const queueKey = resolveDiscordRunQueueKey(ctx);
-    void runQueue
-      .enqueue(queueKey, async () => {
+    const runTask = async () => {
+      if (!runState.isActive()) {
+        return;
+      }
+      runState.onRunStart();
+      try {
         if (!runState.isActive()) {
           return;
         }
-        runState.onRunStart();
-        try {
-          if (!runState.isActive()) {
-            return;
-          }
-          await processDiscordRunWithTimeout({
-            ctx,
-            runtime: params.runtime,
-            lifecycleSignal: params.abortSignal,
-            timeoutMs: params.listenerTimeoutMs,
-          });
-        } finally {
-          runState.onRunEnd();
-        }
-      })
-      .catch((err) => {
-        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
-      });
+        await processDiscordRunWithTimeout({
+          ctx,
+          runtime: params.runtime,
+          lifecycleSignal: params.abortSignal,
+          timeoutMs: params.listenerTimeoutMs,
+        });
+      } finally {
+        runState.onRunEnd();
+      }
+    };
+
+    const runPromise = shouldBypassDiscordSessionQueue({ cfg: params.cfg, ctx })
+      ? runTask()
+      : runQueue.enqueue(resolveDiscordRunQueueKey(ctx), runTask);
+
+    void runPromise.catch((err) => {
+      params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+    });
   };
 
   const { debouncer } = createChannelInboundDebouncer<{

@@ -27,6 +27,7 @@ function createHandlerParams(overrides?: {
   setStatus?: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
   listenerTimeoutMs?: number;
+  queueMode?: "collect" | "followup" | "interrupt" | "steer" | "steer-backlog";
 }) {
   const cfg: OpenClawConfig = {
     channels: {
@@ -40,6 +41,11 @@ function createHandlerParams(overrides?: {
       inbound: {
         debounceMs: 0,
       },
+      queue: overrides?.queueMode
+        ? {
+            mode: overrides.queueMode,
+          }
+        : undefined,
     },
   };
   return {
@@ -167,6 +173,43 @@ describe("createDiscordMessageHandler queue behavior", () => {
         }),
       );
     });
+  });
+
+  it("allows steer-mode Discord messages for the same session to start without waiting for the prior run to finish", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    const secondRun = createDeferred();
+    processDiscordMessageMock
+      .mockImplementationOnce(async () => {
+        await firstRun.promise;
+      })
+      .mockImplementationOnce(async () => {
+        await secondRun.promise;
+      });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    const handler = createDiscordMessageHandler(createHandlerParams({ queueMode: "steer" }));
+
+    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
+
+    firstRun.resolve();
+    secondRun.resolve();
+    await firstRun.promise;
+    await secondRun.promise;
   });
 
   it("applies listener timeout to queued runs so stalled runs do not block the queue", async () => {
