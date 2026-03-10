@@ -127,11 +127,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
-          chatLog.addSystem(`model set failed: ${String(err)}`);
+          chatLog.addSystem(`model set failed: ${sanitizeRenderableText(String(err))}`);
         }
       });
     } catch (err) {
-      chatLog.addSystem(`model list failed: ${String(err)}`);
+      chatLog.addSystem(`model list failed: ${sanitizeRenderableText(String(err))}`);
       tui.requestRender();
     }
   };
@@ -304,7 +304,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
-            chatLog.addSystem(`model set failed: ${String(err)}`);
+            chatLog.addSystem(`model set failed: ${sanitizeRenderableText(String(err))}`);
           }
         }
         break;
