@@ -541,12 +541,9 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
         }
       }
       if (splitAt != null) {
-        const candidate = splitAt + 1; // include the whitespace if possible
-        if (candidate > cursor && candidate <= hardEnd) {
-          end = candidate;
-        } else if (splitAt > cursor) {
-          end = splitAt;
-        }
+        // Keep the whitespace on the left chunk when possible so the next chunk
+        // doesn't start with it.
+        end = splitAt + 1;
       }
     }
 
