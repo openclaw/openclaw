@@ -1135,6 +1135,31 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("keeps disable_notification on plain-text fallback when silent is true", async () => {
+    const chatId = "123";
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 2, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "_oops_", {
+      token: "tok",
+      api,
+      silent: true,
+    });
+
+    expect(sendMessage.mock.calls).toEqual([
+      [chatId, "<i>oops</i>", { parse_mode: "HTML", disable_notification: true }],
+      [chatId, "_oops_", { disable_notification: true }],
+    ]);
+  });
+
   it("parses message_thread_id from recipient string (telegram:group:...:topic:...)", async () => {
     const chatId = "-1001234567890";
     const sendMessage = vi.fn().mockResolvedValue({

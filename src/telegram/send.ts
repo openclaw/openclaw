@@ -632,27 +632,48 @@ export async function sendMessageTelegram(
   const linkPreviewEnabled = account.config.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
 
-  const sendTelegramText = async (
-    rawText: string,
+  type TelegramTextChunk = {
+    plainText: string;
+    htmlText?: string;
+  };
+
+  const sendTelegramTextChunk = async (
+    chunk: TelegramTextChunk,
     params?: Record<string, unknown>,
-    fallbackText?: string,
-    preRenderedHtml?: string,
   ) => {
     return await withTelegramThreadFallback(
       params,
       "message",
       opts.verbose,
       async (effectiveParams, label) => {
-        const htmlText = preRenderedHtml ?? renderHtmlText(rawText);
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
           baseParams.link_preview_options = linkPreviewOptions;
         }
-        const hasBaseParams = Object.keys(baseParams).length > 0;
-        const sendParams = {
-          parse_mode: "HTML" as const,
+        const plainParams = {
           ...baseParams,
           ...(opts.silent === true ? { disable_notification: true } : {}),
+        };
+        const hasPlainParams = Object.keys(plainParams).length > 0;
+        const requestPlain = (retryLabel: string) =>
+          requestWithChatNotFound(
+            () =>
+              hasPlainParams
+                ? api.sendMessage(
+                    chatId,
+                    chunk.plainText,
+                    plainParams as Parameters<typeof api.sendMessage>[2],
+                  )
+                : api.sendMessage(chatId, chunk.plainText),
+            retryLabel,
+          );
+        if (!chunk.htmlText) {
+          return await requestPlain(label);
+        }
+        const htmlText = chunk.htmlText;
+        const htmlParams = {
+          parse_mode: "HTML" as const,
+          ...plainParams,
         };
         return await withTelegramHtmlParseFallback({
           label,
@@ -663,22 +684,11 @@ export async function sendMessageTelegram(
                 api.sendMessage(
                   chatId,
                   htmlText,
-                  sendParams as Parameters<typeof api.sendMessage>[2],
+                  htmlParams as Parameters<typeof api.sendMessage>[2],
                 ),
               retryLabel,
             ),
-          requestPlain: (retryLabel) => {
-            const plainParams = hasBaseParams
-              ? (baseParams as Parameters<typeof api.sendMessage>[2])
-              : undefined;
-            return requestWithChatNotFound(
-              () =>
-                plainParams
-                  ? api.sendMessage(chatId, fallbackText ?? rawText, plainParams)
-                  : api.sendMessage(chatId, fallbackText ?? rawText),
-              retryLabel,
-            );
-          },
+          requestPlain,
         });
       },
     );
@@ -692,11 +702,10 @@ export async function sendMessageTelegram(
         }
       : undefined;
 
-  const sendPlainChunkedText = async (
-    plainText: string,
+  const sendTelegramTextChunks = async (
+    chunks: TelegramTextChunk[],
     context: string,
   ): Promise<{ messageId: string; chatId: string }> => {
-    const chunks = splitTelegramPlainTextChunks(plainText, 4000);
     let lastMessageId = "";
     let lastChatId = chatId;
     for (let index = 0; index < chunks.length; index += 1) {
@@ -704,25 +713,7 @@ export async function sendMessageTelegram(
       if (!chunk) {
         continue;
       }
-      const res = await withTelegramThreadFallback(
-        buildTextParams(index === chunks.length - 1),
-        "message",
-        opts.verbose,
-        async (effectiveParams, label) => {
-          const params = effectiveParams ? { ...effectiveParams } : {};
-          if (linkPreviewOptions) {
-            params.link_preview_options = linkPreviewOptions;
-          }
-          const hasParams = Object.keys(params).length > 0;
-          return await requestWithChatNotFound(
-            () =>
-              hasParams
-                ? api.sendMessage(chatId, chunk, params as Parameters<typeof api.sendMessage>[2])
-                : api.sendMessage(chatId, chunk),
-            label,
-          );
-        },
-      );
+      const res = await sendTelegramTextChunk(chunk, buildTextParams(index === chunks.length - 1));
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId);
       lastMessageId = String(messageId);
@@ -731,10 +722,7 @@ export async function sendMessageTelegram(
     return { messageId: lastMessageId, chatId: lastChatId };
   };
 
-  const sendChunkedText = async (
-    rawText: string,
-    context: string,
-  ): Promise<{ messageId: string; chatId: string }> => {
+  const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
     const fallbackText = opts.plainText ?? rawText;
     let htmlChunks: string[];
     try {
@@ -745,44 +733,24 @@ export async function sendMessageTelegram(
           error,
         )}`,
       );
-      return await sendPlainChunkedText(fallbackText, context);
+      return splitTelegramPlainTextChunks(fallbackText, 4000).map((plainText) => ({ plainText }));
     }
     const fixedPlainTextChunks = splitTelegramPlainTextChunks(fallbackText, 4000);
     if (fixedPlainTextChunks.length > htmlChunks.length) {
       logVerbose(
         `telegram ${context} plain-text fallback needs more chunks than HTML; sending plain text`,
       );
-      return await sendPlainChunkedText(fallbackText, context);
+      return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
     const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
-    const chunks = htmlChunks.map((chunk, index) => ({
-      rawText: chunk,
-      htmlText: chunk,
-      plainText: plainTextChunks[index],
+    return htmlChunks.map((htmlText, index) => ({
+      htmlText,
+      plainText: plainTextChunks[index] ?? htmlText,
     }));
-
-    let lastMessageId = "";
-    let lastChatId = chatId;
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index];
-      if (!chunk) {
-        continue;
-      }
-      const isLastChunk = index === chunks.length - 1;
-      const res = await sendTelegramText(
-        chunk.rawText,
-        buildTextParams(isLastChunk),
-        chunk.plainText,
-        chunk.htmlText,
-      );
-      const messageId = resolveTelegramMessageIdOrThrow(res, context);
-      recordSentMessage(chatId, messageId);
-      lastMessageId = String(messageId);
-      lastChatId = String(res?.chat?.id ?? chatId);
-    }
-
-    return { messageId: lastMessageId, chatId: lastChatId };
   };
+
+  const sendChunkedText = async (rawText: string, context: string) =>
+    await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
 
   if (mediaUrl) {
     const media = await loadWebMedia(
@@ -942,11 +910,11 @@ export async function sendMessageTelegram(
         const textResult = await sendChunkedText(followUpText, "text follow-up send");
         return { messageId: textResult.messageId, chatId: resolvedChatId };
       }
-      const textParams = buildTextParams(true);
-      const textRes = await sendTelegramText(followUpText, textParams);
-      const textMessageId = resolveTelegramMessageIdOrThrow(textRes, "text follow-up send");
-      recordSentMessage(chatId, textMessageId);
-      return { messageId: String(textMessageId), chatId: resolvedChatId };
+      const textResult = await sendTelegramTextChunks(
+        [{ plainText: followUpText, htmlText: renderHtmlText(followUpText) }],
+        "text follow-up send",
+      );
+      return { messageId: textResult.messageId, chatId: resolvedChatId };
     }
 
     return { messageId: String(mediaMessageId), chatId: resolvedChatId };
@@ -959,11 +927,10 @@ export async function sendMessageTelegram(
   if (textMode === "html") {
     textResult = await sendChunkedText(text, "text send");
   } else {
-    const textParams = buildTextParams(true);
-    const res = await sendTelegramText(text, textParams, opts.plainText);
-    const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
-    recordSentMessage(chatId, messageId);
-    textResult = { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+    textResult = await sendTelegramTextChunks(
+      [{ plainText: opts.plainText ?? text, htmlText: renderHtmlText(text) }],
+      "text send",
+    );
   }
   recordChannelActivity({
     channel: "telegram",
