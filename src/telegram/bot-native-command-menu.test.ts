@@ -3,6 +3,7 @@ import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   hashCommandList,
+  hashCommandListWithConfig,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 
@@ -13,6 +14,8 @@ type SyncMenuOptions = {
   accountId: string;
   botIdentity: string;
   runtimeLog?: ReturnType<typeof vi.fn>;
+  nativeEnabled?: boolean;
+  nativeSkillsEnabled?: boolean;
 };
 
 function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
@@ -28,6 +31,8 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
     commandsToRegister: options.commandsToRegister,
     accountId: options.accountId,
     botIdentity: options.botIdentity,
+    nativeEnabled: options.nativeEnabled,
+    nativeSkillsEnabled: options.nativeSkillsEnabled,
   });
 }
 
@@ -279,5 +284,144 @@ describe("bot-native-command-menu", () => {
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );
+  });
+
+  it("hashCommandListWithConfig produces different hashes when config changes (#38367)", () => {
+    const commands = [{ command: "alpha", description: "A" }];
+    const hashEnabled = hashCommandListWithConfig(commands, {
+      nativeEnabled: true,
+      nativeSkillsEnabled: false,
+    });
+    const hashDisabled = hashCommandListWithConfig(commands, {
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+    const hashSkillsEnabled = hashCommandListWithConfig(commands, {
+      nativeEnabled: true,
+      nativeSkillsEnabled: true,
+    });
+    expect(hashEnabled).not.toBe(hashDisabled);
+    expect(hashEnabled).not.toBe(hashSkillsEnabled);
+    expect(hashDisabled).not.toBe(hashSkillsEnabled);
+  });
+
+  it("hashCommandListWithConfig is stable for same config state (#38367)", () => {
+    const commands = [
+      { command: "bravo", description: "B" },
+      { command: "alpha", description: "A" },
+    ];
+    const reversed = [...commands].toReversed();
+    const config = { nativeEnabled: true, nativeSkillsEnabled: true };
+    expect(hashCommandListWithConfig(commands, config)).toBe(
+      hashCommandListWithConfig(reversed, config),
+    );
+  });
+
+  it("invalidates cache when nativeEnabled config changes (#38367)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-config-native-${Date.now()}`;
+    const commands = [{ command: "cfg_test", description: "Config test command" }];
+
+    // First sync with nativeEnabled: true.
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+      nativeEnabled: true,
+      nativeSkillsEnabled: false,
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
+
+    // Second sync with same commands but nativeEnabled: false — should NOT skip.
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+  });
+
+  it("invalidates cache when nativeSkillsEnabled config changes (#38367)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-config-skills-${Date.now()}`;
+    const commands = [{ command: "skills_test", description: "Skills config test" }];
+
+    // First sync with nativeSkillsEnabled: false.
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+      nativeEnabled: true,
+      nativeSkillsEnabled: false,
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
+
+    // Second sync with nativeSkillsEnabled: true — should NOT skip.
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+      nativeEnabled: true,
+      nativeSkillsEnabled: true,
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+  });
+
+  it("logs when sync is skipped due to cache hit (#38367)", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-log-skip-${Date.now()}`;
+    const commands = [{ command: "log_skip", description: "Log skip test" }];
+
+    // First sync — should call setMyCommands.
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+      nativeEnabled: true,
+      nativeSkillsEnabled: false,
+    });
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
+
+    // Second sync — should skip and log.
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+      nativeEnabled: true,
+      nativeSkillsEnabled: false,
+    });
+
+    // Wait a tick for the async sync to complete the cache check.
+    await vi.waitFor(() => {
+      expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
+    });
+    // setMyCommands should still be 1 (not called again).
+    expect(setMyCommands).toHaveBeenCalledTimes(1);
   });
 });
