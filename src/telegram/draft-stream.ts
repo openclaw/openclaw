@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
-import { isSafeToRetrySendError } from "./network-errors.js";
+import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -206,9 +206,10 @@ export function createTelegramDraftStream(params: {
           "telegram stream preview send failed with message_thread_id, retrying without thread",
       }));
     } catch (err) {
-      // Pre-connect failures (DNS, refused) guarantee the message never reached
-      // Telegram — clear the flag so sendMayHaveLanded() doesn't suppress fallback.
-      if (isSafeToRetrySendError(err)) {
+      // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
+      // guarantee the message was never delivered — clear the flag so
+      // sendMayHaveLanded() doesn't suppress fallback.
+      if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
         messageSendAttempted = false;
       }
       throw err;
