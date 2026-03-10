@@ -36,9 +36,11 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
+  resolveAcpCommandChannel,
   resolveAcpCommandAccountId,
   resolveAcpCommandBindingContext,
   resolveAcpCommandConversationId,
+  resolveAcpCommandThreadId,
 } from "./context.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
@@ -172,6 +174,7 @@ async function bindSpawnedAcpSessionToThread(params: {
 
   const label = params.label || params.agentId;
   const conversationId = currentConversationId;
+  const spawnedDiscordThread = spawnPolicy.channel === "discord" && placement === "child";
 
   try {
     const binding = await bindingService.bind({
@@ -191,6 +194,8 @@ async function bindSpawnedAcpSessionToThread(params: {
         agentId: params.agentId,
         label,
         boundBy: senderId || "unknown",
+        spawnedThread: spawnedDiscordThread,
+        spawnedBy: spawnedDiscordThread ? "acp" : undefined,
         introText: resolveThreadBindingIntroText({
           agentId: params.agentId,
           label,
@@ -223,6 +228,29 @@ async function bindSpawnedAcpSessionToThread(params: {
       error: message || `Failed to bind a ${channel} thread/conversation to the new ACP session.`,
     };
   }
+}
+
+function shouldArchiveAcpCreatedDiscordThread(params: {
+  commandParams: HandleCommandsParams;
+  removedBindings: SessionBindingRecord[];
+}): boolean {
+  if (resolveAcpCommandChannel(params.commandParams) !== "discord") {
+    return false;
+  }
+  const currentThreadId = resolveAcpCommandThreadId(params.commandParams);
+  if (!currentThreadId) {
+    return false;
+  }
+  return params.removedBindings.some((binding) => {
+    if (binding.conversation.channel !== "discord") {
+      return false;
+    }
+    if (binding.conversation.conversationId.trim() !== currentThreadId) {
+      return false;
+    }
+    const metadata = binding.metadata;
+    return metadata?.spawnedThread === true && metadata?.spawnedBy === "acp";
+  });
 }
 
 async function cleanupFailedSpawn(params: {
@@ -592,6 +620,26 @@ export async function handleAcpCloseAction(
         targetSessionKey: sessionKey,
         reason: "manual",
       });
+
+      if (
+        shouldArchiveAcpCreatedDiscordThread({
+          commandParams: params,
+          removedBindings,
+        })
+      ) {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: `✅ ACP session closed and thread archived${runtimeNotice}.`,
+            channelData: {
+              discord: {
+                archiveCurrentThreadAfterReply: true,
+                archiveFailureText: `⚠️ ACP session closed, but thread archive failed${runtimeNotice}.`,
+              },
+            },
+          },
+        };
+      }
 
       return stopWithText(
         `✅ Closed ACP session ${sessionKey}${runtimeNotice}. Removed ${removedBindings.length} binding${removedBindings.length === 1 ? "" : "s"}.`,

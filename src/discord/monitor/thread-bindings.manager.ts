@@ -55,6 +55,7 @@ import {
   THREAD_BINDINGS_SWEEP_INTERVAL_MS,
   type ThreadBindingManager,
   type ThreadBindingRecord,
+  type ThreadBindingSpawnedBy,
 } from "./thread-bindings.types.js";
 
 function registerManager(manager: ThreadBindingManager) {
@@ -145,6 +146,8 @@ function toSessionBindingRecord(
       webhookId: record.webhookId,
       webhookToken: record.webhookToken,
       boundBy: record.boundBy,
+      spawnedThread: record.spawnedThread === true ? true : undefined,
+      spawnedBy: record.spawnedBy,
       lastActivityAt: record.lastActivityAt,
       idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
         record,
@@ -316,6 +319,11 @@ export function createThreadBindingManager(
       }
 
       const now = Date.now();
+      const spawnedBy =
+        typeof bindParams.spawnedBy === "string" &&
+        (bindParams.spawnedBy === "acp" || bindParams.spawnedBy === "subagent")
+          ? (bindParams.spawnedBy as ThreadBindingSpawnedBy)
+          : undefined;
       const record: ThreadBindingRecord = {
         accountId,
         channelId,
@@ -327,6 +335,8 @@ export function createThreadBindingManager(
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
         boundBy: bindParams.boundBy?.trim() || "system",
+        spawnedThread: bindParams.spawnedThread === true ? true : undefined,
+        spawnedBy,
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs,
@@ -379,7 +389,11 @@ export function createThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound turns when allowBots is enabled.
-        void maybeSendBindingMessage({ record: removed, text: farewell, preferWebhook: false });
+        void maybeSendBindingMessage({
+          record: removed,
+          text: farewell,
+          preferWebhook: false,
+        });
       }
       return removed;
     },
@@ -462,10 +476,16 @@ export function createThreadBindingManager(
             at: number;
           }> = [];
           if (inactivityExpiresAt != null && now >= inactivityExpiresAt) {
-            expirationCandidates.push({ reason: "idle-expired", at: inactivityExpiresAt });
+            expirationCandidates.push({
+              reason: "idle-expired",
+              at: inactivityExpiresAt,
+            });
           }
           if (maxAgeExpiresAt != null && now >= maxAgeExpiresAt) {
-            expirationCandidates.push({ reason: "max-age-expired", at: maxAgeExpiresAt });
+            expirationCandidates.push({
+              reason: "max-age-expired",
+              at: maxAgeExpiresAt,
+            });
           }
           if (expirationCandidates.length > 0) {
             expirationCandidates.sort((a, b) => a.at - b.at);
@@ -554,6 +574,10 @@ export function createThreadBindingManager(
         typeof metadata.boundBy === "string" ? metadata.boundBy.trim() || undefined : undefined;
       const agentId =
         typeof metadata.agentId === "string" ? metadata.agentId.trim() || undefined : undefined;
+      const spawnedThread = metadata.spawnedThread === true;
+      const spawnedByRaw = typeof metadata.spawnedBy === "string" ? metadata.spawnedBy.trim() : "";
+      const spawnedBy: ThreadBindingSpawnedBy | undefined =
+        spawnedByRaw === "acp" || spawnedByRaw === "subagent" ? spawnedByRaw : undefined;
       let threadId: string | undefined;
       let channelId = input.conversation.parentConversationId?.trim() || undefined;
       let createThread = false;
@@ -582,6 +606,8 @@ export function createThreadBindingManager(
         label,
         boundBy,
         introText,
+        spawnedThread,
+        spawnedBy,
       });
       return bound
         ? toSessionBindingRecord(bound, {

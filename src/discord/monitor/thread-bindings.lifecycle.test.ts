@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -22,7 +23,9 @@ const hoisted = vi.hoisted(() => {
       post: restPost,
     },
   }));
-  const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
+  const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({
+    id: "thread-created",
+  }));
   const readAcpSessionEntry = vi.fn();
   return {
     sendMessageDiscord,
@@ -435,7 +438,10 @@ describe("thread binding lifecycle", () => {
       });
 
       vi.setSystemTime(new Date("2026-02-20T00:00:30.000Z"));
-      const touched = manager.touchThread({ threadId: "thread-1", persist: false });
+      const touched = manager.touchThread({
+        threadId: "thread-1",
+        persist: false,
+      });
       expect(touched).not.toBeNull();
 
       const record = manager.getByThreadId("thread-1");
@@ -549,6 +555,43 @@ describe("thread binding lifecycle", () => {
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
   });
 
+  it("stores spawned ACP thread metadata on child thread bindings", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:spawned",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel-parent",
+        parentConversationId: "parent-1",
+      },
+      placement: "child",
+      metadata: {
+        agentId: "codex",
+        boundBy: "user-1",
+        spawnedThread: true,
+        spawnedBy: "acp",
+      },
+    });
+
+    expect(bound.metadata).toMatchObject({
+      spawnedThread: true,
+      spawnedBy: "acp",
+    });
+    expect(manager.getByThreadId("thread-created")).toMatchObject({
+      spawnedThread: true,
+      spawnedBy: "acp",
+    });
+  });
+
   it("creates a new thread when spawning from an already bound thread", async () => {
     const manager = createThreadBindingManager({
       accountId: "default",
@@ -566,7 +609,9 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-2" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-2",
+    });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
       accountId: "default",
@@ -606,7 +651,9 @@ describe("thread binding lifecycle", () => {
       parent_id: "parent-1",
     });
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-lookup" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-lookup",
+    });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
       accountId: "default",
@@ -644,7 +691,9 @@ describe("thread binding lifecycle", () => {
       parent_id: "parent-runtime",
     });
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-runtime" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-runtime",
+    });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
       accountId: "runtime",
@@ -683,7 +732,9 @@ describe("thread binding lifecycle", () => {
     });
 
     hoisted.createThreadDiscord.mockClear();
-    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-token-refresh" });
+    hoisted.createThreadDiscord.mockResolvedValueOnce({
+      id: "thread-created-token-refresh",
+    });
     hoisted.createDiscordRestClient.mockClear();
 
     const bound = await manager.bindTarget({
@@ -901,7 +952,10 @@ describe("thread binding lifecycle", () => {
     const result = await reconcileAcpThreadBindingsOnStartup({
       cfg: {} as OpenClawConfig,
       accountId: "default",
-      healthProbe: async () => ({ status: "stale", reason: "status-timeout-running-stale" }),
+      healthProbe: async () => ({
+        status: "stale",
+        reason: "status-timeout-running-stale",
+      }),
     });
 
     expect(result.checked).toBe(1);
@@ -945,7 +999,10 @@ describe("thread binding lifecycle", () => {
     const result = await reconcileAcpThreadBindingsOnStartup({
       cfg: {} as OpenClawConfig,
       accountId: "default",
-      healthProbe: async () => ({ status: "uncertain", reason: "status-timeout" }),
+      healthProbe: async () => ({
+        status: "uncertain",
+        reason: "status-timeout",
+      }),
     });
 
     expect(result.checked).toBe(1);

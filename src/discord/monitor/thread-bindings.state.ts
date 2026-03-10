@@ -12,6 +12,7 @@ import {
   type PersistedThreadBindingsPayload,
   type ThreadBindingManager,
   type ThreadBindingRecord,
+  type ThreadBindingSpawnedBy,
   type ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
@@ -164,6 +165,10 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
   const webhookToken =
     typeof value.webhookToken === "string" ? value.webhookToken.trim() || undefined : undefined;
   const boundBy = typeof value.boundBy === "string" ? value.boundBy.trim() || "system" : "system";
+  const spawnedThread = value.spawnedThread === true ? true : undefined;
+  const spawnedByRaw = typeof value.spawnedBy === "string" ? value.spawnedBy.trim() : "";
+  const spawnedBy: ThreadBindingSpawnedBy | undefined =
+    spawnedByRaw === "acp" || spawnedByRaw === "subagent" ? spawnedByRaw : undefined;
   const boundAt =
     typeof value.boundAt === "number" && Number.isFinite(value.boundAt)
       ? Math.floor(value.boundAt)
@@ -215,6 +220,8 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
     webhookId,
     webhookToken,
     boundBy,
+    spawnedThread,
+    spawnedBy,
     boundAt,
     lastActivityAt,
     idleTimeoutMs: migratedIdleTimeoutMs,

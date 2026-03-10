@@ -130,6 +130,8 @@ type FakeBinding = {
     label?: string;
     boundBy?: string;
     webhookId?: string;
+    spawnedThread?: boolean;
+    spawnedBy?: "acp" | "subagent";
   };
 };
 
@@ -207,6 +209,29 @@ function createBoundThreadSession(sessionKey: string = defaultAcpSessionKey) {
   return createSessionBinding({
     targetSessionKey: sessionKey,
     conversation: createThreadConversation(),
+  });
+}
+
+function createSpawnedAcpThreadSession(sessionKey: string = defaultAcpSessionKey) {
+  return createSessionBinding({
+    targetSessionKey: sessionKey,
+    conversation: createThreadConversation(),
+    metadata: {
+      boundBy: "user-1",
+      spawnedThread: true,
+      spawnedBy: "acp",
+    },
+  });
+}
+
+function createBoundTelegramSession(sessionKey: string = defaultAcpSessionKey) {
+  return createSessionBinding({
+    targetSessionKey: sessionKey,
+    conversation: {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1003841603622:topic:498",
+    },
   });
 }
 
@@ -464,6 +489,8 @@ describe("/acp command", () => {
         targetKind: "session",
         placement: "child",
         metadata: expect.objectContaining({
+          spawnedThread: true,
+          spawnedBy: "acp",
           introText: expect.stringContaining("cwd: /home/bob/clawd"),
         }),
       }),
@@ -701,7 +728,60 @@ describe("/acp command", () => {
     expect(hoisted.runTurnMock).not.toHaveBeenCalled();
   });
 
-  it("closes an ACP session, unbinds thread targets, and clears metadata", async () => {
+  it("archives ACP-created Discord threads on /acp close", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSpawnedAcpThreadSession(),
+    );
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createSpawnedAcpThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await runThreadAcpCommand("/acp close", baseCfg);
+
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toBe("✅ ACP session closed and thread archived.");
+    expect(result?.reply?.channelData).toEqual({
+      discord: {
+        archiveCurrentThreadAfterReply: true,
+        archiveFailureText: "⚠️ ACP session closed, but thread archive failed.",
+      },
+    });
+  });
+
+  it("preserves runtime notice in archive close replies", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSpawnedAcpThreadSession(),
+    );
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createSpawnedAcpThreadSession() as SessionBindingRecord,
+    ]);
+    hoisted.closeMock.mockRejectedValue(
+      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "backend unavailable"),
+    );
+
+    const result = await runThreadAcpCommand("/acp close", baseCfg);
+
+    expect(result?.reply?.text).toBe(
+      "✅ ACP session closed and thread archived (backend unavailable).",
+    );
+    expect(result?.reply?.channelData).toEqual({
+      discord: {
+        archiveCurrentThreadAfterReply: true,
+        archiveFailureText:
+          "⚠️ ACP session closed, but thread archive failed (backend unavailable).",
+      },
+    });
+  });
+
+  it("keeps the existing close reply for manually attached Discord threads", async () => {
     mockBoundThreadSession();
     hoisted.sessionBindingUnbindMock.mockResolvedValue([
       createBoundThreadSession() as SessionBindingRecord,
@@ -718,6 +798,46 @@ describe("/acp command", () => {
     );
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
     expect(result?.reply?.text).toContain("Removed 1 binding");
+    expect(result?.reply?.channelData).toBeUndefined();
+  });
+
+  it("fails safe when spawned ownership metadata is incomplete", async () => {
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createSessionBinding({
+        targetSessionKey: defaultAcpSessionKey,
+        conversation: createThreadConversation(),
+        metadata: {
+          boundBy: "user-1",
+          spawnedThread: true,
+        },
+      }) as SessionBindingRecord,
+    ]);
+
+    const result = await runThreadAcpCommand("/acp close", baseCfg);
+
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+    expect(result?.reply?.channelData).toBeUndefined();
+  });
+
+  it("keeps non-Discord /acp close behavior unchanged", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+      (ref: { channel?: string; accountId?: string; conversationId?: string }) =>
+        ref.channel === "telegram" &&
+        ref.accountId === "default" &&
+        ref.conversationId === "-1003841603622:topic:498"
+          ? createBoundTelegramSession()
+          : null,
+    );
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundTelegramSession() as SessionBindingRecord,
+    ]);
+
+    const result = await runTelegramAcpCommand("/acp close", baseCfg);
+
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+    expect(result?.reply?.channelData).toBeUndefined();
   });
 
   it("lists ACP sessions from the session store", async () => {

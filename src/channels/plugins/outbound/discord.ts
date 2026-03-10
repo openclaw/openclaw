@@ -1,13 +1,16 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { archiveDiscordThread } from "../../../discord/monitor/thread-bindings.discord-api.js";
 import {
   getThreadBindingManager,
   type ThreadBindingRecord,
 } from "../../../discord/monitor/thread-bindings.js";
 import {
+  editMessageDiscord,
   sendMessageDiscord,
   sendPollDiscord,
   sendWebhookMessageDiscord,
 } from "../../../discord/send.js";
+import { logVerbose } from "../../../globals.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { normalizeDiscordOutboundTarget } from "../normalize/discord.js";
 import type { ChannelOutboundAdapter } from "../types.js";
@@ -36,6 +39,84 @@ function resolveDiscordWebhookIdentity(params: {
   const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
   const avatarUrl = params.identity?.avatarUrl?.trim() || undefined;
   return { username, avatarUrl };
+}
+
+type DiscordArchiveAfterReplyChannelData = {
+  archiveCurrentThreadAfterReply?: boolean;
+  archiveFailureText?: string;
+};
+
+function resolveArchiveAfterReplyChannelData(
+  channelData: Record<string, unknown> | undefined,
+): DiscordArchiveAfterReplyChannelData | null {
+  const discordData = channelData?.discord;
+  if (!discordData || typeof discordData !== "object") {
+    return null;
+  }
+  const archiveData = discordData as {
+    archiveCurrentThreadAfterReply?: unknown;
+    archiveFailureText?: unknown;
+  };
+  if (archiveData.archiveCurrentThreadAfterReply !== true) {
+    return null;
+  }
+  return {
+    archiveCurrentThreadAfterReply: true,
+    archiveFailureText:
+      typeof archiveData.archiveFailureText === "string"
+        ? archiveData.archiveFailureText.trim() || undefined
+        : undefined,
+  };
+}
+
+async function sendDiscordArchiveAfterReplyPayload(
+  ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0],
+  archiveAfterReply: DiscordArchiveAfterReplyChannelData,
+) {
+  const threadId = String(ctx.threadId).trim();
+  const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId });
+  const accountId = ctx.accountId ?? undefined;
+  const text = ctx.payload.text ?? "";
+
+  const send = ctx.deps?.sendDiscord ?? sendMessageDiscord;
+  const sent = await send(target, text, {
+    cfg: ctx.cfg,
+    accountId,
+    replyTo: ctx.replyToId ?? undefined,
+    silent: ctx.silent ?? undefined,
+    verbose: false,
+  });
+  const delivery = { channel: "discord" as const, ...sent };
+
+  try {
+    await archiveDiscordThread({
+      cfg: ctx.cfg,
+      accountId: accountId ?? "default",
+      threadId,
+    });
+  } catch (error) {
+    logVerbose(`discord outbound thread archive failed for ${threadId}: ${String(error)}`);
+    const failureText = archiveAfterReply.archiveFailureText?.trim();
+    if (failureText && sent.messageId) {
+      try {
+        await editMessageDiscord(
+          threadId,
+          sent.messageId,
+          { content: failureText },
+          {
+            cfg: ctx.cfg,
+            accountId,
+          },
+        );
+      } catch (editError) {
+        logVerbose(
+          `discord outbound archive failure message edit failed for ${threadId}:${sent.messageId}: ${String(editError)}`,
+        );
+      }
+    }
+  }
+
+  return delivery;
 }
 
 async function maybeSendDiscordWebhookText(params: {
@@ -84,8 +165,20 @@ export const discordOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 2000,
   pollMaxOptions: 10,
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-  sendPayload: async (ctx) =>
-    await sendTextMediaPayload({ channel: "discord", ctx, adapter: discordOutbound }),
+  sendPayload: async (ctx) => {
+    const archiveAfterReply = resolveArchiveAfterReplyChannelData(ctx.payload.channelData);
+    const threadId =
+      ctx.threadId !== undefined && ctx.threadId !== null ? String(ctx.threadId).trim() : "";
+    const hasMedia = Boolean(ctx.payload.mediaUrl) || Boolean(ctx.payload.mediaUrls?.length);
+    if (!archiveAfterReply || !threadId || hasMedia) {
+      return await sendTextMediaPayload({
+        channel: "discord",
+        ctx,
+        adapter: discordOutbound,
+      });
+    }
+    return await sendDiscordArchiveAfterReplyPayload(ctx, archiveAfterReply);
+  },
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({

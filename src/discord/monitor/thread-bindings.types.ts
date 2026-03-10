@@ -1,4 +1,5 @@
 export type ThreadBindingTargetKind = "subagent" | "acp";
+export type ThreadBindingSpawnedBy = "subagent" | "acp";
 
 export type ThreadBindingRecord = {
   accountId: string;
@@ -11,6 +12,10 @@ export type ThreadBindingRecord = {
   webhookId?: string;
   webhookToken?: string;
   boundBy: string;
+  /** True when OpenClaw created this thread while binding the target session. */
+  spawnedThread?: boolean;
+  /** Which OpenClaw subsystem created the spawned thread. */
+  spawnedBy?: ThreadBindingSpawnedBy;
   boundAt: number;
   lastActivityAt: number;
   /** Inactivity timeout window in milliseconds (0 disables inactivity auto-unfocus). */
@@ -56,6 +61,8 @@ export type ThreadBindingManager = {
     introText?: string;
     webhookId?: string;
     webhookToken?: string;
+    spawnedThread?: boolean;
+    spawnedBy?: ThreadBindingSpawnedBy;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
     threadId: string;

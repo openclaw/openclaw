@@ -3,13 +3,17 @@ import { normalizeDiscordOutboundTarget } from "../normalize/discord.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscordMock = vi.fn();
+  const editMessageDiscordMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
   const sendWebhookMessageDiscordMock = vi.fn();
+  const archiveDiscordThreadMock = vi.fn();
   const getThreadBindingManagerMock = vi.fn();
   return {
     sendMessageDiscordMock,
+    editMessageDiscordMock,
     sendPollDiscordMock,
     sendWebhookMessageDiscordMock,
+    archiveDiscordThreadMock,
     getThreadBindingManagerMock,
   };
 });
@@ -19,9 +23,21 @@ vi.mock("../../../discord/send.js", async (importOriginal) => {
   return {
     ...actual,
     sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscordMock(...args),
+    editMessageDiscord: (...args: unknown[]) => hoisted.editMessageDiscordMock(...args),
     sendPollDiscord: (...args: unknown[]) => hoisted.sendPollDiscordMock(...args),
     sendWebhookMessageDiscord: (...args: unknown[]) =>
       hoisted.sendWebhookMessageDiscordMock(...args),
+  };
+});
+
+vi.mock("../../../discord/monitor/thread-bindings.discord-api.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../discord/monitor/thread-bindings.discord-api.js")
+    >();
+  return {
+    ...actual,
+    archiveDiscordThread: (...args: unknown[]) => hoisted.archiveDiscordThreadMock(...args),
   };
 });
 
@@ -85,15 +101,24 @@ describe("normalizeDiscordOutboundTarget", () => {
   });
 
   it("passes through channel: prefixed targets", () => {
-    expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({ ok: true, to: "channel:123" });
+    expect(normalizeDiscordOutboundTarget("channel:123")).toEqual({
+      ok: true,
+      to: "channel:123",
+    });
   });
 
   it("passes through user: prefixed targets", () => {
-    expect(normalizeDiscordOutboundTarget("user:123")).toEqual({ ok: true, to: "user:123" });
+    expect(normalizeDiscordOutboundTarget("user:123")).toEqual({
+      ok: true,
+      to: "user:123",
+    });
   });
 
   it("passes through channel name strings", () => {
-    expect(normalizeDiscordOutboundTarget("general")).toEqual({ ok: true, to: "general" });
+    expect(normalizeDiscordOutboundTarget("general")).toEqual({
+      ok: true,
+      to: "general",
+    });
   });
 
   it("returns error for empty target", () => {
@@ -105,7 +130,10 @@ describe("normalizeDiscordOutboundTarget", () => {
   });
 
   it("trims whitespace", () => {
-    expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({ ok: true, to: "channel:123" });
+    expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({
+      ok: true,
+      to: "channel:123",
+    });
   });
 });
 
@@ -115,6 +143,10 @@ describe("discordOutbound", () => {
       messageId: "msg-1",
       channelId: "ch-1",
     });
+    hoisted.editMessageDiscordMock.mockClear().mockResolvedValue({
+      messageId: "msg-1",
+      channelId: "thread-1",
+    });
     hoisted.sendPollDiscordMock.mockClear().mockResolvedValue({
       messageId: "poll-1",
       channelId: "ch-1",
@@ -123,6 +155,7 @@ describe("discordOutbound", () => {
       messageId: "msg-webhook-1",
       channelId: "thread-1",
     });
+    hoisted.archiveDiscordThreadMock.mockClear().mockResolvedValue(undefined);
     hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
   });
 
@@ -225,6 +258,120 @@ describe("discordOutbound", () => {
       text: "fallback",
       result,
     });
+  });
+
+  it("archives the current thread after sending archive-aware payloads", async () => {
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "✅ ACP session closed and thread archived.",
+      payload: {
+        text: "✅ ACP session closed and thread archived.",
+        channelData: {
+          discord: {
+            archiveCurrentThreadAfterReply: true,
+            archiveFailureText: "⚠️ ACP session closed, but thread archive failed.",
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "thread-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:thread-1",
+      "✅ ACP session closed and thread archived.",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(hoisted.sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(hoisted.archiveDiscordThreadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        threadId: "thread-1",
+      }),
+    );
+    expect(hoisted.editMessageDiscordMock).not.toHaveBeenCalled();
+    expect(result).toEqual(DEFAULT_DISCORD_SEND_RESULT);
+  });
+
+  it("honors sendDiscord overrides for archive-after-reply payloads", async () => {
+    const sendDiscordOverride = vi.fn().mockResolvedValue({
+      channel: "discord",
+      messageId: "override-msg-1",
+      channelId: "override-thread-1",
+    });
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "✅ ACP session closed and thread archived.",
+      payload: {
+        text: "✅ ACP session closed and thread archived.",
+        channelData: {
+          discord: {
+            archiveCurrentThreadAfterReply: true,
+            archiveFailureText: "⚠️ ACP session closed, but thread archive failed.",
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "thread-1",
+      deps: {
+        sendDiscord: sendDiscordOverride,
+      },
+    });
+
+    expect(sendDiscordOverride).toHaveBeenCalledWith(
+      "channel:thread-1",
+      "✅ ACP session closed and thread archived.",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(hoisted.archiveDiscordThreadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        threadId: "thread-1",
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "override-msg-1",
+      channelId: "override-thread-1",
+    });
+  });
+
+  it("edits the reply to partial success text when thread archive fails", async () => {
+    hoisted.archiveDiscordThreadMock.mockRejectedValueOnce(new Error("archive failed"));
+
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "✅ ACP session closed and thread archived.",
+      payload: {
+        text: "✅ ACP session closed and thread archived.",
+        channelData: {
+          discord: {
+            archiveCurrentThreadAfterReply: true,
+            archiveFailureText: "⚠️ ACP session closed, but thread archive failed.",
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "thread-1",
+    });
+
+    expect(hoisted.editMessageDiscordMock).toHaveBeenCalledWith(
+      "thread-1",
+      "msg-1",
+      { content: "⚠️ ACP session closed, but thread archive failed." },
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
   });
 
   it("routes poll sends to thread target when threadId is provided", async () => {

@@ -1,4 +1,5 @@
 import { ChannelType, Routes } from "discord-api-types/v10";
+import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
@@ -286,4 +287,26 @@ export async function createThreadForBinding(params: {
     );
     return null;
   }
+}
+
+export async function archiveDiscordThread(params: {
+  cfg?: OpenClawConfig;
+  accountId: string;
+  token?: string;
+  threadId: string;
+}): Promise<void> {
+  const threadId = params.threadId.trim();
+  if (!threadId) {
+    throw new Error("Discord thread id is required");
+  }
+  const rest = createDiscordRestClient(
+    {
+      accountId: params.accountId,
+      token: params.token,
+    },
+    params.cfg,
+  ).rest;
+  await rest.patch(Routes.channel(threadId), {
+    body: { archived: true },
+  });
 }
