@@ -707,18 +707,24 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const { preparation, customInstructions: eventInstructions, signal } = event;
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
       // When there are no summarizable messages (all messages are "recent"), cancelling
-      // compaction leaves context unchanged but the SDK will re-trigger on every subsequent
-      // assistant response — creating a cancel loop that blocks cron lanes (#41981).
-      // Instead of cancelling, return a minimal compaction result so the SDK writes a
-      // compaction boundary entry. This marks the session as "recently compacted" and
-      // prevents immediate re-triggering.
-      const alreadyCancelled = noRealMessagesCancelledSessions.has(ctx.sessionManager);
-      if (!alreadyCancelled) {
-        noRealMessagesCancelledSessions.add(ctx.sessionManager);
+      // compaction leaves context unchanged but the SDK re-triggers _checkCompaction
+      // after every assistant response — creating a cancel loop that blocks cron lanes (#41981).
+      //
+      // Strategy: on the FIRST hit, return a minimal compaction result so the SDK writes
+      // a boundary entry. The SDK's prepareCompaction() returns undefined when the last
+      // entry is a compaction, which blocks immediate re-triggering within the same turn.
+      // On SUBSEQUENT hits (same session), cancel directly — the boundary already exists,
+      // and cancelling is cheaper than writing additional boundary entries.
+      const alreadyBoundaried = noRealMessagesCancelledSessions.has(ctx.sessionManager);
+      if (alreadyBoundaried) {
+        log.debug(
+          "Compaction safeguard: no real conversation messages to summarize (boundary already written, cancelling).",
+        );
+        return { cancel: true };
       }
-      const logFn = alreadyCancelled ? log.debug.bind(log) : log.info.bind(log);
-      logFn(
-        "Compaction safeguard: no real conversation messages to summarize; writing empty compaction boundary to prevent re-trigger loop.",
+      noRealMessagesCancelledSessions.add(ctx.sessionManager);
+      log.info(
+        "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
       );
       const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
       return {

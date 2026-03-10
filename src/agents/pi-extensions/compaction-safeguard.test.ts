@@ -1565,7 +1565,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result.compaction.firstKeptEntryId).toBe("entry-2");
   });
 
-  it("downgrades log level on repeated no-real-messages compaction for same session", async () => {
+  it("cancels on repeated no-real-messages compaction for same session (boundary already written)", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
@@ -1582,7 +1582,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       signal: new AbortController().signal,
     };
 
-    // First call
+    // First call — writes boundary
     const { result: result1 } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
@@ -1590,13 +1590,13 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result1.compaction).toBeDefined();
 
-    // Second call with same sessionManager — should still work but log at debug
+    // Second call with same sessionManager — cancels (boundary already exists)
     const { result: result2 } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expect(result2.compaction).toBeDefined();
+    expect(result2).toEqual({ cancel: true });
   });
 
   it("continues when messages include real conversation content", async () => {
