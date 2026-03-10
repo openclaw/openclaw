@@ -120,7 +120,9 @@ describe("resolveProxyFetchFromEnv", () => {
 
     const result = resolveProxyFetchFromEnv();
     expect(result).toBeDefined();
-    expect(result!.envVar).toBe("https_proxy");
+    // Windows process.env is case-insensitive; the key may be normalised to
+    // uppercase by the OS, so accept either casing for the log value.
+    expect(result!.envVar.toUpperCase()).toBe("HTTPS_PROXY");
     expect(envAgentSpy).toHaveBeenCalled();
   });
 
@@ -134,7 +136,8 @@ describe("resolveProxyFetchFromEnv", () => {
 
     const result = resolveProxyFetchFromEnv();
     expect(result).toBeDefined();
-    expect(result!.envVar).toBe("http_proxy");
+    // Windows process.env is case-insensitive; accept either casing.
+    expect(result!.envVar.toUpperCase()).toBe("HTTP_PROXY");
     expect(envAgentSpy).toHaveBeenCalled();
   });
 
@@ -162,7 +165,8 @@ describe("resolveProxyFetchFromEnv", () => {
 
     const result = resolveProxyFetchFromEnv();
     expect(result).toBeDefined();
-    expect(result!.envVar).toBe("all_proxy");
+    // Windows process.env is case-insensitive; accept either casing.
+    expect(result!.envVar.toUpperCase()).toBe("ALL_PROXY");
     expect(envAgentSpy).toHaveBeenCalled();
   });
 
