@@ -2,7 +2,11 @@ import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
+import {
+  isWhatsAppVoiceCompatibleAudio,
+  normalizePollInput,
+  type PollInput,
+} from "openclaw/plugin-sdk/media-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
@@ -111,6 +115,7 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let audioAsVoice: boolean | undefined;
     if (primaryMediaUrl) {
       const media = await loadOutboundMediaFromUrl(primaryMediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
@@ -122,11 +127,16 @@ export async function sendMessageWhatsApp(
       mediaBuffer = media.buffer;
       mediaType = media.contentType ?? "application/octet-stream";
       if (media.kind === "audio") {
-        // WhatsApp expects explicit opus codec for PTT voice notes.
-        mediaType =
-          media.contentType === "audio/ogg"
+        // Only Opus/Ogg audio should be labeled as a WhatsApp voice note.
+        audioAsVoice = isWhatsAppVoiceCompatibleAudio({
+          contentType: media.contentType,
+          fileName: media.fileName ?? primaryMediaUrl,
+        });
+        mediaType = audioAsVoice
+          ? media.contentType === "audio/ogg" || media.contentType === "audio/opus"
             ? "audio/ogg; codecs=opus"
-            : (media.contentType ?? "application/octet-stream");
+            : (media.contentType ?? "application/octet-stream")
+          : (media.contentType ?? "application/octet-stream");
       } else if (media.kind === "video") {
         text = caption ?? "";
       } else if (media.kind === "image") {
@@ -142,10 +152,15 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
+      options.gifPlayback ||
+      accountId ||
+      documentFileName ||
+      audioAsVoice ||
+      options.quotedMessageKey
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(audioAsVoice ? { audioAsVoice: true } : {}),
             ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,
           }

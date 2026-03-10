@@ -217,6 +217,28 @@ describe("web outbound", () => {
       "voice note",
       buf,
       "audio/ogg; codecs=opus",
+      { audioAsVoice: true },
+    );
+  });
+
+  it("keeps webm audio as regular audio", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/webm",
+      kind: "audio",
+    });
+    await sendMessageWhatsApp("+1555", "", {
+      verbose: false,
+      mediaUrl: "/tmp/voice.webm",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "", buf, "audio/webm");
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      "+1555",
+      "",
+      buf,
+      "audio/webm",
+      expect.objectContaining({ audioAsVoice: true }),
     );
   });
 

@@ -14,6 +14,7 @@ import {
   resolveMarkdownTableMode,
   resolveSendableOutboundReplyParts,
   resolveTextChunkLimit,
+  resolveToolDeliveryPayload,
   shouldLogVerbose,
   toLocationContext,
   type getChildLogger,
@@ -61,9 +62,6 @@ function shouldSuppressWhatsAppPayload(
   payload: ReplyPayload,
   info: { kind: ReplyLifecycleKind },
 ): boolean {
-  if (info.kind === "tool") {
-    return true;
-  }
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
     return true;
   }
@@ -289,8 +287,18 @@ export async function dispatchWhatsAppBufferedReply(params: {
         if (shouldSuppressWhatsAppPayload(payload, info)) {
           return;
         }
+        const deliveredPayload =
+          info.kind === "tool"
+            ? resolveToolDeliveryPayload(payload, {
+                allowText: false,
+                allowExecApproval: false,
+              })
+            : payload;
+        if (!deliveredPayload) {
+          return;
+        }
         await params.deliverReply({
-          replyResult: payload,
+          replyResult: deliveredPayload,
           msg: params.msg,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
@@ -302,18 +310,22 @@ export async function dispatchWhatsAppBufferedReply(params: {
           tableMode,
         });
         didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
-          combinedBody: params.context.Body as string | undefined,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
+        if (info.kind === "final") {
+          const shouldLog = deliveredPayload.text ? true : undefined;
+          params.rememberSentText(deliveredPayload.text, {
+            combinedBody: params.context.Body as string | undefined,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: shouldLog,
+          });
+        }
         const fromDisplay =
           params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
-        const reply = resolveSendableOutboundReplyParts(payload);
+        const reply = resolveSendableOutboundReplyParts(deliveredPayload);
         if (shouldLogVerbose()) {
-          const preview = payload.text != null ? reply.text : "<media>";
-          logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
+          const preview = deliveredPayload.text != null ? reply.text : "<media>";
+          logVerbose(
+            `Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`,
+          );
         }
       },
       onReplyStart: params.msg.sendComposing,
@@ -324,7 +336,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
   });
 
-  const didQueueVisibleReply = queuedFinal || counts.block > 0 || counts.final > 0;
+  const didQueueVisibleReply = didSendReply || queuedFinal || counts.block > 0 || counts.final > 0;
   if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);

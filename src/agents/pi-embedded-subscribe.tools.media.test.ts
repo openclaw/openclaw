@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractToolResultAudioAsVoice,
   extractToolResultMediaArtifact,
   extractToolResultMediaPaths,
   filterToolResultMediaUrls,

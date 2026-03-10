@@ -6,19 +6,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
-const synthesizeMock = vi.hoisted(() =>
-  vi.fn(
-    async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
-      audioBuffer: Buffer.from("voice"),
-      fileExtension: ".ogg",
-      outputFormat: "ogg",
-      voiceCompatible: request.target === "voice-note",
-    }),
-  ),
-);
+const { getSpeechProviderMock, listSpeechProvidersMock, runFfmpegMock, synthesizeMock } =
+  vi.hoisted(() => ({
+    getSpeechProviderMock: vi.fn(),
+    listSpeechProvidersMock: vi.fn(),
+    runFfmpegMock: vi.fn(),
+    synthesizeMock: vi.fn(
+      async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: request.target === "voice-note",
+      }),
+    ),
+  }));
 
-const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
-const getSpeechProviderMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    runFfmpeg: (...args: Parameters<typeof actual.runFfmpeg>) => runFfmpegMock(...args),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   normalizeChannelId: (channel: string | undefined) => channel?.trim().toLowerCase() ?? null,
@@ -94,11 +105,12 @@ async function expectTtsPayloadResult(params: {
   }
 }
 
-describe("speech-core native voice-note routing", () => {
-  afterEach(() => {
-    synthesizeMock.mockClear();
-  });
+afterEach(() => {
+  synthesizeMock.mockClear();
+  runFfmpegMock.mockReset();
+});
 
+describe("speech-core native voice-note routing", () => {
   it("keeps native voice-note channel support centralized", () => {
     for (const channel of nativeVoiceNoteChannels) {
       expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
@@ -126,5 +138,31 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+});
+
+describe("maybeNormalizeVoiceBubbleAudio", () => {
+  it("transcodes webm voice-note audio to ogg for WhatsApp delivery", async () => {
+    runFfmpegMock.mockResolvedValueOnce("");
+
+    const result = await _test.maybeNormalizeVoiceBubbleAudio({
+      audioPath: "/tmp/reply.webm",
+      channelId: "whatsapp",
+    });
+
+    expect(result).toBe("/tmp/reply.ogg");
+    expect(runFfmpegMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["-i", "/tmp/reply.webm", path.join("/tmp", "reply.ogg")]),
+    );
+  });
+
+  it("keeps non-webm audio unchanged", async () => {
+    const result = await _test.maybeNormalizeVoiceBubbleAudio({
+      audioPath: "/tmp/reply.mp3",
+      channelId: "whatsapp",
+    });
+
+    expect(result).toBe("/tmp/reply.mp3");
+    expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 });

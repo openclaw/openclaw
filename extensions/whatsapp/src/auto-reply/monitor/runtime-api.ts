@@ -16,7 +16,10 @@ export {
   buildHistoryContextFromEntries,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+export {
+  resolveSendableOutboundReplyParts,
+  resolveToolDeliveryPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 export {
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,

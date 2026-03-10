@@ -82,9 +82,12 @@ describe("createWebSendApi", () => {
     );
   });
 
-  it("supports audio as push-to-talk voice note", async () => {
+  it("supports audio as push-to-talk voice note when requested", async () => {
     const payload = Buffer.from("aud");
-    await api.sendMessage("+1555", "", payload, "audio/ogg", { accountId: "alt" });
+    await api.sendMessage("+1555", "", payload, "audio/ogg", {
+      accountId: "alt",
+      audioAsVoice: true,
+    });
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
@@ -98,6 +101,22 @@ describe("createWebSendApi", () => {
       accountId: "alt",
       direction: "outbound",
     });
+  });
+
+  it("sends non-voice audio without push-to-talk", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "", payload, "audio/webm");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        audio: payload,
+        mimetype: "audio/webm",
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({ ptt: true }),
+    );
   });
 
   it("supports video media and gifPlayback option", async () => {

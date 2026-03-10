@@ -349,7 +349,7 @@ describe("deliverWebReply", () => {
     );
   });
 
-  it("sends audio media as ptt voice note", async () => {
+  it("sends audio media as WhatsApp voice note when requested", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -360,7 +360,11 @@ describe("deliverWebReply", () => {
     });
 
     await deliverWebReply({
-      replyResult: { text: "cap", mediaUrl: "http://example.com/a.ogg" },
+      replyResult: {
+        text: "cap",
+        mediaUrl: "http://example.com/a.ogg",
+        audioAsVoice: true,
+      },
       msg,
       maxMediaBytes: 1024 * 1024,
       textLimit: 200,
@@ -372,11 +376,40 @@ describe("deliverWebReply", () => {
       expect.objectContaining({
         audio: expect.any(Buffer),
         ptt: true,
-        mimetype: "audio/ogg",
-        caption: "cap",
+        mimetype: "audio/ogg; codecs=opus",
       }),
       undefined,
     );
+    expect(msg.reply).toHaveBeenCalledWith("cap");
+  });
+
+  it("sends non-voice audio without forcing ptt and keeps text as a normal reply", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/a.mp3" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        mimetype: "audio/mpeg",
+      }),
+    );
+    expect(msg.sendMedia).not.toHaveBeenCalledWith(expect.objectContaining({ ptt: true }));
+    expect(msg.reply).toHaveBeenCalledWith("cap");
   });
 
   it("sends video media", async () => {

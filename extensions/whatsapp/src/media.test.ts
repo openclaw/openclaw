@@ -4,17 +4,62 @@ import path from "node:path";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/media-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
+import { captureEnv, mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
-import {
-  LocalMediaAccessError,
-  loadWebMedia,
-  loadWebMediaRaw,
-  optimizeImageToJpeg,
-} from "./media.js";
+
+const { convertHeicToJpegMock, detectMimeMock, runFfprobeMock } = vi.hoisted(() => ({
+  convertHeicToJpegMock: vi.fn(),
+  detectMimeMock: vi.fn(),
+  runFfprobeMock: vi.fn(),
+}));
+
+vi.mock("../../../src/media/image-ops.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
+    "../../../src/media/image-ops.js",
+  );
+  return {
+    ...actual,
+    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+  };
+});
+
+vi.mock("../../../src/media/mime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../src/media/mime.js")>(
+    "../../../src/media/mime.js",
+  );
+  detectMimeMock.mockImplementation((...args: Parameters<typeof actual.detectMime>) =>
+    actual.detectMime(...args),
+  );
+  return {
+    ...actual,
+    detectMime: (...args: Parameters<typeof actual.detectMime>) => detectMimeMock(...args),
+  };
+});
+
+vi.mock("../../../src/media/ffmpeg-exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../../src/media/ffmpeg-exec.js")>(
+      "../../../src/media/ffmpeg-exec.js",
+    );
+  runFfprobeMock.mockImplementation((...args: Parameters<typeof actual.runFfprobe>) =>
+    actual.runFfprobe(...args),
+  );
+  return {
+    ...actual,
+    runFfprobe: (...args: Parameters<typeof actual.runFfprobe>) => runFfprobeMock(...args),
+  };
+});
+
+let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
+let loadWebMedia: typeof import("./media.js").loadWebMedia;
+let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
+let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
+let sendVoiceMessageDiscord: typeof import("../../discord/src/send.js").sendVoiceMessageDiscord;
+
+({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
+  await import("./media.js"));
+({ sendVoiceMessageDiscord } = await import("../../discord/src/send.js"));
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -23,6 +68,7 @@ let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
+let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
@@ -76,6 +122,7 @@ beforeAll(async () => {
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
+  fakeHeicFile = await writeTempFile(tinyPngBuffer, ".heic");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -176,6 +223,32 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
+  });
+
+  it("normalizes HEIC local files to JPEG output", async () => {
+    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
+
+    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
+
+    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
+    expect(result.buffer.length).toBeGreaterThan(0);
+    expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
+    expect(result.buffer[0]).toBe(0xff);
+    expect(result.buffer[1]).toBe(0xd8);
+  });
+
+  it("relabels audio-only webm files as audio before delivery", async () => {
+    const audioOnlyWebmFile = await writeTempFile(Buffer.from("fake-webm"), ".webm");
+    detectMimeMock.mockResolvedValueOnce("video/webm");
+    runFfprobeMock.mockResolvedValueOnce("audio\n");
+
+    const result = await loadWebMedia(audioOnlyWebmFile, 1024 * 1024);
+
+    expect(result.kind).toBe("audio");
+    expect(result.contentType).toBe("audio/webm");
   });
 
   it("includes URL + status in fetch errors", async () => {

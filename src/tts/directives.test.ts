@@ -78,6 +78,15 @@ describe("parseTtsDirectives provider-aware routing", () => {
     });
   });
 
+  it("treats bare [[tts]] as a directive trigger", () => {
+    const result = parseTtsDirectives("[[tts]]Hello world", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("Hello world");
+  });
+
   it("routes generic speed to the explicitly declared provider", () => {
     const result = parseTtsDirectives(
       "hello [[tts:provider=minimax speed=1.2]] world",

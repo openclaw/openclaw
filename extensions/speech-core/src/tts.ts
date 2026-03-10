@@ -19,6 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -587,6 +588,46 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
 
+async function maybeNormalizeVoiceBubbleAudio(params: {
+  audioPath: string;
+  channelId: ChannelId | null;
+}): Promise<string> {
+  if (params.channelId === null || !OPUS_CHANNELS.has(params.channelId)) {
+    return params.audioPath;
+  }
+  if (path.extname(params.audioPath).toLowerCase() !== ".webm") {
+    return params.audioPath;
+  }
+
+  const outputPath = path.join(
+    path.dirname(params.audioPath),
+    `${path.basename(params.audioPath, ".webm")}.ogg`,
+  );
+
+  try {
+    await runFfmpeg([
+      "-y",
+      "-i",
+      params.audioPath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-ar",
+      "48000",
+      "-ac",
+      "1",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      outputPath,
+    ]);
+    return outputPath;
+  } catch {
+    return params.audioPath;
+  }
+}
+
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
 }
@@ -770,18 +811,23 @@ export async function textToSpeech(params: {
   const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
   const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
   writeFileSync(audioPath, synthesis.audioBuffer);
+  const normalizedAudioPath = await maybeNormalizeVoiceBubbleAudio({
+    audioPath,
+    channelId: resolveChannelId(params.channel),
+  });
   scheduleCleanup(tempDir);
 
   return {
     success: true,
-    audioPath,
+    audioPath: normalizedAudioPath,
     latencyMs: synthesis.latencyMs,
     provider: synthesis.provider,
     fallbackFrom: synthesis.fallbackFrom,
     attemptedProviders: synthesis.attemptedProviders,
     attempts: synthesis.attempts,
-    outputFormat: synthesis.outputFormat,
-    voiceCompatible: synthesis.voiceCompatible,
+    outputFormat: normalizedAudioPath === audioPath ? synthesis.outputFormat : "ogg-opus",
+    voiceCompatible:
+      normalizedAudioPath === audioPath ? synthesis.voiceCompatible : true,
   };
 }
 
@@ -1196,6 +1242,7 @@ export async function maybeApplyTtsToPayload(params: {
 }
 
 export const _test = {
+  maybeNormalizeVoiceBubbleAudio,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   supportsNativeVoiceNoteTts,

@@ -85,6 +85,12 @@ export function parseTtsDirectives(
     return "";
   });
 
+  const bareDirectiveRegex = /\[\[tts\]\]/gi;
+  cleanedText = cleanedText.replace(bareDirectiveRegex, () => {
+    hasDirective = true;
+    return "";
+  });
+
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;

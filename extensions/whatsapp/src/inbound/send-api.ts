@@ -54,7 +54,11 @@ export function createWebSendApi(params: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("audio/")) {
-          payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
+          payload = {
+            audio: mediaBuffer,
+            ...(sendOptions?.audioAsVoice ? { ptt: true } : {}),
+            mimetype: mediaType,
+          };
         } else if (mediaType.startsWith("video/")) {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {

@@ -45,6 +45,7 @@ export async function deliverWebReply(params: {
   );
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = resolveOutboundMediaUrls(replyResult);
+  const wantsVoiceNote = replyResult.audioAsVoice === true;
 
   const getQuote = () => {
     if (!replyResult.replyToId) {
@@ -151,18 +152,23 @@ export async function deliverWebReply(params: {
         );
       } else if (media.kind === "audio") {
         const quote = getQuote();
+        if (caption) {
+          remainingText.unshift(caption);
+        }
         await sendWithRetry(
           () =>
             msg.sendMedia(
               {
                 audio: media.buffer,
-                ptt: true,
-                mimetype: media.contentType,
-                caption,
+                ...(wantsVoiceNote ? { ptt: true } : {}),
+                mimetype:
+                  wantsVoiceNote && media.contentType === "audio/ogg"
+                    ? "audio/ogg; codecs=opus"
+                    : media.contentType,
               },
               quote,
             ),
-          "media:audio",
+          wantsVoiceNote ? "media:voice" : "media:audio",
         );
       } else if (media.kind === "video") {
         const quote = getQuote();

@@ -40,6 +40,17 @@ vi.mock("./runtime-api.js", () => ({
     text: payload.text ?? "",
     hasMedia: false,
   }),
+  resolveToolDeliveryPayload: (payload: {
+    text?: string;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+  }) => {
+    const mediaUrls = [
+      ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+      ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+    ].filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+    return mediaUrls.length > 0 ? { ...payload, text: undefined } : null;
+  },
   resolveTextChunkLimit: () => 4000,
   shouldLogVerbose: () => false,
   toLocationContext: () => ({}),
@@ -351,6 +362,63 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(2);
     expect(rememberSentText).toHaveBeenCalledTimes(2);
+  });
+
+  it("delivers media-only tool payloads without remembering sent text", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchWhatsAppBufferedReply({
+      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+      connectionId: "conn",
+      context: { Body: "hi" },
+      conversationId: "+1000",
+      deliverReply,
+      groupHistories: new Map(),
+      groupHistoryKey: "+1000",
+      maxMediaBytes: 1,
+      msg: makeMsg(),
+      rememberSentText,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      } as never,
+      replyPipeline: {},
+      replyResolver: (async () => undefined) as never,
+      route: makeRoute(),
+      shouldClearGroupHistory: false,
+    });
+
+    const deliver = (
+      capturedDispatchParams as {
+        dispatcherOptions?: {
+          deliver?: (
+            payload: { text?: string; mediaUrl?: string },
+            info: { kind: "tool" | "block" | "final" },
+          ) => Promise<void>;
+        };
+      }
+    )?.dispatcherOptions?.deliver;
+
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      { text: "tool payload", mediaUrl: " https://example.com/voice.ogg " },
+      { kind: "tool" },
+    );
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          text: undefined,
+          mediaUrl: " https://example.com/voice.ogg ",
+        }),
+      }),
+    );
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
