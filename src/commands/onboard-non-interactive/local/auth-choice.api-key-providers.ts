@@ -1,8 +1,12 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
-import { setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
+import {
+  setCommonstackApiKey,
+  setLitellmApiKey,
+} from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import { applyCommonstackConfig } from "../../onboard-auth.config-core.js";
 import { applyLitellmConfig } from "../../onboard-auth.config-litellm.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
@@ -35,6 +39,37 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null | undefined> {
+  if (params.authChoice === "commonstack-api-key") {
+    const resolved = await params.resolveApiKey({
+      provider: "commonstack",
+      cfg: params.baseConfig,
+      flagValue: params.opts.commonstackApiKey,
+      flagName: "--commonstack-api-key",
+      envVar: "COMMONSTACK_API_KEY",
+      runtime: params.runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await params.maybeSetResolvedApiKey(resolved, (value) =>
+        setCommonstackApiKey(value, undefined, params.apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+
+    const nextConfig = applyAuthProfileConfig(params.nextConfig, {
+      profileId: "commonstack:default",
+      provider: "commonstack",
+      mode: "api_key",
+    });
+    const result = await applyCommonstackConfig(nextConfig, {
+      nonInteractive: true,
+    });
+    return result.config;
+  }
+
   if (params.authChoice !== "litellm-api-key") {
     return undefined;
   }

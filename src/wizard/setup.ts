@@ -457,7 +457,11 @@ export async function runSetupWizard(
     }
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  if (
+    authChoiceFromPrompt &&
+    authChoice !== "custom-api-key" &&
+    authChoice !== "commonstack-api-key"
+  ) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,

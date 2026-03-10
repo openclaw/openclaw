@@ -3,6 +3,7 @@ import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
   chutes: "chutes",
+  "commonstack-api-key": "commonstack",
   "litellm-api-key": "litellm",
   "custom-api-key": "custom",
 };

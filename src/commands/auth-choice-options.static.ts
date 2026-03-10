@@ -28,6 +28,13 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     groupHint: "OAuth",
   },
   {
+    value: "commonstack-api-key",
+    label: "CommonStack API key",
+    groupId: "commonstack",
+    groupLabel: "CommonStack",
+    groupHint: "API key",
+  },
+  {
     value: "litellm-api-key",
     label: "LiteLLM API key",
     hint: "Unified gateway for 100+ LLM providers",

@@ -1,9 +1,17 @@
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
-import { LITELLM_DEFAULT_MODEL_REF, setLitellmApiKey } from "../plugins/provider-auth-storage.js";
+import {
+  LITELLM_DEFAULT_MODEL_REF,
+  setCommonstackApiKey,
+  setLitellmApiKey,
+} from "../plugins/provider-auth-storage.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
-import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
+import {
+  createAuthChoiceAgentModelNoter,
+  ensureApiKeyFromOptionEnvOrPrompt,
+} from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import { applyCommonstackConfig } from "./onboard-auth.config-core.js";
 import { applyLitellmConfig, applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
@@ -93,4 +101,60 @@ export async function applyLiteLlmApiKeyProvider({
     noteDefault: LITELLM_DEFAULT_MODEL_REF,
   });
   return { config: getConfig(), agentModelOverride: getAgentModelOverride() };
+}
+
+export async function applyCommonstackApiKeyProvider({
+  params,
+  authChoice,
+  config,
+  setConfig,
+  getConfig,
+  normalizedTokenProvider,
+  requestedSecretInputMode,
+  getAgentModelOverride,
+}: ApplyApiKeyProviderParams): Promise<ApplyAuthChoiceResult | null> {
+  if (authChoice !== "commonstack-api-key") {
+    return null;
+  }
+
+  let nextConfig = config;
+
+  await ensureApiKeyFromOptionEnvOrPrompt({
+    token: params.opts?.token,
+    tokenProvider: normalizedTokenProvider,
+    secretInputMode: requestedSecretInputMode,
+    config: nextConfig,
+    expectedProviders: ["commonstack"],
+    provider: "commonstack",
+    envLabel: "COMMONSTACK_API_KEY",
+    promptMessage: "Enter CommonStack API key",
+    normalize: normalizeApiKeyInput,
+    validate: validateApiKeyInput,
+    prompter: params.prompter,
+    setCredential: async (apiKey, mode) =>
+      setCommonstackApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+    noteMessage: [
+      "CommonStack provides an OpenAI-compatible model marketplace behind one API key.",
+      "OpenClaw will scan the catalog next and ask you to pick a default model.",
+    ].join("\n"),
+    noteTitle: "CommonStack",
+  });
+
+  nextConfig = applyAuthProfileConfig(nextConfig, {
+    profileId: "commonstack:default",
+    provider: "commonstack",
+    mode: "api_key",
+  });
+
+  const commonstackResult = await applyCommonstackConfig(nextConfig, {
+    agentDir: params.agentDir,
+    setDefaultModel: params.setDefaultModel,
+    noteAgentModel: createAuthChoiceAgentModelNoter(params),
+  });
+  setConfig(commonstackResult.config);
+
+  return {
+    config: getConfig(),
+    agentModelOverride: commonstackResult.selectedModel ?? getAgentModelOverride(),
+  };
 }

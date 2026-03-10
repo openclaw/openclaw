@@ -6,6 +6,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   groq: ["GROQ_API_KEY"],
   deepgram: ["DEEPGRAM_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
+  commonstack: ["COMMONSTACK_API_KEY"],
   litellm: ["LITELLM_API_KEY"],
 } as const;
 

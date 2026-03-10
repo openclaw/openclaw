@@ -1,6 +1,9 @@
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
-type OnboardCoreAuthOptionKey = keyof Pick<OnboardOptions, "litellmApiKey">;
+type OnboardCoreAuthOptionKey = keyof Pick<
+  OnboardOptions,
+  "commonstackApiKey" | "litellmApiKey"
+>;
 
 export type OnboardCoreAuthFlag = {
   optionKey: OnboardCoreAuthOptionKey;
@@ -11,6 +14,13 @@ export type OnboardCoreAuthFlag = {
 };
 
 export const CORE_ONBOARD_AUTH_FLAGS: ReadonlyArray<OnboardCoreAuthFlag> = [
+  {
+    optionKey: "commonstackApiKey",
+    authChoice: "commonstack-api-key",
+    cliFlag: "--commonstack-api-key",
+    cliOption: "--commonstack-api-key <key>",
+    description: "CommonStack API key",
+  },
   {
     optionKey: "litellmApiKey",
     authChoice: "litellm-api-key",
