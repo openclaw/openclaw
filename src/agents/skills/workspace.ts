@@ -73,7 +73,10 @@ export function rewriteSkillPathsForContainer(
     : containerSkillsMount;
   return skills.map((s) => {
     const dirName = path.basename(s.baseDir);
-    const relativePath = path.relative(s.baseDir, s.filePath);
+    const relativePath = path.posix.relative(
+      s.baseDir.split(path.sep).join(path.posix.sep),
+      s.filePath.split(path.sep).join(path.posix.sep),
+    );
     return {
       ...s,
       filePath: `${mount}/${dirName}/${relativePath}`,
@@ -680,12 +683,17 @@ export function resolveSkillsPromptForRun(params: {
 }): string {
   // When running inside a sandbox container, rewrite snapshot skill paths
   // to the container mount point instead of returning the cached host-path prompt.
+  // Apply the same truncation limits as the non-snapshot path.
   if (params.containerSkillsMount && params.skillsSnapshot?.resolvedSkills?.length) {
-    const rewritten = rewriteSkillPathsForContainer(
-      params.skillsSnapshot.resolvedSkills,
-      params.containerSkillsMount,
-    );
-    return formatSkillsForPrompt(rewritten);
+    const { skillsForPrompt, truncated } = applySkillsPromptLimits({
+      skills: params.skillsSnapshot.resolvedSkills,
+      config: params.config,
+    });
+    const truncationNote = truncated
+      ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${params.skillsSnapshot.resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
+      : "";
+    const rewritten = rewriteSkillPathsForContainer(skillsForPrompt, params.containerSkillsMount);
+    return [truncationNote, formatSkillsForPrompt(rewritten)].filter(Boolean).join("\n");
   }
 
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
@@ -787,9 +795,13 @@ export async function syncSkillsToWorkspace(params: {
           fsp.rm(path.join(targetSkillsDir, entry), { recursive: true, force: true }),
         ),
       );
-    } catch {
-      // Directory doesn't exist yet — create it.
-      await fsp.mkdir(targetSkillsDir, { recursive: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // Directory doesn't exist yet — create it.
+        await fsp.mkdir(targetSkillsDir, { recursive: true });
+      } else {
+        throw err;
+      }
     }
 
     const usedDirNames = new Set<string>();
