@@ -103,6 +103,9 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  SearchProviderRegistration,
+  SearchProviderParams,
+  SearchProviderResult,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,

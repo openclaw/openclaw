@@ -15,9 +15,15 @@ import type { HookEntry } from "../hooks/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SearchProviderRegistration } from "./search-registry.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+export type {
+  SearchProviderRegistration,
+  SearchProviderParams,
+  SearchProviderResult,
+} from "./search-registry.js";
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -291,6 +297,8 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  /** Register a custom web search provider for the built-in `web_search` tool. */
+  registerSearchProvider: (provider: SearchProviderRegistration) => void;
   /** Register a context engine implementation (exclusive slot — only one active at a time). */
   registerContextEngine: (
     id: string,

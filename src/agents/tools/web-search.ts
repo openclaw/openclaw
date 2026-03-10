@@ -20,8 +20,12 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import {
+  getSearchProvider,
+  hasSearchProvider,
+} from "../../plugins/search-registry.js";
 
-const SEARCH_PROVIDERS = ["brave", "duckduckgo", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -150,7 +154,7 @@ function normalizeToIsoDate(value: string): string | undefined {
 }
 
 function createWebSearchSchema(params: {
-  provider: (typeof SEARCH_PROVIDERS)[number];
+  provider: string;
   perplexityTransport?: PerplexityTransport;
 }) {
   const querySchema = {
@@ -386,13 +390,6 @@ type PerplexitySearchApiResponse = {
   id?: string;
 };
 
-type DuckDuckGoConfig = {
-  proxy?: string; // "tor" or full proxy URL like "socks5://127.0.0.1:9050"
-  region?: string; // us-en, wt-wt, etc.
-  safesearch?: string; // on, moderate, off
-  timelimit?: string; // d, w, m, y
-};
-
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
@@ -498,7 +495,7 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
-function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+function missingSearchKeyPayload(provider: string) {
   if (provider === "brave") {
     return {
       error: "missing_brave_api_key",
@@ -538,16 +535,19 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(search?: WebSearchConfig): string {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
+
+  // Check plugin-registered providers first.
+  if (raw && hasSearchProvider(raw)) {
+    return raw;
+  }
+
   if (raw === "brave") {
     return "brave";
-  }
-  if (raw === "duckduckgo") {
-    return "duckduckgo";
   }
   if (raw === "gemini") {
     return "gemini";
@@ -781,29 +781,6 @@ function resolveGrokModel(grok?: GrokConfig): string {
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
-}
-
-function resolveDuckDuckGoConfig(search?: WebSearchConfig): DuckDuckGoConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
-  const duckduckgo = "duckduckgo" in search ? search.duckduckgo : undefined;
-  if (!duckduckgo || typeof duckduckgo !== "object") {
-    return {};
-  }
-  return duckduckgo as DuckDuckGoConfig;
-}
-
-function resolveDuckDuckGoProxy(duckduckgo?: DuckDuckGoConfig): string | undefined {
-  const proxy = duckduckgo?.proxy;
-  if (!proxy || typeof proxy !== "string") {
-    return undefined;
-  }
-  // "tor" is a convenience alias for Tor daemon
-  if (proxy.toLowerCase() === "tor") {
-    return "socks5://127.0.0.1:9050";
-  }
-  return proxy;
 }
 
 function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
@@ -1462,105 +1439,6 @@ async function runKimiSearch(params: {
   };
 }
 
-async function findDdgsCli(): Promise<string | null> {
-  const { access } = await import("node:fs/promises");
-  const { constants } = await import("node:fs");
-
-  // Search common installation locations
-  const searchPaths = [
-    `${process.env.HOME}/.local/bin/ddgs`,
-    `${process.env.HOME}/.openclaw/.venv/bin/ddgs`,
-    "/usr/local/bin/ddgs",
-    "/usr/bin/ddgs",
-  ];
-
-  for (const path of searchPaths) {
-    try {
-      await access(path, constants.X_OK);
-      return path;
-    } catch {
-      // Continue searching
-    }
-  }
-
-  return null;
-}
-
-async function runDuckDuckGoSearch(params: {
-  query: string;
-  count: number;
-  timeoutSeconds: number;
-  proxy?: string;
-  region?: string;
-  safesearch?: string;
-  timelimit?: string;
-}): Promise<{ results: Array<{ title: string; url: string; description: string }> }> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const { unlink } = await import("node:fs/promises");
-  const execFileAsync = promisify(execFile);
-
-  // Find ddgs CLI
-  const ddgsPath = await findDdgsCli();
-  if (!ddgsPath) {
-    throw new Error(
-      "ddgs CLI not found. Install with: pip install --user ddgs OR pipx install ddgs",
-    );
-  }
-
-  // Use temporary JSON file for output
-  const outputFile = `/tmp/ddgs-${Date.now()}.json`;
-  const args = ["text", "-q", params.query, "-m", String(params.count), "-o", outputFile];
-
-  if (params.proxy) {
-    args.push("-pr", params.proxy); // Note: -pr not -p
-  }
-  if (params.region) {
-    args.push("-r", params.region);
-  }
-  if (params.safesearch) {
-    args.push("-s", params.safesearch);
-  }
-  if (params.timelimit) {
-    args.push("-t", params.timelimit);
-  }
-
-  try {
-    await execFileAsync(ddgsPath, args, {
-      timeout: (params.timeoutSeconds + 5) * 1000,
-      maxBuffer: 1024 * 1024,
-    });
-
-    // Read JSON output
-    const { readFile } = await import("node:fs/promises");
-    const jsonData = await readFile(outputFile, "utf-8");
-    const data = JSON.parse(jsonData) as Array<{
-      title: string;
-      href: string;
-      body: string;
-    }>;
-
-    // Cleanup temp file
-    await unlink(outputFile).catch(() => {});
-
-    // Map to expected format
-    return {
-      results: data.map((r) => ({
-        title: r.title,
-        url: r.href,
-        description: r.body,
-      })),
-    };
-  } catch (error) {
-    // Cleanup temp file on error
-    await unlink(outputFile).catch(() => {});
-
-    if (error instanceof Error && error.message.includes("ENOENT")) {
-      throw new Error(`ddgs CLI not found at ${ddgsPath}`, { cause: error });
-    }
-    throw error;
-  }
-
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1628,7 +1506,7 @@ async function runWebSearch(params: {
   apiKey: string | undefined;
   timeoutSeconds: number;
   cacheTtlMs: number;
-  provider: (typeof SEARCH_PROVIDERS)[number];
+  provider: string;
   country?: string;
   language?: string;
   search_lang?: string;
@@ -1644,16 +1522,15 @@ async function runWebSearch(params: {
   perplexityTransport?: PerplexityTransport;
   grokModel?: string;
   grokInlineCitations?: boolean;
-  duckduckgoProxy?: string;
-  duckduckgoRegion?: string;
-  duckduckgoSafesearch?: string;
-  duckduckgoTimelimit?: string;
+
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  pluginSearchConfig?: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
+  const pluginProvider = getSearchProvider(params.provider);
   const providerSpecificKey =
     params.provider === "perplexity"
       ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
@@ -1663,8 +1540,8 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : params.provider === "duckduckgo"
-              ? `${params.duckduckgoProxy || "none"}:${params.duckduckgoRegion || "default"}:${params.duckduckgoSafesearch || "moderate"}:${params.duckduckgoTimelimit || "none"}`
+            : pluginProvider
+              ? (pluginProvider.cacheKeyExtra?.(params.pluginSearchConfig ?? {}) ?? "plugin")
               : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
@@ -1677,6 +1554,56 @@ async function runWebSearch(params: {
   }
 
   const start = Date.now();
+
+  // Check plugin-registered search providers first.
+  if (pluginProvider) {
+    const searchConfig = params.pluginSearchConfig ?? {};
+
+    const result = await pluginProvider.search(
+      {
+        query: params.query,
+        count: params.count,
+        timeoutSeconds: params.timeoutSeconds,
+        country: params.country,
+        language: params.language,
+        freshness: params.freshness,
+        dateAfter: params.dateAfter,
+        dateBefore: params.dateBefore,
+      },
+      searchConfig,
+    );
+
+    const payload: Record<string, unknown> = {
+      query: params.query,
+      provider: params.provider,
+      tookMs: Date.now() - start,
+    };
+
+    if (result.results) {
+      payload.count = result.results.length;
+      payload.results = result.results.map((entry) => ({
+        title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+        url: entry.url,
+        description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
+        siteName: entry.siteName ?? (entry.url ? resolveSiteName(entry.url) : undefined),
+      }));
+    }
+    if (result.content) {
+      payload.externalContent = {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      };
+      payload.content = wrapWebContent(result.content, "web_search");
+    }
+    if (result.citations) {
+      payload.citations = result.citations;
+    }
+
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
 
   if (params.provider === "perplexity") {
     if (params.perplexityTransport === "chat_completions") {
@@ -1762,35 +1689,6 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
-    };
-    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  }
-
-  if (params.provider === "duckduckgo") {
-    const { results } = await runDuckDuckGoSearch({
-      query: params.query,
-      count: params.count,
-      timeoutSeconds: params.timeoutSeconds,
-      proxy: params.duckduckgoProxy,
-      region: params.duckduckgoRegion,
-      safesearch: params.duckduckgoSafesearch,
-      timelimit: params.duckduckgoTimelimit,
-    });
-
-    const mapped = results.map((entry) => ({
-      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-      url: entry.url, // Keep raw for tool chaining
-      description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
-      siteName: entry.url ? resolveSiteName(entry.url) : undefined,
-    }));
-
-    const payload = {
-      query: params.query,
-      provider: params.provider,
-      count: mapped.length,
-      tookMs: Date.now() - start,
-      results: mapped,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -1981,22 +1879,23 @@ export function createWebSearchTool(options?: {
   const perplexityConfig = resolvePerplexityConfig(search);
   const perplexityTransport = resolvePerplexityTransport(perplexityConfig);
   const grokConfig = resolveGrokConfig(search);
-  const duckduckgoConfig = resolveDuckDuckGoConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
-  const description =
-    provider === "perplexity"
+  // Use plugin provider description if available.
+  const pluginSearchProvider = getSearchProvider(provider);
+
+  const description = pluginSearchProvider
+    ? pluginSearchProvider.description
+    : provider === "perplexity"
       ? perplexityTransport.transport === "chat_completions"
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using the Perplexity Search API. Returns structured results (title, URL, snippet) for fast research. Supports domain, region, language, and freshness filtering."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "duckduckgo"
-          ? "Search the web using DuckDuckGo (no API key required). Supports Tor proxy for anonymous searching. Returns titles, URLs, and snippets."
-          : provider === "kimi"
+        : provider === "kimi"
             ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
             : provider === "gemini"
               ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
@@ -2014,21 +1913,22 @@ export function createWebSearchTool(options?: {
     }),
     execute: async (_toolCallId, args) => {
       const perplexityRuntime = provider === "perplexity" ? perplexityTransport : undefined;
-      const apiKey =
-        provider === "perplexity"
+      const apiKey = pluginSearchProvider
+        ? (pluginSearchProvider.resolveApiKey?.((search as Record<string, unknown>) ?? {}) ?? "")
+        : provider === "perplexity"
           ? perplexityRuntime?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : provider === "duckduckgo"
-              ? "" // DuckDuckGo doesn't need an API key
-              : provider === "kimi"
-                ? resolveKimiApiKey(kimiConfig)
-                : provider === "gemini"
-                  ? resolveGeminiApiKey(geminiConfig)
-                  : resolveSearchApiKey(search);
+            : provider === "kimi"
+              ? resolveKimiApiKey(kimiConfig)
+              : provider === "gemini"
+                ? resolveGeminiApiKey(geminiConfig)
+                : resolveSearchApiKey(search);
 
-      if (!apiKey && provider !== "duckduckgo") {
-        return jsonResult(missingSearchKeyPayload(provider));
+      // Plugin providers handle their own API key requirements.
+      // Built-in providers require an API key.
+      if (!apiKey && !pluginSearchProvider) {
+        return jsonResult(missingSearchKeyPayload(provider as (typeof SEARCH_PROVIDERS)[number]));
       }
 
       const supportsStructuredPerplexityFilters =
@@ -2258,14 +2158,13 @@ export function createWebSearchTool(options?: {
         perplexityTransport: perplexityRuntime?.transport,
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
-        duckduckgoProxy: resolveDuckDuckGoProxy(duckduckgoConfig),
-        duckduckgoRegion: duckduckgoConfig?.region,
-        duckduckgoSafesearch: duckduckgoConfig?.safesearch,
-        duckduckgoTimelimit: duckduckgoConfig?.timelimit,
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        pluginSearchConfig: hasSearchProvider(provider)
+          ? ((search as Record<string, unknown> | undefined)?.[provider] as Record<string, unknown>) ?? {}
+          : undefined,
       });
       return jsonResult(result);
     },

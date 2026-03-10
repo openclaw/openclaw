@@ -123,10 +123,6 @@ export default defineConfig([
     }),
   ),
   nodeBuildConfig({
-    entry: "src/plugin-sdk/keyed-async-queue.ts",
-    outDir: "dist/plugin-sdk",
-  }),
-  nodeBuildConfig({
     entry: "src/extensionAPI.ts",
   }),
   nodeBuildConfig({
