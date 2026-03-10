@@ -150,19 +150,9 @@ export const SandboxDockerSchema = z
           continue;
         }
 
-        // Replace the colonCount block with:
         const windowsPrefix = /^[A-Za-z]:/;
         const parsed = splitSandboxBindSpec(bind);
         const source = (parsed ? parsed.host : bind).trim();
-        if (!source.startsWith("/") && !windowsPrefix.test(source)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["binds", i],
-            message:
-              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-              "Only absolute POSIX paths are supported for sandbox binds.",
-          });
-        }
         if (!source.startsWith("/") && !windowsPrefix.test(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
