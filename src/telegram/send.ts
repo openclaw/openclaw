@@ -22,7 +22,7 @@ import { normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -88,6 +88,16 @@ type TelegramReactionOpts = {
   retry?: RetryConfig;
 };
 
+type TelegramTypingOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  messageThreadId?: number;
+};
+
 function resolveTelegramMessageIdOrThrow(
   result: TelegramMessageLike | null | undefined,
   context: string,
@@ -105,6 +115,12 @@ const MESSAGE_NOT_MODIFIED_RE =
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
+const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
+const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
+
+export function resetTelegramClientOptionsCacheForTests(): void {
+  telegramClientOptionsCache.clear();
+}
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
@@ -120,25 +136,74 @@ function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   };
 }
 
+function shouldUseTelegramClientOptionsCache(): boolean {
+  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+}
+
+function buildTelegramClientOptionsCacheKey(params: {
+  account: ResolvedTelegramAccount;
+  timeoutSeconds?: number;
+}): string {
+  const proxyKey = params.account.config.proxy?.trim() ?? "";
+  const autoSelectFamily = params.account.config.network?.autoSelectFamily;
+  const autoSelectFamilyKey =
+    typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
+  const dnsResultOrderKey = params.account.config.network?.dnsResultOrder ?? "default";
+  const timeoutSecondsKey =
+    typeof params.timeoutSeconds === "number" ? String(params.timeoutSeconds) : "default";
+  return `${params.account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${timeoutSecondsKey}`;
+}
+
+function setCachedTelegramClientOptions(
+  cacheKey: string,
+  clientOptions: ApiClientOptions | undefined,
+): ApiClientOptions | undefined {
+  telegramClientOptionsCache.set(cacheKey, clientOptions);
+  if (telegramClientOptionsCache.size > MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE) {
+    const oldestKey = telegramClientOptionsCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      telegramClientOptionsCache.delete(oldestKey);
+    }
+  }
+  return clientOptions;
+}
+
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ApiClientOptions | undefined {
-  const proxyUrl = account.config.proxy?.trim();
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch, {
-    network: account.config.network,
-  });
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
     Number.isFinite(account.config.timeoutSeconds)
       ? Math.max(1, Math.floor(account.config.timeoutSeconds))
       : undefined;
-  return fetchImpl || timeoutSeconds
-    ? {
-        ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
-        ...(timeoutSeconds ? { timeoutSeconds } : {}),
-      }
-    : undefined;
+
+  const cacheEnabled = shouldUseTelegramClientOptionsCache();
+  const cacheKey = cacheEnabled
+    ? buildTelegramClientOptionsCacheKey({
+        account,
+        timeoutSeconds,
+      })
+    : null;
+  if (cacheKey && telegramClientOptionsCache.has(cacheKey)) {
+    return telegramClientOptionsCache.get(cacheKey);
+  }
+
+  const proxyUrl = account.config.proxy?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const fetchImpl = resolveTelegramFetch(proxyFetch, {
+    network: account.config.network,
+  });
+  const clientOptions =
+    fetchImpl || timeoutSeconds
+      ? {
+          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        }
+      : undefined;
+  if (cacheKey) {
+    return setCachedTelegramClientOptions(cacheKey, clientOptions);
+  }
+  return clientOptions;
 }
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
@@ -777,6 +842,39 @@ export async function sendMessageTelegram(
   return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
 }
 
+export async function sendTypingTelegram(
+  to: string,
+  opts: TelegramTypingOpts = {},
+): Promise<{ ok: true }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+  });
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
+  await requestWithDiag(
+    () =>
+      api.sendChatAction(
+        chatId,
+        "typing",
+        threadParams as Parameters<TelegramApi["sendChatAction"]>[2],
+      ),
+    "typing",
+  );
+  return { ok: true };
+}
+
 export async function reactMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
@@ -872,6 +970,61 @@ type TelegramEditOpts = {
   /** Optional config injection to avoid global loadConfig() (improves testability). */
   cfg?: ReturnType<typeof loadConfig>;
 };
+
+type TelegramEditReplyMarkupOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
+  buttons?: TelegramInlineButtons;
+  /** Optional config injection to avoid global loadConfig() (improves testability). */
+  cfg?: ReturnType<typeof loadConfig>;
+};
+
+export async function editMessageReplyMarkupTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  buttons: TelegramInlineButtons,
+  opts: TelegramEditReplyMarkupOpts = {},
+): Promise<{ ok: true; messageId: string; chatId: string }> {
+  const { cfg, account, api } = resolveTelegramApiContext({
+    ...opts,
+    cfg: opts.cfg,
+  });
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const replyMarkup = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
+  try {
+    await requestWithDiag(
+      () => api.editMessageReplyMarkup(chatId, messageId, { reply_markup: replyMarkup }),
+      "editMessageReplyMarkup",
+      {
+        shouldLog: (err) => !isTelegramMessageNotModifiedError(err),
+      },
+    );
+  } catch (err) {
+    if (!isTelegramMessageNotModifiedError(err)) {
+      throw err;
+    }
+  }
+  logVerbose(`[telegram] Edited reply markup for message ${messageId} in chat ${chatId}`);
+  return { ok: true, messageId: String(messageId), chatId };
+}
 
 export async function editMessageTelegram(
   chatIdInput: string | number,
