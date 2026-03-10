@@ -116,6 +116,32 @@ describe("agents apps commands", () => {
     });
   });
 
+  it("does not run npm install when the registry alias already exists", async () => {
+    loadConfigMock.mockReturnValue({
+      apps: {
+        registry: {
+          ide: {
+            source:
+              "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide",
+          },
+        },
+      },
+    });
+
+    await expect(
+      agentsAppsInstallCommand(
+        {
+          source: "@agentina/aotui-ide",
+          as: "ide",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow('Agent app "ide" already exists. Use --force to replace it.');
+
+    expect(installNpmAotuiPackageMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("installs a local Agent App for a specific agent", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
@@ -152,6 +178,28 @@ describe("agents apps commands", () => {
     });
   });
 
+  it("does not run npm install when the selected agent is unknown", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "main" }],
+      },
+    });
+
+    await expect(
+      agentsAppsInstallCommand(
+        {
+          source: "@agentina/aotui-ide",
+          as: "ide",
+          agent: "ops",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("Unknown agent: ops");
+
+    expect(installNpmAotuiPackageMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("uninstalls an Agent App, clears selections, and removes managed cache files", async () => {
     loadConfigMock.mockReturnValue({
       apps: {
@@ -185,7 +233,7 @@ describe("agents apps commands", () => {
           apps: ["other"],
         },
         list: [
-          { id: "main", apps: [] },
+          { id: "main", apps: undefined },
           { id: "ops", apps: ["other"] },
         ],
       },

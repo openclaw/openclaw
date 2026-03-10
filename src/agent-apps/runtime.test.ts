@@ -70,6 +70,27 @@ describe("AOTUI runtime registry", () => {
     expect(mocks.service.start).toHaveBeenCalledTimes(1);
   });
 
+  it("publishes the singleton before awaiting start so concurrent callers reuse it", async () => {
+    let resolveStart: (() => void) | undefined;
+    mocks.service.start.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+
+    const runtime = await import("./runtime.js");
+    const firstPromise = runtime.startAotuiGatewayRuntime();
+    const secondPromise = runtime.startAotuiGatewayRuntime();
+
+    expect(mocks.createOpenClawKernelService).toHaveBeenCalledTimes(1);
+    expect(runtime.getAotuiGatewayRuntime()).toBe(mocks.service);
+
+    resolveStart?.();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(first).toBe(second);
+  });
+
   it("resets the desktop for new sessions and ensures for existing sessions", async () => {
     const runtime = await import("./runtime.js");
     await runtime.startAotuiGatewayRuntime();
@@ -176,6 +197,16 @@ describe("AOTUI runtime registry", () => {
 
     expect(mocks.service.stop).toHaveBeenCalledWith("shutdown");
     expect(runtime.getAotuiGatewayRuntime()).toBeNull();
+  });
+
+  it("keeps the runtime handle when stop fails", async () => {
+    const runtime = await import("./runtime.js");
+    await runtime.startAotuiGatewayRuntime();
+    mocks.service.stop.mockRejectedValueOnce(new Error("stop failed"));
+
+    await expect(runtime.stopAotuiGatewayRuntime("shutdown")).rejects.toThrow("stop failed");
+
+    expect(runtime.getAotuiGatewayRuntime()).toBe(mocks.service);
   });
 
   it("reinitializes the session desktop after compaction when a desktop exists", async () => {

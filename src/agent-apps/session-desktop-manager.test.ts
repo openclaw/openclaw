@@ -92,4 +92,59 @@ describe("InMemorySessionDesktopManager", () => {
     expect(next.agentId).toBe("reviewer");
     expect(next.workspaceDir).toBe("/tmp/workspace-a");
   });
+
+  it("rolls back the desktop when post-create setup fails", async () => {
+    const manager = new InMemorySessionDesktopManager(kernel as never, {
+      afterCreate: async () => {
+        throw new Error("install failed");
+      },
+    });
+
+    await expect(
+      manager.ensureDesktop({
+        sessionKey: "agent:main:discord:channel:dev",
+        agentId: "main",
+      }),
+    ).rejects.toThrow("install failed");
+
+    expect(kernel.destroyDesktop).toHaveBeenCalledWith("agent:main:discord:channel:dev");
+    expect(manager.getDesktop("agent:main:discord:channel:dev")).toBeUndefined();
+  });
+
+  it("shares an in-flight create and only publishes the desktop after post-create setup succeeds", async () => {
+    let resolveAfterCreate: (() => void) | undefined;
+    const manager = new InMemorySessionDesktopManager(kernel as never, {
+      afterCreate: async () => {
+        await new Promise<void>((resolve) => {
+          resolveAfterCreate = resolve;
+        });
+      },
+    });
+
+    const firstPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_1",
+      agentId: "main",
+    });
+    const secondPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_2",
+      agentId: "main",
+      workspaceDir: "/tmp/workspace-b",
+    });
+
+    expect(kernel.createDesktop).toHaveBeenCalledTimes(1);
+    expect(manager.getDesktop("agent:main:discord:channel:dev")).toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(resolveAfterCreate).toBeTypeOf("function");
+    });
+    resolveAfterCreate?.();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(first.desktopId).toBe(second.desktopId);
+    expect(second.sessionId).toBe("session_2");
+    expect(second.workspaceDir).toBe("/tmp/workspace-b");
+    expect(manager.getDesktop("agent:main:discord:channel:dev")).toBe(second);
+  });
 });

@@ -116,6 +116,14 @@ export async function agentsAppsInstallCommand(
     throw new Error("Could not derive an app registry name. Pass --as <name>.");
   }
 
+  const previousEntry = cfg.apps?.registry?.[registryName];
+  if (previousEntry && !opts.force) {
+    throw new Error(`Agent app "${registryName}" already exists. Use --force to replace it.`);
+  }
+  if (opts.select !== false) {
+    validateAgentSelectionTarget(cfg, opts.agent);
+  }
+
   const resolvedSource =
     parsedSource.kind === "npm"
       ? await installNpmAotuiPackage(parsedSource.packageSpec, {
@@ -123,11 +131,6 @@ export async function agentsAppsInstallCommand(
         })
       : null;
   const source = resolvedSource?.localSource ?? parsedSource.source;
-
-  const previousEntry = cfg.apps?.registry?.[registryName];
-  if (previousEntry && !opts.force) {
-    throw new Error(`Agent app "${registryName}" already exists. Use --force to replace it.`);
-  }
 
   let next: OpenClawConfig = {
     ...cfg,
@@ -219,6 +222,7 @@ function applyAgentAppSelection(
   appName: string,
   agentId?: string,
 ): OpenClawConfig {
+  validateAgentSelectionTarget(cfg, agentId);
   if (!agentId) {
     const existing = cfg.agents?.defaults?.apps ?? [];
     return {
@@ -236,9 +240,6 @@ function applyAgentAppSelection(
   const normalizedAgentId = agentId.trim().toLowerCase();
   const list = listAgentEntries(cfg);
   const index = list.findIndex((entry) => entry.id.trim().toLowerCase() === normalizedAgentId);
-  if (index < 0) {
-    throw new Error(`Unknown agent: ${agentId}`);
-  }
   const current = list[index];
   const nextList = [...list];
   nextList[index] = {
@@ -252,6 +253,19 @@ function applyAgentAppSelection(
       list: nextList,
     },
   };
+}
+
+function validateAgentSelectionTarget(cfg: OpenClawConfig, agentId?: string): void {
+  if (!agentId) {
+    return;
+  }
+
+  const normalizedAgentId = agentId.trim().toLowerCase();
+  const list = listAgentEntries(cfg);
+  const index = list.findIndex((entry) => entry.id.trim().toLowerCase() === normalizedAgentId);
+  if (index < 0) {
+    throw new Error(`Unknown agent: ${agentId}`);
+  }
 }
 
 function pruneAgentApp(cfg: OpenClawConfig, appName: string): OpenClawConfig {
@@ -291,7 +305,7 @@ function removeName(values: string[] | undefined, target: string): string[] | un
     return undefined;
   }
   const filtered = values.filter((value) => value !== target);
-  return filtered.length > 0 ? filtered : [];
+  return filtered.length > 0 ? filtered : undefined;
 }
 
 function resolveSelectionTargetLabel(cfg: OpenClawConfig, agentId?: string): string {

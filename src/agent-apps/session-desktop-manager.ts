@@ -35,6 +35,7 @@ function toDesktopId(sessionKey: string): DesktopID {
 
 export class InMemorySessionDesktopManager implements SessionDesktopManager {
   private readonly records = new Map<string, DesktopRecord>();
+  private readonly pendingCreates = new Map<string, Promise<DesktopRecord>>();
   private readonly afterCreate?: SessionDesktopManagerOptions["afterCreate"];
 
   constructor(
@@ -48,41 +49,23 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
     const sessionKey = normalizeSessionKey(input.sessionKey);
     const existing = this.records.get(sessionKey);
     if (existing) {
-      existing.lastActiveAt = Date.now();
-      existing.sessionId = input.sessionId ?? existing.sessionId;
-      existing.workspaceDir = input.workspaceDir ?? existing.workspaceDir;
-      if (existing.status === "suspended") {
-        await this.kernel.resume(existing.desktopId);
-      }
-      existing.status = "active";
-      return existing;
+      return await this.rebindExistingDesktop(existing, input);
     }
 
-    const now = Date.now();
-    const { baseSessionKey, threadId } = parseThreadInfo(sessionKey);
-    const desktopId = await this.kernel.createDesktop(toDesktopId(sessionKey));
-    const record: DesktopRecord = {
-      desktopKey: sessionKey,
-      desktopId,
-      sessionKey,
-      ...(baseSessionKey ? { baseSessionKey } : {}),
-      ...(input.parentSessionKey
-        ? { parentSessionKey: normalizeSessionKey(input.parentSessionKey) }
-        : {}),
-      ...(threadId ? { threadId } : {}),
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-      agentId: normalizeAgentId(input.agentId),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      createdAt: now,
-      lastActiveAt: now,
-      status: "active",
-    };
-
-    this.records.set(sessionKey, record);
-    if (this.afterCreate) {
-      await this.afterCreate(record);
+    const pending = this.pendingCreates.get(sessionKey);
+    if (pending) {
+      const record = await pending;
+      return await this.rebindExistingDesktop(record, input);
     }
-    return record;
+
+    const createPromise = this.createAndInitializeDesktopRecord(sessionKey, input);
+    this.pendingCreates.set(sessionKey, createPromise);
+    try {
+      const record = await createPromise;
+      return await this.rebindExistingDesktop(record, input);
+    } finally {
+      this.pendingCreates.delete(sessionKey);
+    }
   }
 
   async touchDesktop(sessionKey: string, sessionId?: string): Promise<void> {
@@ -170,5 +153,56 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
 
   listDesktops(): DesktopRecord[] {
     return [...this.records.values()];
+  }
+
+  private async rebindExistingDesktop(
+    existing: DesktopRecord,
+    input: DesktopBindingInput,
+  ): Promise<DesktopRecord> {
+    existing.lastActiveAt = Date.now();
+    existing.sessionId = input.sessionId ?? existing.sessionId;
+    existing.workspaceDir = input.workspaceDir ?? existing.workspaceDir;
+    if (existing.status === "suspended") {
+      await this.kernel.resume(existing.desktopId);
+    }
+    existing.status = "active";
+    return existing;
+  }
+
+  private async createAndInitializeDesktopRecord(
+    sessionKey: string,
+    input: DesktopBindingInput,
+  ): Promise<DesktopRecord> {
+    const now = Date.now();
+    const { baseSessionKey, threadId } = parseThreadInfo(sessionKey);
+    const desktopId = await this.kernel.createDesktop(toDesktopId(sessionKey));
+    const record: DesktopRecord = {
+      desktopKey: sessionKey,
+      desktopId,
+      sessionKey,
+      ...(baseSessionKey ? { baseSessionKey } : {}),
+      ...(input.parentSessionKey
+        ? { parentSessionKey: normalizeSessionKey(input.parentSessionKey) }
+        : {}),
+      ...(threadId ? { threadId } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      agentId: normalizeAgentId(input.agentId),
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      createdAt: now,
+      lastActiveAt: now,
+      status: "active",
+    };
+
+    try {
+      if (this.afterCreate) {
+        await this.afterCreate(record);
+      }
+    } catch (err) {
+      await this.kernel.destroyDesktop(record.desktopId);
+      throw err;
+    }
+
+    this.records.set(sessionKey, record);
+    return record;
   }
 }

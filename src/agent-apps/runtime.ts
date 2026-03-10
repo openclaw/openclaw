@@ -19,9 +19,14 @@ export async function startAotuiGatewayRuntime(
   }
 
   const service = createOpenClawKernelService(config);
-  await service.start();
   gatewayKernelService = service;
-  return service;
+  try {
+    await service.start();
+    return service;
+  } catch (err) {
+    gatewayKernelService = null;
+    throw err;
+  }
 }
 
 export async function stopAotuiGatewayRuntime(reason?: string): Promise<void> {
@@ -30,8 +35,10 @@ export async function stopAotuiGatewayRuntime(reason?: string): Promise<void> {
   }
 
   const active = gatewayKernelService;
-  gatewayKernelService = null;
   await active.stop(reason);
+  if (gatewayKernelService === active) {
+    gatewayKernelService = null;
+  }
 }
 
 export async function syncAotuiDesktopForRun(params: {
