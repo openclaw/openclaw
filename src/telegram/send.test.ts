@@ -17,6 +17,7 @@ const {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendTypingTelegram,
   sendPollTelegram,
   sendStickerTelegram,
 } = await importTelegramSendModule();
@@ -171,6 +172,25 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("sends typing to the resolved chat and topic", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction.mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890:topic:271", {
+      accountId: "default",
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledWith("-1001234567890", "typing", {
+      message_thread_id: 271,
+    });
+  });
+
   it("applies timeoutSeconds config precedence", async () => {
     const cases = [
       {
@@ -777,6 +797,31 @@ describe("sendMessageTelegram", () => {
       }),
     ).rejects.toThrow(/Bad Request/);
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries when grammY network envelope message includes failed-after wording", async () => {
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("Network request for 'sendMessage' failed after 1 attempts."),
+      )
+      .mockResolvedValueOnce({
+        message_id: 7,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ messageId: "7", chatId });
   });
 
   it("sends GIF media as animation", async () => {

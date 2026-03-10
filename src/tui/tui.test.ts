@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
@@ -6,6 +7,7 @@ import {
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
+  resolveInitialTuiAgentId,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -104,6 +106,50 @@ describe("resolveTuiSessionKey", () => {
         sessionMainKey: "agent:main:main",
       }),
     ).toBe("agent:main:test1");
+  });
+});
+
+describe("resolveInitialTuiAgentId", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      list: [
+        { id: "main", workspace: "/tmp/openclaw" },
+        { id: "ops", workspace: "/tmp/openclaw/projects/ops" },
+      ],
+    },
+  };
+
+  it("infers agent from cwd when session is not agent-prefixed", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "",
+        cwd: "/tmp/openclaw/projects/ops/src",
+      }),
+    ).toBe("ops");
+  });
+
+  it("keeps explicit agent prefix from --session", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "agent:main:incident",
+        cwd: "/tmp/openclaw/projects/ops/src",
+      }),
+    ).toBe("main");
+  });
+
+  it("falls back when cwd has no matching workspace", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "",
+        cwd: "/var/tmp/unrelated",
+      }),
+    ).toBe("main");
   });
 });
 

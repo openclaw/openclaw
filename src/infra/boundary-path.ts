@@ -540,12 +540,9 @@ async function resolveOutsideBoundaryPathAsync(params: {
     return null;
   }
   const kind = await getPathKind(params.context.absolutePath, false);
-  return buildOutsideLexicalBoundaryPath({
+  return buildOutsideBoundaryPathFromContext({
     boundaryLabel: params.boundaryLabel,
-    rootCanonicalPath: params.context.rootCanonicalPath,
-    absolutePath: params.context.absolutePath,
-    canonicalOutsideLexicalPath: params.context.canonicalOutsideLexicalPath,
-    rootPath: params.context.rootPath,
+    context: params.context,
     kind,
   });
 }
@@ -558,13 +555,25 @@ function resolveOutsideBoundaryPathSync(params: {
     return null;
   }
   const kind = getPathKindSync(params.context.absolutePath, false);
+  return buildOutsideBoundaryPathFromContext({
+    boundaryLabel: params.boundaryLabel,
+    context: params.context,
+    kind,
+  });
+}
+
+function buildOutsideBoundaryPathFromContext(params: {
+  boundaryLabel: string;
+  context: BoundaryResolutionContext;
+  kind: { exists: boolean; kind: ResolvedBoundaryPathKind };
+}): ResolvedBoundaryPath {
   return buildOutsideLexicalBoundaryPath({
     boundaryLabel: params.boundaryLabel,
     rootCanonicalPath: params.context.rootCanonicalPath,
     absolutePath: params.context.absolutePath,
     canonicalOutsideLexicalPath: params.context.canonicalOutsideLexicalPath,
     rootPath: params.context.rootPath,
-    kind,
+    kind: params.kind,
   });
 }
 

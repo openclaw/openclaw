@@ -165,7 +165,7 @@ export async function configureGatewayForOnboarding(
       defaults: nextConfig.secrets?.defaults,
     }).ref;
     const tokenMode =
-      flow === "quickstart" && opts.secretInputMode !== "ref"
+      flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
         ? quickstartTokenRef
           ? "ref"
           : "plaintext"
