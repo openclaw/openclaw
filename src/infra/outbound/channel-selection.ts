@@ -43,6 +43,12 @@ function isAccountEnabled(account: unknown): boolean {
 }
 
 async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): Promise<boolean> {
+  // Skip channels absent from config — prevents phantom "default" accounts
+  // from stale auth files inflating the configured-channel count (#42080).
+  if (cfg.channels?.[plugin.id] === undefined) {
+    return false;
+  }
+
   const accountIds = plugin.config.listAccountIds(cfg);
   if (accountIds.length === 0) {
     return false;
@@ -105,9 +111,21 @@ export async function resolveMessageChannelSelection(params: {
       }
       throw new Error(`Unknown channel: ${String(normalized)}`);
     }
+
+    // Known channel — verify it's actually configured before accepting (#42080).
+    // Throw on mismatch so the agent/caller sees a clear error and can retry
+    // with a valid channel instead of silently rerouting to a different one.
+    const configured = await listConfiguredMessageChannels(params.cfg);
+    if (!configured.includes(normalized as MessageChannelId)) {
+      throw new Error(
+        configured.length > 0
+          ? `Channel ${String(normalized)} is not configured. Configured channels: ${configured.join(", ")}`
+          : `Channel ${String(normalized)} is not configured (no message channels are configured).`,
+      );
+    }
     return {
       channel: normalized as MessageChannelId,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured,
       source: "explicit",
     };
   }
