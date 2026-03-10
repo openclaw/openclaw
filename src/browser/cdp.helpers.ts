@@ -174,10 +174,9 @@ export async function fetchCdpChecked(
     );
     if (!res.ok) {
       if (res.status === 429) {
-        const text = await res.text().catch(() => "");
-        const detail = text ? ` (${text.slice(0, 200)})` : "";
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
         throw new Error(
-          `${BROWSER_RATE_LIMIT_MESSAGE}${detail} Do NOT retry - wait for the current session to complete, or upgrade your plan.`,
+          `${BROWSER_RATE_LIMIT_MESSAGE} Do NOT retry - wait for the current session to complete, or upgrade your plan.`,
         );
       }
       throw new Error(`HTTP ${res.status}`);

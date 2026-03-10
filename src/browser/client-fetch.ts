@@ -185,10 +185,8 @@ async function fetchHttpJson<T>(
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       if (isRateLimitStatus(res.status)) {
-        const detail = text ? ` (${text.slice(0, 200)})` : "";
-        throw new BrowserServiceError(
-          `${BROWSER_RATE_LIMIT_MESSAGE}${detail} ${BROWSER_TOOL_MODEL_HINT}`,
-        );
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        throw new BrowserServiceError(`${BROWSER_RATE_LIMIT_MESSAGE} ${BROWSER_TOOL_MODEL_HINT}`);
       }
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
@@ -284,13 +282,8 @@ export async function fetchBrowserJson<T>(
 
     if (result.status >= 400) {
       if (isRateLimitStatus(result.status)) {
-        const detail =
-          result.body && typeof result.body === "object" && "error" in result.body
-            ? ` (${String((result.body as { error?: unknown }).error).slice(0, 200)})`
-            : "";
-        throw new BrowserServiceError(
-          `${BROWSER_RATE_LIMIT_MESSAGE}${detail} ${BROWSER_TOOL_MODEL_HINT}`,
-        );
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        throw new BrowserServiceError(`${BROWSER_RATE_LIMIT_MESSAGE} ${BROWSER_TOOL_MODEL_HINT}`);
       }
       const message =
         result.body && typeof result.body === "object" && "error" in result.body
