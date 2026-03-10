@@ -405,7 +405,7 @@ export function resolveAcpxPluginConfig(params: {
     stripProviderAuthEnvVars,
     installCommand,
     cwd,
-    agentCommand: normalized.agentCommand?.trim() || undefined,
+    agentCommand: normalized.agentCommand || undefined,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
