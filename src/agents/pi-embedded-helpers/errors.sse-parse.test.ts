@@ -251,6 +251,14 @@ describe("isLikelySSEParseError", () => {
       ).toBe(false);
     });
 
+    it("does NOT detect 'parse error: unexpected end of stream' (non-JSON)", () => {
+      expect(
+        isLikelySSEParseError("parse error: unexpected end of stream", {
+          streamingContext: true,
+        }),
+      ).toBe(false);
+    });
+
     it("rejects context length errors", () => {
       expect(
         isLikelySSEParseError("context length exceeded in JSON stream", {
