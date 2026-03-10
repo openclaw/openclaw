@@ -1,0 +1,37 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.9.2
+2 info using node@v22.14.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/workspace/projects/openclaw/.npmrc
+5 silly config load:file:/usr/local/etc/npmrc
+6 verbose title npm run typecheck
+7 verbose argv "run" "--loglevel" "silent" "typecheck"
+8 verbose logfile logs-max:10 dir:/workspace/projects/openclaw/.npm/_logs/2026-03-10T05_33_06_566Z-
+9 verbose logfile /workspace/projects/openclaw/.npm/_logs/2026-03-10T05_33_06_566Z-debug-0.log
+10 silly logfile start cleaning logs, removing 1 files
+11 silly logfile done cleaning log files
+12 verbose stack Error: Missing script: "typecheck"
+12 verbose stack
+12 verbose stack Did you mean this?
+12 verbose stack   npm run dup:check # run the "dup:check" package script
+12 verbose stack
+12 verbose stack To see a list of scripts, run:
+12 verbose stack   npm run
+12 verbose stack     at #run (/usr/local/lib/node_modules/npm/lib/commands/run-script.js:111:13)
+12 verbose stack     at async RunScript.exec (/usr/local/lib/node_modules/npm/lib/commands/run-script.js:40:7)
+12 verbose stack     at async Npm.exec (/usr/local/lib/node_modules/npm/lib/npm.js:207:9)
+12 verbose stack     at async module.exports (/usr/local/lib/node_modules/npm/lib/cli/entry.js:74:5)
+13 error Missing script: "typecheck"
+13 error
+13 error Did you mean this?
+13 error   npm run dup:check # run the "dup:check" package script
+13 error
+13 error To see a list of scripts, run:
+13 error   npm run
+14 verbose cwd /workspace/projects/openclaw
+15 verbose os Linux 6.12.69-linuxkit
+16 verbose node v22.14.0
+17 verbose npm  v10.9.2
+18 verbose exit 1
+19 verbose code 1
+20 error A complete log of this run can be found in: /workspace/projects/openclaw/.npm/_logs/2026-03-10T05_33_06_566Z-debug-0.log

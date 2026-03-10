@@ -1,0 +1,996 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.9.2
+2 info using node@v22.14.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/.npmrc
+5 silly config load:file:/workspace/projects/openclaw/.npmrc
+6 silly config load:file:/workspace/projects/openclaw/.config/pnpm/rc
+7 verbose title npm install
+8 verbose argv "install"
+9 verbose logfile logs-max:10 dir:/workspace/projects/openclaw/.npm/_logs/2026-03-10T02_52_08_635Z-
+10 verbose logfile /workspace/projects/openclaw/.npm/_logs/2026-03-10T02_52_08_635Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly packumentCache heap:2197815296 maxSize:549453824 maxEntrySize:274726912
+13 silly logfile done cleaning log files
+14 silly idealTree buildDeps
+15 silly reify moves {}
+16 silly audit bulk request {
+16 silly audit   '@aws-crypto/crc32': [ '5.2.0' ],
+16 silly audit   '@aws-crypto/crc32c': [ '5.2.0' ],
+16 silly audit   '@aws-crypto/sha1-browser': [ '5.2.0' ],
+16 silly audit   '@smithy/is-array-buffer': [ '2.2.0', '4.2.0' ],
+16 silly audit   '@smithy/util-buffer-from': [ '2.2.0', '4.2.0' ],
+16 silly audit   '@smithy/util-utf8': [ '2.3.0', '4.2.0' ],
+16 silly audit   '@aws-crypto/sha256-browser': [ '5.2.0' ],
+16 silly audit   '@aws-crypto/sha256-js': [ '5.2.0' ],
+16 silly audit   '@aws-crypto/supports-web-crypto': [ '5.2.0' ],
+16 silly audit   '@aws-crypto/util': [ '5.2.0' ],
+16 silly audit   '@aws-sdk/client-s3': [ '3.983.0' ],
+16 silly audit   '@aws-sdk/client-sso': [ '3.982.0' ],
+16 silly audit   '@aws-sdk/util-endpoints': [ '3.982.0', '3.983.0' ],
+16 silly audit   '@aws-sdk/core': [ '3.973.6' ],
+16 silly audit   '@aws-sdk/crc64-nvme': [ '3.972.0' ],
+16 silly audit   '@aws-sdk/credential-provider-env': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/credential-provider-http': [ '3.972.6' ],
+16 silly audit   '@aws-sdk/credential-provider-ini': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/credential-provider-login': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/credential-provider-node': [ '3.972.5' ],
+16 silly audit   '@aws-sdk/credential-provider-process': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/credential-provider-sso': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/credential-provider-web-identity': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/middleware-bucket-endpoint': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-expect-continue': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-flexible-checksums': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/middleware-host-header': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-location-constraint': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-logger': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-recursion-detection': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-sdk-s3': [ '3.972.6' ],
+16 silly audit   '@aws-sdk/middleware-ssec': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/middleware-user-agent': [ '3.972.6' ],
+16 silly audit   '@aws-sdk/nested-clients': [ '3.982.0' ],
+16 silly audit   '@aws-sdk/region-config-resolver': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/s3-request-presigner': [ '3.983.0' ],
+16 silly audit   '@aws-sdk/signature-v4-multi-region': [ '3.983.0' ],
+16 silly audit   '@aws-sdk/token-providers': [ '3.982.0' ],
+16 silly audit   '@aws-sdk/types': [ '3.973.1' ],
+16 silly audit   '@aws-sdk/util-arn-parser': [ '3.972.2' ],
+16 silly audit   '@aws-sdk/util-format-url': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/util-locate-window': [ '3.965.4' ],
+16 silly audit   '@aws-sdk/util-user-agent-browser': [ '3.972.3' ],
+16 silly audit   '@aws-sdk/util-user-agent-node': [ '3.972.4' ],
+16 silly audit   '@aws-sdk/xml-builder': [ '3.972.4' ],
+16 silly audit   '@aws/lambda-invoke-store': [ '0.2.3' ],
+16 silly audit   '@babel/helper-string-parser': [ '7.27.1' ],
+16 silly audit   '@babel/helper-validator-identifier': [ '7.28.5' ],
+16 silly audit   '@babel/parser': [ '7.29.0' ],
+16 silly audit   '@babel/types': [ '7.29.0' ],
+16 silly audit   '@esbuild/aix-ppc64': [ '0.21.5' ],
+16 silly audit   '@esbuild/android-arm': [ '0.21.5' ],
+16 silly audit   '@esbuild/android-arm64': [ '0.21.5' ],
+16 silly audit   '@esbuild/android-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/darwin-arm64': [ '0.21.5' ],
+16 silly audit   '@esbuild/darwin-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/freebsd-arm64': [ '0.21.5' ],
+16 silly audit   '@esbuild/freebsd-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-arm': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-arm64': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-ia32': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-loong64': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-mips64el': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-ppc64': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-riscv64': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-s390x': [ '0.21.5' ],
+16 silly audit   '@esbuild/linux-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/netbsd-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/openbsd-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/sunos-x64': [ '0.21.5' ],
+16 silly audit   '@esbuild/win32-arm64': [ '0.21.5' ],
+16 silly audit   '@esbuild/win32-ia32': [ '0.21.5' ],
+16 silly audit   '@esbuild/win32-x64': [ '0.21.5' ],
+16 silly audit   '@jest/schemas': [ '29.6.3' ],
+16 silly audit   '@jridgewell/sourcemap-codec': [ '1.5.5' ],
+16 silly audit   '@microsoft/api-extractor': [ '7.43.0' ],
+16 silly audit   '@microsoft/api-extractor-model': [ '7.28.13' ],
+16 silly audit   typescript: [ '5.4.2', '5.1.3' ],
+16 silly audit   '@microsoft/tsdoc': [ '0.14.2' ],
+16 silly audit   '@microsoft/tsdoc-config': [ '0.16.2' ],
+16 silly audit   resolve: [ '1.19.0', '1.22.11' ],
+16 silly audit   '@rollup/pluginutils': [ '5.3.0' ],
+16 silly audit   '@rollup/rollup-android-arm-eabi': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-android-arm64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-darwin-arm64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-darwin-x64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-freebsd-arm64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-freebsd-x64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-arm-gnueabihf': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-arm-musleabihf': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-arm64-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-arm64-musl': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-loong64-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-loong64-musl': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-ppc64-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-ppc64-musl': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-riscv64-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-riscv64-musl': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-s390x-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-x64-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-linux-x64-musl': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-openbsd-x64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-openharmony-arm64': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-win32-arm64-msvc': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-win32-ia32-msvc': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-win32-x64-gnu': [ '4.57.1' ],
+16 silly audit   '@rollup/rollup-win32-x64-msvc': [ '4.57.1' ],
+16 silly audit   '@rushstack/node-core-library': [ '4.0.2' ],
+16 silly audit   '@rushstack/rig-package': [ '0.5.2' ],
+16 silly audit   '@rushstack/terminal': [ '0.10.0' ],
+16 silly audit   '@rushstack/ts-command-line': [ '4.19.1' ],
+16 silly audit   '@sinclair/typebox': [ '0.27.8' ],
+16 silly audit   '@smithy/abort-controller': [ '4.2.8' ],
+16 silly audit   '@smithy/chunked-blob-reader': [ '5.2.0' ],
+16 silly audit   '@smithy/chunked-blob-reader-native': [ '4.2.1' ],
+16 silly audit   '@smithy/config-resolver': [ '4.4.6' ],
+16 silly audit   '@smithy/core': [ '3.22.1' ],
+16 silly audit   '@smithy/credential-provider-imds': [ '4.2.8' ],
+16 silly audit   '@smithy/eventstream-codec': [ '4.2.8' ],
+16 silly audit   '@smithy/eventstream-serde-browser': [ '4.2.8' ],
+16 silly audit   '@smithy/eventstream-serde-config-resolver': [ '4.3.8' ],
+16 silly audit   '@smithy/eventstream-serde-node': [ '4.2.8' ],
+16 silly audit   '@smithy/eventstream-serde-universal': [ '4.2.8' ],
+16 silly audit   '@smithy/fetch-http-handler': [ '5.3.9' ],
+16 silly audit   '@smithy/hash-blob-browser': [ '4.2.9' ],
+16 silly audit   '@smithy/hash-node': [ '4.2.8' ],
+16 silly audit   '@smithy/hash-stream-node': [ '4.2.8' ],
+16 silly audit   '@smithy/invalid-dependency': [ '4.2.8' ],
+16 silly audit   '@smithy/md5-js': [ '4.2.8' ],
+16 silly audit   '@smithy/middleware-content-length': [ '4.2.8' ],
+16 silly audit   '@smithy/middleware-endpoint': [ '4.4.13' ],
+16 silly audit   '@smithy/middleware-retry': [ '4.4.30' ],
+16 silly audit   '@smithy/middleware-serde': [ '4.2.9' ],
+16 silly audit   '@smithy/middleware-stack': [ '4.2.8' ],
+16 silly audit   '@smithy/node-config-provider': [ '4.3.8' ],
+16 silly audit   '@smithy/node-http-handler': [ '4.4.9' ],
+16 silly audit   '@smithy/property-provider': [ '4.2.8' ],
+16 silly audit   '@smithy/protocol-http': [ '5.3.8' ],
+16 silly audit   '@smithy/querystring-builder': [ '4.2.8' ],
+16 silly audit   '@smithy/querystring-parser': [ '4.2.8' ],
+16 silly audit   '@smithy/service-error-classification': [ '4.2.8' ],
+16 silly audit   '@smithy/shared-ini-file-loader': [ '4.4.3' ],
+16 silly audit   '@smithy/signature-v4': [ '5.3.8' ],
+16 silly audit   '@smithy/smithy-client': [ '4.11.2' ],
+16 silly audit   '@smithy/types': [ '4.12.0' ],
+16 silly audit   '@smithy/url-parser': [ '4.2.8' ],
+16 silly audit   '@smithy/util-base64': [ '4.3.0' ],
+16 silly audit   '@smithy/util-body-length-browser': [ '4.2.0' ],
+16 silly audit   '@smithy/util-body-length-node': [ '4.2.1' ],
+16 silly audit   '@smithy/util-config-provider': [ '4.2.0' ],
+16 silly audit   '@smithy/util-defaults-mode-browser': [ '4.3.29' ],
+16 silly audit   '@smithy/util-defaults-mode-node': [ '4.2.32' ],
+16 silly audit   '@smithy/util-endpoints': [ '3.2.8' ],
+16 silly audit   '@smithy/util-hex-encoding': [ '4.2.0' ],
+16 silly audit   '@smithy/util-middleware': [ '4.2.8' ],
+16 silly audit   '@smithy/util-retry': [ '4.2.8' ],
+16 silly audit   '@smithy/util-stream': [ '4.5.11' ],
+16 silly audit   '@smithy/util-uri-escape': [ '4.2.0' ],
+16 silly audit   '@smithy/util-waiter': [ '4.2.8' ],
+16 silly audit   '@smithy/uuid': [ '1.1.0' ],
+16 silly audit   '@types/argparse': [ '1.0.38' ],
+16 silly audit   '@types/estree': [ '1.0.8' ],
+16 silly audit   '@types/lodash': [ '4.17.23' ],
+16 silly audit   '@types/validator': [ '13.15.10' ],
+16 silly audit   '@urbit/aura': [ '3.0.0' ],
+16 silly audit   '@urbit/nockjs': [ '1.6.0' ],
+16 silly audit   '@vitest/expect': [ '1.6.1' ],
+16 silly audit   '@vitest/runner': [ '1.6.1' ],
+16 silly audit   '@vitest/snapshot': [ '1.6.1' ],
+16 silly audit   '@vitest/spy': [ '1.6.1' ],
+16 silly audit   '@vitest/utils': [ '1.6.1' ],
+16 silly audit   'estree-walker': [ '3.0.3', '2.0.2' ],
+16 silly audit   '@volar/language-core': [ '1.11.1' ],
+16 silly audit   '@volar/source-map': [ '1.11.1' ],
+16 silly audit   '@volar/typescript': [ '1.11.1' ],
+16 silly audit   '@vue/compiler-core': [ '3.5.27' ],
+16 silly audit   '@vue/compiler-dom': [ '3.5.27' ],
+16 silly audit   '@vue/language-core': [ '1.8.27' ],
+16 silly audit   'brace-expansion': [ '2.0.2', '1.1.12' ],
+16 silly audit   minimatch: [ '9.0.5', '3.0.8' ],
+16 silly audit   '@vue/shared': [ '3.5.27' ],
+16 silly audit   acorn: [ '8.15.0' ],
+16 silly audit   'acorn-walk': [ '8.3.4' ],
+16 silly audit   ajv: [ '6.12.6' ],
+16 silly audit   'ansi-styles': [ '5.2.0' ],
+16 silly audit   'any-ascii': [ '0.3.3' ],
+16 silly audit   argparse: [ '1.0.10' ],
+16 silly audit   'assertion-error': [ '1.1.0' ],
+16 silly audit   'balanced-match': [ '1.0.2' ],
+16 silly audit   'base64-js': [ '1.5.1' ],
+16 silly audit   'big-integer': [ '1.6.52' ],
+16 silly audit   bowser: [ '2.13.1' ],
+16 silly audit   'browser-or-node': [ '3.0.0' ],
+16 silly audit   buffer: [ '6.0.3' ],
+16 silly audit   cac: [ '6.7.14' ],
+16 silly audit   chai: [ '4.5.0' ],
+16 silly audit   'check-error': [ '1.0.3' ],
+16 silly audit   commander: [ '9.5.0' ],
+16 silly audit   computeds: [ '0.0.1' ],
+16 silly audit   'concat-map': [ '0.0.1' ],
+16 silly audit   confbox: [ '0.1.8' ],
+16 silly audit   'cross-spawn': [ '7.0.6' ],
+16 silly audit   'date-fns': [ '3.6.0' ],
+16 silly audit   'de-indent': [ '1.0.2' ],
+16 silly audit   debug: [ '4.4.3' ],
+16 silly audit   'deep-eql': [ '4.1.4' ],
+16 silly audit   'diff-sequences': [ '29.6.3' ],
+16 silly audit   'emoji-regex': [ '10.6.0' ],
+16 silly audit   entities: [ '7.0.1' ],
+16 silly audit   esbuild: [ '0.21.5' ],
+16 silly audit   execa: [ '8.0.1' ],
+16 silly audit   'exponential-backoff': [ '3.1.3' ],
+16 silly audit   'fast-deep-equal': [ '3.1.3' ],
+16 silly audit   'fast-json-stable-stringify': [ '2.1.0' ],
+16 silly audit   'fast-xml-parser': [ '5.3.4' ],
+16 silly audit   'fs-extra': [ '7.0.1' ],
+16 silly audit   fsevents: [ '2.3.3' ],
+16 silly audit   'function-bind': [ '1.1.2' ],
+16 silly audit   'get-func-name': [ '2.0.2' ],
+16 silly audit   'get-stream': [ '8.0.1' ],
+16 silly audit   'graceful-fs': [ '4.2.11' ],
+16 silly audit   'has-flag': [ '4.0.0' ],
+16 silly audit   hasown: [ '2.0.2' ],
+16 silly audit   he: [ '1.2.0' ],
+16 silly audit   'human-signals': [ '5.0.0' ],
+16 silly audit   ieee754: [ '1.2.1' ],
+16 silly audit   'import-lazy': [ '4.0.0' ],
+16 silly audit   'is-core-module': [ '2.16.1' ],
+16 silly audit   'is-stream': [ '3.0.0' ],
+16 silly audit   isexe: [ '2.0.0' ],
+16 silly audit   jju: [ '1.4.0' ],
+16 silly audit   'js-tokens': [ '9.0.1' ],
+16 silly audit   'json-schema-traverse': [ '0.4.1' ],
+16 silly audit   jsonfile: [ '4.0.0' ],
+16 silly audit   kolorist: [ '1.8.0' ],
+16 silly audit   'libphonenumber-js': [ '1.12.36' ],
+16 silly audit   'local-pkg': [ '0.5.1' ],
+16 silly audit   lodash: [ '4.17.23' ],
+16 silly audit   'lodash.get': [ '4.4.2' ],
+16 silly audit   'lodash.isequal': [ '4.5.0' ],
+16 silly audit   loupe: [ '2.3.7' ],
+16 silly audit   'lru-cache': [ '6.0.0' ],
+16 silly audit   'magic-string': [ '0.30.21' ],
+16 silly audit   'merge-stream': [ '2.0.0' ],
+16 silly audit   'mimic-fn': [ '4.0.0' ],
+16 silly audit   mlly: [ '1.8.0' ],
+16 silly audit   pathe: [ '2.0.3', '1.1.2' ],
+16 silly audit   ms: [ '2.1.3' ],
+16 silly audit   'muggle-string': [ '0.3.1' ],
+16 silly audit   nanoid: [ '3.3.11' ],
+16 silly audit   'npm-run-path': [ '5.3.0' ],
+16 silly audit   'path-key': [ '4.0.0', '3.1.1' ],
+16 silly audit   onetime: [ '6.0.0' ],
+16 silly audit   'p-limit': [ '5.0.0' ],
+16 silly audit   'path-browserify': [ '1.0.1' ],
+16 silly audit   'path-parse': [ '1.0.7' ],
+16 silly audit   pathval: [ '1.1.1' ],
+16 silly audit   picocolors: [ '1.1.1' ],
+16 silly audit   picomatch: [ '4.0.3' ],
+16 silly audit   'pkg-types': [ '1.3.1' ],
+16 silly audit   postcss: [ '8.5.6' ],
+16 silly audit   'pretty-format': [ '29.7.0' ],
+16 silly audit   punycode: [ '2.3.1' ],
+16 silly audit   'react-is': [ '18.3.1' ],
+16 silly audit   rollup: [ '4.57.1' ],
+16 silly audit   semver: [ '7.5.4' ],
+16 silly audit   'shebang-command': [ '2.0.0' ],
+16 silly audit   'shebang-regex': [ '3.0.0' ],
+16 silly audit   siginfo: [ '2.0.0' ],
+16 silly audit   'signal-exit': [ '4.1.0' ],
+16 silly audit   'sorted-btree': [ '1.8.1' ],
+16 silly audit   'source-map': [ '0.6.1' ],
+16 silly audit   'source-map-js': [ '1.2.1' ],
+16 silly audit   'sprintf-js': [ '1.0.3' ],
+16 silly audit   stackback: [ '0.0.2' ],
+16 silly audit   'std-env': [ '3.10.0' ],
+16 silly audit   'string-argv': [ '0.3.2' ],
+16 silly audit   'strip-final-newline': [ '3.0.0' ],
+16 silly audit   'strip-json-comments': [ '3.1.1' ],
+16 silly audit   'strip-literal': [ '2.1.1' ],
+16 silly audit   strnum: [ '2.1.2' ],
+16 silly audit   'supports-color': [ '8.1.1' ],
+16 silly audit   'supports-preserve-symlinks-flag': [ '1.0.0' ],
+16 silly audit   tinybench: [ '2.9.0' ],
+16 silly audit   tinypool: [ '0.8.4' ],
+16 silly audit   tinyspy: [ '2.2.1' ],
+16 silly audit   tslib: [ '2.8.1' ],
+16 silly audit   'type-detect': [ '4.1.0' ],
+16 silly audit   ufo: [ '1.6.3' ],
+16 silly audit   universalify: [ '0.1.2' ],
+16 silly audit   'uri-js': [ '4.4.1' ],
+16 silly audit   validator: [ '13.15.26' ],
+16 silly audit   vite: [ '5.4.21' ],
+16 silly audit   'vite-node': [ '1.6.1' ],
+16 silly audit   'vite-plugin-dts': [ '3.9.1' ],
+16 silly audit   vitest: [ '1.6.1' ],
+16 silly audit   'vue-template-compiler': [ '2.7.16' ],
+16 silly audit   'vue-tsc': [ '1.8.27' ],
+16 silly audit   which: [ '2.0.2' ],
+16 silly audit   'why-is-node-running': [ '2.3.0' ],
+16 silly audit   yallist: [ '4.0.0' ],
+16 silly audit   'yocto-queue': [ '1.2.2' ],
+16 silly audit   'z-schema': [ '5.0.5' ]
+16 silly audit }
+17 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/fsevents
+18 silly reify mark deleted [
+18 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/fsevents'
+18 silly reify ]
+19 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-x64-msvc
+20 silly reify mark deleted [
+20 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-x64-msvc'
+20 silly reify ]
+21 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-x64-gnu
+22 silly reify mark deleted [
+22 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-x64-gnu'
+22 silly reify ]
+23 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-ia32-msvc
+24 silly reify mark deleted [
+24 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-ia32-msvc'
+24 silly reify ]
+25 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-arm64-msvc
+26 silly reify mark deleted [
+26 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-win32-arm64-msvc'
+26 silly reify ]
+27 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-openharmony-arm64
+28 silly reify mark deleted [
+28 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-openharmony-arm64'
+28 silly reify ]
+29 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-openbsd-x64
+30 silly reify mark deleted [
+30 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-openbsd-x64'
+30 silly reify ]
+31 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-s390x-gnu
+32 silly reify mark deleted [
+32 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-s390x-gnu'
+32 silly reify ]
+33 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-riscv64-musl
+34 silly reify mark deleted [
+34 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-riscv64-musl'
+34 silly reify ]
+35 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-riscv64-gnu
+36 silly reify mark deleted [
+36 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-riscv64-gnu'
+36 silly reify ]
+37 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-ppc64-musl
+38 silly reify mark deleted [
+38 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-ppc64-musl'
+38 silly reify ]
+39 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-ppc64-gnu
+40 silly reify mark deleted [
+40 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-ppc64-gnu'
+40 silly reify ]
+41 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-loong64-musl
+42 silly reify mark deleted [
+42 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-loong64-musl'
+42 silly reify ]
+43 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-loong64-gnu
+44 silly reify mark deleted [
+44 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-loong64-gnu'
+44 silly reify ]
+45 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm64-musl
+46 silly reify mark deleted [
+46 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm64-musl'
+46 silly reify ]
+47 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm64-gnu
+48 silly reify mark deleted [
+48 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm64-gnu'
+48 silly reify ]
+49 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm-musleabihf
+50 silly reify mark deleted [
+50 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm-musleabihf'
+50 silly reify ]
+51 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm-gnueabihf
+52 silly reify mark deleted [
+52 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-linux-arm-gnueabihf'
+52 silly reify ]
+53 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-freebsd-x64
+54 silly reify mark deleted [
+54 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-freebsd-x64'
+54 silly reify ]
+55 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-freebsd-arm64
+56 silly reify mark deleted [
+56 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-freebsd-arm64'
+56 silly reify ]
+57 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-darwin-x64
+58 silly reify mark deleted [
+58 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-darwin-x64'
+58 silly reify ]
+59 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-darwin-arm64
+60 silly reify mark deleted [
+60 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-darwin-arm64'
+60 silly reify ]
+61 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-android-arm64
+62 silly reify mark deleted [
+62 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-android-arm64'
+62 silly reify ]
+63 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-android-arm-eabi
+64 silly reify mark deleted [
+64 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@rollup/rollup-android-arm-eabi'
+64 silly reify ]
+65 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/win32-x64
+66 silly reify mark deleted [
+66 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/win32-x64'
+66 silly reify ]
+67 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/win32-ia32
+68 silly reify mark deleted [
+68 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/win32-ia32'
+68 silly reify ]
+69 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/win32-arm64
+70 silly reify mark deleted [
+70 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/win32-arm64'
+70 silly reify ]
+71 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/sunos-x64
+72 silly reify mark deleted [
+72 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/sunos-x64'
+72 silly reify ]
+73 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/openbsd-x64
+74 silly reify mark deleted [
+74 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/openbsd-x64'
+74 silly reify ]
+75 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/netbsd-x64
+76 silly reify mark deleted [
+76 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/netbsd-x64'
+76 silly reify ]
+77 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-s390x
+78 silly reify mark deleted [
+78 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-s390x'
+78 silly reify ]
+79 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-riscv64
+80 silly reify mark deleted [
+80 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-riscv64'
+80 silly reify ]
+81 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-ppc64
+82 silly reify mark deleted [
+82 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-ppc64'
+82 silly reify ]
+83 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-mips64el
+84 silly reify mark deleted [
+84 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-mips64el'
+84 silly reify ]
+85 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-loong64
+86 silly reify mark deleted [
+86 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-loong64'
+86 silly reify ]
+87 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-ia32
+88 silly reify mark deleted [
+88 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-ia32'
+88 silly reify ]
+89 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-arm64
+90 silly reify mark deleted [
+90 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-arm64'
+90 silly reify ]
+91 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-arm
+92 silly reify mark deleted [
+92 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/linux-arm'
+92 silly reify ]
+93 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/freebsd-x64
+94 silly reify mark deleted [
+94 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/freebsd-x64'
+94 silly reify ]
+95 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/freebsd-arm64
+96 silly reify mark deleted [
+96 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/freebsd-arm64'
+96 silly reify ]
+97 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/darwin-x64
+98 silly reify mark deleted [
+98 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/darwin-x64'
+98 silly reify ]
+99 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/darwin-arm64
+100 silly reify mark deleted [
+100 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/darwin-arm64'
+100 silly reify ]
+101 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/android-x64
+102 silly reify mark deleted [
+102 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/android-x64'
+102 silly reify ]
+103 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/android-arm64
+104 silly reify mark deleted [
+104 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/android-arm64'
+104 silly reify ]
+105 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/android-arm
+106 silly reify mark deleted [
+106 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/android-arm'
+106 silly reify ]
+107 verbose reify failed optional dependency /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/aix-ppc64
+108 silly reify mark deleted [
+108 silly reify   '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/node_modules/@esbuild/aix-ppc64'
+108 silly reify ]
+109 http cache yallist@https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz 1ms (cache hit)
+110 http cache which@https://registry.npmjs.org/which/-/which-2.0.2.tgz 0ms (cache hit)
+111 http cache yocto-queue@https://registry.npmjs.org/yocto-queue/-/yocto-queue-1.2.2.tgz 0ms (cache hit)
+112 http cache vitest@https://registry.npmjs.org/vitest/-/vitest-1.6.1.tgz 0ms (cache hit)
+113 http cache z-schema@https://registry.npmjs.org/z-schema/-/z-schema-5.0.5.tgz 0ms (cache hit)
+114 http cache why-is-node-running@https://registry.npmjs.org/why-is-node-running/-/why-is-node-running-2.3.0.tgz 0ms (cache hit)
+115 http cache vue-tsc@https://registry.npmjs.org/vue-tsc/-/vue-tsc-1.8.27.tgz 0ms (cache hit)
+116 http cache vue-template-compiler@https://registry.npmjs.org/vue-template-compiler/-/vue-template-compiler-2.7.16.tgz 0ms (cache hit)
+117 http cache vite-node@https://registry.npmjs.org/vite-node/-/vite-node-1.6.1.tgz 0ms (cache hit)
+118 http cache vite-plugin-dts@https://registry.npmjs.org/vite-plugin-dts/-/vite-plugin-dts-3.9.1.tgz 0ms (cache hit)
+119 http cache uri-js@https://registry.npmjs.org/uri-js/-/uri-js-4.4.1.tgz 0ms (cache hit)
+120 http cache validator@https://registry.npmjs.org/validator/-/validator-13.15.26.tgz 0ms (cache hit)
+121 http cache vite@https://registry.npmjs.org/vite/-/vite-5.4.21.tgz 0ms (cache hit)
+122 http cache ufo@https://registry.npmjs.org/ufo/-/ufo-1.6.3.tgz 0ms (cache hit)
+123 http cache universalify@https://registry.npmjs.org/universalify/-/universalify-0.1.2.tgz 0ms (cache hit)
+124 http cache typescript@https://registry.npmjs.org/typescript/-/typescript-5.1.3.tgz 0ms (cache hit)
+125 http cache tslib@https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz 0ms (cache hit)
+126 http cache supports-color@https://registry.npmjs.org/supports-color/-/supports-color-8.1.1.tgz 0ms (cache hit)
+127 http cache type-detect@https://registry.npmjs.org/type-detect/-/type-detect-4.1.0.tgz 0ms (cache hit)
+128 http cache tinyspy@https://registry.npmjs.org/tinyspy/-/tinyspy-2.2.1.tgz 0ms (cache hit)
+129 http cache supports-preserve-symlinks-flag@https://registry.npmjs.org/supports-preserve-symlinks-flag/-/supports-preserve-symlinks-flag-1.0.0.tgz 1ms (cache hit)
+130 http cache tinybench@https://registry.npmjs.org/tinybench/-/tinybench-2.9.0.tgz 0ms (cache hit)
+131 http cache strip-json-comments@https://registry.npmjs.org/strip-json-comments/-/strip-json-comments-3.1.1.tgz 0ms (cache hit)
+132 http cache tinypool@https://registry.npmjs.org/tinypool/-/tinypool-0.8.4.tgz 0ms (cache hit)
+133 http cache strnum@https://registry.npmjs.org/strnum/-/strnum-2.1.2.tgz 0ms (cache hit)
+134 http cache strip-literal@https://registry.npmjs.org/strip-literal/-/strip-literal-2.1.1.tgz 0ms (cache hit)
+135 http cache sprintf-js@https://registry.npmjs.org/sprintf-js/-/sprintf-js-1.0.3.tgz 0ms (cache hit)
+136 http cache strip-final-newline@https://registry.npmjs.org/strip-final-newline/-/strip-final-newline-3.0.0.tgz 0ms (cache hit)
+137 http cache string-argv@https://registry.npmjs.org/string-argv/-/string-argv-0.3.2.tgz 0ms (cache hit)
+138 http cache source-map-js@https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz 0ms (cache hit)
+139 http cache std-env@https://registry.npmjs.org/std-env/-/std-env-3.10.0.tgz 0ms (cache hit)
+140 http cache stackback@https://registry.npmjs.org/stackback/-/stackback-0.0.2.tgz 0ms (cache hit)
+141 http cache shebang-regex@https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz 0ms (cache hit)
+142 http cache source-map@https://registry.npmjs.org/source-map/-/source-map-0.6.1.tgz 0ms (cache hit)
+143 http cache signal-exit@https://registry.npmjs.org/signal-exit/-/signal-exit-4.1.0.tgz 0ms (cache hit)
+144 http cache sorted-btree@https://registry.npmjs.org/sorted-btree/-/sorted-btree-1.8.1.tgz 0ms (cache hit)
+145 http cache siginfo@https://registry.npmjs.org/siginfo/-/siginfo-2.0.0.tgz 0ms (cache hit)
+146 http cache semver@https://registry.npmjs.org/semver/-/semver-7.5.4.tgz 0ms (cache hit)
+147 http cache react-is@https://registry.npmjs.org/react-is/-/react-is-18.3.1.tgz 0ms (cache hit)
+148 http cache shebang-command@https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz 0ms (cache hit)
+149 http cache rollup@https://registry.npmjs.org/rollup/-/rollup-4.57.1.tgz 0ms (cache hit)
+150 http cache picomatch@https://registry.npmjs.org/picomatch/-/picomatch-4.0.3.tgz 0ms (cache hit)
+151 http cache punycode@https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz 0ms (cache hit)
+152 http cache postcss@https://registry.npmjs.org/postcss/-/postcss-8.5.6.tgz 0ms (cache hit)
+153 http cache pathval@https://registry.npmjs.org/pathval/-/pathval-1.1.1.tgz 0ms (cache hit)
+154 http cache pretty-format@https://registry.npmjs.org/pretty-format/-/pretty-format-29.7.0.tgz 0ms (cache hit)
+155 http cache pkg-types@https://registry.npmjs.org/pkg-types/-/pkg-types-1.3.1.tgz 0ms (cache hit)
+156 http cache resolve@https://registry.npmjs.org/resolve/-/resolve-1.22.11.tgz 0ms (cache hit)
+157 http cache picocolors@https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz 0ms (cache hit)
+158 http cache pathe@https://registry.npmjs.org/pathe/-/pathe-1.1.2.tgz 0ms (cache hit)
+159 http cache p-limit@https://registry.npmjs.org/p-limit/-/p-limit-5.0.0.tgz 0ms (cache hit)
+160 http cache path-key@https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz 0ms (cache hit)
+161 http cache path-parse@https://registry.npmjs.org/path-parse/-/path-parse-1.0.7.tgz 0ms (cache hit)
+162 http cache path-browserify@https://registry.npmjs.org/path-browserify/-/path-browserify-1.0.1.tgz 0ms (cache hit)
+163 http cache muggle-string@https://registry.npmjs.org/muggle-string/-/muggle-string-0.3.1.tgz 0ms (cache hit)
+164 http cache onetime@https://registry.npmjs.org/onetime/-/onetime-6.0.0.tgz 1ms (cache hit)
+165 http cache nanoid@https://registry.npmjs.org/nanoid/-/nanoid-3.3.11.tgz 0ms (cache hit)
+166 http cache ms@https://registry.npmjs.org/ms/-/ms-2.1.3.tgz 0ms (cache hit)
+167 http cache mlly@https://registry.npmjs.org/mlly/-/mlly-1.8.0.tgz 0ms (cache hit)
+168 http cache npm-run-path@https://registry.npmjs.org/npm-run-path/-/npm-run-path-5.3.0.tgz 0ms (cache hit)
+169 http cache minimatch@https://registry.npmjs.org/minimatch/-/minimatch-3.0.8.tgz 0ms (cache hit)
+170 http cache lru-cache@https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz 0ms (cache hit)
+171 http cache mimic-fn@https://registry.npmjs.org/mimic-fn/-/mimic-fn-4.0.0.tgz 0ms (cache hit)
+172 http cache magic-string@https://registry.npmjs.org/magic-string/-/magic-string-0.30.21.tgz 0ms (cache hit)
+173 http cache merge-stream@https://registry.npmjs.org/merge-stream/-/merge-stream-2.0.0.tgz 1ms (cache hit)
+174 http cache lodash.get@https://registry.npmjs.org/lodash.get/-/lodash.get-4.4.2.tgz 0ms (cache hit)
+175 http cache loupe@https://registry.npmjs.org/loupe/-/loupe-2.3.7.tgz 0ms (cache hit)
+176 http cache lodash@https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz 0ms (cache hit)
+177 http cache jsonfile@https://registry.npmjs.org/jsonfile/-/jsonfile-4.0.0.tgz 0ms (cache hit)
+178 http cache local-pkg@https://registry.npmjs.org/local-pkg/-/local-pkg-0.5.1.tgz 0ms (cache hit)
+179 http cache lodash.isequal@https://registry.npmjs.org/lodash.isequal/-/lodash.isequal-4.5.0.tgz 0ms (cache hit)
+180 http cache kolorist@https://registry.npmjs.org/kolorist/-/kolorist-1.8.0.tgz 0ms (cache hit)
+181 http cache is-stream@https://registry.npmjs.org/is-stream/-/is-stream-3.0.0.tgz 0ms (cache hit)
+182 http cache libphonenumber-js@https://registry.npmjs.org/libphonenumber-js/-/libphonenumber-js-1.12.36.tgz 0ms (cache hit)
+183 http cache json-schema-traverse@https://registry.npmjs.org/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz 0ms (cache hit)
+184 http cache js-tokens@https://registry.npmjs.org/js-tokens/-/js-tokens-9.0.1.tgz 0ms (cache hit)
+185 http cache import-lazy@https://registry.npmjs.org/import-lazy/-/import-lazy-4.0.0.tgz 0ms (cache hit)
+186 http cache jju@https://registry.npmjs.org/jju/-/jju-1.4.0.tgz 0ms (cache hit)
+187 http cache isexe@https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz 1ms (cache hit)
+188 http cache is-core-module@https://registry.npmjs.org/is-core-module/-/is-core-module-2.16.1.tgz 0ms (cache hit)
+189 http cache he@https://registry.npmjs.org/he/-/he-1.2.0.tgz 0ms (cache hit)
+190 http cache ieee754@https://registry.npmjs.org/ieee754/-/ieee754-1.2.1.tgz 0ms (cache hit)
+191 http cache human-signals@https://registry.npmjs.org/human-signals/-/human-signals-5.0.0.tgz 0ms (cache hit)
+192 http cache hasown@https://registry.npmjs.org/hasown/-/hasown-2.0.2.tgz 0ms (cache hit)
+193 http cache has-flag@https://registry.npmjs.org/has-flag/-/has-flag-4.0.0.tgz 0ms (cache hit)
+194 http cache get-func-name@https://registry.npmjs.org/get-func-name/-/get-func-name-2.0.2.tgz 0ms (cache hit)
+195 http cache fs-extra@https://registry.npmjs.org/fs-extra/-/fs-extra-7.0.1.tgz 0ms (cache hit)
+196 http cache fast-xml-parser@https://registry.npmjs.org/fast-xml-parser/-/fast-xml-parser-5.3.4.tgz 0ms (cache hit)
+197 http cache graceful-fs@https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz 0ms (cache hit)
+198 http cache get-stream@https://registry.npmjs.org/get-stream/-/get-stream-8.0.1.tgz 0ms (cache hit)
+199 http cache function-bind@https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz 0ms (cache hit)
+200 http cache fast-json-stable-stringify@https://registry.npmjs.org/fast-json-stable-stringify/-/fast-json-stable-stringify-2.1.0.tgz 0ms (cache hit)
+201 http cache execa@https://registry.npmjs.org/execa/-/execa-8.0.1.tgz 0ms (cache hit)
+202 http cache fast-deep-equal@https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz 0ms (cache hit)
+203 http cache esbuild@https://registry.npmjs.org/esbuild/-/esbuild-0.21.5.tgz 0ms (cache hit)
+204 http cache exponential-backoff@https://registry.npmjs.org/exponential-backoff/-/exponential-backoff-3.1.3.tgz 0ms (cache hit)
+205 http cache diff-sequences@https://registry.npmjs.org/diff-sequences/-/diff-sequences-29.6.3.tgz 0ms (cache hit)
+206 http cache entities@https://registry.npmjs.org/entities/-/entities-7.0.1.tgz 0ms (cache hit)
+207 http cache estree-walker@https://registry.npmjs.org/estree-walker/-/estree-walker-2.0.2.tgz 0ms (cache hit)
+208 http cache emoji-regex@https://registry.npmjs.org/emoji-regex/-/emoji-regex-10.6.0.tgz 0ms (cache hit)
+209 http cache deep-eql@https://registry.npmjs.org/deep-eql/-/deep-eql-4.1.4.tgz 0ms (cache hit)
+210 http cache cross-spawn@https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz 0ms (cache hit)
+211 http cache de-indent@https://registry.npmjs.org/de-indent/-/de-indent-1.0.2.tgz 0ms (cache hit)
+212 http cache debug@https://registry.npmjs.org/debug/-/debug-4.4.3.tgz 0ms (cache hit)
+213 http cache computeds@https://registry.npmjs.org/computeds/-/computeds-0.0.1.tgz 0ms (cache hit)
+214 http cache date-fns@https://registry.npmjs.org/date-fns/-/date-fns-3.6.0.tgz 0ms (cache hit)
+215 http cache confbox@https://registry.npmjs.org/confbox/-/confbox-0.1.8.tgz 0ms (cache hit)
+216 http cache concat-map@https://registry.npmjs.org/concat-map/-/concat-map-0.0.1.tgz 0ms (cache hit)
+217 http cache check-error@https://registry.npmjs.org/check-error/-/check-error-1.0.3.tgz 0ms (cache hit)
+218 http cache commander@https://registry.npmjs.org/commander/-/commander-9.5.0.tgz 0ms (cache hit)
+219 http cache chai@https://registry.npmjs.org/chai/-/chai-4.5.0.tgz 0ms (cache hit)
+220 http cache cac@https://registry.npmjs.org/cac/-/cac-6.7.14.tgz 0ms (cache hit)
+221 http cache big-integer@https://registry.npmjs.org/big-integer/-/big-integer-1.6.52.tgz 0ms (cache hit)
+222 http cache buffer@https://registry.npmjs.org/buffer/-/buffer-6.0.3.tgz 0ms (cache hit)
+223 http cache brace-expansion@https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.12.tgz 1ms (cache hit)
+224 http cache browser-or-node@https://registry.npmjs.org/browser-or-node/-/browser-or-node-3.0.0.tgz 0ms (cache hit)
+225 http cache bowser@https://registry.npmjs.org/bowser/-/bowser-2.13.1.tgz 0ms (cache hit)
+226 http cache balanced-match@https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz 0ms (cache hit)
+227 http cache base64-js@https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz 0ms (cache hit)
+228 http cache assertion-error@https://registry.npmjs.org/assertion-error/-/assertion-error-1.1.0.tgz 0ms (cache hit)
+229 http cache argparse@https://registry.npmjs.org/argparse/-/argparse-1.0.10.tgz 0ms (cache hit)
+230 http cache acorn-walk@https://registry.npmjs.org/acorn-walk/-/acorn-walk-8.3.4.tgz 0ms (cache hit)
+231 http cache ansi-styles@https://registry.npmjs.org/ansi-styles/-/ansi-styles-5.2.0.tgz 0ms (cache hit)
+232 http cache any-ascii@https://registry.npmjs.org/any-ascii/-/any-ascii-0.3.3.tgz 0ms (cache hit)
+233 http cache @vue/compiler-dom@https://registry.npmjs.org/@vue/compiler-dom/-/compiler-dom-3.5.27.tgz 0ms (cache hit)
+234 http cache ajv@https://registry.npmjs.org/ajv/-/ajv-6.12.6.tgz 0ms (cache hit)
+235 http cache @vue/shared@https://registry.npmjs.org/@vue/shared/-/shared-3.5.27.tgz 0ms (cache hit)
+236 http cache acorn@https://registry.npmjs.org/acorn/-/acorn-8.15.0.tgz 0ms (cache hit)
+237 http cache @vue/language-core@https://registry.npmjs.org/@vue/language-core/-/language-core-1.8.27.tgz 0ms (cache hit)
+238 http cache @volar/source-map@https://registry.npmjs.org/@volar/source-map/-/source-map-1.11.1.tgz 0ms (cache hit)
+239 http cache @volar/language-core@https://registry.npmjs.org/@volar/language-core/-/language-core-1.11.1.tgz 0ms (cache hit)
+240 http cache @vue/compiler-core@https://registry.npmjs.org/@vue/compiler-core/-/compiler-core-3.5.27.tgz 0ms (cache hit)
+241 http cache @vitest/snapshot@https://registry.npmjs.org/@vitest/snapshot/-/snapshot-1.6.1.tgz 0ms (cache hit)
+242 http cache @volar/typescript@https://registry.npmjs.org/@volar/typescript/-/typescript-1.11.1.tgz 0ms (cache hit)
+243 http cache @urbit/aura@https://registry.npmjs.org/@urbit/aura/-/aura-3.0.0.tgz 0ms (cache hit)
+244 http cache @vitest/runner@https://registry.npmjs.org/@vitest/runner/-/runner-1.6.1.tgz 0ms (cache hit)
+245 http cache @vitest/spy@https://registry.npmjs.org/@vitest/spy/-/spy-1.6.1.tgz 0ms (cache hit)
+246 http cache @types/validator@https://registry.npmjs.org/@types/validator/-/validator-13.15.10.tgz 0ms (cache hit)
+247 http cache @urbit/nockjs@https://registry.npmjs.org/@urbit/nockjs/-/nockjs-1.6.0.tgz 0ms (cache hit)
+248 http cache @types/lodash@https://registry.npmjs.org/@types/lodash/-/lodash-4.17.23.tgz 0ms (cache hit)
+249 http cache @vitest/utils@https://registry.npmjs.org/@vitest/utils/-/utils-1.6.1.tgz 0ms (cache hit)
+250 http cache @types/estree@https://registry.npmjs.org/@types/estree/-/estree-1.0.8.tgz 0ms (cache hit)
+251 http cache @vitest/expect@https://registry.npmjs.org/@vitest/expect/-/expect-1.6.1.tgz 0ms (cache hit)
+252 http cache @smithy/uuid@https://registry.npmjs.org/@smithy/uuid/-/uuid-1.1.0.tgz 0ms (cache hit)
+253 http cache @types/argparse@https://registry.npmjs.org/@types/argparse/-/argparse-1.0.38.tgz 0ms (cache hit)
+254 http cache @smithy/util-waiter@https://registry.npmjs.org/@smithy/util-waiter/-/util-waiter-4.2.8.tgz 0ms (cache hit)
+255 http cache @smithy/util-utf8@https://registry.npmjs.org/@smithy/util-utf8/-/util-utf8-4.2.0.tgz 0ms (cache hit)
+256 http cache @smithy/util-uri-escape@https://registry.npmjs.org/@smithy/util-uri-escape/-/util-uri-escape-4.2.0.tgz 0ms (cache hit)
+257 http cache @smithy/util-stream@https://registry.npmjs.org/@smithy/util-stream/-/util-stream-4.5.11.tgz 0ms (cache hit)
+258 http cache @smithy/util-endpoints@https://registry.npmjs.org/@smithy/util-endpoints/-/util-endpoints-3.2.8.tgz 0ms (cache hit)
+259 http cache @smithy/util-retry@https://registry.npmjs.org/@smithy/util-retry/-/util-retry-4.2.8.tgz 0ms (cache hit)
+260 http cache @smithy/util-hex-encoding@https://registry.npmjs.org/@smithy/util-hex-encoding/-/util-hex-encoding-4.2.0.tgz 0ms (cache hit)
+261 http cache @smithy/util-middleware@https://registry.npmjs.org/@smithy/util-middleware/-/util-middleware-4.2.8.tgz 0ms (cache hit)
+262 http cache @smithy/util-config-provider@https://registry.npmjs.org/@smithy/util-config-provider/-/util-config-provider-4.2.0.tgz 0ms (cache hit)
+263 http cache @smithy/util-defaults-mode-browser@https://registry.npmjs.org/@smithy/util-defaults-mode-browser/-/util-defaults-mode-browser-4.3.29.tgz 0ms (cache hit)
+264 http cache @smithy/util-buffer-from@https://registry.npmjs.org/@smithy/util-buffer-from/-/util-buffer-from-4.2.0.tgz 0ms (cache hit)
+265 http cache @smithy/util-body-length-node@https://registry.npmjs.org/@smithy/util-body-length-node/-/util-body-length-node-4.2.1.tgz 1ms (cache hit)
+266 http cache @smithy/util-defaults-mode-node@https://registry.npmjs.org/@smithy/util-defaults-mode-node/-/util-defaults-mode-node-4.2.32.tgz 0ms (cache hit)
+267 http cache @smithy/util-body-length-browser@https://registry.npmjs.org/@smithy/util-body-length-browser/-/util-body-length-browser-4.2.0.tgz 0ms (cache hit)
+268 http cache @smithy/url-parser@https://registry.npmjs.org/@smithy/url-parser/-/url-parser-4.2.8.tgz 0ms (cache hit)
+269 http cache @smithy/util-base64@https://registry.npmjs.org/@smithy/util-base64/-/util-base64-4.3.0.tgz 0ms (cache hit)
+270 http cache @smithy/service-error-classification@https://registry.npmjs.org/@smithy/service-error-classification/-/service-error-classification-4.2.8.tgz 0ms (cache hit)
+271 http cache @smithy/smithy-client@https://registry.npmjs.org/@smithy/smithy-client/-/smithy-client-4.11.2.tgz 0ms (cache hit)
+272 http cache @smithy/types@https://registry.npmjs.org/@smithy/types/-/types-4.12.0.tgz 0ms (cache hit)
+273 http cache @smithy/signature-v4@https://registry.npmjs.org/@smithy/signature-v4/-/signature-v4-5.3.8.tgz 0ms (cache hit)
+274 http cache @smithy/querystring-builder@https://registry.npmjs.org/@smithy/querystring-builder/-/querystring-builder-4.2.8.tgz 0ms (cache hit)
+275 http cache @smithy/node-config-provider@https://registry.npmjs.org/@smithy/node-config-provider/-/node-config-provider-4.3.8.tgz 0ms (cache hit)
+276 http cache @smithy/shared-ini-file-loader@https://registry.npmjs.org/@smithy/shared-ini-file-loader/-/shared-ini-file-loader-4.4.3.tgz 0ms (cache hit)
+277 http cache @smithy/querystring-parser@https://registry.npmjs.org/@smithy/querystring-parser/-/querystring-parser-4.2.8.tgz 0ms (cache hit)
+278 http cache @smithy/protocol-http@https://registry.npmjs.org/@smithy/protocol-http/-/protocol-http-5.3.8.tgz 0ms (cache hit)
+279 http cache @smithy/node-http-handler@https://registry.npmjs.org/@smithy/node-http-handler/-/node-http-handler-4.4.9.tgz 0ms (cache hit)
+280 http cache @smithy/middleware-endpoint@https://registry.npmjs.org/@smithy/middleware-endpoint/-/middleware-endpoint-4.4.13.tgz 0ms (cache hit)
+281 http cache @smithy/property-provider@https://registry.npmjs.org/@smithy/property-provider/-/property-provider-4.2.8.tgz 0ms (cache hit)
+282 http cache @smithy/middleware-content-length@https://registry.npmjs.org/@smithy/middleware-content-length/-/middleware-content-length-4.2.8.tgz 0ms (cache hit)
+283 http cache @smithy/middleware-serde@https://registry.npmjs.org/@smithy/middleware-serde/-/middleware-serde-4.2.9.tgz 0ms (cache hit)
+284 http cache @smithy/middleware-stack@https://registry.npmjs.org/@smithy/middleware-stack/-/middleware-stack-4.2.8.tgz 0ms (cache hit)
+285 http cache @smithy/middleware-retry@https://registry.npmjs.org/@smithy/middleware-retry/-/middleware-retry-4.4.30.tgz 0ms (cache hit)
+286 http cache @smithy/md5-js@https://registry.npmjs.org/@smithy/md5-js/-/md5-js-4.2.8.tgz 0ms (cache hit)
+287 http cache @smithy/is-array-buffer@https://registry.npmjs.org/@smithy/is-array-buffer/-/is-array-buffer-4.2.0.tgz 0ms (cache hit)
+288 http cache @smithy/invalid-dependency@https://registry.npmjs.org/@smithy/invalid-dependency/-/invalid-dependency-4.2.8.tgz 0ms (cache hit)
+289 http cache @smithy/hash-stream-node@https://registry.npmjs.org/@smithy/hash-stream-node/-/hash-stream-node-4.2.8.tgz 0ms (cache hit)
+290 http cache @smithy/hash-node@https://registry.npmjs.org/@smithy/hash-node/-/hash-node-4.2.8.tgz 0ms (cache hit)
+291 http cache @smithy/hash-blob-browser@https://registry.npmjs.org/@smithy/hash-blob-browser/-/hash-blob-browser-4.2.9.tgz 0ms (cache hit)
+292 http cache @smithy/fetch-http-handler@https://registry.npmjs.org/@smithy/fetch-http-handler/-/fetch-http-handler-5.3.9.tgz 0ms (cache hit)
+293 http cache @smithy/eventstream-serde-config-resolver@https://registry.npmjs.org/@smithy/eventstream-serde-config-resolver/-/eventstream-serde-config-resolver-4.3.8.tgz 0ms (cache hit)
+294 http cache @smithy/eventstream-serde-universal@https://registry.npmjs.org/@smithy/eventstream-serde-universal/-/eventstream-serde-universal-4.2.8.tgz 0ms (cache hit)
+295 http cache @smithy/credential-provider-imds@https://registry.npmjs.org/@smithy/credential-provider-imds/-/credential-provider-imds-4.2.8.tgz 0ms (cache hit)
+296 http cache @smithy/eventstream-serde-node@https://registry.npmjs.org/@smithy/eventstream-serde-node/-/eventstream-serde-node-4.2.8.tgz 0ms (cache hit)
+297 http cache @smithy/eventstream-serde-browser@https://registry.npmjs.org/@smithy/eventstream-serde-browser/-/eventstream-serde-browser-4.2.8.tgz 0ms (cache hit)
+298 http cache @smithy/core@https://registry.npmjs.org/@smithy/core/-/core-3.22.1.tgz 0ms (cache hit)
+299 http cache @smithy/chunked-blob-reader@https://registry.npmjs.org/@smithy/chunked-blob-reader/-/chunked-blob-reader-5.2.0.tgz 0ms (cache hit)
+300 http cache @smithy/config-resolver@https://registry.npmjs.org/@smithy/config-resolver/-/config-resolver-4.4.6.tgz 1ms (cache hit)
+301 http cache @smithy/eventstream-codec@https://registry.npmjs.org/@smithy/eventstream-codec/-/eventstream-codec-4.2.8.tgz 0ms (cache hit)
+302 http cache @rushstack/ts-command-line@https://registry.npmjs.org/@rushstack/ts-command-line/-/ts-command-line-4.19.1.tgz 0ms (cache hit)
+303 http cache @rushstack/terminal@https://registry.npmjs.org/@rushstack/terminal/-/terminal-0.10.0.tgz 0ms (cache hit)
+304 http cache @smithy/chunked-blob-reader-native@https://registry.npmjs.org/@smithy/chunked-blob-reader-native/-/chunked-blob-reader-native-4.2.1.tgz 0ms (cache hit)
+305 http cache @sinclair/typebox@https://registry.npmjs.org/@sinclair/typebox/-/typebox-0.27.8.tgz 0ms (cache hit)
+306 http cache @smithy/abort-controller@https://registry.npmjs.org/@smithy/abort-controller/-/abort-controller-4.2.8.tgz 0ms (cache hit)
+307 http cache @rushstack/node-core-library@https://registry.npmjs.org/@rushstack/node-core-library/-/node-core-library-4.0.2.tgz 0ms (cache hit)
+308 http cache @rollup/rollup-linux-x64-musl@https://registry.npmjs.org/@rollup/rollup-linux-x64-musl/-/rollup-linux-x64-musl-4.57.1.tgz 0ms (cache hit)
+309 http cache @microsoft/tsdoc@https://registry.npmjs.org/@microsoft/tsdoc/-/tsdoc-0.14.2.tgz 0ms (cache hit)
+310 http cache @rushstack/rig-package@https://registry.npmjs.org/@rushstack/rig-package/-/rig-package-0.5.2.tgz 0ms (cache hit)
+311 http cache @rollup/pluginutils@https://registry.npmjs.org/@rollup/pluginutils/-/pluginutils-5.3.0.tgz 0ms (cache hit)
+312 http cache @microsoft/api-extractor-model@https://registry.npmjs.org/@microsoft/api-extractor-model/-/api-extractor-model-7.28.13.tgz 0ms (cache hit)
+313 http cache @rollup/rollup-linux-x64-gnu@https://registry.npmjs.org/@rollup/rollup-linux-x64-gnu/-/rollup-linux-x64-gnu-4.57.1.tgz 1ms (cache hit)
+314 http cache @jridgewell/sourcemap-codec@https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.5.5.tgz 0ms (cache hit)
+315 http cache @esbuild/linux-x64@https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.21.5.tgz 0ms (cache hit)
+316 http cache @jest/schemas@https://registry.npmjs.org/@jest/schemas/-/schemas-29.6.3.tgz 0ms (cache hit)
+317 http cache @microsoft/tsdoc-config@https://registry.npmjs.org/@microsoft/tsdoc-config/-/tsdoc-config-0.16.2.tgz 0ms (cache hit)
+318 http cache @babel/types@https://registry.npmjs.org/@babel/types/-/types-7.29.0.tgz 0ms (cache hit)
+319 http cache @microsoft/api-extractor@https://registry.npmjs.org/@microsoft/api-extractor/-/api-extractor-7.43.0.tgz 0ms (cache hit)
+320 http cache @aws/lambda-invoke-store@https://registry.npmjs.org/@aws/lambda-invoke-store/-/lambda-invoke-store-0.2.3.tgz 0ms (cache hit)
+321 http cache @babel/helper-string-parser@https://registry.npmjs.org/@babel/helper-string-parser/-/helper-string-parser-7.27.1.tgz 0ms (cache hit)
+322 http cache @babel/parser@https://registry.npmjs.org/@babel/parser/-/parser-7.29.0.tgz 0ms (cache hit)
+323 http cache @aws-sdk/xml-builder@https://registry.npmjs.org/@aws-sdk/xml-builder/-/xml-builder-3.972.4.tgz 0ms (cache hit)
+324 http cache @babel/helper-validator-identifier@https://registry.npmjs.org/@babel/helper-validator-identifier/-/helper-validator-identifier-7.28.5.tgz 0ms (cache hit)
+325 http cache @aws-sdk/util-user-agent-node@https://registry.npmjs.org/@aws-sdk/util-user-agent-node/-/util-user-agent-node-3.972.4.tgz 0ms (cache hit)
+326 http cache @aws-sdk/util-locate-window@https://registry.npmjs.org/@aws-sdk/util-locate-window/-/util-locate-window-3.965.4.tgz 0ms (cache hit)
+327 http cache @aws-sdk/util-format-url@https://registry.npmjs.org/@aws-sdk/util-format-url/-/util-format-url-3.972.3.tgz 0ms (cache hit)
+328 http cache @aws-sdk/util-user-agent-browser@https://registry.npmjs.org/@aws-sdk/util-user-agent-browser/-/util-user-agent-browser-3.972.3.tgz 0ms (cache hit)
+329 http cache @aws-sdk/util-endpoints@https://registry.npmjs.org/@aws-sdk/util-endpoints/-/util-endpoints-3.983.0.tgz 1ms (cache hit)
+330 http cache @aws-sdk/util-arn-parser@https://registry.npmjs.org/@aws-sdk/util-arn-parser/-/util-arn-parser-3.972.2.tgz 0ms (cache hit)
+331 http cache @aws-sdk/region-config-resolver@https://registry.npmjs.org/@aws-sdk/region-config-resolver/-/region-config-resolver-3.972.3.tgz 0ms (cache hit)
+332 http cache @aws-sdk/token-providers@https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.982.0.tgz 0ms (cache hit)
+333 http cache @aws-sdk/nested-clients@https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.982.0.tgz 0ms (cache hit)
+334 http cache @aws-sdk/types@https://registry.npmjs.org/@aws-sdk/types/-/types-3.973.1.tgz 0ms (cache hit)
+335 http cache @aws-sdk/middleware-sdk-s3@https://registry.npmjs.org/@aws-sdk/middleware-sdk-s3/-/middleware-sdk-s3-3.972.6.tgz 0ms (cache hit)
+336 http cache @aws-sdk/signature-v4-multi-region@https://registry.npmjs.org/@aws-sdk/signature-v4-multi-region/-/signature-v4-multi-region-3.983.0.tgz 0ms (cache hit)
+337 http cache @aws-sdk/s3-request-presigner@https://registry.npmjs.org/@aws-sdk/s3-request-presigner/-/s3-request-presigner-3.983.0.tgz 0ms (cache hit)
+338 http cache @aws-sdk/middleware-recursion-detection@https://registry.npmjs.org/@aws-sdk/middleware-recursion-detection/-/middleware-recursion-detection-3.972.3.tgz 0ms (cache hit)
+339 http cache @aws-sdk/middleware-ssec@https://registry.npmjs.org/@aws-sdk/middleware-ssec/-/middleware-ssec-3.972.3.tgz 0ms (cache hit)
+340 http cache @aws-sdk/middleware-host-header@https://registry.npmjs.org/@aws-sdk/middleware-host-header/-/middleware-host-header-3.972.3.tgz 0ms (cache hit)
+341 http cache @aws-sdk/middleware-user-agent@https://registry.npmjs.org/@aws-sdk/middleware-user-agent/-/middleware-user-agent-3.972.6.tgz 0ms (cache hit)
+342 http cache @aws-sdk/middleware-logger@https://registry.npmjs.org/@aws-sdk/middleware-logger/-/middleware-logger-3.972.3.tgz 0ms (cache hit)
+343 http cache @aws-sdk/middleware-location-constraint@https://registry.npmjs.org/@aws-sdk/middleware-location-constraint/-/middleware-location-constraint-3.972.3.tgz 0ms (cache hit)
+344 http cache @aws-sdk/credential-provider-web-identity@https://registry.npmjs.org/@aws-sdk/credential-provider-web-identity/-/credential-provider-web-identity-3.972.4.tgz 0ms (cache hit)
+345 http cache @aws-sdk/middleware-expect-continue@https://registry.npmjs.org/@aws-sdk/middleware-expect-continue/-/middleware-expect-continue-3.972.3.tgz 0ms (cache hit)
+346 http cache @aws-sdk/middleware-flexible-checksums@https://registry.npmjs.org/@aws-sdk/middleware-flexible-checksums/-/middleware-flexible-checksums-3.972.4.tgz 0ms (cache hit)
+347 http cache @aws-sdk/credential-provider-process@https://registry.npmjs.org/@aws-sdk/credential-provider-process/-/credential-provider-process-3.972.4.tgz 0ms (cache hit)
+348 http cache @aws-sdk/middleware-bucket-endpoint@https://registry.npmjs.org/@aws-sdk/middleware-bucket-endpoint/-/middleware-bucket-endpoint-3.972.3.tgz 0ms (cache hit)
+349 http cache @aws-sdk/credential-provider-sso@https://registry.npmjs.org/@aws-sdk/credential-provider-sso/-/credential-provider-sso-3.972.4.tgz 0ms (cache hit)
+350 http cache @aws-sdk/credential-provider-login@https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.4.tgz 0ms (cache hit)
+351 http cache @aws-sdk/credential-provider-node@https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.5.tgz 0ms (cache hit)
+352 http cache @aws-sdk/crc64-nvme@https://registry.npmjs.org/@aws-sdk/crc64-nvme/-/crc64-nvme-3.972.0.tgz 0ms (cache hit)
+353 http cache @aws-sdk/credential-provider-ini@https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.972.4.tgz 0ms (cache hit)
+354 http cache @aws-sdk/credential-provider-http@https://registry.npmjs.org/@aws-sdk/credential-provider-http/-/credential-provider-http-3.972.6.tgz 0ms (cache hit)
+355 http cache @aws-crypto/supports-web-crypto@https://registry.npmjs.org/@aws-crypto/supports-web-crypto/-/supports-web-crypto-5.2.0.tgz 0ms (cache hit)
+356 http cache @aws-sdk/credential-provider-env@https://registry.npmjs.org/@aws-sdk/credential-provider-env/-/credential-provider-env-3.972.4.tgz 0ms (cache hit)
+357 http cache @aws-crypto/sha256-browser@https://registry.npmjs.org/@aws-crypto/sha256-browser/-/sha256-browser-5.2.0.tgz 0ms (cache hit)
+358 http cache @aws-sdk/core@https://registry.npmjs.org/@aws-sdk/core/-/core-3.973.6.tgz 0ms (cache hit)
+359 http cache @aws-crypto/sha1-browser@https://registry.npmjs.org/@aws-crypto/sha1-browser/-/sha1-browser-5.2.0.tgz 0ms (cache hit)
+360 http cache @aws-sdk/client-s3@https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.983.0.tgz 0ms (cache hit)
+361 http cache @aws-crypto/util@https://registry.npmjs.org/@aws-crypto/util/-/util-5.2.0.tgz 0ms (cache hit)
+362 http cache @aws-sdk/client-sso@https://registry.npmjs.org/@aws-sdk/client-sso/-/client-sso-3.982.0.tgz 0ms (cache hit)
+363 http cache @aws-crypto/crc32c@https://registry.npmjs.org/@aws-crypto/crc32c/-/crc32c-5.2.0.tgz 0ms (cache hit)
+364 http cache pathe@https://registry.npmjs.org/pathe/-/pathe-2.0.3.tgz 1ms (cache hit)
+365 http cache path-key@https://registry.npmjs.org/path-key/-/path-key-4.0.0.tgz 0ms (cache hit)
+366 http cache pathe@https://registry.npmjs.org/pathe/-/pathe-2.0.3.tgz 0ms (cache hit)
+367 http cache @aws-crypto/sha256-js@https://registry.npmjs.org/@aws-crypto/sha256-js/-/sha256-js-5.2.0.tgz 0ms (cache hit)
+368 http cache estree-walker@https://registry.npmjs.org/estree-walker/-/estree-walker-3.0.3.tgz 0ms (cache hit)
+369 http cache brace-expansion@https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.0.2.tgz 0ms (cache hit)
+370 http cache @aws-crypto/crc32@https://registry.npmjs.org/@aws-crypto/crc32/-/crc32-5.2.0.tgz 0ms (cache hit)
+371 http cache resolve@https://registry.npmjs.org/resolve/-/resolve-1.19.0.tgz 0ms (cache hit)
+372 http cache typescript@https://registry.npmjs.org/typescript/-/typescript-5.4.2.tgz 0ms (cache hit)
+373 http cache minimatch@https://registry.npmjs.org/minimatch/-/minimatch-9.0.5.tgz 0ms (cache hit)
+374 http cache @smithy/util-utf8@https://registry.npmjs.org/@smithy/util-utf8/-/util-utf8-2.3.0.tgz 0ms (cache hit)
+375 http cache @smithy/util-utf8@https://registry.npmjs.org/@smithy/util-utf8/-/util-utf8-2.3.0.tgz 0ms (cache hit)
+376 http cache @smithy/is-array-buffer@https://registry.npmjs.org/@smithy/is-array-buffer/-/is-array-buffer-2.2.0.tgz 0ms (cache hit)
+377 http cache @smithy/util-utf8@https://registry.npmjs.org/@smithy/util-utf8/-/util-utf8-2.3.0.tgz 0ms (cache hit)
+378 http cache @smithy/is-array-buffer@https://registry.npmjs.org/@smithy/is-array-buffer/-/is-array-buffer-2.2.0.tgz 0ms (cache hit)
+379 http cache @smithy/util-buffer-from@https://registry.npmjs.org/@smithy/util-buffer-from/-/util-buffer-from-2.2.0.tgz 0ms (cache hit)
+380 http cache @smithy/util-buffer-from@https://registry.npmjs.org/@smithy/util-buffer-from/-/util-buffer-from-2.2.0.tgz 0ms (cache hit)
+381 http cache @smithy/util-buffer-from@https://registry.npmjs.org/@smithy/util-buffer-from/-/util-buffer-from-2.2.0.tgz 0ms (cache hit)
+382 http cache @aws-sdk/util-endpoints@https://registry.npmjs.org/@aws-sdk/util-endpoints/-/util-endpoints-3.982.0.tgz 0ms (cache hit)
+383 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 1752ms
+384 silly audit report {
+384 silly audit report   minimatch: [
+384 silly audit report     {
+384 silly audit report       id: 1113459,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-3ppc-4f35-3m26',
+384 silly audit report       title: 'minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '<3.1.3',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1113465,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-3ppc-4f35-3m26',
+384 silly audit report       title: 'minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '>=9.0.0 <9.0.6',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1113538,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-7r86-cg39-jmmj',
+384 silly audit report       title: 'minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '<3.1.3',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1113544,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-7r86-cg39-jmmj',
+384 silly audit report       title: 'minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '>=9.0.0 <9.0.7',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1113546,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-23c5-xmqv-rm74',
+384 silly audit report       title: 'minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '<3.1.4',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1113552,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-23c5-xmqv-rm74',
+384 silly audit report       title: 'minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '>=9.0.0 <9.0.7',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     }
+384 silly audit report   ],
+384 silly audit report   ajv: [
+384 silly audit report     {
+384 silly audit report       id: 1113714,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-2g4f-4pwh-qvx6',
+384 silly audit report       title: 'ajv has ReDoS when using `$data` option',
+384 silly audit report       severity: 'moderate',
+384 silly audit report       vulnerable_versions: '<6.14.0',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     }
+384 silly audit report   ],
+384 silly audit report   esbuild: [
+384 silly audit report     {
+384 silly audit report       id: 1102341,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-67mh-4wv8-2f99',
+384 silly audit report       title: 'esbuild enables any website to send any requests to the development server and read the response',
+384 silly audit report       severity: 'moderate',
+384 silly audit report       vulnerable_versions: '<=0.24.2',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     }
+384 silly audit report   ],
+384 silly audit report   'fast-xml-parser': [
+384 silly audit report     {
+384 silly audit report       id: 1113568,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-m7jm-9gc2-mpf2',
+384 silly audit report       title: 'fast-xml-parser has an entity encoding bypass via regex injection in DOCTYPE entity names',
+384 silly audit report       severity: 'critical',
+384 silly audit report       vulnerable_versions: '>=5.0.0 <5.3.5',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1113569,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-jmr7-xgp7-cmfj',
+384 silly audit report       title: 'fast-xml-parser affected by DoS through entity expansion in DOCTYPE (no expansion limit)',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '>=5.0.0 <5.3.6',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     },
+384 silly audit report     {
+384 silly audit report       id: 1114153,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-fj3w-jwp8-x2g3',
+384 silly audit report       title: 'fast-xml-parser has stack overflow in XMLBuilder with preserveOrder',
+384 silly audit report       severity: 'low',
+384 silly audit report       vulnerable_versions: '>=5.0.0 <5.3.8',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     }
+384 silly audit report   ],
+384 silly audit report   rollup: [
+384 silly audit report     {
+384 silly audit report       id: 1113515,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-mw96-cpmx-2vgc',
+384 silly audit report       title: 'Rollup 4 has Arbitrary File Write via Path Traversal',
+384 silly audit report       severity: 'high',
+384 silly audit report       vulnerable_versions: '>=4.0.0 <4.59.0',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     }
+384 silly audit report   ],
+384 silly audit report   'vue-template-compiler': [
+384 silly audit report     {
+384 silly audit report       id: 1111772,
+384 silly audit report       url: 'https://github.com/advisories/GHSA-g3ch-rx76-35fx',
+384 silly audit report       title: 'vue-template-compiler vulnerable to client-side Cross-Site Scripting (XSS)',
+384 silly audit report       severity: 'moderate',
+384 silly audit report       vulnerable_versions: '>=2.0.0 <3.0.0',
+384 silly audit report       cwe: [Array],
+384 silly audit report       cvss: [Object]
+384 silly audit report     }
+384 silly audit report   ]
+384 silly audit report }
+385 silly packumentCache corgi:https://registry.npmjs.org/minimatch cache-miss
+386 silly packumentCache corgi:https://registry.npmjs.org/ajv cache-miss
+387 silly packumentCache corgi:https://registry.npmjs.org/esbuild cache-miss
+388 silly packumentCache corgi:https://registry.npmjs.org/fast-xml-parser cache-miss
+389 silly packumentCache corgi:https://registry.npmjs.org/rollup cache-miss
+390 silly packumentCache corgi:https://registry.npmjs.org/vue-template-compiler cache-miss
+391 http cache @aws-sdk/util-endpoints@https://registry.npmjs.org/@aws-sdk/util-endpoints/-/util-endpoints-3.982.0.tgz 0ms (cache hit)
+392 http cache @aws-sdk/util-endpoints@https://registry.npmjs.org/@aws-sdk/util-endpoints/-/util-endpoints-3.982.0.tgz 0ms (cache hit)
+393 http cache @smithy/is-array-buffer@https://registry.npmjs.org/@smithy/is-array-buffer/-/is-array-buffer-2.2.0.tgz 0ms (cache hit)
+394 warn deprecated lodash.get@4.4.2: This package is deprecated. Use the optional chaining (?.) operator instead.
+395 warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+396 http fetch GET 200 https://registry.npmjs.org/ajv 13877ms (cache revalidated)
+397 silly packumentCache corgi:https://registry.npmjs.org/ajv set size:464537 disposed:false
+398 http fetch GET 200 https://registry.npmjs.org/minimatch 13904ms (cache revalidated)
+399 silly packumentCache corgi:https://registry.npmjs.org/minimatch set size:167610 disposed:false
+400 http fetch GET 200 https://registry.npmjs.org/fast-xml-parser 13923ms (cache revalidated)
+401 silly packumentCache corgi:https://registry.npmjs.org/fast-xml-parser set size:232762 disposed:false
+402 http fetch GET 200 https://registry.npmjs.org/esbuild 13948ms (cache revalidated)
+403 silly packumentCache corgi:https://registry.npmjs.org/esbuild set size:879341 disposed:false
+404 http fetch GET 200 https://registry.npmjs.org/vue-template-compiler 13986ms (cache revalidated)
+405 silly packumentCache corgi:https://registry.npmjs.org/vue-template-compiler set size:145473 disposed:false
+406 http fetch GET 200 https://registry.npmjs.org/rollup 14046ms (cache revalidated)
+407 silly packumentCache corgi:https://registry.npmjs.org/rollup set size:2543476 disposed:false
+408 silly packumentCache corgi:https://registry.npmjs.org/@microsoft%2fapi-extractor cache-miss
+409 http fetch GET 200 https://registry.npmjs.org/@microsoft%2fapi-extractor 5941ms (cache revalidated)
+410 silly packumentCache corgi:https://registry.npmjs.org/@microsoft%2fapi-extractor set size:862148 disposed:false
+411 silly packumentCache corgi:https://registry.npmjs.org/@vue%2flanguage-core cache-miss
+412 http fetch GET 200 https://registry.npmjs.org/@vue%2flanguage-core 3427ms (cache revalidated)
+413 silly packumentCache corgi:https://registry.npmjs.org/@vue%2flanguage-core set size:128316 disposed:false
+414 silly packumentCache corgi:https://registry.npmjs.org/@microsoft%2ftsdoc-config cache-miss
+415 http fetch GET 200 https://registry.npmjs.org/@microsoft%2ftsdoc-config 2466ms (cache revalidated)
+416 silly packumentCache corgi:https://registry.npmjs.org/@microsoft%2ftsdoc-config set size:37415 disposed:false
+417 silly packumentCache corgi:https://registry.npmjs.org/vite cache-miss
+418 http fetch GET 200 https://registry.npmjs.org/vite 1630ms (cache revalidated)
+419 silly packumentCache corgi:https://registry.npmjs.org/vite set size:2196538 disposed:false
+420 silly packumentCache corgi:https://registry.npmjs.org/@aws-sdk%2fxml-builder cache-miss
+421 http fetch GET 200 https://registry.npmjs.org/@aws-sdk%2fxml-builder 1542ms (cache revalidated)
+422 silly packumentCache corgi:https://registry.npmjs.org/@aws-sdk%2fxml-builder set size:135070 disposed:false
+423 silly packumentCache corgi:https://registry.npmjs.org/@rollup%2fpluginutils cache-miss
+424 http fetch GET 200 https://registry.npmjs.org/@rollup%2fpluginutils 1362ms (cache revalidated)
+425 silly packumentCache corgi:https://registry.npmjs.org/@rollup%2fpluginutils set size:47240 disposed:false
+426 silly packumentCache corgi:https://registry.npmjs.org/vite-plugin-dts cache-miss
+427 http fetch GET 200 https://registry.npmjs.org/vite-plugin-dts 1250ms (cache revalidated)
+428 silly packumentCache corgi:https://registry.npmjs.org/vite-plugin-dts set size:260538 disposed:false
+429 silly packumentCache corgi:https://registry.npmjs.org/@microsoft%2fapi-extractor-model cache-miss
+430 http fetch GET 200 https://registry.npmjs.org/@microsoft%2fapi-extractor-model 1312ms (cache revalidated)
+431 silly packumentCache corgi:https://registry.npmjs.org/@microsoft%2fapi-extractor-model set size:318885 disposed:false
+432 silly packumentCache corgi:https://registry.npmjs.org/vite-node cache-miss
+433 silly packumentCache corgi:https://registry.npmjs.org/vitest cache-miss
+434 http fetch GET 200 https://registry.npmjs.org/vite-node 746ms (cache revalidated)
+435 silly packumentCache corgi:https://registry.npmjs.org/vite-node set size:452191 disposed:false
+436 http fetch GET 200 https://registry.npmjs.org/vitest 772ms (cache revalidated)
+437 silly packumentCache corgi:https://registry.npmjs.org/vitest set size:1204826 disposed:false
+438 silly packumentCache corgi:https://registry.npmjs.org/@aws-sdk%2fcore cache-miss
+439 http fetch GET 200 https://registry.npmjs.org/@aws-sdk%2fcore 732ms (cache revalidated)
+440 silly packumentCache corgi:https://registry.npmjs.org/@aws-sdk%2fcore set size:182328 disposed:false
+441 silly packumentCache corgi:https://registry.npmjs.org/vue-tsc cache-miss
+442 http fetch GET 200 https://registry.npmjs.org/vue-tsc 799ms (cache revalidated)
+443 silly packumentCache corgi:https://registry.npmjs.org/vue-tsc set size:445174 disposed:false
+444 info run esbuild@0.21.5 postinstall node_modules/esbuild node install.js
+445 info run esbuild@0.21.5 postinstall { code: 0, signal: null }
+446 verbose stack Error: Could not read package.json: Error: ENOENT: no such file or directory, open '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/package.json'
+446 verbose stack     at async open (node:internal/fs/promises:638:25)
+446 verbose stack     at async readFile (node:internal/fs/promises:1242:14)
+446 verbose stack     at async read (/usr/local/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/read-package.js:9:18)
+446 verbose stack     at async PackageJson.load (/usr/local/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/index.js:131:31)
+446 verbose stack     at async PackageJson.normalize (/usr/local/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/index.js:117:5)
+446 verbose stack     at async runScript (/usr/local/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/run-script.js:11:28)
+446 verbose stack     at async Install.exec (/usr/local/lib/node_modules/npm/lib/commands/install.js:163:9)
+446 verbose stack     at async Npm.exec (/usr/local/lib/node_modules/npm/lib/npm.js:207:9)
+446 verbose stack     at async module.exports (/usr/local/lib/node_modules/npm/lib/cli/entry.js:74:5)
+447 error code ENOENT
+448 error syscall open
+449 error path /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/package.json
+450 error errno -2
+451 error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085/package.json'
+452 error enoent This is related to npm not being able to find a file.
+452 error enoent
+453 verbose cwd /workspace/projects/openclaw/.local/share/pnpm/store/v10/tmp/_tmp_1862_74f4a6a3bf46e7f55de9dbd500f8b085
+454 verbose os Linux 6.12.69-linuxkit
+455 verbose node v22.14.0
+456 verbose npm  v10.9.2
+457 verbose exit -2
+458 verbose code -2
+459 error A complete log of this run can be found in: /workspace/projects/openclaw/.npm/_logs/2026-03-10T02_52_08_635Z-debug-0.log

@@ -9,6 +9,7 @@ INSTALL_BUN="${INSTALL_BUN:-1}"
 BUN_INSTALL_DIR="${BUN_INSTALL_DIR:-/opt/bun}"
 INSTALL_BREW="${INSTALL_BREW:-1}"
 BREW_INSTALL_DIR="${BREW_INSTALL_DIR:-/home/linuxbrew/.linuxbrew}"
+OPENCLAW_ACPX_VERSION="${OPENCLAW_ACPX_VERSION:-0.1.15}"
 FINAL_USER="${FINAL_USER:-sandbox}"
 
 if ! docker image inspect "${BASE_IMAGE}" >/dev/null 2>&1; then
@@ -29,6 +30,7 @@ docker build \
   --build-arg BUN_INSTALL_DIR="${BUN_INSTALL_DIR}" \
   --build-arg INSTALL_BREW="${INSTALL_BREW}" \
   --build-arg BREW_INSTALL_DIR="${BREW_INSTALL_DIR}" \
+  --build-arg OPENCLAW_ACPX_VERSION="${OPENCLAW_ACPX_VERSION}" \
   --build-arg FINAL_USER="${FINAL_USER}" \
   .
 

@@ -52,6 +52,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import { handleMissionControlHttpRequest } from "./mission-control.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import {
@@ -727,6 +728,18 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         }),
       );
+
+      requestStages.push({
+        name: "mission-control-http",
+        run: () =>
+          handleMissionControlHttpRequest(req, res, {
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+            getReadiness,
+          }),
+      });
 
       if (controlUiEnabled) {
         requestStages.push({

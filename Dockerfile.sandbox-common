@@ -11,6 +11,7 @@ ARG INSTALL_BUN=1
 ARG BUN_INSTALL_DIR=/opt/bun
 ARG INSTALL_BREW=1
 ARG BREW_INSTALL_DIR=/home/linuxbrew/.linuxbrew
+ARG OPENCLAW_ACPX_VERSION=0.1.15
 ARG FINAL_USER=sandbox
 
 ENV BUN_INSTALL=${BUN_INSTALL_DIR}
@@ -24,6 +25,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
+
+RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" \
+  && acpx --version
 
 RUN if [ "${INSTALL_BUN}" = "1" ]; then \
   curl -fsSL https://bun.sh/install | bash; \

@@ -1,0 +1,22 @@
+0 verbose cli /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@10.9.2
+2 info using node@v22.14.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/workspace/projects/openclaw/.npmrc
+5 silly config load:file:/usr/local/etc/npmrc
+6 verbose title npm exec dockerfilelint Dockerfile.tony Dockerfile.sandbox-common Dockerfile.sandbox-tony
+7 verbose argv "exec" "--yes" "--" "dockerfilelint" "Dockerfile.tony" "Dockerfile.sandbox-common" "Dockerfile.sandbox-tony"
+8 verbose logfile logs-max:10 dir:/workspace/projects/openclaw/.npm/_logs/2026-03-10T02_47_33_291Z-
+9 verbose logfile /workspace/projects/openclaw/.npm/_logs/2026-03-10T02_47_33_291Z-debug-0.log
+10 silly logfile start cleaning logs, removing 1 files
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:2197815296 maxSize:549453824 maxEntrySize:274726912
+13 http fetch GET 200 https://registry.npmjs.org/dockerfilelint 244ms (cache revalidated)
+14 silly packumentCache heap:2197815296 maxSize:549453824 maxEntrySize:274726912
+15 silly packumentCache heap:2197815296 maxSize:549453824 maxEntrySize:274726912
+16 verbose cwd /workspace/projects/openclaw
+17 verbose os Linux 6.12.69-linuxkit
+18 verbose node v22.14.0
+19 verbose npm  v10.9.2
+20 verbose exit 1
+21 verbose code 1

@@ -1,0 +1,19 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.9.2
+2 info using node@v22.14.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/workspace/projects/openclaw/mission-control-ui/.npmrc
+5 silly config load:file:/workspace/projects/openclaw/.npmrc
+6 silly config load:file:/workspace/projects/openclaw/mission-control-ui/etc/npmrc
+7 verbose title npm exec tsc --noEmit
+8 verbose argv "--prefix" "mission-control-ui" "exec" "tsc" "--" "--noEmit"
+9 verbose logfile logs-max:10 dir:/workspace/projects/openclaw/.npm/_logs/2026-03-10T05_37_49_020Z-
+10 verbose logfile /workspace/projects/openclaw/.npm/_logs/2026-03-10T05_37_49_020Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly logfile done cleaning log files
+13 verbose cwd /workspace/projects/openclaw
+14 verbose os Linux 6.12.69-linuxkit
+15 verbose node v22.14.0
+16 verbose npm  v10.9.2
+17 verbose exit 2
+18 verbose code 2

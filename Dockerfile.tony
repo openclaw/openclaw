@@ -35,6 +35,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
+# ─── acpx CLI (ACP runtime bridge) ───────────────────────────────────────────
+ARG OPENCLAW_ACPX_VERSION=0.1.15
+RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" \
+  && acpx --version
+
 # ─── kubectl ─────────────────────────────────────────────────────────────────
 RUN curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" \
   && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
@@ -52,8 +57,8 @@ RUN curl -Lo kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/rele
 # Run inside container to confirm gateway tools are present:
 #
 #   docker run --rm openclaw-tony:local \
-#     sh -c 'for t in docker kubectl kustomize ruby python3 pip3 jq socat make; do \
+#     sh -c 'for t in docker kubectl kustomize ruby python3 pip3 jq socat make acpx; do \
 #       command -v $t && echo "✅ $t" || echo "❌ $t MISSING"; done'
 #
-# Expected output: 9x ✅
+# Expected output: 10x ✅
 # =============================================================================

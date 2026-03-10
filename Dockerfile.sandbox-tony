@@ -8,7 +8,7 @@
 # Base: openclaw-sandbox:tony (already includes):
 #   Node 22 LTS, npm, git, gh CLI, Ruby, Python3, az CLI, newman, shellcheck,
 #   ripgrep, docker-ce-cli, kubectl, kustomize, helm, kubelogin,
-#   Foundry (forge/cast/anvil/chisel), psql, redis-cli, slither, jq, make
+#   Foundry (forge/cast/anvil/chisel), psql, redis-cli, slither, jq, make, acpx
 # =============================================================================
 
 FROM openclaw-sandbox:tony
@@ -63,6 +63,11 @@ RUN npm install -g oxlint
 # Playwright browser is last-resort only — NOT installed here to keep image lean.
 # If a subagent needs Playwright browser: npx playwright install chromium at runtime.
 RUN npm install -g vercel
+
+# ─── acpx CLI (ACP runtime bridge for sandboxed agent sessions) ──────────────
+ARG OPENCLAW_ACPX_VERSION=0.1.15
+RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" \
+  && acpx --version
 
 # ─── Restore expected user + workdir ─────────────────────────────────────────
 USER node

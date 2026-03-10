@@ -1,0 +1,23 @@
+HTTP/2.0 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json; charset=utf-8
+Date: Tue, 10 Mar 2026 02:29:02 GMT
+Github-Authentication-Token-Expiration: 2026-05-25 17:24:28 UTC
+Referrer-Policy: origin-when-cross-origin, strict-origin-when-cross-origin
+Server: github.com
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Vary: Accept-Encoding, Accept, X-Requested-With
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Github-Media-Type: github.v4; param=merge-info-preview.nebula-preview; format=json
+X-Github-Request-Id: D09F:F5AC8:1185127:48E17E1:69AF81EE
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4963
+X-Ratelimit-Reset: 1773112682
+X-Ratelimit-Resource: graphql
+X-Ratelimit-Used: 37
+X-Xss-Protection: 0
+
+{"data":{"PullRequest":{"fields":[{"name":"activeLockReason"},{"name":"additions"},{"name":"assignedActors"},{"name":"assignees"},{"name":"author"},{"name":"authorAssociation"},{"name":"autoMergeRequest"},{"name":"baseRef"},{"name":"baseRefName"},{"name":"baseRefOid"},{"name":"baseRepository"},{"name":"body"},{"name":"bodyHTML"},{"name":"bodyText"},{"name":"canBeRebased"},{"name":"changedFiles"},{"name":"checksResourcePath"},{"name":"checksUrl"},{"name":"closed"},{"name":"closedAt"},{"name":"closingIssuesReferences"},{"name":"comments"},{"name":"commits"},{"name":"createdAt"},{"name":"createdViaEmail"},{"name":"databaseId"},{"name":"deletions"},{"name":"editor"},{"name":"files"},{"name":"fullDatabaseId"},{"name":"headRef"},{"name":"headRefName"},{"name":"headRefOid"},{"name":"headRepository"},{"name":"headRepositoryOwner"},{"name":"hovercard"},{"name":"id"},{"name":"includesCreatedEdit"},{"name":"isCrossRepository"},{"name":"isDraft"},{"name":"isInMergeQueue"},{"name":"isMergeQueueEnabled"},{"name":"isReadByViewer"},{"name":"labels"},{"name":"lastEditedAt"},{"name":"latestOpinionatedReviews"},{"name":"latestReviews"},{"name":"locked"},{"name":"maintainerCanModify"},{"name":"mergeCommit"},{"name":"mergeQueue"},{"name":"mergeQueueEntry"},{"name":"mergeStateStatus"},{"name":"mergeable"},{"name":"merged"},{"name":"mergedAt"},{"name":"mergedBy"},{"name":"milestone"},{"name":"number"},{"name":"participants"},{"name":"permalink"},{"name":"potentialMergeCommit"},{"name":"projectCards"},{"name":"projectItems"},{"name":"projectV2"},{"name":"projectsV2"},{"name":"publishedAt"},{"name":"reactionGroups"},{"name":"reactions"},{"name":"repository"},{"name":"resourcePath"},{"name":"revertResourcePath"},{"name":"revertUrl"},{"name":"reviewDecision"},{"name":"reviewRequests"},{"name":"reviewThreads"},{"name":"reviews"},{"name":"state"},{"name":"statusCheckRollup"},{"name":"suggestedActors"},{"name":"suggestedReviewerActors"},{"name":"suggestedReviewers"},{"name":"timeline"},{"name":"timelineItems"},{"name":"title"},{"name":"titleHTML"},{"name":"totalCommentsCount"},{"name":"updatedAt"},{"name":"url"},{"name":"userContentEdits"},{"name":"viewerCanApplySuggestion"},{"name":"viewerCanClose"},{"name":"viewerCanDeleteHeadRef"},{"name":"viewerCanDisableAutoMerge"},{"name":"viewerCanEditFiles"},{"name":"viewerCanEnableAutoMerge"},{"name":"viewerCanLabel"},{"name":"viewerCanMergeAsAdmin"},{"name":"viewerCanReact"},{"name":"viewerCanReopen"},{"name":"viewerCanSubscribe"},{"name":"viewerCanUpdate"},{"name":"viewerCanUpdateBranch"},{"name":"viewerCannotUpdateReasons"},{"name":"viewerDidAuthor"},{"name":"viewerLatestReview"},{"name":"viewerLatestReviewRequest"},{"name":"viewerMergeBodyText"},{"name":"viewerMergeHeadlineText"},{"name":"viewerSubscription"}]},"StatusCheckRollupContextConnection":{"fields":[{"name":"checkRunCount"},{"name":"checkRunCountsByState"},{"name":"edges"},{"name":"nodes"},{"name":"pageInfo"},{"name":"statusContextCount"},{"name":"statusContextCountsByState"},{"name":"totalCount"}]}}}
