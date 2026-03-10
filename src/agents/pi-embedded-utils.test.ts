@@ -5,6 +5,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
+  stripToolCallXml,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -594,6 +595,81 @@ describe("promoteThinkingTagsToBlocks", () => {
     });
     promoteThinkingTagsToBlocks(msg);
     expect(msg.content).toEqual([{ type: "text", text: "hello world" }]);
+  });
+});
+
+describe("stripToolCallXml", () => {
+  it("strips <tool_call> blocks", () => {
+    const text = `Before<tool_call>
+{"name": "search", "arguments": {"query": "test"}}
+</tool_call>After`;
+    expect(stripToolCallXml(text)).toBe("BeforeAfter");
+  });
+
+  it("strips <tool_result> blocks", () => {
+    const text = `Before<tool_result>
+Spawned sub-agent coding (id: sa_01jt3cwwqb5rz7hqp6ghh5qc12)
+</tool_result>After`;
+    expect(stripToolCallXml(text)).toBe("BeforeAfter");
+  });
+
+  it("strips both tool_call and tool_result blocks", () => {
+    const text = `I'll help with that.
+<tool_call>
+{"name": "subagents", "arguments": {"action": "spawn"}}
+</tool_call>
+<tool_result>
+Spawned sub-agent coding
+</tool_result>
+Here is the result.`;
+    expect(stripToolCallXml(text)).toBe("I'll help with that.\n\n\nHere is the result.");
+  });
+
+  it("handles tags with attributes", () => {
+    const text = `Start<tool_call id="123" type="function">content</tool_call>End`;
+    expect(stripToolCallXml(text)).toBe("StartEnd");
+  });
+
+  it("handles stray unclosed tags", () => {
+    const text = "Some text<tool_call>more text";
+    expect(stripToolCallXml(text)).toBe("Some textmore text");
+  });
+
+  it("returns text unchanged when no tool tags present", () => {
+    const text = "Normal response without any tool markup.";
+    expect(stripToolCallXml(text)).toBe(text);
+  });
+
+  it("returns empty/falsy input unchanged", () => {
+    expect(stripToolCallXml("")).toBe("");
+  });
+});
+
+describe("extractAssistantText strips tool_call XML (#40879)", () => {
+  it("strips tool_call XML from assistant messages", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `I'll search for that.
+<tool_call>
+{"name": "search", "arguments": {"query": "test"}}
+</tool_call>
+<tool_result>
+Found 3 results.
+</tool_result>
+Here are the results.`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).not.toContain("<tool_call>");
+    expect(result).not.toContain("<tool_result>");
+    expect(result).toContain("I'll search for that.");
+    expect(result).toContain("Here are the results.");
   });
 });
 
