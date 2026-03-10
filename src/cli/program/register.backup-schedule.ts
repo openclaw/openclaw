@@ -109,6 +109,29 @@ async function findBackupScheduleJobById(opts: Record<string, unknown>, id: stri
   }
 }
 
+async function listBackupScheduleJobs(opts: Record<string, unknown>): Promise<CronJob[]> {
+  const jobs: CronJob[] = [];
+  let offset = 0;
+  for (;;) {
+    const listed = await callGatewayFromCli("cron.list", opts, {
+      includeDisabled: true,
+      offset,
+      limit: CRON_LIST_PAGE_LIMIT,
+    });
+    jobs.push(...resolveBackupScheduleJobs(listed));
+
+    const page = resolveCronListPage(listed);
+    if (!page.hasMore) {
+      return jobs;
+    }
+    const nextOffset =
+      typeof page.nextOffset === "number" && page.nextOffset > offset
+        ? page.nextOffset
+        : offset + CRON_LIST_PAGE_LIMIT;
+    offset = nextOffset;
+  }
+}
+
 export function registerBackupScheduleCommand(backup: Command) {
   const schedule = backup.command("schedule").description("Manage scheduled backup jobs");
 
@@ -197,10 +220,7 @@ export function registerBackupScheduleCommand(backup: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const res = await callGatewayFromCli("cron.list", opts, {
-            includeDisabled: true,
-          });
-          const jobs = resolveBackupScheduleJobs(res);
+          const jobs = await listBackupScheduleJobs(opts as Record<string, unknown>);
           if (opts.json) {
             printCronJson({ jobs });
             return;

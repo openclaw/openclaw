@@ -187,6 +187,96 @@ describe("registerBackupCommand", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining('"id": "non-backup-job"'));
   });
 
+  it("lists scheduled backup jobs across paginated cron.list results", async () => {
+    const baseJob = {
+      name: "Scheduled backup",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "main" as const,
+      wakeMode: "now" as const,
+      state: {},
+    };
+
+    callGatewayFromCli
+      .mockResolvedValueOnce({
+        jobs: [
+          {
+            ...baseJob,
+            id: "non-backup-job-page-1",
+            payload: { kind: "systemEvent" as const, text: "tick" },
+          },
+        ],
+        hasMore: true,
+        nextOffset: 200,
+      })
+      .mockResolvedValueOnce({
+        jobs: [{ ...baseJob, id: "backup-job-page-2", payload: { kind: "backupCreate" as const } }],
+        hasMore: false,
+        nextOffset: null,
+      });
+
+    await runCli(["backup", "schedule", "list", "--json"]);
+
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "cron.list",
+      expect.any(Object),
+      expect.objectContaining({ includeDisabled: true, offset: 0, limit: 200 }),
+    );
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "cron.list",
+      expect.any(Object),
+      expect.objectContaining({ includeDisabled: true, offset: 200, limit: 200 }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"id": "backup-job-page-2"'));
+  });
+
+  it("prints no scheduled backups only after exhausting paginated cron.list", async () => {
+    const nonBackupJob = {
+      id: "non-backup-job",
+      name: "Other job",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "main" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "systemEvent" as const, text: "tick" },
+      state: {},
+    };
+
+    callGatewayFromCli
+      .mockResolvedValueOnce({
+        jobs: [nonBackupJob],
+        hasMore: true,
+        nextOffset: 200,
+      })
+      .mockResolvedValueOnce({
+        jobs: [nonBackupJob],
+        hasMore: false,
+        nextOffset: null,
+      });
+
+    await runCli(["backup", "schedule", "list"]);
+
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      1,
+      "cron.list",
+      expect.any(Object),
+      expect.objectContaining({ includeDisabled: true, offset: 0, limit: 200 }),
+    );
+    expect(callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "cron.list",
+      expect.any(Object),
+      expect.objectContaining({ includeDisabled: true, offset: 200, limit: 200 }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith("No scheduled backups.");
+  });
+
   it("removes scheduled backup jobs found on a later cron.list page", async () => {
     const baseJob = {
       name: "Scheduled backup",
