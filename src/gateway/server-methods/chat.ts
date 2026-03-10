@@ -5,7 +5,11 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
-import { isEmbeddedPiRunActive, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
+import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  waitForEmbeddedPiRunEnd,
+} from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -483,8 +487,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
 
       // Wait for all runs to end (with 2s timeout per session)
+      // If timeout, force-abort and wait again
       for (const sessionId of sessionIds) {
-        await waitForEmbeddedPiRunEnd(sessionId, 2000);
+        const ended = await waitForEmbeddedPiRunEnd(sessionId, 2000);
+        if (!ended) {
+          // Run didn't end in 2s, force-abort it
+          const aborted = abortEmbeddedPiRun(sessionId);
+          if (aborted) {
+            // Wait another 2s for the run to clean up after abort
+            await waitForEmbeddedPiRunEnd(sessionId, 2000);
+          }
+        }
       }
     }
 
