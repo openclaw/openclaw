@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+  loadNodeHostConfig: vi.fn(),
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -76,6 +77,10 @@ vi.mock("./shared.js", async (importActual) => {
 
 vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
+}));
+
+vi.mock("../../node-host/config.js", () => ({
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
 vi.mock("../onboard-helpers.js", () => ({
@@ -155,6 +160,7 @@ describe("modelsAuthLoginCommand", () => {
     });
     mocks.writeOAuthCredentials.mockResolvedValue("openai-codex:user@example.com");
     mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.loadNodeHostConfig.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -204,6 +210,22 @@ describe("modelsAuthLoginCommand", () => {
     await expect(modelsAuthLoginCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
       "No provider plugins found.",
     );
+  });
+
+  it("blocks oauth login when running on a remote node host", async () => {
+    const runtime = createRuntime();
+    mocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-1",
+      token: "node-token",
+      gateway: { host: "10.30.10.20", port: 18789 },
+    });
+
+    await expect(modelsAuthLoginCommand({ provider: "openai-codex" }, runtime)).rejects.toThrow(
+      "configured as a remote node host",
+    );
+    expect(mocks.loginOpenAICodexOAuth).not.toHaveBeenCalled();
+    expect(mocks.writeOAuthCredentials).not.toHaveBeenCalled();
   });
 
   it("does not persist a cancelled manual token entry", async () => {

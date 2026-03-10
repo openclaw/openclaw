@@ -17,6 +17,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { loadNodeHostConfig } from "../../node-host/config.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -342,10 +343,28 @@ async function runBuiltInOpenAICodexLogin(params: {
   }
 }
 
+function isLoopbackHost(host?: string): boolean {
+  const value = (host ?? "").trim().toLowerCase();
+  return value === "" || value === "localhost" || value === "127.0.0.1" || value === "::1";
+}
+
+async function assertNotRemoteNodeHostAuthWrite(): Promise<void> {
+  const nodeConfig = await loadNodeHostConfig();
+  if (!nodeConfig?.token) return;
+  const gatewayHost = nodeConfig.gateway?.host;
+  if (isLoopbackHost(gatewayHost)) return;
+
+  throw new Error(
+    "This machine is configured as a remote node host. `openclaw models auth login` would write OAuth credentials locally and not to the gateway. Run this command on the gateway host instead.",
+  );
+}
+
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
   }
+
+  await assertNotRemoteNodeHostAuthWrite();
 
   const config = await loadValidConfigOrThrow();
   const defaultAgentId = resolveDefaultAgentId(config);
