@@ -800,7 +800,7 @@ export function isImageSizeError(errorMessage?: string): boolean {
 
 /** 已知与 SSE 上下文无关的误报模式——排除后避免误判。 */
 const SSE_FALSE_POSITIVE_RE =
-  /context.?(?:overflow|window|length)|rate.?limit|billing|insufficient.?(?:credit|balance|quota)|too many requests|quota exceeded|upstream/i;
+  /context.?(?:overflow|window|length)|rate.?limit|billing|insufficient.?(?:credit|balance|quota)|too many requests|quota exceeded/i;
 
 /** Anthropic / OpenAI SDK 抛出的特有 SSE 解析错误消息。 */
 const SSE_SDK_PATTERN_RE =
@@ -851,7 +851,7 @@ export function isLikelySSEParseError(
   const isJsonParseFailure =
     lower.includes("json parse") ||
     lower.includes("json.parse") ||
-    lower.includes("failed to parse") ||
+    (lower.includes("failed to parse") && isJsonContext) ||
     (lower.includes("parse error") && isJsonContext);
 
   if (isJsonParseFailure && inStreamingContext) {
