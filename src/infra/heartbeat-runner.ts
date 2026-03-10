@@ -132,10 +132,10 @@ function resolveHeartbeatAgentIds(cfg: OpenClawConfig): string[] {
   if (hasExplicitHeartbeatAgents(cfg)) {
     return explicitAgentIds;
   }
-  if (!hasDefaultHeartbeat(cfg)) {
-    return [];
+  if (hasDefaultHeartbeat(cfg)) {
+    return listAgentIds(cfg);
   }
-  return listAgentIds(cfg);
+  return [resolveDefaultAgentId(cfg)];
 }
 
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {

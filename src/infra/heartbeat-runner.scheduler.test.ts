@@ -84,7 +84,7 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("does not schedule heartbeats when heartbeat is not configured anywhere", async () => {
+  it("keeps scheduling the default agent when heartbeat relies on implicit defaults", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
 
@@ -98,9 +98,12 @@ describe("startHeartbeatRunner", () => {
       runOnce: runSpy,
     });
 
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
 
-    expect(runSpy).not.toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", reason: "interval" }),
+    );
 
     runner.stop();
   });
