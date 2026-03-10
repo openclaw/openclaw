@@ -258,7 +258,7 @@ export class FeishuStreamingSession {
     }
 
     this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "" };
-    this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+    this.log?.(`Started streaming: cardId=${encodeURIComponent(cardId)}, messageId=${sendRes.data.message_id}`);
   }
 
   private async updateCardContent(text: string, onError?: (error: unknown) => void): Promise<void> {
@@ -267,8 +267,10 @@ export class FeishuStreamingSession {
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
+    // Encode cardId to prevent URL injection
+    const encodedCardId = encodeURIComponent(this.state.cardId);
     await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+      url: `${apiBase}/cardkit/v1/cards/${encodedCardId}/elements/content/content`,
       init: {
         method: "PUT",
         headers: {
@@ -278,7 +280,7 @@ export class FeishuStreamingSession {
         body: JSON.stringify({
           content: text,
           sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+          uuid: `s_${encodedCardId}_${this.state.sequence}`,
         }),
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
@@ -341,8 +343,10 @@ export class FeishuStreamingSession {
 
     // Close streaming mode
     this.state.sequence += 1;
+    // Encode cardId to prevent URL injection
+    const encodedCardId = encodeURIComponent(this.state.cardId);
     await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+      url: `${apiBase}/cardkit/v1/cards/${encodedCardId}/settings`,
       init: {
         method: "PATCH",
         headers: {
@@ -354,7 +358,7 @@ export class FeishuStreamingSession {
             config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
           }),
           sequence: this.state.sequence,
-          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
+          uuid: `c_${encodedCardId}_${this.state.sequence}`,
         }),
       },
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
@@ -365,7 +369,7 @@ export class FeishuStreamingSession {
       })
       .catch((e) => this.log?.(`Close failed: ${String(e)}`));
 
-    this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
+    this.log?.(`Closed streaming: cardId=${encodeURIComponent(this.state.cardId)}`);
   }
 
   isActive(): boolean {
