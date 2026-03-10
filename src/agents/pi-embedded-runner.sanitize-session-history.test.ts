@@ -255,7 +255,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("coerces openai-completions assistant content arrays to text", async () => {
+  it("coerces openai-completions assistant content arrays to a single text block", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -278,8 +278,8 @@ describe("sanitizeSessionHistory", () => {
     });
 
     const assistant = result[0] as { content?: unknown };
-    expect(typeof assistant.content).toBe("string");
-    expect(assistant.content).toBe("first line\nsecond line");
+    expect(Array.isArray(assistant.content)).toBe(true);
+    expect(assistant.content).toEqual([{ type: "text", text: "first line\nsecond line" }]);
   });
 
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {

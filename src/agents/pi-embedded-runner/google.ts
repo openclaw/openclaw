@@ -8,6 +8,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -23,7 +24,6 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
-import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
@@ -164,7 +164,10 @@ function coerceOpenAICompletionsAssistantText(messages: AgentMessage[]): AgentMe
       continue;
     }
     touched = true;
-    out.push({ ...assistant, content: contentText } as AgentMessage);
+    out.push({
+      ...assistant,
+      content: [{ type: "text", text: contentText }],
+    });
   }
 
   return touched ? out : messages;
