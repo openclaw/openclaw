@@ -148,9 +148,19 @@ export const SandboxDockerSchema = z
           });
           continue;
         }
-        const firstColon = bind.indexOf(":");
+        let colonCount = 0;
+        for(let bindIndex = 0; bindIndex < bind.length; bindIndex += 1){
+          if (bind.indexOf(bindIndex) === ':'){
+            colonCount += 1;
+          }
+        }
+        let firstColon = bind.indexOf(":");
+        if (colonCount == 3){
+          firstColon = bind.indexOf(":", firstColon + 1);
+        }
+        const windowsPrefix = /^[A-Z]:/;
         const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
-        if (!source.startsWith("/")) {
+        if (!source.startsWith("/") && !windowsPrefix.test(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],
