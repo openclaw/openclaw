@@ -32,9 +32,21 @@ def eprint(msg: str) -> None:
 
 
 def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
+    # Validate provider to prevent command injection
+    allowed_providers = ["codex", "claude"]
+    if provider not in allowed_providers:
+        raise ValueError(f"Invalid provider: {provider}. Must be one of {allowed_providers}")
+    # Use subprocess.run with explicit security settings
     cmd = ["codexbar", "cost", "--format", "json", "--provider", provider]
     try:
-        output = subprocess.check_output(cmd, text=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            shell=False,  # Explicitly disable shell to prevent injection
+            check=True,
+        )
+        output = result.stdout
     except FileNotFoundError:
         raise RuntimeError("codexbar not found on PATH. Install CodexBar CLI first.")
     except subprocess.CalledProcessError as exc:
