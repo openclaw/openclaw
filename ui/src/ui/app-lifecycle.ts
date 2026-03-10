@@ -1,3 +1,4 @@
+import { resetChatRunWatchdog, scheduleChatRunWatchdog } from "./app-chat.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -35,6 +36,10 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string;
+  chatRunId: string | null;
+  chatRunLastActivityAt: number | null;
+  chatRunWatchdogTimer: number | null;
+  chatRunWatchdogProbeInFlight: boolean;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -76,6 +81,7 @@ export function handleDisconnected(host: LifecycleHost) {
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
   host.client?.stop();
   host.client = null;
   host.connected = false;
@@ -85,6 +91,13 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("chatRunId")) {
+    if (host.chatRunId) {
+      scheduleChatRunWatchdog(host as unknown as Parameters<typeof scheduleChatRunWatchdog>[0]);
+    } else {
+      resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
+    }
+  }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }

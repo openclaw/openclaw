@@ -3,7 +3,13 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  flushChatQueueForEvent,
+  noteChatRunActivity,
+  resetChatRunWatchdog,
+  scheduleChatRunWatchdog,
+} from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -91,6 +97,11 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatRunLastActivityAt: number | null;
+  chatRunWatchdogTimer: number | null;
+  chatRunWatchdogProbeInFlight: boolean;
+  chatStreamStartedAt: number | null;
+  chatStream: string | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -218,6 +229,8 @@ export function connectGateway(host: GatewayHost) {
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      host.chatRunLastActivityAt = null;
+      resetChatRunWatchdog(host);
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
@@ -248,6 +261,7 @@ export function connectGateway(host: GatewayHost) {
         host.lastError = null;
         host.lastErrorCode = null;
       }
+      resetChatRunWatchdog(host);
     },
     onEvent: (evt) => {
       if (host.client !== client) {
@@ -315,6 +329,13 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+  if (state === "delta") {
+    noteChatRunActivity(host);
+  } else if (host.chatRunId) {
+    scheduleChatRunWatchdog(host);
+  } else {
+    resetChatRunWatchdog(host);
+  }
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);

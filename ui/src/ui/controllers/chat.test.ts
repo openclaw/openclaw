@@ -1,6 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
 
+vi.stubGlobal("localStorage", {
+  getItem: vi.fn(() => null),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+});
+
+vi.mock("../app-settings.ts", () => ({
+  setLastActiveSessionKey: vi.fn(),
+}));
+
+vi.mock("../app-scroll.ts", () => ({
+  scheduleChatScroll: vi.fn(),
+}));
+
+vi.mock("../app-tool-stream.ts", () => ({
+  resetToolStream: vi.fn(),
+}));
+
+vi.mock("../../i18n/index.ts", () => ({
+  isSupportedLocale: vi.fn(() => false),
+}));
+
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
@@ -533,6 +555,142 @@ describe("loadChatHistory", () => {
 
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("chat run watchdog", () => {
+  it("recovers a stale run and flushes a queued message", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          return { status: "ok" };
+        }
+        if (method === "chat.history") {
+          return { messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }] };
+        }
+        if (method === "chat.send") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const state = createState({
+        client: { request } as unknown as ChatState["client"],
+        connected: true,
+      }) as ChatState & {
+        chatQueue: Array<{ id: string; text: string; createdAt: number }>;
+        chatRunLastActivityAt: number | null;
+        chatRunWatchdogTimer: number | null;
+        chatRunWatchdogProbeInFlight: boolean;
+        refreshSessionsAfterChat: Set<string>;
+      };
+      state.chatRunId = "run-1";
+      state.chatStreamStartedAt = Date.now();
+      state.chatRunLastActivityAt = Date.now();
+      state.chatRunWatchdogTimer = null;
+      state.chatRunWatchdogProbeInFlight = false;
+      state.chatQueue = [{ id: "q-1", text: "continue", createdAt: Date.now() }];
+      state.refreshSessionsAfterChat = new Set();
+
+      scheduleChatRunWatchdog(state as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(request).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-1",
+        timeoutMs: 50,
+      });
+      expect(request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "main",
+        limit: 200,
+      });
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "main",
+          message: "continue",
+          deliver: false,
+        }),
+      );
+      expect(state.chatQueue).toEqual([]);
+      expect(state.chatRunId).not.toBe("run-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting when the run is still active", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const state = createState({
+        client: { request } as unknown as ChatState["client"],
+        connected: true,
+      }) as ChatState & {
+        chatQueue: Array<{ id: string; text: string; createdAt: number }>;
+        chatRunLastActivityAt: number | null;
+        chatRunWatchdogTimer: number | null;
+        chatRunWatchdogProbeInFlight: boolean;
+        refreshSessionsAfterChat: Set<string>;
+      };
+      state.chatRunId = "run-1";
+      state.chatStreamStartedAt = Date.now();
+      state.chatRunLastActivityAt = Date.now();
+      state.chatRunWatchdogTimer = null;
+      state.chatRunWatchdogProbeInFlight = false;
+      state.chatQueue = [{ id: "q-1", text: "continue", createdAt: Date.now() }];
+      state.refreshSessionsAfterChat = new Set();
+
+      scheduleChatRunWatchdog(state as never);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(state.chatRunId).toBe("run-1");
+      expect(state.chatQueue).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the watchdog when reset before it fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { resetChatRunWatchdog, scheduleChatRunWatchdog } = await import("../app-chat.ts");
+      const request = vi.fn();
+      const state = createState({
+        client: { request } as unknown as ChatState["client"],
+        connected: true,
+      }) as ChatState & {
+        chatQueue: Array<{ id: string; text: string; createdAt: number }>;
+        chatRunLastActivityAt: number | null;
+        chatRunWatchdogTimer: number | null;
+        chatRunWatchdogProbeInFlight: boolean;
+        refreshSessionsAfterChat: Set<string>;
+      };
+      state.chatRunId = "run-1";
+      state.chatStreamStartedAt = Date.now();
+      state.chatRunLastActivityAt = Date.now();
+      state.chatRunWatchdogTimer = null;
+      state.chatRunWatchdogProbeInFlight = false;
+      state.chatQueue = [];
+      state.refreshSessionsAfterChat = new Set();
+
+      scheduleChatRunWatchdog(state as never);
+      resetChatRunWatchdog(state as never);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
