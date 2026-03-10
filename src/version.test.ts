@@ -149,8 +149,29 @@ describe("version resolution", () => {
     expect(resolveUsableRuntimeVersion(" \t ")).toBeUndefined();
     expect(resolveUsableRuntimeVersion("0.0.0")).toBeUndefined();
     expect(resolveUsableRuntimeVersion(" 0.0.0 ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("dev")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" DEV ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("unknown")).toBeUndefined();
     expect(resolveUsableRuntimeVersion("2026.3.2")).toBe("2026.3.2");
     expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
+  });
+
+  it("ignores placeholder OPENCLAW_VERSION values when resolving the runtime service version", () => {
+    expect(
+      resolveRuntimeServiceVersion({
+        OPENCLAW_VERSION: "dev",
+        OPENCLAW_SERVICE_VERSION: "2.2.2",
+        npm_package_version: "1.1.1",
+      }),
+    ).toBe(VERSION);
+
+    expect(
+      resolveRuntimeServiceVersion({
+        OPENCLAW_VERSION: "unknown",
+        OPENCLAW_SERVICE_VERSION: "2.2.2",
+        npm_package_version: "1.1.1",
+      }),
+    ).toBe(VERSION);
   });
 
   it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
