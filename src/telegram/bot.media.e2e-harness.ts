@@ -6,6 +6,9 @@ export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
 export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
+export const undiciFetchSpy: Mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+  globalThis.fetch(input, init),
+);
 
 async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
   return {
@@ -80,6 +83,14 @@ const throttlerSpy = vi.fn(() => "throttler");
 vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
+
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("undici")>();
+  return {
+    ...actual,
+    fetch: (...args: Parameters<typeof undiciFetchSpy>) => undiciFetchSpy(...args),
+  };
+});
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();

@@ -115,6 +115,12 @@ const MESSAGE_NOT_MODIFIED_RE =
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
+const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
+const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
+
+export function resetTelegramClientOptionsCacheForTests(): void {
+  telegramClientOptionsCache.clear();
+}
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
@@ -130,25 +136,74 @@ function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   };
 }
 
+function shouldUseTelegramClientOptionsCache(): boolean {
+  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+}
+
+function buildTelegramClientOptionsCacheKey(params: {
+  account: ResolvedTelegramAccount;
+  timeoutSeconds?: number;
+}): string {
+  const proxyKey = params.account.config.proxy?.trim() ?? "";
+  const autoSelectFamily = params.account.config.network?.autoSelectFamily;
+  const autoSelectFamilyKey =
+    typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
+  const dnsResultOrderKey = params.account.config.network?.dnsResultOrder ?? "default";
+  const timeoutSecondsKey =
+    typeof params.timeoutSeconds === "number" ? String(params.timeoutSeconds) : "default";
+  return `${params.account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${timeoutSecondsKey}`;
+}
+
+function setCachedTelegramClientOptions(
+  cacheKey: string,
+  clientOptions: ApiClientOptions | undefined,
+): ApiClientOptions | undefined {
+  telegramClientOptionsCache.set(cacheKey, clientOptions);
+  if (telegramClientOptionsCache.size > MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE) {
+    const oldestKey = telegramClientOptionsCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      telegramClientOptionsCache.delete(oldestKey);
+    }
+  }
+  return clientOptions;
+}
+
 function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ApiClientOptions | undefined {
-  const proxyUrl = account.config.proxy?.trim();
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch, {
-    network: account.config.network,
-  });
   const timeoutSeconds =
     typeof account.config.timeoutSeconds === "number" &&
     Number.isFinite(account.config.timeoutSeconds)
       ? Math.max(1, Math.floor(account.config.timeoutSeconds))
       : undefined;
-  return fetchImpl || timeoutSeconds
-    ? {
-        ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
-        ...(timeoutSeconds ? { timeoutSeconds } : {}),
-      }
-    : undefined;
+
+  const cacheEnabled = shouldUseTelegramClientOptionsCache();
+  const cacheKey = cacheEnabled
+    ? buildTelegramClientOptionsCacheKey({
+        account,
+        timeoutSeconds,
+      })
+    : null;
+  if (cacheKey && telegramClientOptionsCache.has(cacheKey)) {
+    return telegramClientOptionsCache.get(cacheKey);
+  }
+
+  const proxyUrl = account.config.proxy?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const fetchImpl = resolveTelegramFetch(proxyFetch, {
+    network: account.config.network,
+  });
+  const clientOptions =
+    fetchImpl || timeoutSeconds
+      ? {
+          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        }
+      : undefined;
+  if (cacheKey) {
+    return setCachedTelegramClientOptions(cacheKey, clientOptions);
+  }
+  return clientOptions;
 }
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
