@@ -353,7 +353,7 @@ const memoryPlugin = {
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
           const agentId =
-            (configNamespace === "global" ? undefined : configNamespace) ?? toolCtx.agentId;
+            configNamespace === "global" ? undefined : (configNamespace ?? toolCtx.agentId);
 
           const vector = await embeddings.embed(query);
           const results = await db.search(vector, limit, 0.1, agentId);
@@ -417,7 +417,7 @@ const memoryPlugin = {
           };
 
           const agentId =
-            (configNamespace === "global" ? undefined : configNamespace) ?? toolCtx.agentId;
+            configNamespace === "global" ? undefined : (configNamespace ?? toolCtx.agentId);
           const vector = await embeddings.embed(text);
 
           // Check for duplicates within same namespace
@@ -461,7 +461,7 @@ const memoryPlugin = {
         async execute(_toolCallId, params) {
           const { query, memoryId } = params as { query?: string; memoryId?: string };
           const agentId =
-            (configNamespace === "global" ? undefined : configNamespace) ?? toolCtx.agentId;
+            configNamespace === "global" ? undefined : (configNamespace ?? toolCtx.agentId);
 
           if (memoryId) {
             await db.delete(memoryId, agentId);
@@ -585,7 +585,7 @@ const memoryPlugin = {
         }
 
         // Resolve namespace: explicit config > agent's own ID from hook context
-        const agentId = (configNamespace === "global" ? undefined : configNamespace) ?? ctx.agentId;
+        const agentId = configNamespace === "global" ? undefined : (configNamespace ?? ctx.agentId);
 
         try {
           const vector = await embeddings.embed(event.prompt);
@@ -618,7 +618,7 @@ const memoryPlugin = {
         }
 
         // Resolve namespace: explicit config > agent's own ID from hook context
-        const agentId = (configNamespace === "global" ? undefined : configNamespace) ?? ctx.agentId;
+        const agentId = configNamespace === "global" ? undefined : (configNamespace ?? ctx.agentId);
 
         try {
           const texts: string[] = [];
