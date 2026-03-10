@@ -646,6 +646,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
       "billing",
     );
+    // Poe returns 402 without "payment required"; must be recognized for fallback
+    expect(
+      classifyFailoverReason(
+        "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
