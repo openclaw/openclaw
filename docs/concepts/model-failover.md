@@ -46,7 +46,8 @@ If you authenticate multiple GPT OAuth profiles for the same provider (for examp
 OpenClaw can rotate between them when one profile is rate-limited or out of
 credits/quota.
 
-You can make the order explicit:
+You can make the order explicit in your **gateway config** (for example
+`~/.openclaw/gateway/config.json` or `~/.openclaw/gateway/config.yaml`):
 
 ```json
 {
@@ -64,6 +65,8 @@ Behavior at runtime:
 - On failover-worthy errors (`429`, rate limit, quota/billing exhaustion), it
   marks the current profile unavailable and retries with the next eligible
   profile.
+- If you **user-pin** a specific profile (for example `/model …@openai-codex:work@example.com`),
+  OpenClaw does **not** rotate to another profile; it will proceed to **model fallback** instead.
 - If no eligible profile remains, model fallback rules apply.
 
 Use `/model status` to inspect active candidates and the next auth profile.
