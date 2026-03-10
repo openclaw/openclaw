@@ -34,9 +34,7 @@ export type IMessageSendResult = {
   messageId: string;
 };
 
-const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
 const REPLY_TAG_RE = /\[\[\s*reply_to(_current)?(\s*:\s*[^\]\n]+)?\s*\]\]/gi;
-const MAX_REPLY_TO_ID_LENGTH = 256;
 
 /**
  * Strip all reply tags from message text for channels that don't support them.
@@ -45,48 +43,6 @@ const MAX_REPLY_TO_ID_LENGTH = 256;
  */
 function stripReplyTags(message: string): string {
   return message.replace(REPLY_TAG_RE, "").trim();
-}
-
-function stripUnsafeReplyTagChars(value: string): string {
-  let next = "";
-  for (const ch of value) {
-    const code = ch.charCodeAt(0);
-    if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
-      continue;
-    }
-    next += ch;
-  }
-  return next;
-}
-
-function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
-  const trimmed = rawReplyToId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const sanitized = stripUnsafeReplyTagChars(trimmed).trim();
-  if (!sanitized) {
-    return undefined;
-  }
-  if (sanitized.length > MAX_REPLY_TO_ID_LENGTH) {
-    return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
-  }
-  return sanitized;
-}
-
-function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
-  const resolvedReplyToId = sanitizeReplyToId(replyToId);
-  if (!resolvedReplyToId) {
-    return message;
-  }
-  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
-  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
-  if (existingLeadingTag) {
-    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
-    return remainder ? `${replyTag} ${remainder}` : replyTag;
-  }
-  const trimmedMessage = message.trimStart();
-  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
 }
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
