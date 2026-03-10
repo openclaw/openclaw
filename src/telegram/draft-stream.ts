@@ -126,6 +126,11 @@ export function createTelegramDraftStream(params: {
   }
 
   const streamState = { stopped: false, final: false };
+  // Guards against timer-spawned flush races: once stop() completes its final
+  // flush, no more sendOrEditStreamMessage calls should proceed. Without this,
+  // a fire-and-forget flush (from setTimeout in the throttle loop) can edit the
+  // stream message with stale partial text after the final reply was delivered.
+  let streamDone = false;
   let streamMessageId: number | undefined;
   let streamDraftId = usesDraftTransport ? allocateTelegramDraftId() : undefined;
   let previewTransport: "message" | "draft" = usesDraftTransport ? "draft" : "message";
@@ -238,6 +243,9 @@ export function createTelegramDraftStream(params: {
   };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+    if (streamDone) {
+      return false;
+    }
     // Allow final flush even if stopped (e.g., after clear()).
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -340,10 +348,18 @@ export function createTelegramDraftStream(params: {
     warnPrefix: "telegram stream preview cleanup failed",
   });
 
+  // Wrap stop to block late timer-spawned flushes and await in-flight sends.
+  const safeStop = async (): Promise<void> => {
+    await stop();
+    streamDone = true;
+    await loop.waitForInFlight();
+  };
+
   const forceNewMessage = () => {
     // Boundary rotation may call stop() to finalize the previous draft.
     // Re-open the stream lifecycle for the next assistant segment.
     streamState.final = false;
+    streamDone = false;
     generation += 1;
     streamMessageId = undefined;
     if (previewTransport === "draft") {
@@ -362,7 +378,7 @@ export function createTelegramDraftStream(params: {
    * Returns the permanent message id, or undefined if nothing to materialize.
    */
   const materialize = async (): Promise<number | undefined> => {
-    await stop();
+    await safeStop();
     // If using message transport, the streamMessageId is already a real message.
     if (previewTransport === "message" && typeof streamMessageId === "number") {
       return streamMessageId;
@@ -418,7 +434,7 @@ export function createTelegramDraftStream(params: {
     previewRevision: () => previewRevision,
     lastDeliveredText: () => lastDeliveredText,
     clear,
-    stop,
+    stop: safeStop,
     materialize,
     forceNewMessage,
   };

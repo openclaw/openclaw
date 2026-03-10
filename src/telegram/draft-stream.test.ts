@@ -575,6 +575,45 @@ describe("draft stream initial message debounce", () => {
     });
   });
 
+  describe("stop blocks late timer-spawned flushes", () => {
+    it("does not edit stream message with stale text after stop() returns", async () => {
+      vi.useFakeTimers();
+      try {
+        let resolveSend: ((value: { message_id: number }) => void) | undefined;
+        const firstSendPromise = new Promise<{ message_id: number }>((resolve) => {
+          resolveSend = resolve;
+        });
+        const api = createMockDraftApi(() => firstSendPromise);
+        const stream = createDraftStream(api, { throttleMs: 500 });
+
+        // Trigger initial send (will block on firstSendPromise)
+        stream.update("partial A");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+        // Queue another update while the first is in-flight (schedules a timer)
+        stream.update("partial B");
+
+        // Resolve the first send, then immediately stop
+        resolveSend?.({ message_id: 17 });
+        const stopPromise = stream.stop();
+        await vi.advanceTimersByTimeAsync(1000);
+        await stopPromise;
+
+        // Record edits at this point
+        const editCallCount = api.editMessageText.mock.calls.length;
+
+        // Advance time well past any scheduled throttle timer
+        await vi.advanceTimersByTimeAsync(2000);
+
+        // No additional edits should have been made after stop() returned
+        expect(api.editMessageText).toHaveBeenCalledTimes(editCallCount);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("default behavior without debounce params", () => {
     it("sends immediately without minInitialChars set (backward compatible)", async () => {
       const api = createMockApi();
