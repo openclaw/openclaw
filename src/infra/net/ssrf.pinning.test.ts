@@ -68,6 +68,29 @@ describe("ssrf pinning", () => {
     expect(pinned.addresses).toEqual(["93.184.216.34"]);
   });
 
+  it("rejects mixed DNS answers when all resolved addresses are blocked", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "::", family: 6 },
+      { address: "127.0.0.1", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
+  });
+
+  it("preserves dedupe and ipv4-first ordering after filtering blocked mixed answers", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "::", family: 6 },
+      { address: "93.184.216.35", family: 4 },
+      { address: "2001:db8::1", family: 6 },
+      { address: "93.184.216.34", family: 4 },
+      { address: "93.184.216.35", family: 4 },
+      { address: "2001:db8::1", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostname("example.com", lookup);
+    expect(pinned.addresses).toEqual(["93.184.216.35", "93.184.216.34", "2001:db8::1"]);
+  });
+
   it("allows RFC2544 benchmark range addresses only when policy explicitly opts in", async () => {
     const lookup = vi.fn(async () => [
       { address: "198.18.0.153", family: 4 },
