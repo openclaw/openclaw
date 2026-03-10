@@ -172,4 +172,64 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroups).toHaveBeenCalledTimes(1);
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
+
+  it("treats explicit dm prefixes as user targets even when plugin default is group", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+          defaultTargetKind: "group",
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "custom",
+      input: "dm:alice",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("normalized");
+      expect(result.target.to).toBe("dm:alice");
+      expect(result.target.kind).toBe("user");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("treats explicit room prefixes as group targets even when plugin default is user", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+          defaultTargetKind: "user",
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "custom",
+      input: "room:ops",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("normalized");
+      expect(result.target.to).toBe("room:ops");
+      expect(result.target.kind).toBe("group");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
 });

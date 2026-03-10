@@ -67,7 +67,7 @@ function normalizeQuery(value: string): string {
 
 function stripTargetPrefixes(value: string): string {
   return value
-    .replace(/^(channel|group|user):/i, "")
+    .replace(/^(channel|group|chat|room|conversation|user|dm):/i, "")
     .replace(/^[@#]/, "")
     .trim();
 }
@@ -159,10 +159,17 @@ function detectTargetKind(
     return "group";
   }
 
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
+  if (
+    trimmed.startsWith("@") ||
+    /^<@!?/.test(trimmed) ||
+    /^(user|dm):/i.test(trimmed)
+  ) {
     return "user";
   }
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed) || /^group:/i.test(trimmed)) {
+  if (
+    trimmed.startsWith("#") ||
+    /^(channel|group|chat|room|conversation):/i.test(trimmed)
+  ) {
     return "group";
   }
 
