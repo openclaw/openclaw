@@ -555,9 +555,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         content: loaded.content,
         missing: false,
       });
-    } else if (entry.name === DEFAULT_BOOTSTRAP_FILENAME && onboardingCompleted) {
+    } else if (
+      entry.name === DEFAULT_BOOTSTRAP_FILENAME &&
+      onboardingCompleted &&
+      loaded.reason === "path"
+    ) {
       // BOOTSTRAP.md is a one-time file deleted after onboarding; don't report
-      // it as missing once onboarding is complete.
+      // it as missing once onboarding is complete.  Only suppress genuine
+      // absence ("path"); keep validation/io failures visible.
       continue;
     } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
