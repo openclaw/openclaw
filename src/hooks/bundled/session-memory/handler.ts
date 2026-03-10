@@ -14,7 +14,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
+import { appendFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   parseAgentSessionKey,
@@ -319,11 +319,12 @@ const saveSessionToMemory: HookHandler = async (event) => {
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
+        const envTimeoutMs = Number(process.env.OPENCLAW_SESSION_MEMORY_SLUG_TIMEOUT_MS);
+        const configTimeoutMs = (hookConfig as Record<string, unknown> | undefined)
+          ?.slugTimeoutMs as number;
         const configuredTimeoutMs =
-          Number(process.env.OPENCLAW_SESSION_MEMORY_SLUG_TIMEOUT_MS) ||
-          (typeof (hookConfig as Record<string, unknown> | undefined)?.slugTimeoutMs === "number"
-            ? ((hookConfig as Record<string, unknown>).slugTimeoutMs as number)
-            : undefined) ||
+          (Number.isFinite(envTimeoutMs) ? envTimeoutMs : undefined) ||
+          (Number.isFinite(configTimeoutMs) ? configTimeoutMs : undefined) ||
           5000;
         log.debug("Calling generateSlugViaLLM...", { timeoutMs: configuredTimeoutMs });
         const llmSlug = await generateSlugViaLLM({
@@ -369,35 +370,30 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Include conversation content if available
     if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      entryParts.push("### Conversation Summary", "", sessionContent, "");
     }
 
     const entry = entryParts.join("\n");
 
-    let existing = "";
-    try {
-      existing = await fs.readFile(memoryFilePath, "utf-8");
-    } catch {
-      // New daily file.
-    }
-
     const dailyHeader = `# ${dateStr}`;
-    const normalizedExisting = existing.trim();
-    const base = normalizedExisting
-      ? normalizedExisting.startsWith("# ")
-        ? normalizedExisting
-        : `${dailyHeader}\n\n${normalizedExisting}`
-      : dailyHeader;
-    const combined = `${base}\n\n${entry}`;
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
+    // Append under memory root with alias-safe file validation.
+    // Use O_APPEND semantics to avoid lost updates when multiple sessions close concurrently.
+    const openResult = await appendFileWithinRoot({
       rootDir: memoryDir,
       relativePath: filename,
-      data: `${combined.trimEnd()}\n`,
+      data: "",
       encoding: "utf-8",
     });
-    log.debug("Memory file written successfully");
+    const needsHeader = openResult.createdForWrite || openResult.openedStat.size === 0;
+
+    await appendFileWithinRoot({
+      rootDir: memoryDir,
+      relativePath: filename,
+      data: needsHeader ? `${dailyHeader}\n\n${entry}\n` : `\n\n${entry}\n`,
+      encoding: "utf-8",
+    });
+    log.debug("Memory file appended successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");

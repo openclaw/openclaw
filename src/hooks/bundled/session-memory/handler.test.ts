@@ -65,23 +65,15 @@ async function runNewWithPreviousSessionEntry(params: {
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
-  sessionKey?: string;
-  workspaceDirOverride?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
-  const event = createHookEvent(
-    "command",
-    params.action ?? "new",
-    params.sessionKey ?? "agent:main:main",
-    {
-      cfg:
-        params.cfg ??
-        ({
-          agents: { defaults: { workspace: params.tempDir } },
-        } satisfies OpenClawConfig),
-      previousSessionEntry: params.previousSessionEntry,
-      ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
-    },
-  );
+  const event = createHookEvent("command", params.action ?? "new", "agent:main:main", {
+    cfg:
+      params.cfg ??
+      ({
+        agents: { defaults: { workspace: params.tempDir } },
+      } satisfies OpenClawConfig),
+    previousSessionEntry: params.previousSessionEntry,
+  });
 
   await handler(event);
 
@@ -250,42 +242,58 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
-  it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
-    const mainWorkspace = await createCaseWorkspace("workspace-main");
-    const naviWorkspace = await createCaseWorkspace("workspace-navi");
-    const naviSessionsDir = path.join(naviWorkspace, "sessions");
-    await fs.mkdir(naviSessionsDir, { recursive: true });
+  it("appends multiple sessions into the same daily memory file", async () => {
+    vi.useFakeTimers();
+    try {
+      const tempDir = await createCaseWorkspace("workspace");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
 
-    const sessionFile = await writeWorkspaceFile({
-      dir: naviSessionsDir,
-      name: "navi-session.jsonl",
-      content: createMockSessionContent([
-        { role: "user", content: "Remember this under Navi" },
-        { role: "assistant", content: "Stored in the bound workspace" },
-      ]),
-    });
+      vi.setSystemTime(new Date("2026-03-10T00:00:00Z"));
+      const sessionFile1 = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "s1.jsonl",
+        content: createMockSessionContent([
+          { role: "user", content: "First" },
+          { role: "assistant", content: "One" },
+        ]),
+      });
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        previousSessionEntry: { sessionId: "s1", sessionFile: sessionFile1 },
+      });
 
-    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
-      tempDir: naviWorkspace,
-      cfg: {
-        agents: {
-          defaults: { workspace: mainWorkspace },
-          list: [{ id: "navi", workspace: naviWorkspace }],
-        },
-      } satisfies OpenClawConfig,
-      sessionKey: "agent:main:main",
-      workspaceDirOverride: naviWorkspace,
-      previousSessionEntry: {
-        sessionId: "navi-session",
-        sessionFile,
-      },
-    });
+      vi.setSystemTime(new Date("2026-03-10T00:01:00Z"));
+      const sessionFile2 = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "s2.jsonl",
+        content: createMockSessionContent([
+          { role: "user", content: "Second" },
+          { role: "assistant", content: "Two" },
+        ]),
+      });
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        previousSessionEntry: { sessionId: "s2", sessionFile: sessionFile2 },
+      });
 
-    expect(files.length).toBe(1);
-    expect(memoryContent).toContain("user: Remember this under Navi");
-    expect(memoryContent).toContain("assistant: Stored in the bound workspace");
-    expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
-    await expect(fs.access(path.join(mainWorkspace, "memory"))).rejects.toThrow();
+      const memoryDir = path.join(tempDir, "memory");
+      const files = await fs.readdir(memoryDir);
+      expect(files).toEqual(["2026-03-10.md"]);
+      const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+
+      expect(memoryContent).toContain("# 2026-03-10");
+      expect(memoryContent).toContain("user: First");
+      expect(memoryContent).toContain("assistant: One");
+      expect(memoryContent).toContain("user: Second");
+      expect(memoryContent).toContain("assistant: Two");
+      expect(memoryContent).toContain("### Conversation Summary");
+
+      const sessionHeadings = (memoryContent.match(/## Session:/g) ?? []).length;
+      expect(sessionHeadings).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {
