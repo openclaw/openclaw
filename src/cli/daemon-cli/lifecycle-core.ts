@@ -203,13 +203,33 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
+    // Attempt an idempotent recovery start first (notably for macOS launchd where
+    // `bootout` leaves the plist installed on disk but unloaded in launchd).
+    // If recovery fails, fall back to not-loaded guidance.
+    try {
+      await params.service.restart({ env: process.env, stdout });
+    } catch {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
+
+    let started = true;
+    try {
+      started = await params.service.isLoaded({ env: process.env });
+    } catch {
+      started = true;
+    }
+    emit({
+      ok: true,
+      result: "started",
+      service: buildDaemonServiceSnapshot(params.service, started),
     });
     return;
   }

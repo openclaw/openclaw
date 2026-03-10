@@ -139,4 +139,51 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
+
+  it("attempts recovery restart when service is not loaded", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to not-loaded guidance when recovery restart fails", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    service.isLoaded.mockResolvedValue(false);
+    service.restart.mockRejectedValue(new Error("launchctl bootstrap failed"));
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      message?: string;
+      hints?: string[];
+    };
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.message).toContain("not loaded");
+    expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
+  });
 });
