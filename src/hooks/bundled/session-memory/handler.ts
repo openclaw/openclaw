@@ -312,6 +312,37 @@ const saveSessionToMemory: HookHandler = async (event) => {
               "session-memory handler runs.",
           );
         }
+        // Verify we're reverting our own write before touching the file.
+        // A concurrent session (e.g. /new, /reset) may have written to the
+        // same filename between our inline write and this post-hook drain.
+        // If the current content doesn't match what we wrote, skip retraction
+        // to avoid clobbering the other session's data.
+        let currentContent: string | null = null;
+        try {
+          currentContent = await fs.readFile(memoryFilePath, "utf-8");
+        } catch (err: unknown) {
+          if (
+            err instanceof Error &&
+            "code" in err &&
+            (err as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            // File was externally deleted — nothing to retract.
+            log.debug("Session save retraction skipped — file already removed");
+            return;
+          }
+          throw err;
+        }
+
+        if (currentContent !== writtenEntry) {
+          // File content differs from what we wrote — another session has
+          // written to this file since our inline write. Do not clobber.
+          log.warn(
+            "Session save retraction skipped — file was modified by another " +
+              "session since our inline write (concurrent save detected)",
+          );
+          return;
+        }
+
         if (preExistingContent !== null) {
           // Slug collision: another entry already existed at this filename
           // before our inline write. Restore the original content rather
@@ -327,24 +358,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
           });
           log.debug("Session save retracted by post-hook — pre-existing file restored");
         } else {
-          try {
-            await fs.unlink(memoryFilePath);
-            log.debug("Session save retracted by post-hook (blockSessionSave)");
-          } catch (err) {
-            // ENOENT can occur if the file was externally deleted between
-            // the inline write and the post-hook drain — not a concern.
-            // Re-throw non-ENOENT errors (e.g. EACCES, EROFS) so
-            // triggerInternalHook logs them. Note: errors are caught
-            // per-action and do NOT propagate to the session caller;
-            // the file may remain on disk under adversarial FS conditions.
-            if (
-              !(err instanceof Error) ||
-              !("code" in err) ||
-              (err as NodeJS.ErrnoException).code !== "ENOENT"
-            ) {
-              throw err;
-            }
-          }
+          await fs.unlink(memoryFilePath);
+          log.debug("Session save retracted by post-hook (blockSessionSave)");
         }
         return;
       }
