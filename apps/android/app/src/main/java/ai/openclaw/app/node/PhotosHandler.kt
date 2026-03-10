@@ -164,9 +164,11 @@ private object SystemPhotosDataSource : PhotosDataSource {
 
     if (decoded.width <= maxWidth) return decoded
     val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
-    val scaled = decoded.scale(maxWidth, targetHeight, true)
-    decoded.recycle()
-    return scaled
+    return try {
+      decoded.scale(maxWidth, targetHeight, true)
+    } finally {
+      decoded.recycle()
+    }
   }
 
   private fun computeInSampleSize(width: Int, maxWidth: Int): Int {
