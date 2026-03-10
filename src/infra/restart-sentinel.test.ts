@@ -4,12 +4,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  consumeFinalizedRestartSentinel,
   consumeRestartSentinel,
+  finalizeRestartSentinelForCompletedRestart,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
+  isFinalRestartSentinelStatus,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
+  transitionRestartSentinelStatus,
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
@@ -48,6 +52,46 @@ describe("restart sentinel", () => {
 
     const empty = await readRestartSentinel();
     expect(empty).toBeNull();
+  });
+
+  it("only consumes finalized sentinels", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "pending",
+      ts: Date.now(),
+    });
+
+    expect(await consumeFinalizedRestartSentinel()).toBeNull();
+    expect((await readRestartSentinel())?.payload.status).toBe("pending");
+
+    await transitionRestartSentinelStatus("ok", {
+      allowedCurrentStatuses: ["pending"],
+    });
+
+    const consumed = await consumeFinalizedRestartSentinel();
+    expect(consumed?.payload.status).toBe("ok");
+    expect(await readRestartSentinel()).toBeNull();
+  });
+
+  it("finalizes only fresh in-progress restart sentinels", async () => {
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "in-progress",
+      ts: Date.now(),
+    });
+
+    const finalized = await finalizeRestartSentinelForCompletedRestart();
+    expect(finalized?.payload.status).toBe("ok");
+
+    await writeRestartSentinel({
+      kind: "restart",
+      status: "in-progress",
+      ts: Date.now() - 10_000,
+    });
+
+    const stale = await finalizeRestartSentinelForCompletedRestart(process.env, 100);
+    expect(stale).toBeNull();
+    expect((await readRestartSentinel())?.payload.status).toBe("in-progress");
   });
 
   it("drops invalid sentinel payloads", async () => {
@@ -129,6 +173,14 @@ describe("restart sentinel", () => {
     const trimmed = trimLogTail(text, 8000);
     expect(trimmed?.length).toBeLessThanOrEqual(8001);
     expect(trimmed?.startsWith("…")).toBe(true);
+  });
+
+  it("reports final sentinel statuses accurately", () => {
+    expect(isFinalRestartSentinelStatus("ok")).toBe(true);
+    expect(isFinalRestartSentinelStatus("error")).toBe(true);
+    expect(isFinalRestartSentinelStatus("skipped")).toBe(true);
+    expect(isFinalRestartSentinelStatus("pending")).toBe(false);
+    expect(isFinalRestartSentinelStatus("in-progress")).toBe(false);
   });
 
   it("formats restart messages without volatile timestamps", () => {

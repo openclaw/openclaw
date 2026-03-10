@@ -7,7 +7,8 @@ import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
-  consumeRestartSentinel,
+  consumeFinalizedRestartSentinel,
+  finalizeRestartSentinelForCompletedRestart,
   formatRestartSentinelMessage,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
@@ -16,7 +17,8 @@ import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/deliv
 import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
-  const sentinel = await consumeRestartSentinel();
+  await finalizeRestartSentinelForCompletedRestart();
+  const sentinel = await consumeFinalizedRestartSentinel();
   if (!sentinel) {
     return;
   }

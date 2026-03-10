@@ -111,6 +111,7 @@ describe("update.run sentinel deliveryContext", () => {
 
     expect(responded).toBe(true);
     expect(capturedPayload).toBeDefined();
+    expect(capturedPayload!.status).toBe("pending");
     expect(capturedPayload!.deliveryContext).toEqual({
       channel: "webchat",
       to: "webchat:user-123",
@@ -124,6 +125,7 @@ describe("update.run sentinel deliveryContext", () => {
     await invokeUpdateRun({});
 
     expect(capturedPayload).toBeDefined();
+    expect(capturedPayload!.status).toBe("pending");
     expect(capturedPayload!.deliveryContext).toBeUndefined();
     expect(capturedPayload!.threadId).toBeUndefined();
   });
@@ -134,6 +136,7 @@ describe("update.run sentinel deliveryContext", () => {
     await invokeUpdateRun({ sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456" });
 
     expect(capturedPayload).toBeDefined();
+    expect(capturedPayload!.status).toBe("pending");
     expect(capturedPayload!.deliveryContext).toEqual({
       channel: "slack",
       to: "slack:C0123ABC",
@@ -186,6 +189,7 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(capturedPayload?.status).toBe("error");
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
   });

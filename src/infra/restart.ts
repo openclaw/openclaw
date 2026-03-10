@@ -409,6 +409,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  beforeRestart?: () => void | Promise<void>;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -469,19 +470,26 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartReason = reason;
   pendingRestartTimer = setTimeout(
     () => {
-      pendingRestartTimer = null;
-      pendingRestartDueAt = 0;
-      pendingRestartReason = undefined;
-      const pendingCheck = preRestartCheck;
-      if (!pendingCheck) {
-        emitGatewayRestart();
-        return;
-      }
-      const cfg = loadConfig();
-      deferGatewayRestartUntilIdle({
-        getPendingCount: pendingCheck,
-        maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
-      });
+      void (async () => {
+        try {
+          await opts?.beforeRestart?.();
+        } catch (err) {
+          restartLog.warn(`restart preflight hook failed: ${String(err)}`);
+        }
+        pendingRestartTimer = null;
+        pendingRestartDueAt = 0;
+        pendingRestartReason = undefined;
+        const pendingCheck = preRestartCheck;
+        if (!pendingCheck) {
+          emitGatewayRestart();
+          return;
+        }
+        const cfg = loadConfig();
+        deferGatewayRestartUntilIdle({
+          getPendingCount: pendingCheck,
+          maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+        });
+      })();
     },
     Math.max(0, requestedDueAt - nowMs),
   );

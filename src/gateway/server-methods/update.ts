@@ -4,6 +4,7 @@ import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
+  transitionRestartSentinelStatus,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -57,7 +58,7 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     const payload: RestartSentinelPayload = {
       kind: "update",
-      status: result.status,
+      status: result.status === "ok" ? "pending" : result.status,
       ts: Date.now(),
       sessionKey,
       deliveryContext,
@@ -100,6 +101,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? scheduleGatewaySigusr1Restart({
             delayMs: restartDelayMs,
             reason: "update.run",
+            beforeRestart: async () => {
+              await transitionRestartSentinelStatus("in-progress", {
+                allowedCurrentStatuses: ["pending"],
+              });
+            },
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,
