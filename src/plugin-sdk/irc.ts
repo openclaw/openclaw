@@ -29,6 +29,7 @@ export { getChatChannelMeta } from "../channels/registry.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { resolveNeverReply } from "../config/group-policy.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -59,6 +60,12 @@ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export {
+  buildPendingHistoryContextFromMap,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
 export type { RuntimeEnv } from "../runtime.js";
 export {
   readStoreAllowFromForDmPolicy,

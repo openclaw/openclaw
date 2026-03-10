@@ -26,6 +26,7 @@ import {
   resolveDmGroupAccessWithLists,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveNeverReply,
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
   listSkillCommandsForAgents,
@@ -1356,21 +1357,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
 
-    if (kind !== "direct" && commandGate.shouldBlock) {
-      logInboundDrop({
-        log: logVerboseMessage,
-        channel: "mattermost",
-        reason: "control command (unauthorized)",
-        target: senderId,
-      });
-      return;
-    }
-
     const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
-    const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
-    const channelDisplay =
-      payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
-    const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
 
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
@@ -1382,6 +1369,43 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         id: kind === "direct" ? senderId : channelId,
       },
     });
+
+    if (
+      kind !== "direct" &&
+      resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
+    ) {
+      logVerboseMessage("mattermost: group message stored for context (neverReply: true)");
+      const trimmed = rawText.trim();
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: channelHistories,
+        historyKey: route.sessionKey,
+        limit: historyLimit,
+        entry: trimmed
+          ? {
+              sender: senderName,
+              body: trimmed,
+              timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
+              messageId: post.id ?? undefined,
+            }
+          : null,
+      });
+      return;
+    }
+
+    if (kind !== "direct" && commandGate.shouldBlock) {
+      logInboundDrop({
+        log: logVerboseMessage,
+        channel: "mattermost",
+        reason: "control command (unauthorized)",
+        target: senderId,
+      });
+      return;
+    }
+
+    const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
+    const channelDisplay =
+      payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
+    const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;

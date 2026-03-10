@@ -260,6 +260,40 @@ describe("signal mention gating", () => {
   });
 });
 
+describe("signal neverReply gating", () => {
+  it("skips group messages and records pending history when neverReply is true", async () => {
+    capturedCtx = undefined;
+    const groupHistories = new Map();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              neverReply: true,
+              groups: { "*": { requireMention: false } },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        historyLimit: 5,
+        groupHistories,
+      }),
+    );
+
+    await handler(makeGroupEvent({ message: "hello from the group" }));
+
+    // Message should NOT be dispatched
+    expect(capturedCtx).toBeUndefined();
+
+    // Message should be recorded in pending history
+    const entries = groupHistories.get("g1");
+    expect(entries).toBeTruthy();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].sender).toBe("Alice");
+    expect(entries[0].body).toBe("hello from the group");
+  });
+});
+
 describe("renderSignalMentions", () => {
   const PLACEHOLDER = "\uFFFC";
 

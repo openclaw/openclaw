@@ -545,6 +545,45 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.Body).not.toContain("parent_user_id");
   });
 
+  it("returns null for channel messages and records history when neverReply is true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            neverReply: true,
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.historyLimit = 10;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "hello room",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+
+    // Verify history was recorded
+    const entries = slackCtx.channelHistories.get("C123");
+    expect(entries).toBeDefined();
+    expect(entries).toHaveLength(1);
+    expect(entries![0]).toMatchObject({
+      sender: "Alice",
+      body: "hello room",
+    });
+  });
+
   it("creates thread session for top-level DM when replyToMode=all", async () => {
     const { storePath } = makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({

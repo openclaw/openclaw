@@ -9,6 +9,7 @@ import {
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
   recordPendingHistoryEntryIfEnabled,
+  resolveNeverReply,
   resolveControlCommandGate,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
@@ -279,6 +280,27 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
         return;
       }
+    }
+
+    if (
+      !isDirectMessage &&
+      resolveNeverReply({ cfg, channel: "msteams", accountId: DEFAULT_ACCOUNT_ID })
+    ) {
+      log.debug?.("msteams: group message stored for context (neverReply: true)");
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: conversationHistories,
+        historyKey: conversationId,
+        limit: historyLimit,
+        entry: rawBody
+          ? {
+              sender: senderName,
+              body: rawBody,
+              timestamp: parseMSTeamsActivityTimestamp(activity.timestamp)?.getTime(),
+              messageId: activity.id ?? undefined,
+            }
+          : null,
+      });
+      return;
     }
 
     const commandDmAllowFrom = isDirectMessage ? effectiveDmAllowFrom : configuredDmAllowFrom;

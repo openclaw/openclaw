@@ -388,6 +388,24 @@ export function resolveChannelGroupRequireMention(params: {
   return true;
 }
 
+export function resolveNeverReply(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  accountId?: string | null;
+}): boolean {
+  const accountId = normalizeAccountId(params.accountId);
+  const channelConfig = params.cfg.channels?.[params.channel] as
+    | { neverReply?: boolean; accounts?: Record<string, { neverReply?: boolean }> }
+    | undefined;
+  const accountEntry = resolveAccountEntry(channelConfig?.accounts, accountId);
+  return (
+    accountEntry?.neverReply ??
+    channelConfig?.neverReply ??
+    params.cfg.channels?.defaults?.neverReply ??
+    false
+  );
+}
+
 export function resolveChannelGroupToolsPolicy(
   params: {
     cfg: OpenClawConfig;

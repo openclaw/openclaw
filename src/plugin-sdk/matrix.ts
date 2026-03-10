@@ -8,6 +8,12 @@ export {
   readReactionParams,
   readStringParam,
 } from "../agents/tools/common.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export {
+  buildPendingHistoryContextFromMap,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
@@ -64,6 +70,7 @@ export {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
+export { resolveNeverReply } from "../config/group-policy.js";
 export type {
   DmPolicy,
   GroupPolicy,

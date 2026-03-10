@@ -668,3 +668,50 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     ).toBe(true);
   });
 });
+
+describe("neverReply", () => {
+  it("drops guild message and records history when neverReply is true", async () => {
+    const channelId = "channel-never-reply";
+    const guildId = "guild-never-reply";
+    const guildHistories = new Map() as Map<
+      string,
+      import("../../auto-reply/reply/history.js").HistoryEntry[]
+    >;
+    const message = createMessage({
+      id: "m-never-reply",
+      channelId,
+      content: "hello group",
+      author: { id: "user-1", bot: false, username: "Alice" },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_CFG,
+          channels: { discord: { neverReply: true } },
+        } as import("../../config/config.js").OpenClawConfig,
+        discordConfig: { groupPolicy: "open" } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 10,
+    });
+
+    expect(result).toBeNull();
+
+    // Verify history was recorded
+    const entries = guildHistories.get(channelId);
+    expect(entries).toBeDefined();
+    expect(entries).toHaveLength(1);
+    expect(entries![0]).toMatchObject({
+      sender: "Alice",
+      body: "hello group",
+    });
+  });
+});

@@ -16,6 +16,7 @@ import { formatLocationText, type NormalizedLocation } from "../channels/locatio
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveNeverReply } from "../config/group-policy.js";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -75,6 +76,7 @@ async function resolveStickerVisionSupport(params: {
 
 export async function resolveTelegramInboundBody(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   primaryCtx: TelegramContext;
   msg: TelegramContext["message"];
   allMedia: TelegramMediaRef[];
@@ -96,6 +98,7 @@ export async function resolveTelegramInboundBody(params: {
 }): Promise<TelegramInboundBodyResult | null> {
   const {
     cfg,
+    accountId,
     primaryCtx,
     msg,
     allMedia,
@@ -252,6 +255,23 @@ export async function resolveTelegramInboundBody(params: {
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  if (isGroup && resolveNeverReply({ cfg, channel: "telegram", accountId })) {
+    logVerbose("Telegram group message stored for context (neverReply: true)");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: groupHistories,
+      historyKey: historyKey ?? "",
+      limit: historyLimit,
+      entry: historyKey
+        ? {
+            sender: buildSenderLabel(msg, senderId || chatId),
+            body: rawBody,
+            timestamp: msg.date ? msg.date * 1000 : undefined,
+            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+          }
+        : null,
+    });
+    return null;
+  }
   if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
     recordPendingHistoryEntryIfEnabled({

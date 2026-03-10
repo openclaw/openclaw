@@ -126,6 +126,7 @@ export function createWebOnMessageHandler(params: {
 
       const gating = applyGroupGating({
         cfg: params.cfg,
+        accountId: route.accountId,
         msg,
         conversationId,
         groupHistoryKey,

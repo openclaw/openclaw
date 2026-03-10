@@ -23,6 +23,7 @@ import {
   resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveMentionGatingWithBypass,
+  resolveNeverReply,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
@@ -383,6 +384,46 @@ async function processMessage(
     return;
   }
 
+  const peer = isGroup
+    ? { kind: "group" as const, id: chatId }
+    : { kind: "direct" as const, id: senderId };
+
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg: config,
+    channel: "zalouser",
+    accountId: account.accountId,
+    peer: {
+      // Keep DM peer kind as "direct" so session keys follow dmScope and UI labels stay DM-shaped.
+      kind: peer.kind,
+      id: peer.id,
+    },
+  });
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "zalouser", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "zalouser: group message stored for context (neverReply: true)");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: historyState.groupHistories,
+      historyKey: route.sessionKey,
+      limit: historyState.historyLimit,
+      entry: rawBody
+        ? {
+            sender: senderName || senderId,
+            body: rawBody,
+            timestamp: message.timestampMs,
+            messageId: resolveZalouserMessageSid({
+              msgId: message.msgId,
+              cliMsgId: message.cliMsgId,
+              fallback: `${message.timestampMs}`,
+            }),
+          }
+        : null,
+    });
+    return;
+  }
+
   if (!isGroup && accessDecision.decision !== "allow") {
     if (accessDecision.decision === "pairing") {
       await issuePairingChallenge({
@@ -445,20 +486,6 @@ async function processMessage(
     return;
   }
 
-  const peer = isGroup
-    ? { kind: "group" as const, id: chatId }
-    : { kind: "direct" as const, id: senderId };
-
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: config,
-    channel: "zalouser",
-    accountId: account.accountId,
-    peer: {
-      // Keep DM peer kind as "direct" so session keys follow dmScope and UI labels stay DM-shaped.
-      kind: peer.kind,
-      id: peer.id,
-    },
-  });
   const historyKey = isGroup ? route.sessionKey : undefined;
 
   const requireMention = isGroup

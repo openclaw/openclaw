@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveNeverReply,
+  resolveToolsBySender,
+} from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -264,5 +268,88 @@ describe("resolveToolsBySender", () => {
     expect(warningSpy.mock.calls[0]?.[1]).toMatchObject({
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
     });
+  });
+});
+
+describe("resolveNeverReply", () => {
+  it("returns false by default", () => {
+    const cfg = { channels: { telegram: {} } } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("returns true when set on channel config", () => {
+    const cfg = {
+      channels: { telegram: { neverReply: true } },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(true);
+  });
+
+  it("returns false when explicitly disabled on channel config", () => {
+    const cfg = {
+      channels: { telegram: { neverReply: false } },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("falls back to defaults when channel config is missing", () => {
+    const cfg = {
+      channels: { defaults: { neverReply: true } },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(true);
+  });
+
+  it("channel-level overrides defaults", () => {
+    const cfg = {
+      channels: {
+        defaults: { neverReply: true },
+        telegram: { neverReply: false },
+      },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("account-level overrides channel-level", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          neverReply: true,
+          accounts: {
+            bot1: { neverReply: false },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram", accountId: "bot1" })).toBe(false);
+  });
+
+  it("falls back to channel-level when account has no neverReply", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          neverReply: true,
+          accounts: {
+            bot1: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram", accountId: "bot1" })).toBe(true);
+  });
+
+  it("returns false when channels config is missing", () => {
+    const cfg = {} as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "telegram" })).toBe(false);
+  });
+
+  it("works for different channel types", () => {
+    const cfg = {
+      channels: {
+        discord: { neverReply: true },
+        slack: { neverReply: false },
+      },
+    } as OpenClawConfig;
+    expect(resolveNeverReply({ cfg, channel: "discord" })).toBe(true);
+    expect(resolveNeverReply({ cfg, channel: "slack" })).toBe(false);
+    expect(resolveNeverReply({ cfg, channel: "signal" })).toBe(false);
   });
 });

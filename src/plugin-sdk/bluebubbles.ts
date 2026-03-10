@@ -15,6 +15,7 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
+export { resolveNeverReply } from "../config/group-policy.js";
 export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export {
   BLUEBUBBLES_ACTION_NAMES,

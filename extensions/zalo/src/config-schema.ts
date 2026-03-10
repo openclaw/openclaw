@@ -18,6 +18,7 @@ const zaloAccountSchema = z.object({
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
   allowFrom: z.array(AllowFromEntrySchema).optional(),
   groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
+  neverReply: z.boolean().optional(),
   groupAllowFrom: z.array(AllowFromEntrySchema).optional(),
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),

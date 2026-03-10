@@ -46,6 +46,7 @@ export {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
+export { resolveNeverReply } from "../config/group-policy.js";
 export type { GroupToolPolicyConfig, MarkdownTableMode } from "../config/types.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";

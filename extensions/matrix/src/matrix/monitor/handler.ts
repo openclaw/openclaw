@@ -1,6 +1,8 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
+  buildPendingHistoryContextFromMap,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -9,8 +11,11 @@ import {
   formatAllowlistMatchMeta,
   logInboundDrop,
   logTypingFailure,
+  recordPendingHistoryEntryIfEnabled,
   resolveInboundSessionEnvelopeContext,
   resolveControlCommandGate,
+  resolveNeverReply,
+  type HistoryEntry,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -43,6 +48,8 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
+
+const roomHistories = new Map<string, HistoryEntry[]>();
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -366,6 +373,32 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         logVerboseMessage(`matrix: allow room ${roomId} (${roomMatchMeta})`);
       }
 
+      if (isRoom && resolveNeverReply({ cfg, channel: "matrix", accountId })) {
+        logVerboseMessage("matrix: group message stored for context (neverReply: true)");
+        const messagesGroupChat = (cfg as Record<string, unknown>).messages as
+          | { groupChat?: { historyLimit?: number } }
+          | undefined;
+        const historyLimit =
+          messagesGroupChat?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+        const historyBody =
+          locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
+        const historyKey = `${accountId}:${roomId}`;
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: roomHistories,
+          historyKey,
+          limit: historyLimit,
+          entry: historyBody
+            ? {
+                sender: senderName || senderId,
+                body: historyBody,
+                timestamp: eventTs ?? undefined,
+                messageId: event.event_id ?? undefined,
+              }
+            : null,
+        });
+        return;
+      }
+
       const rawBody =
         locationPayload?.text ?? (typeof content.body === "string" ? content.body.trim() : "");
       let media: {
@@ -580,9 +613,33 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderLabel,
       });
 
+      const historyLimit =
+        (
+          (cfg as Record<string, unknown>).messages as
+            | { groupChat?: { historyLimit?: number } }
+            | undefined
+        )?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+      const combinedHistoryKey = `${accountId}:${roomId}`;
+      const combinedBody = isRoom
+        ? buildPendingHistoryContextFromMap({
+            historyMap: roomHistories,
+            historyKey: combinedHistoryKey,
+            limit: historyLimit,
+            currentMessage: body,
+            formatEntry: (entry) =>
+              core.channel.reply.formatInboundEnvelope({
+                channel: "Matrix",
+                from: envelopeFrom,
+                timestamp: entry.timestamp,
+                body: entry.body,
+                senderLabel: entry.sender,
+              }),
+          })
+        : body;
+
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
-        Body: body,
+        Body: combinedBody,
         BodyForAgent: resolveMatrixBodyForAgent({
           isDirectMessage,
           bodyText,
