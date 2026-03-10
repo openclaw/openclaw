@@ -243,6 +243,14 @@ export class RealtimeCallHandler {
       ...baseFields,
     });
 
+    // Clear inboundGreeting from the call record before call.answered fires.
+    // The realtime bridge owns all voice output; the TTS greeting path would
+    // fail anyway because provider state is never initialized for realtime calls.
+    const callRecord = this.manager.getCallByProviderCallId(callSid);
+    if (callRecord?.metadata) {
+      delete callRecord.metadata.initialMessage;
+    }
+
     this.manager.processEvent({
       id: `realtime-answered-${callSid}`,
       callId: callSid,
@@ -250,9 +258,7 @@ export class RealtimeCallHandler {
       ...baseFields,
     });
 
-    // Resolve the manager-generated internal callId
-    const call = this.manager.getCallByProviderCallId(callSid);
-    return call?.callId ?? callSid;
+    return callRecord?.callId ?? callSid;
   }
 
   private endCallInManager(callSid: string, callId: string): void {
