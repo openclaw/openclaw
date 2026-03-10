@@ -74,7 +74,10 @@ export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
     return { config: cfg, changes: [] };
   }
 
-  const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
+  const summary = new Map<
+    string,
+    { migrated: number; dropped: number; migratedExamples: string[]; droppedExamples: string[] }
+  >();
   let changed = false;
 
   for (const hit of hits) {
@@ -82,18 +85,23 @@ export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
     if (!toolsBySender || !(hit.key in toolsBySender)) {
       continue;
     }
-    const row = summary.get(hit.pathLabel) ?? { migrated: 0, dropped: 0, examples: [] };
+    const row = summary.get(hit.pathLabel) ?? {
+      migrated: 0,
+      dropped: 0,
+      migratedExamples: [],
+      droppedExamples: [],
+    };
 
     if (toolsBySender[hit.targetKey] === undefined) {
       toolsBySender[hit.targetKey] = toolsBySender[hit.key];
       row.migrated++;
-      if (row.examples.length < 3) {
-        row.examples.push(`${hit.key} -> ${hit.targetKey}`);
+      if (row.migratedExamples.length < 3) {
+        row.migratedExamples.push(`${hit.key} -> ${hit.targetKey}`);
       }
     } else {
       row.dropped++;
-      if (row.examples.length < 3) {
-        row.examples.push(`${hit.key} (kept existing ${hit.targetKey})`);
+      if (row.droppedExamples.length < 3) {
+        row.droppedExamples.push(`${hit.key} (kept existing ${hit.targetKey})`);
       }
     }
     delete toolsBySender[hit.key];
@@ -108,14 +116,15 @@ export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   const changes: string[] = [];
   for (const [pathLabel, row] of summary) {
     if (row.migrated > 0) {
-      const suffix = row.examples.length > 0 ? ` (${row.examples.join(", ")})` : "";
+      const suffix = row.migratedExamples.length > 0 ? ` (${row.migratedExamples.join(", ")})` : "";
       changes.push(
         `- ${pathLabel}: migrated ${row.migrated} legacy key${row.migrated === 1 ? "" : "s"} to typed id: entries${suffix}.`,
       );
     }
     if (row.dropped > 0) {
+      const suffix = row.droppedExamples.length > 0 ? ` (${row.droppedExamples.join(", ")})` : "";
       changes.push(
-        `- ${pathLabel}: removed ${row.dropped} legacy key${row.dropped === 1 ? "" : "s"} where typed id: entries already existed.`,
+        `- ${pathLabel}: removed ${row.dropped} legacy key${row.dropped === 1 ? "" : "s"} where typed id: entries already existed${suffix}.`,
       );
     }
   }

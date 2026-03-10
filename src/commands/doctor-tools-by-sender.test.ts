@@ -70,8 +70,8 @@ describe("doctor toolsBySender", () => {
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
     expect(result.changes).toEqual([
-      "- channels.whatsapp.groups.123@g.us.toolsBySender: migrated 1 legacy key to typed id: entries (owner (kept existing id:owner), alice -> id:alice).",
-      "- channels.whatsapp.groups.123@g.us.toolsBySender: removed 1 legacy key where typed id: entries already existed.",
+      "- channels.whatsapp.groups.123@g.us.toolsBySender: migrated 1 legacy key to typed id: entries (alice -> id:alice).",
+      "- channels.whatsapp.groups.123@g.us.toolsBySender: removed 1 legacy key where typed id: entries already existed (owner (kept existing id:owner)).",
     ]);
   });
 });
