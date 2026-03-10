@@ -926,6 +926,8 @@
   .cron-workspace-form {
     position: static;
     order: -1;
+    max-height: 80vh;
+    overflow-y: auto;
   }
 
   .cron-form-grid {
