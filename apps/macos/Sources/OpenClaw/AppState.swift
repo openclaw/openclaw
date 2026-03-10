@@ -726,10 +726,13 @@ final class AppState {
         // Preserve existing agentId mappings for words that still match;
         // new words get nil agentId.
         let existing = Dictionary(
-            self.swabbleTriggerEntries.map { ($0.word.lowercased(), $0.agentId) },
+            self.swabbleTriggerEntries.map {
+                ($0.word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0.agentId)
+            },
             uniquingKeysWith: { first, _ in first })
         self.swabbleTriggerEntries = triggers.map { word in
-            TriggerWordEntry(word: word, agentId: existing[word.lowercased()])
+            let key = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return TriggerWordEntry(word: word, agentId: existing[key])
         }
         self.suppressVoiceWakeGlobalSync = false
     }
