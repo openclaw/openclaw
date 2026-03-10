@@ -1628,3 +1628,101 @@ describe("runReplyAgent transient HTTP retry", () => {
     expect(payload?.text).toContain("Recovered response");
   });
 });
+
+describe("runReplyAgent overloaded/rate-limit error surfacing", () => {
+  function createOverloadRun(errorMessage: string) {
+    vi.useFakeTimers();
+    runEmbeddedPiAgentMock.mockRejectedValue(new Error(errorMessage));
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("surfaces friendly overloaded message for 529 errors", async () => {
+    const runPromise = createOverloadRun(
+      '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+    );
+
+    // First attempt triggers transient HTTP retry backoff; second attempt also fails.
+    await vi.advanceTimersByTimeAsync(2_500);
+    const result = await runPromise;
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
+
+  it("surfaces friendly rate-limit message for 429 errors", async () => {
+    const runPromise = createOverloadRun(
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}',
+    );
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    const result = await runPromise;
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("surfaces friendly message for overloaded keyword in non-HTTP error", async () => {
+    const runPromise = createOverloadRun("Anthropic API is overloaded");
+
+    const result = await runPromise;
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
+});
