@@ -22,8 +22,8 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.isCanonicalMainSessionKey
 import ai.openclaw.app.normalizeMainKey
+import ai.openclaw.app.shouldReplaceMainSessionKey
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -158,8 +158,7 @@ class TalkModeManager(
 
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
-    if (trimmed.isEmpty()) return
-    if (isCanonicalMainSessionKey(mainSessionKey)) return
+    if (!shouldReplaceMainSessionKey(mainSessionKey, trimmed)) return
     mainSessionKey = trimmed
   }
 

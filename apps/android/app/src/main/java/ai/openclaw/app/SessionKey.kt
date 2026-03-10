@@ -11,3 +11,9 @@ internal fun isCanonicalMainSessionKey(raw: String?): Boolean {
   if (trimmed == "global") return true
   return trimmed.startsWith("agent:")
 }
+
+internal fun shouldReplaceMainSessionKey(current: String?, candidate: String?): Boolean {
+  val next = candidate?.trim().orEmpty()
+  if (next.isEmpty()) return false
+  return next != current?.trim().orEmpty()
+}
