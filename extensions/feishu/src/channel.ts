@@ -981,15 +981,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       if (!warnedDmPolicyMigration.has(ctx.accountId)) {
         const rawFeishu = ctx.cfg.channels?.feishu as FeishuConfig | undefined;
         const accountsMap = rawFeishu?.accounts;
-        const isMultiAccount =
-          accountsMap != null && Object.keys(accountsMap).length > 0;
+        const isMultiAccount = accountsMap != null && Object.keys(accountsMap).length > 0;
         // In multi-account mode, account-level dmPolicy is undefined when not explicitly set.
         // Root-level "open" means the user deliberately opted in, so skip the warning.
         // In single-account mode, Zod applies the schema default ("pairing"), so warn when
         // the resolved value is "pairing" as the best available signal.
         const dmPolicyImplicit = isMultiAccount
-          ? accountsMap[ctx.accountId]?.dmPolicy === undefined &&
-            rawFeishu?.dmPolicy !== "open"
+          ? accountsMap[ctx.accountId]?.dmPolicy === undefined && rawFeishu?.dmPolicy !== "open"
           : rawFeishu?.dmPolicy === "pairing";
         if (dmPolicyImplicit) {
           warnedDmPolicyMigration.add(ctx.accountId);
