@@ -79,6 +79,14 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  /**
+   * When true, load only the agent-local store inside the lock instead of the
+   * merged (main + agent-local) view returned by ensureAuthProfileStore.
+   * Use for non-default agents when the write target is the agent-local file
+   * only, to prevent main-store profiles from being written into that file
+   * (credential scope bleed).
+   */
+  agentLocalOnly?: boolean;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -86,7 +94,9 @@ export async function updateAuthProfileStoreWithLock(params: {
 
   try {
     return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = ensureAuthProfileStore(params.agentDir);
+      const store = params.agentLocalOnly
+        ? loadAgentLocalAuthProfileStore(params.agentDir)
+        : ensureAuthProfileStore(params.agentDir);
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
