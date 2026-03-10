@@ -162,7 +162,7 @@ function detectTargetKind(
   if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
     return "user";
   }
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
+  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed) || /^group:/i.test(trimmed)) {
     return "group";
   }
 
