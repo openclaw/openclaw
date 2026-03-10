@@ -213,4 +213,39 @@ describe("folder snapshot store", () => {
       }),
     ).rejects.toThrow("permission denied");
   });
+
+  it("surfaces envelope read failures other than ENOENT", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-readfile-");
+    const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
+    const validEnvelope = createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID);
+    const validPath = path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.envelope.json`);
+    const brokenPath = path.join(
+      snapshotRoot,
+      "snap_2026-03-10T00-00-02-000Z_deadbeef.envelope.json",
+    );
+    await fs.mkdir(snapshotRoot, { recursive: true });
+    await fs.writeFile(validPath, `${JSON.stringify(validEnvelope, null, 2)}\n`, "utf8");
+    await fs.writeFile(brokenPath, `${JSON.stringify(validEnvelope, null, 2)}\n`, "utf8");
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    readFileSpy.mockImplementation(async (filePath, ...args) => {
+      if (filePath === brokenPath) {
+        throw Object.assign(new Error("i/o error"), { code: "EIO" });
+      }
+      return await vi
+        .importActual<typeof import("node:fs/promises")>("node:fs/promises")
+        .then((actual) => actual.readFile(filePath, ...args));
+    });
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+
+    await expect(
+      store.listSnapshots({
+        installationId: VALID_INSTALLATION_ID,
+      }),
+    ).rejects.toThrow("i/o error");
+  });
 });

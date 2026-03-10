@@ -107,8 +107,19 @@ export function createFolderSnapshotStore(
       const envelopes = entries.filter((entry) => entry.endsWith(".envelope.json")).toSorted();
       const listed = await Promise.all(
         envelopes.map(async (entry) => {
+          const filePath = path.join(root, entry);
+          let raw: string;
           try {
-            return await readEnvelopeFile(path.join(root, entry));
+            raw = await fs.readFile(filePath, "utf8");
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException | undefined)?.code;
+            if (code === "ENOENT") {
+              return undefined;
+            }
+            throw error;
+          }
+          try {
+            return parseBackupSnapshotEnvelope(raw);
           } catch {
             return undefined;
           }
