@@ -38,7 +38,8 @@ Examples of inactive surfaces:
 - Top-level channel credentials that no enabled account inherits.
 - Disabled tool/feature surfaces.
 - Web search provider-specific keys that are not selected by `tools.web.search.provider`.
-  In auto mode (provider unset), provider-specific keys are also active for provider auto-detection.
+  In auto mode (provider unset), keys are consulted by precedence for provider auto-detection until one resolves.
+  After selection, non-selected provider keys are treated as inactive until selected.
 - `gateway.remote.token` / `gateway.remote.password` SecretRefs are active (when `gateway.remote.enabled` is not `false`) if one of these is true:
   - `gateway.mode=remote`
   - `gateway.remote.url` is configured
