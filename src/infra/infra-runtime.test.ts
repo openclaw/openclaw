@@ -100,6 +100,28 @@ describe("infra runtime", () => {
       await vi.runAllTimersAsync();
     });
 
+    it("runs the pre-restart hook before emitting SIGUSR1", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const beforeRestart = vi.fn(async () => {});
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({ delayMs: 0, beforeRestart });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(beforeRestart).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        const sigusr1Index = emitSpy.mock.calls.findIndex((args) => args[0] === "SIGUSR1");
+        expect(sigusr1Index).toBeGreaterThanOrEqual(0);
+        expect(beforeRestart.mock.invocationCallOrder[0]).toBeLessThan(
+          emitSpy.mock.invocationCallOrder[sigusr1Index] ?? Number.POSITIVE_INFINITY,
+        );
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("tracks external restart policy", () => {
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
       setGatewaySigusr1RestartPolicy({ allowExternal: true });

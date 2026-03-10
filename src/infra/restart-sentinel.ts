@@ -29,7 +29,7 @@ export type RestartSentinelStats = {
 
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-patch" | "update" | "restart";
-  status: "ok" | "error" | "skipped";
+  status: "pending" | "in-progress" | "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
   /** Delivery context captured at restart time to ensure channel routing survives restart. */
@@ -51,6 +51,13 @@ export type RestartSentinel = {
 };
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
+const RESTART_SENTINEL_FINALIZE_MAX_AGE_MS = 5 * 60_000;
+
+export function isFinalRestartSentinelStatus(
+  status: RestartSentinelPayload["status"],
+): status is "ok" | "error" | "skipped" {
+  return status === "ok" || status === "error" || status === "skipped";
+}
 
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -94,6 +101,68 @@ export async function readRestartSentinel(
   } catch {
     return null;
   }
+}
+
+async function rewriteRestartSentinel(
+  nextPayload: RestartSentinelPayload,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return await writeRestartSentinel(nextPayload, env);
+}
+
+export async function transitionRestartSentinelStatus(
+  nextStatus: RestartSentinelPayload["status"],
+  opts?: {
+    allowedCurrentStatuses?: RestartSentinelPayload["status"][];
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<RestartSentinel | null> {
+  const env = opts?.env ?? process.env;
+  const sentinel = await readRestartSentinel(env);
+  if (!sentinel) {
+    return null;
+  }
+  if (
+    opts?.allowedCurrentStatuses &&
+    !opts.allowedCurrentStatuses.includes(sentinel.payload.status)
+  ) {
+    return sentinel;
+  }
+  const nextPayload: RestartSentinelPayload = {
+    ...sentinel.payload,
+    status: nextStatus,
+    ts: Date.now(),
+  };
+  await rewriteRestartSentinel(nextPayload, env);
+  return { ...sentinel, payload: nextPayload };
+}
+
+export async function finalizeRestartSentinelForCompletedRestart(
+  env: NodeJS.ProcessEnv = process.env,
+  maxAgeMs = RESTART_SENTINEL_FINALIZE_MAX_AGE_MS,
+): Promise<RestartSentinel | null> {
+  const sentinel = await readRestartSentinel(env);
+  if (!sentinel || sentinel.payload.status !== "in-progress") {
+    return null;
+  }
+  if (Date.now() - sentinel.payload.ts > Math.max(0, maxAgeMs)) {
+    return null;
+  }
+  return await transitionRestartSentinelStatus("ok", {
+    allowedCurrentStatuses: ["in-progress"],
+    env,
+  });
+}
+
+export async function consumeFinalizedRestartSentinel(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  const sentinel = await readRestartSentinel(env);
+  if (!sentinel || !isFinalRestartSentinelStatus(sentinel.payload.status)) {
+    return null;
+  }
+  await fs.unlink(resolveRestartSentinelPath(env)).catch(() => {});
+  return sentinel;
 }
 
 export async function consumeRestartSentinel(
