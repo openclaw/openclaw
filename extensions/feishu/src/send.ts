@@ -82,6 +82,7 @@ export type FeishuMessageInfo = {
   senderType?: string;
   content: string;
   contentType: string;
+  rawContent: string;
   createTime?: number;
 };
 
@@ -233,6 +234,7 @@ export async function getMessageFeishu(params: {
       senderType: item.sender?.sender_type,
       content,
       contentType: msgType,
+      rawContent,
       createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
     };
   } catch {
