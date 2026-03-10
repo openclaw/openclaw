@@ -611,6 +611,26 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("infers Model Studio auth choice from --modelstudio-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-modelstudio-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["modelstudio:default"]?.provider).toBe("modelstudio");
+      expect(cfg.auth?.profiles?.["modelstudio:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.modelstudio?.baseUrl).toBe(
+        "https://coding-intl.dashscope.aliyuncs.com/v1",
+      );
+      expect(cfg.agents?.defaults?.model?.primary).toBe("modelstudio/qwen3.5-plus");
+      await expectApiKeyProfile({
+        profileId: "modelstudio:default",
+        provider: "modelstudio",
+        key: "modelstudio-test-key",
+      });
+    });
+  });
+
   it("configures a custom provider from non-interactive flags", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
       await runNonInteractiveOnboardingWithDefaults(runtime, {
