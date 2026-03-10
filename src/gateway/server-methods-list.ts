@@ -137,6 +137,22 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // Team runs, tasks, and messaging
+  "teamRuns.create",
+  "teamRuns.list",
+  "teamRuns.get",
+  "teamRuns.complete",
+  "teamRuns.delete",
+  "teamRuns.sweep",
+  "teamRuns.addMember",
+  "teamRuns.updateMember",
+  "teamTasks.create",
+  "teamTasks.list",
+  "teamTasks.update",
+  "teamTasks.delete",
+  "teamMessages.send",
+  "teamMessages.markRead",
+  "teamMessages.list",
 ];
 
 export function listGatewayMethods(): string[] {

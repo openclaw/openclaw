@@ -99,6 +99,10 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.marketplace.registries",
     "agents.marketplace.get",
     "agents.marketplace.bundles",
+    "teamRuns.list",
+    "teamRuns.get",
+    "teamTasks.list",
+    "teamMessages.list",
   ],
   [WRITE_SCOPE]: [
     "send",
@@ -124,6 +128,14 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.marketplace.enable",
     "agents.marketplace.generate",
     "agents.marketplace.health.fix",
+    "teamRuns.create",
+    "teamRuns.complete",
+    "teamRuns.addMember",
+    "teamRuns.updateMember",
+    "teamTasks.create",
+    "teamTasks.update",
+    "teamMessages.send",
+    "teamMessages.markRead",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
@@ -164,6 +176,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "projects.archive",
     "projects.bindSession",
     "projects.unbindSession",
+    "teamRuns.delete",
+    "teamRuns.sweep",
+    "teamTasks.delete",
   ],
 };
 

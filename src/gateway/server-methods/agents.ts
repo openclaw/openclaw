@@ -71,7 +71,9 @@ function resolveAgentWorkspaceFileOrRespondError(
   const name = (
     typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
   ).trim();
-  if (!ALLOWED_FILE_NAMES.has(name)) {
+  // Allow exact bootstrap/memory filenames and daily memory files (memory/*.md)
+  const isAllowedMemorySubfile = /^memory\/[a-z0-9._-]+\.md$/i.test(name);
+  if (!ALLOWED_FILE_NAMES.has(name) && !isAllowedMemorySubfile) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
   }
