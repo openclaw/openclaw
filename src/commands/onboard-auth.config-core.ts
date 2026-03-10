@@ -54,6 +54,7 @@ export {
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
 import { cancel, isCancel, select, spinner } from "@clack/prompts";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { scanCommonstackModels } from "../agents/model-scan.js";
 import {
@@ -87,6 +88,9 @@ import {
   MODELSTUDIO_GLOBAL_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
+
+const COMMONSTACK_BASE_URL = "https://api.commonstack.ai/v1";
+const COMMONSTACK_DEFAULT_MAX_TOKENS = 8192;
 
 export function applyZaiProviderConfig(
   cfg: OpenClawConfig,
@@ -191,7 +195,7 @@ export function applyCommonstackProviderConfig(cfg: OpenClawConfig): OpenClawCon
 
   providers.commonstack = {
     ...existingProviderRest,
-    baseUrl: "https://api.commonstack.ai/v1",
+    baseUrl: COMMONSTACK_BASE_URL,
     api: "openai-completions",
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
     models: existingModels,
@@ -271,7 +275,9 @@ export async function applyCommonstackConfig(
       throw new Error("Model selection cancelled.");
     }
 
+    const selectedModelRef = String(selectedModel);
     const existingModel = next.agents?.defaults?.model;
+    const existingAgentModels = next.agents?.defaults?.models;
     const updatedConfig = {
       ...next,
       agents: {
@@ -284,20 +290,57 @@ export async function applyCommonstackConfig(
                   fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
                 }
               : undefined),
-            primary: selectedModel,
+            primary: selectedModelRef,
+          },
+          models: {
+            ...existingAgentModels,
+            [selectedModelRef]: existingAgentModels?.[selectedModelRef] ?? {},
           },
         },
       },
     };
+    const selectedScanEntry = models.find((entry) => entry.modelRef === selectedModelRef);
+    const selectedModelId =
+      selectedScanEntry?.id ??
+      (selectedModelRef.startsWith("commonstack/")
+        ? selectedModelRef.slice("commonstack/".length)
+        : selectedModelRef);
+    const updatedWithProviderModel = applyProviderConfigWithDefaultModel(updatedConfig, {
+      agentModels: updatedConfig.agents?.defaults?.models ?? {},
+      providerId: "commonstack",
+      api: "openai-completions",
+      baseUrl: COMMONSTACK_BASE_URL,
+      defaultModel: {
+        id: selectedModelId,
+        name: selectedScanEntry?.name?.trim() || selectedModelId,
+        reasoning: false,
+        input:
+          selectedScanEntry?.modality?.toLowerCase().includes("image") === true
+            ? ["text", "image"]
+            : ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          typeof selectedScanEntry?.contextLength === "number" &&
+          selectedScanEntry.contextLength > 0
+            ? selectedScanEntry.contextLength
+            : DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          typeof selectedScanEntry?.maxCompletionTokens === "number" &&
+          selectedScanEntry.maxCompletionTokens > 0
+            ? selectedScanEntry.maxCompletionTokens
+            : COMMONSTACK_DEFAULT_MAX_TOKENS,
+      },
+      defaultModelId: selectedModelId,
+    });
 
     if (params.setDefaultModel) {
-      return { config: updatedConfig };
+      return { config: updatedWithProviderModel };
     }
 
     if (params.noteAgentModel) {
-      await params.noteAgentModel(selectedModel);
+      await params.noteAgentModel(selectedModelRef);
     }
-    return { config: updatedConfig, selectedModel };
+    return { config: updatedWithProviderModel, selectedModel: selectedModelRef };
   }
 
   return { config: next };
