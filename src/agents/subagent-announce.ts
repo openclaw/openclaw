@@ -1396,7 +1396,15 @@ export async function runSubagentAnnounceFlow(params: {
       // when it contains more context than the simple last-message extraction.
       if (outcome.status === "timeout") {
         const partialProgress = await readSubagentPartialProgress(params.childSessionKey);
-        if (partialProgress?.trim() && (!reply?.trim() || partialProgress.length > reply.length)) {
+        // Do not overwrite recognized silent/skip tokens with partial progress —
+        // that would cause the parent to announce when it should stay silent.
+        const replyIsSilent =
+          reply?.trim() && (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN));
+        if (
+          !replyIsSilent &&
+          partialProgress?.trim() &&
+          (!reply?.trim() || partialProgress.length > reply.length)
+        ) {
           reply = partialProgress;
         }
       }
