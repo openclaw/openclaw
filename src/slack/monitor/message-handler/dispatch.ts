@@ -553,13 +553,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       // Fall back to normal delivery with the full accumulated streamed text
       // so the user receives the complete answer even when stop() fails.
-      // Use a nested const + if so TypeScript can narrow the type of the
-      // captured const (not the outer mutable let) before the spread.
-      if (orphanDeleted && streamedText) {
-        const fallback = lastStreamPayload;
-        if (fallback !== null) {
-          await deliverNormally({ ...fallback, text: streamedText }, finalStream.threadTs);
-        }
+      if (orphanDeleted && lastStreamPayload && streamedText) {
+        const fallback: ReplyPayload = Object.assign({}, lastStreamPayload, { text: streamedText });
+        await deliverNormally(fallback, finalStream.threadTs);
       }
     }
   }
