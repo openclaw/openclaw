@@ -1374,6 +1374,17 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
 }
 
+export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
+    return config;
+  }
+  if (config === runtimeConfigSnapshot) {
+    return runtimeConfigSourceSnapshot;
+  }
+  const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
+  return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+}
+
 export function setRuntimeConfigSnapshotRefreshHandler(
   refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
 ): void {
