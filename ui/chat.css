@@ -1,0 +1,7 @@
+/* UI-only: resizable chat input with auto-height */
+.field.chat-compose__field {
+  resize: vertical; /* allow vertical resize via drag */
+  min-height: 120px; /* sensible starting height */
+  height: auto; /* auto height until user resizes or content grows */
+  overflow: hidden; /* prevent scrollbars on auto-resize */
+}

@@ -1188,7 +1188,7 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
-  test("webchat clients cannot patch or delete sessions", async () => {
+  test("webchat clients can patch session label only and delete; cannot patch other fields", async () => {
     await createSessionStoreDir();
 
     await writeSessionStore({
@@ -1219,18 +1219,24 @@ describe("gateway server sessions", () => {
       scopes: ["operator.admin"],
     });
 
-    const patched = await rpcReq(ws, "sessions.patch", {
+    const patchedLabel = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:discord:group:dev",
-      label: "should-fail",
+      label: "Webchat label",
     });
-    expect(patched.ok).toBe(false);
-    expect(patched.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
+    expect(patchedLabel.ok).toBe(true);
 
-    const deleted = await rpcReq(ws, "sessions.delete", {
+    const patchedThinking = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:discord:group:dev",
+      thinkingLevel: "medium",
+    });
+    expect(patchedThinking.ok).toBe(false);
+    expect(patchedThinking.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
+
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
       key: "agent:main:discord:group:dev",
     });
-    expect(deleted.ok).toBe(false);
-    expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
 
     ws.close();
   });

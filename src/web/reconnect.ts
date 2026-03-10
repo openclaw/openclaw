@@ -8,7 +8,8 @@ export type ReconnectPolicy = BackoffPolicy & {
   maxAttempts: number;
 };
 
-export const DEFAULT_HEARTBEAT_SECONDS = 60;
+/** Default: run heartbeat once every 4 hours. */
+export const DEFAULT_HEARTBEAT_SECONDS = 4 * 60 * 60; // 14_400
 export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
   initialMs: 2_000,
   maxMs: 30_000,

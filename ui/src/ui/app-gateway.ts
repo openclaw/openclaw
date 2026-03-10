@@ -34,6 +34,11 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import {
+  canonicalizeUiSessionKey,
+  readUiSessionDefaults,
+  type UiSessionDefaultsSnapshot,
+} from "./session-key-utils.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
@@ -77,45 +82,13 @@ type GatewayHost = {
   updateAvailable: UpdateAvailable | null;
 };
 
-type SessionDefaultsSnapshot = {
-  defaultAgentId?: string;
-  mainKey?: string;
-  mainSessionKey?: string;
-  scope?: string;
-};
-
-function normalizeSessionKeyForDefaults(
-  value: string | undefined,
-  defaults: SessionDefaultsSnapshot,
-): string {
-  const raw = (value ?? "").trim();
-  const mainSessionKey = defaults.mainSessionKey?.trim();
-  if (!mainSessionKey) {
-    return raw;
-  }
-  if (!raw) {
-    return mainSessionKey;
-  }
-  const mainKey = defaults.mainKey?.trim() || "main";
-  const defaultAgentId = defaults.defaultAgentId?.trim();
-  const isAlias =
-    raw === "main" ||
-    raw === mainKey ||
-    (defaultAgentId &&
-      (raw === `agent:${defaultAgentId}:main` || raw === `agent:${defaultAgentId}:${mainKey}`));
-  return isAlias ? mainSessionKey : raw;
-}
-
-function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnapshot) {
-  if (!defaults?.mainSessionKey) {
+function applySessionDefaults(host: GatewayHost, defaults?: UiSessionDefaultsSnapshot) {
+  if (!defaults) {
     return;
   }
-  const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
-  const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
-    host.settings.sessionKey,
-    defaults,
-  );
-  const resolvedLastActiveSessionKey = normalizeSessionKeyForDefaults(
+  const resolvedSessionKey = canonicalizeUiSessionKey(host.sessionKey, defaults);
+  const resolvedSettingsSessionKey = canonicalizeUiSessionKey(host.settings.sessionKey, defaults);
+  const resolvedLastActiveSessionKey = canonicalizeUiSessionKey(
     host.settings.lastActiveSessionKey,
     defaults,
   );
@@ -133,6 +106,25 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
   if (shouldUpdateSettings) {
     applySettings(host as unknown as Parameters<typeof applySettings>[0], nextSettings);
+  }
+  const tabsHost = host as unknown as {
+    conversationTabs?: Array<{ id: string; label: string; color: string; sessionKey: string }>;
+    persistConversationTabs?: () => void;
+  };
+  if (Array.isArray(tabsHost.conversationTabs)) {
+    let changed = false;
+    const nextTabs = tabsHost.conversationTabs.map((tab) => {
+      const nextTabSessionKey = canonicalizeUiSessionKey(tab.sessionKey, defaults);
+      if (nextTabSessionKey === tab.sessionKey) {
+        return tab;
+      }
+      changed = true;
+      return { ...tab, sessionKey: nextTabSessionKey };
+    });
+    if (changed) {
+      tabsHost.conversationTabs = nextTabs;
+      tabsHost.persistConversationTabs?.();
+    }
   }
 }
 
@@ -204,8 +196,14 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); auto-refreshing…`;
       host.lastErrorCode = null;
+      void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).then(() => {
+        if (host.client === client) {
+          host.lastError = null;
+          host.lastErrorCode = null;
+        }
+      });
     },
   });
   host.client = client;
@@ -332,7 +330,7 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
     | {
         presence?: PresenceEntry[];
         health?: HealthSnapshot;
-        sessionDefaults?: SessionDefaultsSnapshot;
+        sessionDefaults?: UiSessionDefaultsSnapshot;
         updateAvailable?: UpdateAvailable;
       }
     | undefined;
@@ -342,8 +340,9 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
   }
-  if (snapshot?.sessionDefaults) {
-    applySessionDefaults(host, snapshot.sessionDefaults);
+  const sessionDefaults = readUiSessionDefaults(host.hello);
+  if (sessionDefaults) {
+    applySessionDefaults(host, sessionDefaults);
   }
   host.updateAvailable = snapshot?.updateAvailable ?? null;
 }

@@ -1,11 +1,14 @@
 import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayHelloOk } from "../gateway.ts";
+import { areEquivalentUiSessionKeys, readUiSessionDefaults } from "../session-key-utils.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hello?: GatewayHelloOk | null;
   sessionKey: string;
   chatLoading: boolean;
   chatMessages: unknown[];
@@ -221,7 +224,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  const sessionDefaults = readUiSessionDefaults(state.hello);
+  if (!areEquivalentUiSessionKeys(payload.sessionKey, state.sessionKey, sessionDefaults)) {
     return null;
   }
 

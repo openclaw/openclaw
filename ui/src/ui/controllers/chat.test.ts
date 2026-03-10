@@ -36,6 +36,34 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("accepts equivalent bare and canonical session keys", () => {
+    const state = createState({
+      sessionKey: "main-39859704",
+      chatRunId: "run-1",
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main-39859704",
+      state: "error",
+      errorMessage: "boom",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.lastError).toBe("boom");
+    expect(state.chatRunId).toBe(null);
+  });
+
   it("returns null for delta from another run", () => {
     const state = createState({
       sessionKey: "main",

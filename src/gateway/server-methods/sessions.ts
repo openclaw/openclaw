@@ -77,13 +77,35 @@ function resolveGatewaySessionTargetFromKey(key: string) {
   return { cfg, target, storePath: target.storePath };
 }
 
+/** True if the patch only sets label (and key). Webchat is allowed to patch label only. */
+function isLabelOnlyPatch(patch: Record<string, unknown>): boolean {
+  const keys = Object.keys(patch).filter((k) => k !== "key");
+  if (keys.length === 0) {
+    return true;
+  }
+  if (keys.length === 1 && keys[0] === "label") {
+    return true;
+  }
+  return false;
+}
+
 function rejectWebchatSessionMutation(params: {
   action: "patch" | "delete";
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;
+  /** For action "patch": if true, do not reject (allow webchat to patch label only). */
+  allowLabelOnlyPatch?: boolean;
+  /** For action "delete": if true, do not reject (allow webchat to delete sessions, e.g. from Sessions page). */
+  allowDelete?: boolean;
 }): boolean {
   if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+    return false;
+  }
+  if (params.action === "patch" && params.allowLabelOnlyPatch) {
+    return false;
+  }
+  if (params.action === "delete" && params.allowDelete) {
     return false;
   }
   params.respond(
@@ -381,7 +403,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
+    const allowLabelOnlyPatch = isLabelOnlyPatch(p as Record<string, unknown>);
+    if (
+      rejectWebchatSessionMutation({
+        action: "patch",
+        client,
+        isWebchatConnect,
+        respond,
+        allowLabelOnlyPatch,
+      })
+    ) {
       return;
     }
 
@@ -517,7 +548,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
+    if (
+      rejectWebchatSessionMutation({
+        action: "delete",
+        client,
+        isWebchatConnect,
+        respond,
+        allowDelete: true,
+      })
+    ) {
       return;
     }
 

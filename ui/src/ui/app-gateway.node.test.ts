@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
+import "./test-browser-globals.ts";
 import { connectGateway } from "./app-gateway.ts";
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  emitHello: (hello: { type: "hello-ok"; protocol: number; snapshot?: unknown }) => void;
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -34,6 +36,7 @@ vi.mock("./gateway.ts", () => {
 
     constructor(
       private opts: {
+        onHello?: (hello: { type: "hello-ok"; protocol: number; snapshot?: unknown }) => void;
         onClose?: (info: {
           code: number;
           reason: string;
@@ -46,6 +49,9 @@ vi.mock("./gateway.ts", () => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        emitHello: (hello) => {
+          this.opts.onHello?.(hello);
+        },
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -101,11 +107,17 @@ function createHost() {
     assistantAvatar: null,
     assistantAgentId: null,
     sessionKey: "main",
+    conversationTabs: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    chatToolMessages: [],
+    toolStreamSyncTimer: null,
     chatRunId: null,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
+    persistConversationTabs: vi.fn(),
   } as unknown as Parameters<typeof connectGateway>[0];
 }
 
@@ -183,6 +195,45 @@ describe("connectGateway", () => {
       latestVersion: "2.0.0",
       channel: "latest",
     });
+  });
+
+  it("canonicalizes tab session keys from hello session defaults", () => {
+    const host = createHost() as ReturnType<typeof createHost> & {
+      conversationTabs: Array<{ id: string; label: string; color: string; sessionKey: string }>;
+      persistConversationTabs: ReturnType<typeof vi.fn>;
+    };
+    host.sessionKey = "main-39859704";
+    host.settings.sessionKey = "main-39859704";
+    host.settings.lastActiveSessionKey = "main-39859704";
+    host.conversationTabs = [
+      {
+        id: "tab-1",
+        label: "New chat 39859704",
+        color: "purple",
+        sessionKey: "main-39859704",
+      },
+    ];
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 1,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "agent:main:main",
+        },
+      },
+    });
+
+    expect(host.sessionKey).toBe("agent:main:main-39859704");
+    expect(host.settings.sessionKey).toBe("agent:main:main-39859704");
+    expect(host.settings.lastActiveSessionKey).toBe("agent:main:main-39859704");
+    expect(host.conversationTabs[0]?.sessionKey).toBe("agent:main:main-39859704");
+    expect(host.persistConversationTabs).toHaveBeenCalledTimes(1);
   });
 
   it("ignores stale client onClose callbacks after reconnect", () => {

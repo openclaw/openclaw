@@ -60,6 +60,7 @@ import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import { patchSession } from "./controllers/sessions.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import {
   loadConversationTabsState,
@@ -440,6 +441,16 @@ export class OpenClawApp extends LitElement {
         }
       }
     }
+    this.syncConversationTabLabelsToGateway();
+  }
+
+  /** Push each tab's label to the gateway so Sessions list shows them (best-effort). */
+  private syncConversationTabLabelsToGateway() {
+    for (const tab of this.conversationTabs) {
+      void patchSession(this as unknown as Parameters<typeof patchSession>[0], tab.sessionKey, {
+        label: tab.label,
+      });
+    }
   }
 
   protected firstUpdated() {
@@ -706,9 +717,10 @@ export class OpenClawApp extends LitElement {
   addConversationTab() {
     const id = generateUUID();
     const sessionKey = `main-${id.slice(0, 8)}`;
+    const uniqueLabel = `New chat ${id.slice(0, 8)}`;
     const newTab: ConversationTab = {
       id,
-      label: "New chat",
+      label: uniqueLabel,
       color: "purple",
       sessionKey,
     };
@@ -737,6 +749,9 @@ export class OpenClawApp extends LitElement {
     void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
     void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
     this.persistConversationTabs();
+    void patchSession(this as unknown as Parameters<typeof patchSession>[0], sessionKey, {
+      label: uniqueLabel,
+    });
   }
 
   closeConversationTab(tabId: string) {
@@ -850,6 +865,9 @@ export class OpenClawApp extends LitElement {
     void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
     void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
     this.persistConversationTabs();
+    void patchSession(this as unknown as Parameters<typeof patchSession>[0], newTab.sessionKey, {
+      label: newTab.label,
+    });
   }
 
   setHistoryLimit(limit: HistoryLimit) {
@@ -873,11 +891,17 @@ export class OpenClawApp extends LitElement {
 
   setTabLabel(tabId: string, label: string) {
     const trimmed = label.trim() || "New chat";
+    const tab = this.conversationTabs.find((t) => t.id === tabId);
     this.conversationTabs = this.conversationTabs.map((t) =>
       t.id === tabId ? { ...t, label: trimmed } : t,
     );
     this.editingTabId = null;
     this.persistConversationTabs();
+    if (tab) {
+      void patchSession(this as unknown as Parameters<typeof patchSession>[0], tab.sessionKey, {
+        label: trimmed,
+      });
+    }
   }
 
   startEditingTab(tabId: string) {
