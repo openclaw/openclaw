@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
+import { resolveImageCompressionSettings } from "./image-compression.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -292,6 +293,11 @@ export function createImageTool(options?: {
     return null;
   }
 
+  const compressionConfig = options?.config?.agents?.defaults?.imageCompression;
+  const compressionSettings = resolveImageCompressionSettings({
+    compression: compressionConfig,
+  });
+
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
@@ -456,10 +462,16 @@ export function createImageTool(options?: {
                 maxBytes,
                 sandboxValidated: true,
                 readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+                skipOptimization: !compressionSettings.optimize,
+                maxSideOverride: compressionSettings.maxSide,
+                qualityOverride: compressionSettings.quality,
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots,
+                skipOptimization: !compressionSettings.optimize,
+                maxSideOverride: compressionSettings.maxSide,
+                qualityOverride: compressionSettings.quality,
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
