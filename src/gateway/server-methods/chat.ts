@@ -5,7 +5,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
-import { waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
+import { isEmbeddedPiRunActive, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -445,29 +445,42 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Auto-abort any active runs for this session before starting a new one
+    // Auto-abort any active runs for this session before starting a new one.
+    // We need to check both chatAbortControllers AND ACTIVE_EMBEDDED_RUNS because:
+    // - When TUI calls abortChat first, the run is removed from chatAbortControllers
+    // - But the run is still active in ACTIVE_EMBEDDED_RUNS (agent is still executing)
+    // - If we don't wait, the new message gets enqueued and never executes
     const activeRunsForSession = Array.from(context.chatAbortControllers.entries()).filter(
-      ([_, entry]) => entry.sessionKey === rawSessionKey,
+      ([_, ctrlEntry]) => ctrlEntry.sessionKey === rawSessionKey,
     );
 
-    if (activeRunsForSession.length > 0) {
-      // Collect sessionIds to wait for
-      const sessionIds = new Set(activeRunsForSession.map(([_, entry]) => entry.sessionId));
+    // Also check if there's an active embedded run that was already aborted but hasn't ended yet
+    const currentSessionId = entry?.sessionId;
+    const hasActiveEmbeddedRun = currentSessionId && isEmbeddedPiRunActive(currentSessionId);
 
-      // Abort old runs
-      abortChatRunsForSessionKey(
-        {
-          chatAbortControllers: context.chatAbortControllers,
-          chatRunBuffers: context.chatRunBuffers,
-          chatDeltaSentAt: context.chatDeltaSentAt,
-          chatAbortedRuns: context.chatAbortedRuns,
-          removeChatRun: context.removeChatRun,
-          agentRunSeq: context.agentRunSeq,
-          broadcast: context.broadcast,
-          nodeSendToSession: context.nodeSendToSession,
-        },
-        { sessionKey: rawSessionKey, stopReason: "replaced" },
-      );
+    if (activeRunsForSession.length > 0 || hasActiveEmbeddedRun) {
+      // Collect sessionIds to wait for
+      const sessionIds = new Set(activeRunsForSession.map(([_, ctrlEntry]) => ctrlEntry.sessionId));
+      if (currentSessionId) {
+        sessionIds.add(currentSessionId);
+      }
+
+      // Abort old runs (only those still in chatAbortControllers)
+      if (activeRunsForSession.length > 0) {
+        abortChatRunsForSessionKey(
+          {
+            chatAbortControllers: context.chatAbortControllers,
+            chatRunBuffers: context.chatRunBuffers,
+            chatDeltaSentAt: context.chatDeltaSentAt,
+            chatAbortedRuns: context.chatAbortedRuns,
+            removeChatRun: context.removeChatRun,
+            agentRunSeq: context.agentRunSeq,
+            broadcast: context.broadcast,
+            nodeSendToSession: context.nodeSendToSession,
+          },
+          { sessionKey: rawSessionKey, stopReason: "replaced" },
+        );
+      }
 
       // Wait for all runs to end (with 2s timeout per session)
       for (const sessionId of sessionIds) {
