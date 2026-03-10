@@ -122,16 +122,34 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it("waitForInFlight resolves after in-flight send completes", async () => {
-    const { stream, send } = createDraftStreamHarness();
+  it("waitForInFlight resolves only after a concurrent in-flight send completes", async () => {
+    let resolveSend!: () => void;
+    const slowSend = vi.fn<DraftSendFn>(
+      () =>
+        new Promise<{ channelId: string; messageId: string }>((resolve) => {
+          resolveSend = () => resolve({ channelId: "C123", messageId: "111.222" });
+        }),
+    );
+    const { stream } = createDraftStreamHarness({ send: slowSend });
 
     stream.update("hello");
-    await stream.flush();
+    void stream.flush(); // kick off the in-flight send without awaiting
 
-    expect(send).toHaveBeenCalledTimes(1);
+    stream.stop(); // stop the loop while the send is still pending
+    const waitPromise = stream.waitForInFlight();
 
-    // After flush, in-flight is settled — waitForInFlight should resolve immediately.
-    await stream.waitForInFlight();
+    let resolved = false;
+    void waitPromise.then(() => {
+      resolved = true;
+    });
+
+    // Not yet resolved — send is still in flight
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    resolveSend(); // complete the in-flight send
+    await waitPromise;
+    expect(resolved).toBe(true);
     expect(stream.messageId()).toBe("111.222");
   });
 
