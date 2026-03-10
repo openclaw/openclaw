@@ -202,6 +202,18 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
+
+  // Pre-flight config validation (#35862)
+  {
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return;
+    }
+  }
+
   if (!loaded) {
     // Attempt an idempotent recovery start first (notably for macOS launchd where
     // `bootout` leaves the plist installed on disk but unloaded in launchd).
@@ -233,17 +245,6 @@ export async function runServiceStart(params: {
     });
     return;
   }
-  // Pre-flight config validation (#35862)
-  {
-    const configError = await getConfigValidationError();
-    if (configError) {
-      fail(
-        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
-      );
-      return;
-    }
-  }
-
   try {
     const restartResult = await params.service.restart({ env: process.env, stdout });
     const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);

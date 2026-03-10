@@ -132,6 +132,27 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("does not attempt recovery restart when config is invalid and service is not loaded", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+    });
+    service.isLoaded.mockResolvedValue(false);
+
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => ["openclaw gateway install"],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("proceeds with start when config is valid", async () => {
     setConfigSnapshot({ exists: true, valid: true });
 
