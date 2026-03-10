@@ -163,6 +163,12 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: Lark.LoggerLevel.info,
+    // Provide default wsConfig to prevent "Cannot read properties of undefined" errors
+    wsConfig: {
+      pingInterval: 30000, // 30 seconds
+      reconnectInterval: 5000, // 5 seconds
+      maxReconnectAttempts: 10,
+    },
     ...(agent ? { agent } : {}),
   });
 }
