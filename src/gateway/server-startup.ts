@@ -23,6 +23,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
+import { applyGlobalProxyDispatcher } from "./server-global-proxy.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
@@ -127,7 +128,15 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+
   if (!skipChannels) {
+    // Install a proxy-aware global undici dispatcher before starting channels.
+    // Third-party libs (e.g. @buape/carbon) use globalThis.fetch which does not
+    // honor HTTP_PROXY env vars; this ensures all outbound fetch() calls route
+    // through the proxy configured in any enabled channel (e.g. Telegram, Discord).
+    // Skipped when channels are disabled (OPENCLAW_SKIP_CHANNELS / OPENCLAW_SKIP_PROVIDERS)
+    // so provider-only or test runs are not forced through a stale channel proxy.
+    applyGlobalProxyDispatcher(params.cfg);
     try {
       await params.startChannels();
     } catch (err) {

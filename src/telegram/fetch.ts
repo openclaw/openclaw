@@ -2,6 +2,7 @@ import * as dns from "node:dns";
 import * as net from "node:net";
 import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
+import { isGlobalProxyDispatcherApplied } from "../gateway/server-global-proxy.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -74,9 +75,14 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // current autoSelectFamily setting so subsequent globalThis.fetch calls
   // inherit the same decision.
   // See: https://github.com/openclaw/openclaw/issues/25676
+  //
+  // Skip if a global proxy dispatcher was already installed — the proxy
+  // dispatcher already handles autoSelectFamily and we must not overwrite it
+  // with a plain Agent (which would lose proxy routing).
   if (
     autoSelectDecision.value !== null &&
-    autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
+    autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily &&
+    !isGlobalProxyDispatcherApplied()
   ) {
     const existingGlobalDispatcher = getGlobalDispatcher();
     const shouldPreserveExistingProxy =
