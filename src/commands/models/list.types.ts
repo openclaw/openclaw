@@ -1,3 +1,19 @@
+/** Rate limit information extracted from provider HTTP response headers. */
+export type RateLimitInfo = {
+  /** Requests remaining in current window. */
+  remainingRequests?: number;
+  /** Total request limit per window. */
+  limitRequests?: number;
+  /** Tokens remaining in current window. */
+  remainingTokens?: number;
+  /** Total token limit per window. */
+  limitTokens?: number;
+  /** When the request limit resets (ISO 8601 or duration string). */
+  resetRequests?: string;
+  /** When the token limit resets (ISO 8601 or duration string). */
+  resetTokens?: string;
+};
+
 export type ConfiguredEntry = {
   key: string;
   ref: { provider: string; model: string };

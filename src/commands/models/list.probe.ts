@@ -7,6 +7,7 @@ import {
   type AuthProfileEligibilityReasonCode,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  resolveApiKeyForProfile,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
@@ -30,6 +31,7 @@ import {
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { redactSecrets } from "../status-all/format.js";
+import type { RateLimitInfo } from "./list.types.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
@@ -64,6 +66,7 @@ export type AuthProbeResult = {
   reasonCode?: AuthProbeReasonCode;
   error?: string;
   latencyMs?: number;
+  rateLimit?: RateLimitInfo;
 };
 
 type AuthProbeTarget = {
@@ -96,6 +99,8 @@ export type AuthProbeOptions = {
   timeoutMs: number;
   concurrency: number;
   maxTokens: number;
+  /** When true, make an additional lightweight API call to capture rate-limit headers. */
+  rateLimits?: boolean;
 };
 
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
@@ -409,6 +414,223 @@ export async function buildProbeTargets(params: {
   return { targets, results };
 }
 
+// ---------------------------------------------------------------------------
+// Rate-limit header probing
+// ---------------------------------------------------------------------------
+
+/** Parse a numeric header value, returning `undefined` for missing/invalid values. */
+export function parseIntHeader(value: string | null | undefined): number | undefined {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** Extract standardised rate-limit headers from a `Headers`-like object. */
+export function parseRateLimitHeaders(headers: {
+  get(name: string): string | null;
+}): RateLimitInfo | undefined {
+  const info: RateLimitInfo = {
+    remainingRequests: parseIntHeader(headers.get("x-ratelimit-remaining-requests")),
+    limitRequests: parseIntHeader(headers.get("x-ratelimit-limit-requests")),
+    remainingTokens: parseIntHeader(headers.get("x-ratelimit-remaining-tokens")),
+    limitTokens: parseIntHeader(headers.get("x-ratelimit-limit-tokens")),
+    resetRequests: headers.get("x-ratelimit-reset-requests") ?? undefined,
+    resetTokens: headers.get("x-ratelimit-reset-tokens") ?? undefined,
+  };
+
+  // If every field is undefined, the provider didn't send rate-limit headers.
+  const hasAny = Object.values(info).some((v) => v !== undefined);
+  return hasAny ? info : undefined;
+}
+
+type ProviderEndpoint = {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+};
+
+/** Default base URLs for known providers. */
+const DEFAULT_PROVIDER_BASE_URLS: Record<string, string> = {
+  anthropic: "https://api.anthropic.com",
+  openai: "https://api.openai.com/v1",
+  groq: "https://api.groq.com/openai/v1",
+  xai: "https://api.x.ai/v1",
+  cerebras: "https://api.cerebras.ai/v1",
+  mistral: "https://api.mistral.ai/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+};
+
+/**
+ * Build the cheapest possible request for a provider — max_tokens=1, single-char prompt.
+ * Respects custom baseUrl from models.providers config when available.
+ */
+function buildProviderEndpoint(params: {
+  provider: string;
+  model: string;
+  apiKey: string;
+  customBaseUrl?: string;
+}): ProviderEndpoint | null {
+  const { provider, model, apiKey, customBaseUrl } = params;
+
+  if (provider === "anthropic") {
+    const raw = customBaseUrl?.replace(/\/+$/, "") ?? "https://api.anthropic.com";
+    // Avoid path doubling when custom baseUrl already includes a version segment (e.g. /v1)
+    const base = /\/v\d+$/.test(raw) ? raw : `${raw}/v1`;
+    return {
+      url: `${base}/messages`,
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "." }],
+      }),
+    };
+  }
+
+  // OpenAI-compatible providers (OpenAI, Groq, xAI, Cerebras, Mistral, OpenRouter)
+  const openAICompatible = ["openai", "groq", "xai", "cerebras", "mistral", "openrouter"];
+  if (openAICompatible.includes(provider)) {
+    const raw = customBaseUrl?.replace(/\/+$/, "") ?? DEFAULT_PROVIDER_BASE_URLS[provider] ?? null;
+    if (!raw) {
+      return null;
+    }
+    // Custom base URLs may or may not include the /chat/completions path segment;
+    // we always append it since rate-limit headers come from completion endpoints.
+    return {
+      url: `${raw}/chat/completions`,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "." }],
+      }),
+    };
+  }
+
+  // Google — uses API key in query param, different request format.
+  // Rate-limit headers may not follow the x-ratelimit-* convention.
+  if (provider === "google") {
+    const raw = customBaseUrl?.replace(/\/+$/, "") ?? "https://generativelanguage.googleapis.com";
+    // Avoid path doubling when custom baseUrl already includes a version segment (e.g. /v1beta)
+    const base = /\/v\d+(?:beta\d*|alpha\d*)?$/.test(raw) ? raw : `${raw}/v1beta`;
+    return {
+      url: `${base}/models/${model}:generateContent?key=${apiKey}`,
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: "." }] }],
+        generationConfig: { maxOutputTokens: 1 },
+      }),
+    };
+  }
+
+  return null;
+}
+
+/** Resolve the API key for a given probe target. */
+async function resolveApiKeyForTarget(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  target: AuthProbeTarget;
+}): Promise<string | null> {
+  const { cfg, target } = params;
+  if (target.profileId) {
+    const store = ensureAuthProfileStore(params.agentDir);
+    const result = await resolveApiKeyForProfile({
+      cfg,
+      store,
+      profileId: target.profileId,
+      agentDir: params.agentDir,
+    });
+    return result?.apiKey ?? null;
+  }
+  // Env-based or models.json-based key
+  const envKey = resolveEnvApiKey(target.provider);
+  if (envKey) {
+    return envKey.apiKey;
+  }
+  const customKey = getCustomProviderApiKey(cfg, target.provider);
+  if (customKey && !isNonSecretApiKeyMarker(customKey)) {
+    return customKey;
+  }
+  return null;
+}
+
+/** Resolve custom base URL from models.providers config, if configured. */
+function resolveCustomBaseUrl(cfg: OpenClawConfig, provider: string): string | undefined {
+  const providers = cfg?.models?.providers ?? {};
+  const providerConfig = (providers[provider] ?? providers[normalizeProviderId(provider)]) as
+    | { baseUrl?: string }
+    | undefined;
+  return providerConfig?.baseUrl?.trim() || undefined;
+}
+
+/**
+ * Make a lightweight direct HTTP call to capture rate-limit headers.
+ * Only called after the main probe succeeds (status === "ok").
+ */
+async function probeRateLimits(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  target: AuthProbeTarget;
+  timeoutMs: number;
+}): Promise<RateLimitInfo | undefined> {
+  const { cfg, target, timeoutMs } = params;
+  if (!target.model) {
+    return undefined;
+  }
+
+  const apiKey = await resolveApiKeyForTarget({
+    cfg,
+    agentDir: params.agentDir,
+    target,
+  });
+  if (!apiKey) {
+    return undefined;
+  }
+
+  const customBaseUrl = resolveCustomBaseUrl(cfg, target.model.provider);
+  const endpoint = buildProviderEndpoint({
+    provider: target.model.provider,
+    model: target.model.model,
+    apiKey,
+    customBaseUrl,
+  });
+  if (!endpoint) {
+    return undefined;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(endpoint.url, {
+        method: "POST",
+        headers: endpoint.headers,
+        body: endpoint.body,
+        signal: controller.signal,
+      });
+      // We only need the headers — even a 429 or error response may include them.
+      return parseRateLimitHeaders(response.headers);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Rate-limit probing is best-effort; never fail the overall probe.
+    return undefined;
+  }
+}
+
 async function probeTarget(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -418,6 +640,7 @@ async function probeTarget(params: {
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
+  rateLimits?: boolean;
 }): Promise<AuthProbeResult> {
   const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
   if (!target.model) {
@@ -460,6 +683,14 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
     });
+    const latencyMs = Date.now() - start;
+
+    // Optionally make a separate lightweight call to capture rate-limit headers.
+    let rateLimit: RateLimitInfo | undefined;
+    if (params.rateLimits) {
+      rateLimit = await probeRateLimits({ cfg, agentDir, target, timeoutMs });
+    }
+
     return {
       provider: target.provider,
       model: `${target.model.provider}/${target.model.model}`,
@@ -468,7 +699,8 @@ async function probeTarget(params: {
       source: target.source,
       mode: target.mode,
       status: "ok",
-      latencyMs: Date.now() - start,
+      latencyMs,
+      rateLimit,
     };
   } catch (err) {
     const described = describeFailoverError(err);
@@ -492,6 +724,7 @@ async function runTargetsWithConcurrency(params: {
   timeoutMs: number;
   maxTokens: number;
   concurrency: number;
+  rateLimits?: boolean;
   onProgress?: (update: { completed: number; total: number; label?: string }) => void;
 }): Promise<AuthProbeResult[]> {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
@@ -530,6 +763,7 @@ async function runTargetsWithConcurrency(params: {
         target,
         timeoutMs,
         maxTokens,
+        rateLimits: params.rateLimits,
       });
       results[index] = result;
       completed += 1;
@@ -567,6 +801,7 @@ export async function runAuthProbes(params: {
         timeoutMs: params.options.timeoutMs,
         maxTokens: params.options.maxTokens,
         concurrency: params.options.concurrency,
+        rateLimits: params.options.rateLimits,
         onProgress: params.onProgress,
       })
     : [];
@@ -581,6 +816,32 @@ export async function runAuthProbes(params: {
     options: params.options,
     results: [...plan.results, ...results],
   };
+}
+
+export function formatRateLimitShort(info?: RateLimitInfo | null): {
+  rpm: string;
+  tpm: string;
+} {
+  if (!info) {
+    return { rpm: "-", tpm: "-" };
+  }
+  const rpm =
+    info.remainingRequests != null && info.limitRequests != null
+      ? `${info.remainingRequests}/${info.limitRequests}`
+      : info.remainingRequests != null
+        ? `${info.remainingRequests}`
+        : info.limitRequests != null
+          ? `-/${info.limitRequests}`
+          : "-";
+  const tpm =
+    info.remainingTokens != null && info.limitTokens != null
+      ? `${info.remainingTokens}/${info.limitTokens}`
+      : info.remainingTokens != null
+        ? `${info.remainingTokens}`
+        : info.limitTokens != null
+          ? `-/${info.limitTokens}`
+          : "-";
+  return { rpm, tpm };
 }
 
 export function formatProbeLatency(latencyMs?: number | null) {
