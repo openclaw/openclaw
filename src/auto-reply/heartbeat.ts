@@ -1,5 +1,12 @@
+import { parseDurationMs } from "../cli/parse-duration.js";
 import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
+
+export type HeartbeatTask = {
+  name: string;
+  interval: string;
+  prompt: string;
+};
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
@@ -168,4 +175,133 @@ export function stripHeartbeatToken(
   }
 
   return { shouldSkip: false, text: rest, didStrip: true };
+}
+
+/**
+ * Parse heartbeat tasks from HEARTBEAT.md content.
+ * Supports YAML-like task definitions:
+ *
+ * tasks:
+ *   - name: email-check
+ *     interval: 30m
+ *     prompt: "Check for urgent unread emails"
+ */
+export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
+  const tasks: HeartbeatTask[] = [];
+  const lines = content.split("\n");
+  let inTasksBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Detect tasks block start
+    if (trimmed === "tasks:") {
+      inTasksBlock = true;
+      continue;
+    }
+
+    if (!inTasksBlock) {
+      continue;
+    }
+
+    // End of tasks block (either empty line or new top-level content)
+    if (
+      !trimmed.startsWith(" ") &&
+      !trimmed.startsWith("\t") &&
+      trimmed &&
+      !trimmed.startsWith("-")
+    ) {
+      inTasksBlock = false;
+      continue;
+    }
+
+    // Parse task entry
+    if (trimmed.startsWith("- name:")) {
+      const name = trimmed
+        .replace("- name:", "")
+        .trim()
+        .replace(/^["']|["']$/g, "");
+      let interval = "";
+      let prompt = "";
+
+      // Look ahead for interval and prompt
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j];
+        const nextTrimmed = nextLine.trim();
+
+        // End of this task
+        if (nextTrimmed.startsWith("- name:")) {
+          break;
+        }
+        // End of tasks block
+        if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
+          inTasksBlock = false;
+          break;
+        }
+
+        if (nextTrimmed.startsWith("interval:")) {
+          interval = nextTrimmed
+            .replace("interval:", "")
+            .trim()
+            .replace(/^["']|["']$/g, "");
+        } else if (nextTrimmed.startsWith("prompt:")) {
+          prompt = nextTrimmed
+            .replace("prompt:", "")
+            .trim()
+            .replace(/^["']|["']$/g, "");
+        }
+      }
+
+      if (name && interval && prompt) {
+        tasks.push({ name, interval, prompt });
+      }
+    }
+  }
+
+  return tasks;
+}
+
+/**
+ * Check if a task is due based on its interval and last run time.
+ */
+export function isTaskDue(lastRunMs: number | undefined, interval: string, nowMs: number): boolean {
+  if (lastRunMs === undefined) {
+    return true; // Never run, always due
+  }
+
+  try {
+    const intervalMs = parseDurationMs(interval, { defaultUnit: "m" });
+    return nowMs - lastRunMs >= intervalMs;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get or initialize last run time for a task from session store.
+ */
+export function getTaskLastRunMs(
+  taskName: string,
+  sessionEntry: Record<string, unknown> | undefined,
+): number | undefined {
+  if (!sessionEntry?.heartbeatTaskState) {
+    return undefined;
+  }
+  const taskState = sessionEntry.heartbeatTaskState as Record<string, number>;
+  return taskState[taskName];
+}
+
+/**
+ * Update last run time for a task in session store.
+ */
+export function updateTaskLastRunMs(
+  taskName: string,
+  nowMs: number,
+  sessionEntry: Record<string, unknown>,
+): void {
+  if (!sessionEntry.heartbeatTaskState) {
+    sessionEntry.heartbeatTaskState = {};
+  }
+  (sessionEntry.heartbeatTaskState as Record<string, number>)[taskName] = nowMs;
 }
