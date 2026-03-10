@@ -1474,6 +1474,36 @@ describe("loadOpenClawPlugins", () => {
     expect(resolved).not.toContain("index.js");
   });
 
+  it("generic fallback populates keyed-async-queue, matrix, and account-id when export-map discovery returns empty (regression #35869)", () => {
+    // Reproduces the failure mode where listPluginSdkExportedSubpaths() returns [] (e.g.,
+    // package.json exports unavailable in non-standard production layouts). Passing subpaths:[]
+    // bypasses discovery and forces the directory-scan fallback, proving it covers all
+    // critical Matrix-plugin imports — not just keyed-async-queue alone.
+    const root = makeTempDir();
+    const pluginSdkDir = path.join(root, "dist", "plugin-sdk");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    // anchor file + the three subpaths the Matrix plugin imports
+    for (const subpath of ["core", "keyed-async-queue", "matrix", "account-id"]) {
+      fs.writeFileSync(path.join(pluginSdkDir, `${subpath}.js`), "module.exports = {};\n");
+    }
+    // a test file that must be excluded by the scan filter
+    fs.writeFileSync(path.join(pluginSdkDir, "core.test.js"), "module.exports = {};\n");
+
+    const aliasMap = __testing.resolvePluginSdkScopedAliasMap({
+      subpaths: [],
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toBeTruthy();
+    expect(aliasMap["openclaw/plugin-sdk/matrix"]).toBeTruthy();
+    expect(aliasMap["openclaw/plugin-sdk/account-id"]).toBeTruthy();
+    // path must point to the actual subpath file, not index.js
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toContain("keyed-async-queue.js");
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).not.toContain("index.js");
+    // test files must be excluded from fallback scan
+    expect(aliasMap["openclaw/plugin-sdk/core.test"]).toBeUndefined();
+  });
+
   it("loads bundled plugin that imports openclaw/plugin-sdk/keyed-async-queue (regression #35869)", () => {
     const pluginDir = makeTempDir();
     writePlugin({

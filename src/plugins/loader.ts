@@ -143,29 +143,60 @@ function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): st
   }
 }
 
-const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
+const resolvePluginSdkScopedAliasMap = (
+  params: {
+    // Optional override for the discovered subpath list — used in tests to simulate
+    // export-map discovery failure (pass [] to bypass listPluginSdkExportedSubpaths).
+    subpaths?: string[];
+    modulePath?: string;
+  } = {},
+): Record<string, string> => {
+  const discoveredSubpaths =
+    params.subpaths ??
+    listPluginSdkExportedSubpaths(params.modulePath ? { modulePath: params.modulePath } : {});
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths()) {
+  for (const subpath of discoveredSubpaths) {
     const resolved = resolvePluginSdkAliasFile({
       srcFile: `${subpath}.ts`,
       distFile: `${subpath}.js`,
+      modulePath: params.modulePath,
     });
     if (resolved) {
       aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;
     }
   }
-  // Explicit alias for keyed-async-queue (#35869): guarantees the alias is present even
-  // when package.json export-map discovery fails in non-standard production layouts.
-  // Without this, jiti falls back to Node resolution which produced the invalid path
-  // `/dist/plugin-sdk/index.js/keyed-async-queue` in production (v2026.3.2 failure mode).
-  const kaqKey = "openclaw/plugin-sdk/keyed-async-queue";
-  if (!aliasMap[kaqKey]) {
-    const resolved = resolvePluginSdkAliasFile({
-      srcFile: "keyed-async-queue.ts",
-      distFile: "keyed-async-queue.js",
+  // Generic fallback (#35869): when export-map discovery returns empty (e.g., package.json
+  // exports are unavailable in non-standard production layouts), aliasMap has no entries and
+  // every plugin subpath import — keyed-async-queue, matrix, account-id, etc. — fails.
+  // Scan the plugin-sdk directory directly to populate aliases for ALL subpaths on disk so
+  // that no single-subpath patch is needed when the next missing entry surfaces.
+  if (Object.keys(aliasMap).length === 0) {
+    // Use a known stable file as an anchor to locate the plugin-sdk directory.
+    const anchorFile = resolvePluginSdkAliasFile({
+      srcFile: "core.ts",
+      distFile: "core.js",
+      modulePath: params.modulePath,
     });
-    if (resolved) {
-      aliasMap[kaqKey] = resolved;
+    if (anchorFile) {
+      const sdkDir = path.dirname(anchorFile);
+      const ext = anchorFile.endsWith(".ts") ? ".ts" : ".js";
+      try {
+        for (const name of fs.readdirSync(sdkDir)) {
+          if (!name.endsWith(ext) || name.includes(".test.") || name.includes(".e2e.")) {
+            continue;
+          }
+          const subpath = name.slice(0, -ext.length);
+          if (!subpath || subpath.includes(".")) {
+            continue;
+          }
+          const key = `openclaw/plugin-sdk/${subpath}`;
+          if (!aliasMap[key]) {
+            aliasMap[key] = path.join(sdkDir, name);
+          }
+        }
+      } catch {
+        // ignore scan errors
+      }
     }
   }
   return aliasMap;
