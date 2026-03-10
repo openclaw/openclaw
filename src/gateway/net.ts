@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -8,6 +10,42 @@ import {
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
 } from "../shared/net/ip.js";
+
+let isContainerRuntimeCache: boolean | null = null;
+
+export function isContainerRuntime(): boolean {
+  if (isContainerRuntimeCache !== null) {
+    return isContainerRuntimeCache;
+  }
+
+  const containerEnv = process.env.OPENCLAW_CONTAINER;
+  if (containerEnv !== undefined) {
+    isContainerRuntimeCache = isTruthyEnvValue(containerEnv);
+    return isContainerRuntimeCache;
+  }
+
+  try {
+    if (fs.existsSync("/.dockerenv")) {
+      isContainerRuntimeCache = true;
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
+    if (/(docker|kubepods|containerd)/i.test(cgroup)) {
+      isContainerRuntimeCache = true;
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  isContainerRuntimeCache = false;
+  return false;
+}
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -294,16 +332,46 @@ export async function canBindToHost(host: string): Promise<boolean> {
 
 export async function resolveGatewayListenHosts(
   bindHost: string,
-  opts?: { canBindToHost?: (host: string) => Promise<boolean> },
+  opts?: {
+    canBindToHost?: (host: string) => Promise<boolean>;
+    includeLanAliasForLoopback?: boolean;
+    pickLanIPv4?: () => string | undefined;
+  },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;
-  if (await canBind("::1")) {
-    return [bindHost, "::1"];
+  const hosts = [bindHost];
+
+  // Container loopback binds need a LAN alias so published ports reach the gateway.
+  const shouldAddLanAlias =
+    opts?.includeLanAliasForLoopback ??
+    isContainerRuntime();
+
+  if (shouldAddLanAlias) {
+    const pickLanIp = opts?.pickLanIPv4 ?? pickPrimaryLanIPv4;
+    const lanIp = pickLanIp();
+    if (lanIp && lanIp !== bindHost) {
+      try {
+        if (await canBind(lanIp)) {
+          hosts.push(lanIp);
+        }
+      } catch {
+        // ignore container alias bind failures and keep loopback-only
+      }
+    }
   }
-  return [bindHost];
+
+  try {
+    if (await canBind("::1")) {
+      hosts.push("::1");
+    }
+  } catch {
+    // ignore IPv6 bind failures
+  }
+
+  return hosts;
 }
 
 /**
