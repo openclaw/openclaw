@@ -149,7 +149,9 @@ describe("createGatewayCloseHandler", () => {
 
   it("records warning for each failing channel stop", async () => {
     const stopChannel = vi.fn(async (id: string) => {
-      if (id === "telegram") throw new Error("telegram stuck");
+      if (id === "telegram") {
+        throw new Error("telegram stuck");
+      }
     });
     const p = makeParams({ stopChannel });
     const close = createGatewayCloseHandler(p);
