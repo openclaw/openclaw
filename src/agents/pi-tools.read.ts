@@ -781,11 +781,11 @@ function wrapWriteToolWithAppendMode(
       }
 
       // Append mode — handle directly.
-      const filePath = normalized?.path as string | undefined;
+      const filePath = (normalized?.path as string | undefined)?.trim();
       const content = normalized?.content as string | undefined;
 
       if (!filePath) {
-        return { content: [{ type: "text", text: "Error: path is required" }] };
+        return { content: [{ type: "text", text: "Error: path is required (must be non-empty)" }] };
       }
       if (content === undefined || content === null) {
         return { content: [{ type: "text", text: "Error: content is required" }] };
