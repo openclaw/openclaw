@@ -1,0 +1,106 @@
+# deploy-pipeline.yml
+# Generic application deployment pipeline: test → build → deploy → smoke-test
+# Demonstrates: sequential gates, mandatory outputs, post-deploy verification
+
+name: Deploy Pipeline
+version: "1.0"
+description: "Four-stage deployment: test, build, deploy to production, smoke test verification"
+concurrency: 1  # Strictly sequential — each stage must gate the next
+
+steps:
+
+  # ── Stage 1: Test ──────────────────────────────────────────────────────────
+  # Run the full test suite. Generate a coverage report.
+  # If tests fail, the pipeline stops — nothing is built or deployed.
+  - id: test
+    name: "Run Test Suite"
+    timeout: 300
+    task: |
+      You are a CI/CD agent running the test suite for this application.
+
+      Run: `npm test -- --coverage --reporter=json > reports/test-results-{date}.json`
+
+      If tests fail:
+        1. Parse the failure output
+        2. Write a failure summary to: reports/test-failure-{date}.md
+        3. Exit with a clear error message
+
+      If tests pass:
+        1. Write the coverage report to: reports/coverage-{date}.json
+        2. Check that coverage >= 80% for all modules; warn if below
+        3. Report: "Tests passed. Coverage: X%"
+
+      The build stage will not run until you report success.
+    outputs:
+      - "reports/test-results-{date}.json"
+
+  # ── Stage 2: Build ─────────────────────────────────────────────────────────
+  # Compile, bundle, and produce deployment artifact.
+  - id: build
+    name: "Build Artifact"
+    depends_on: [test]
+    timeout: 300
+    task: |
+      Tests passed. Now build the production artifact.
+
+      1. Run: `npm run build`
+      2. Verify the dist/ directory was created
+      3. Create a build manifest at: dist/build-manifest-{date}.json
+         Include: build_time, git_sha, npm_version, file_count, total_size_kb
+      4. Compress the artifact: `tar -czf artifacts/app-{date}.tar.gz dist/`
+
+      Report the artifact size and any warnings from the build.
+    outputs:
+      - "dist/build-manifest-{date}.json"
+      - "artifacts/app-{date}.tar.gz"
+
+  # ── Stage 3: Deploy ────────────────────────────────────────────────────────
+  # Push the artifact to production. Write a deploy log.
+  - id: deploy
+    name: "Deploy to Production"
+    depends_on: [build]
+    timeout: 600
+    retry: 1        # Retry once if deploy fails (e.g., flaky network)
+    retry_delay: 30
+    task: |
+      Build complete. Deploy to production.
+
+      1. Upload artifact: `./deploy.sh artifacts/app-{date}.tar.gz production`
+      2. Wait for the deployment health check to pass (poll for up to 120s)
+      3. Write deploy log to: logs/deploy-{date}.json
+         Include: deploy_time, artifact, target_env, duration_s, health_check_status
+
+      If deployment fails after all retries, write a rollback procedure to:
+        logs/rollback-procedure-{date}.md
+
+      DO NOT proceed if health check fails — the smoke test will catch regressions.
+    outputs:
+      - "logs/deploy-{date}.json"
+
+  # ── Stage 4: Smoke Test ────────────────────────────────────────────────────
+  # Verify the deployed application is responding correctly.
+  # Optional: a smoke test failure sends an alert but doesn't block other pipelines.
+  - id: smoke-test
+    name: "Smoke Test"
+    depends_on: [deploy]
+    timeout: 180
+    optional: false  # Smoke test failure IS a pipeline failure
+    task: |
+      Deployment complete. Run smoke tests against production.
+
+      Test endpoints:
+        - GET /health → expect 200
+        - GET /api/version → expect JSON with version field
+        - POST /api/echo → expect 200 with echoed body
+
+      Run: `./smoke-tests.sh production > reports/smoke-{date}.json`
+
+      If any test fails:
+        1. Parse which endpoints failed
+        2. Check recent application logs for errors
+        3. Write incident report to: reports/smoke-failure-{date}.md
+        4. Report: "SMOKE TEST FAILED — consider rollback"
+
+      If all pass: "Smoke tests passed. Deployment successful."
+    outputs:
+      - "reports/smoke-{date}.json"

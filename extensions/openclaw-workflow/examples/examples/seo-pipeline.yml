@@ -1,0 +1,103 @@
+# seo-pipeline.yml
+# Meridian SEO Daily Pipeline
+# Runs three agents in sequence: Technical Auditor → Content Creator → Standup Synthesis
+# Drop this file in ~/.openclaw/workflows/ and run: workflow_run({ name: "seo-pipeline" })
+
+name: SEO Daily Pipeline
+version: "1.0"
+description: "Daily SEO audit, content creation, and standup pipeline for Meridian Digital"
+concurrency: 2
+
+steps:
+
+  # ── Step 1: Technical Auditor ──────────────────────────────────────────────
+  # Runs the full technical SEO audit: crawl errors, Core Web Vitals, backlink
+  # changes, ranking shifts. Writes a structured JSON handoff file for downstream agents.
+  - id: tech-auditor
+    name: "Technical Auditor"
+    model: "anthropic/claude-sonnet-4-6"
+    timeout: 420  # 7 minutes — crawl can be slow
+    task: |
+      You are the Technical SEO Auditor for Meridian Digital.
+
+      Today is {date}. Your job:
+
+      1. Read the SEO state from yesterday: data/seo-state/ta-handoff-*.json (most recent)
+      2. Check Google Search Console for new crawl errors and coverage issues
+      3. Check Core Web Vitals trends (use the gsc tool or existing scripts)
+      4. Note any significant ranking changes (±5 positions) for tracked keywords
+      5. Check backlink velocity via DataForSEO
+      6. Write your findings to: data/seo-state/ta-handoff-{date}.json
+
+      Handoff JSON schema:
+      {
+        "date": "{date}",
+        "crawl_errors": [...],
+        "cwv_issues": [...],
+        "ranking_changes": [...],
+        "backlink_delta": {...},
+        "priority_actions": [...]
+      }
+
+      Be concise and data-driven. The content creator reads this file next.
+    outputs:
+      - "data/seo-state/ta-handoff-{date}.json"
+
+  # ── Step 2: Content Creator ────────────────────────────────────────────────
+  # Reads the tech auditor's handoff and drafts 3 content pieces.
+  # Runs only after tech-auditor succeeds (has the handoff file).
+  - id: content-creator
+    name: "Content Creator"
+    depends_on: [tech-auditor]
+    model: "anthropic/claude-sonnet-4-6"
+    timeout: 600  # 10 minutes — content generation takes time
+    retry: 1
+    retry_delay: 60
+    task: |
+      You are the SEO Content Creator for Meridian Digital.
+
+      Today is {date}. The Technical Auditor has finished — read their handoff:
+        data/seo-state/ta-handoff-{date}.json
+
+      Your job:
+      1. Read the handoff and identify the top 3 content opportunities
+      2. For each opportunity, draft either:
+         - A new blog post outline (600-1200 words)
+         - An existing page update recommendation
+         - A new FAQ section or schema markup suggestion
+      3. Write your content brief to: data/seo-state/cc-memo-{date}.md
+
+      Include target keyword, search intent, competitive gap, and estimated impact.
+    outputs:
+      - "data/seo-state/cc-memo-{date}.md"
+
+  # ── Step 3: Standup Synthesis ──────────────────────────────────────────────
+  # Synthesizes both memos into a human-readable standup report.
+  # Optional: if this fails, the pipeline still succeeds (memos are the real outputs).
+  - id: standup
+    name: "Standup Synthesis"
+    depends_on: [tech-auditor, content-creator]
+    model: "anthropic/claude-sonnet-4-6"
+    timeout: 300
+    optional: true
+    task: |
+      You are the SEO Standup Synthesizer for Meridian Digital.
+
+      Today is {date}. Both agents have finished. Synthesize their work:
+
+      Inputs:
+        - Technical Auditor memo: data/seo-state/ta-handoff-{date}.json
+        - Content Creator memo: data/seo-state/cc-memo-{date}.md
+
+      Write a concise standup update to: data/seo-state/standup-{date}.md
+
+      Format:
+      ## SEO Standup — {date}
+      ### 🔍 Technical Status (2-3 bullets)
+      ### ✍️ Content Pipeline (2-3 bullets)
+      ### 🎯 Today's Priority Action
+      ### ⚠️ Blockers / Issues
+
+      Keep it under 300 words. This goes to the team channel.
+    outputs:
+      - "data/seo-state/standup-{date}.md"

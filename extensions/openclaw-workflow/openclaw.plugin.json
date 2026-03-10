@@ -1,0 +1,49 @@
+{
+  "id": "openclaw-workflow",
+  "name": "Workflow Orchestrator",
+  "description": "YAML/JSON-driven multi-step workflow orchestration for OpenClaw agents. Supports parallel execution, dependency management, retry logic, output gates, and partial resume.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workflowsDir": {
+        "type": "string",
+        "description": "Directory containing workflow definition files (YAML/JSON). Defaults to ~/.openclaw/workflows/"
+      },
+      "runsDir": {
+        "type": "string",
+        "description": "Directory where workflow run state files are stored. Defaults to ~/.openclaw/workflow-runs/"
+      },
+      "baseDir": {
+        "type": "string",
+        "description": "Base directory for resolving relative output file paths in workflow steps. Defaults to process.cwd()."
+      },
+      "concurrency": {
+        "type": "number",
+        "description": "Maximum number of steps that can run in parallel within a single workflow. Default: 3."
+      },
+      "notifyChannel": {
+        "type": "string",
+        "description": "Channel ID or name to send step completion notifications. If omitted, notifications are suppressed."
+      },
+      "sessionModel": {
+        "type": "string",
+        "description": "Default model to use for spawned step sessions when a step doesn't specify its own model. Defaults to the OpenClaw default model."
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "description": "How often (in milliseconds) to poll session status for running steps. Default: 5000."
+      }
+    }
+  },
+  "uiHints": {
+    "workflowsDir": { "label": "Workflows Directory", "placeholder": "~/.openclaw/workflows/" },
+    "runsDir": { "label": "Runs State Directory", "placeholder": "~/.openclaw/workflow-runs/" },
+    "baseDir": { "label": "Base Directory for Output Paths", "placeholder": "/home/user/projects/myapp" },
+    "concurrency": { "label": "Max Parallel Steps", "placeholder": "3" },
+    "notifyChannel": { "label": "Notification Channel", "placeholder": "telegram" },
+    "sessionModel": { "label": "Default Step Model", "placeholder": "anthropic/claude-sonnet-4-6" },
+    "pollIntervalMs": { "label": "Poll Interval (ms)", "placeholder": "5000" }
+  }
+}

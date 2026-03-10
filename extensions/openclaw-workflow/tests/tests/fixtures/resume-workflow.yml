@@ -1,0 +1,21 @@
+name: Resume Workflow
+version: "1.0"
+description: "Tests resume functionality — after a partial run, resume skips completed steps"
+
+steps:
+  - id: fetch-data
+    name: "Fetch Data"
+    task: "Fetch and cache data locally"
+    timeout: 60
+
+  - id: transform-data
+    name: "Transform Data"
+    depends_on: [fetch-data]
+    task: "Transform the fetched data"
+    timeout: 60
+
+  - id: load-data
+    name: "Load Data"
+    depends_on: [transform-data]
+    task: "Load transformed data to destination"
+    timeout: 60

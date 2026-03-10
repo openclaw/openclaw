@@ -1,0 +1,22 @@
+name: Optional Step Pipeline
+version: "1.0"
+description: "The standup step is optional — if it fails, the pipeline still succeeds"
+
+steps:
+  - id: main-task
+    name: "Main Task"
+    task: "Do the main work"
+    timeout: 60
+
+  - id: optional-report
+    name: "Optional Report"
+    depends_on: [main-task]
+    task: "Generate a report (optional — may fail)"
+    timeout: 60
+    optional: true
+
+  - id: final-step
+    name: "Final Step"
+    depends_on: [main-task, optional-report]
+    task: "Finalize regardless of report status"
+    timeout: 60

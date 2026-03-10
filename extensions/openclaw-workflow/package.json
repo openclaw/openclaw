@@ -1,0 +1,39 @@
+{
+  "name": "openclaw-workflow",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin for YAML/JSON-driven workflow orchestration with dependency management, parallel execution, retry logic, and output gates",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "workflow",
+    "orchestration",
+    "pipeline",
+    "subagent",
+    "automation"
+  ],
+  "author": "OpenClaw Contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "node --test tests/",
+    "test:watch": "node --test --watch tests/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw.git",
+    "directory": "plugins/openclaw-workflow"
+  }
+}
