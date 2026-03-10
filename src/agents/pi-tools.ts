@@ -217,8 +217,8 @@ export function createOpenClawCodingTools(options?: {
   workspaceDir?: string;
   /**
    * Workspace directory that spawned subagents should inherit.
-   * When running inside a read-only sandbox, workspaceDir is the sandbox copy but
-   * subagents should inherit the real agent workspace, not the temporary sandbox dir.
+   * When sandboxing uses a copied workspace (`ro` or `none`), workspaceDir is the
+   * sandbox copy but subagents should inherit the real agent workspace instead.
    * Defaults to workspaceDir when not set.
    */
   spawnWorkspaceDir?: string;

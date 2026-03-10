@@ -869,8 +869,8 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
-          // When running inside a read-only sandbox, effectiveWorkspace is the sandbox copy.
-          // Spawned subagents should inherit the real workspace, not the temporary sandbox dir.
+          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
           spawnWorkspaceDir:
             sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
           config: params.config,
