@@ -78,7 +78,7 @@ describe("transcribeAssemblyAIAudio", () => {
     const result = await transcribeAssemblyAIAudio({
       buffer: Buffer.from("audio"),
       fileName: "voice.mp3",
-      apiKey: "test-key",
+      apiKey: "test-key", // pragma: allowlist secret
       timeoutMs: 30_000,
       fetchFn,
     });
@@ -97,7 +97,7 @@ describe("transcribeAssemblyAIAudio", () => {
     await transcribeAssemblyAIAudio({
       buffer: Buffer.from("audio"),
       fileName: "voice.mp3",
-      apiKey: "my-secret-key",
+      apiKey: "my-secret-key", // pragma: allowlist secret
       timeoutMs: 30_000,
       fetchFn,
     });
@@ -114,7 +114,7 @@ describe("transcribeAssemblyAIAudio", () => {
     await transcribeAssemblyAIAudio({
       buffer: Buffer.from("audio"),
       fileName: "voice.mp3",
-      apiKey: "ignored-key",
+      apiKey: "ignored-key", // pragma: allowlist secret
       headers: { authorization: "Bearer override" },
       timeoutMs: 30_000,
       fetchFn,
@@ -158,7 +158,7 @@ describe("transcribeAssemblyAIAudio", () => {
     const result = await transcribeAssemblyAIAudio({
       buffer: Buffer.from("audio"),
       fileName: "voice.mp3",
-      apiKey: "key",
+      apiKey: "key", // pragma: allowlist secret
       language: "pt",
       timeoutMs: 30_000,
       fetchFn,
@@ -177,7 +177,7 @@ describe("transcribeAssemblyAIAudio", () => {
     const result = await transcribeAssemblyAIAudio({
       buffer: Buffer.from("audio"),
       fileName: "voice.mp3",
-      apiKey: "key",
+      apiKey: "key", // pragma: allowlist secret
       timeoutMs: 30_000,
       fetchFn,
     });
@@ -216,7 +216,7 @@ describe("transcribeAssemblyAIAudio", () => {
       transcribeAssemblyAIAudio({
         buffer: Buffer.from("audio"),
         fileName: "voice.mp3",
-        apiKey: "key",
+        apiKey: "key", // pragma: allowlist secret
         timeoutMs: 30_000,
         fetchFn,
       }),
