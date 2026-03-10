@@ -8,7 +8,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { logWarn } from "../../logger.js";
+import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
@@ -243,6 +243,19 @@ export async function dispatchCronDelivery(
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
+
+      // Track bestEffort partial failures so we can log them and avoid
+      // marking the job as delivered when payloads were silently dropped.
+      let hadPartialFailure = false;
+      const onError = params.deliveryBestEffort
+        ? (err: unknown, _payload: unknown) => {
+            hadPartialFailure = true;
+            logError(
+              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        : undefined;
+
       const runDelivery = async () =>
         await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
@@ -256,6 +269,7 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          onError,
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
@@ -264,7 +278,9 @@ export async function dispatchCronDelivery(
             run: runDelivery,
           })
         : await runDelivery();
-      delivered = deliveryResults.length > 0;
+      // Only mark delivered when at least one payload reached the channel
+      // AND no partial failure occurred (all payloads succeeded).
+      delivered = deliveryResults.length > 0 && !hadPartialFailure;
       return null;
     } catch (err) {
       if (!params.deliveryBestEffort) {
@@ -277,6 +293,9 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      logError(
+        `[cron:${params.job.id}] delivery failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+      );
       return null;
     }
   };
