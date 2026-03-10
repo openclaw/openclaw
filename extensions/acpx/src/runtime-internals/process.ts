@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
@@ -30,6 +32,11 @@ type SpawnRuntime = {
   execPath: string;
 };
 
+type AcpxSpawnEnvOptions = {
+  agent?: string;
+  homeDir?: string;
+};
+
 export type SpawnCommandCache = {
   key?: string;
   candidate?: WindowsSpawnProgramCandidate;
@@ -54,6 +61,85 @@ const DEFAULT_RUNTIME: SpawnRuntime = {
   env: process.env,
   execPath: process.execPath,
 };
+
+const CODEX_API_AUTH_ENV_KEYS = [
+  "OPENAI_API_KEY",
+  "CODEX_API_KEY",
+  "ACPX_AUTH_OPENAI_API_KEY",
+  "ACPX_AUTH_CODEX_API_KEY",
+] as const;
+
+type CodexAuthModeCacheEntry = {
+  mtimeMs: number;
+  mode: string | null;
+};
+
+const codexAuthModeCache = new Map<string, CodexAuthModeCacheEntry>();
+
+type CodexAuthFile = {
+  auth_mode?: string;
+};
+
+function resolveHomeDir(baseEnv: NodeJS.ProcessEnv, override?: string): string {
+  const trimmedOverride = override?.trim();
+  if (trimmedOverride) {
+    return trimmedOverride;
+  }
+  const envHome = baseEnv.HOME?.trim() || baseEnv.USERPROFILE?.trim();
+  return envHome || homedir();
+}
+
+function resolveCodexAuthPath(params: { baseEnv: NodeJS.ProcessEnv; homeDir?: string }): string {
+  const codexHome = params.baseEnv.CODEX_HOME?.trim();
+  if (codexHome) {
+    return path.join(codexHome, "auth.json");
+  }
+  const home = resolveHomeDir(params.baseEnv, params.homeDir);
+  return path.join(home, ".codex", "auth.json");
+}
+
+function resolveCodexAuthMode(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string | null {
+  try {
+    const authPath = resolveCodexAuthPath(params);
+    if (!existsSync(authPath)) {
+      codexAuthModeCache.delete(authPath);
+      return null;
+    }
+    const stat = statSync(authPath);
+    const cached = codexAuthModeCache.get(authPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) {
+      return cached.mode;
+    }
+    const parsed = JSON.parse(readFileSync(authPath, "utf8")) as CodexAuthFile;
+    const mode =
+      typeof parsed.auth_mode === "string" ? parsed.auth_mode.trim().toLowerCase() : null;
+    codexAuthModeCache.set(authPath, { mtimeMs: stat.mtimeMs, mode });
+    return mode;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveAcpxSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  options?: AcpxSpawnEnvOptions,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv, OPENCLAW_SHELL: "acp" };
+  const agent = options?.agent?.trim().toLowerCase();
+  if (agent !== "codex") {
+    return env;
+  }
+  if (resolveCodexAuthMode({ baseEnv, homeDir: options?.homeDir }) !== "chatgpt") {
+    return env;
+  }
+  for (const key of CODEX_API_AUTH_ENV_KEYS) {
+    delete env[key];
+  }
+  return env;
+}
 
 export function resolveSpawnCommand(
   params: { command: string; args: string[] },
@@ -125,6 +211,7 @@ export function spawnWithResolvedCommand(
     command: string;
     args: string[];
     cwd: string;
+    env?: NodeJS.ProcessEnv;
   },
   options?: SpawnCommandOptions,
 ): ChildProcessWithoutNullStreams {
@@ -138,7 +225,7 @@ export function spawnWithResolvedCommand(
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: { ...process.env, OPENCLAW_SHELL: "acp" },
+    env: params.env ?? resolveAcpxSpawnEnv(process.env),
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
@@ -180,6 +267,7 @@ export async function spawnAndCollect(
     command: string;
     args: string[];
     cwd: string;
+    env?: NodeJS.ProcessEnv;
   },
   options?: SpawnCommandOptions,
   runtime?: {
