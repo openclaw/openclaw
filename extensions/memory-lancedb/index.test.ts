@@ -178,6 +178,7 @@ describe("memory plugin e2e", () => {
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
+          schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
           vectorSearch,
           countRows: vi.fn(async () => 0),
           add: vi.fn(async () => undefined),
@@ -377,6 +378,7 @@ describe("memory plugin — namespace isolation", () => {
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
         openTable: vi.fn(async () => ({
+          schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
           vectorSearch: vi.fn(() => ({
             limit: vi.fn(() => ({
               toArray: vi.fn(async () =>
