@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import { t } from "../../i18n/index.ts";
 import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import { formatBool, formatDurationOrNa, formatRelativeOrNa } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderWhatsAppCard(params: {
@@ -14,43 +15,37 @@ export function renderWhatsAppCard(params: {
   return html`
     <div class="card">
       <div class="card-title">WhatsApp</div>
-      <div class="card-sub">Link WhatsApp Web and monitor connection health.</div>
+      <div class="card-sub">${t("channelsView.subtitles.whatsapp")}</div>
       ${accountCountLabel}
 
       <div class="status-list" style="margin-top: 16px;">
         <div>
-          <span class="label">Configured</span>
-          <span>${whatsapp?.configured ? "Yes" : "No"}</span>
+          <span class="label">${t("channelsView.status.configured")}</span>
+          <span>${formatBool(whatsapp?.configured)}</span>
         </div>
         <div>
-          <span class="label">Linked</span>
-          <span>${whatsapp?.linked ? "Yes" : "No"}</span>
+          <span class="label">${t("channelsView.status.linked")}</span>
+          <span>${formatBool(whatsapp?.linked)}</span>
         </div>
         <div>
-          <span class="label">Running</span>
-          <span>${whatsapp?.running ? "Yes" : "No"}</span>
+          <span class="label">${t("channelsView.status.running")}</span>
+          <span>${formatBool(whatsapp?.running)}</span>
         </div>
         <div>
-          <span class="label">Connected</span>
-          <span>${whatsapp?.connected ? "Yes" : "No"}</span>
+          <span class="label">${t("channelsView.status.connected")}</span>
+          <span>${formatBool(whatsapp?.connected)}</span>
         </div>
         <div>
-          <span class="label">Last connect</span>
-          <span>
-            ${whatsapp?.lastConnectedAt ? formatRelativeTimestamp(whatsapp.lastConnectedAt) : "n/a"}
-          </span>
+          <span class="label">${t("channelsView.status.lastConnect")}</span>
+          <span>${formatRelativeOrNa(whatsapp?.lastConnectedAt)}</span>
         </div>
         <div>
-          <span class="label">Last message</span>
-          <span>
-            ${whatsapp?.lastMessageAt ? formatRelativeTimestamp(whatsapp.lastMessageAt) : "n/a"}
-          </span>
+          <span class="label">${t("channelsView.status.lastMessage")}</span>
+          <span>${formatRelativeOrNa(whatsapp?.lastMessageAt)}</span>
         </div>
         <div>
-          <span class="label">Auth age</span>
-          <span>
-            ${whatsapp?.authAgeMs != null ? formatDurationHuman(whatsapp.authAgeMs) : "n/a"}
-          </span>
+          <span class="label">${t("channelsView.status.authAge")}</span>
+          <span>${formatDurationOrNa(whatsapp?.authAgeMs)}</span>
         </div>
       </div>
 
@@ -84,31 +79,31 @@ export function renderWhatsAppCard(params: {
           ?disabled=${props.whatsappBusy}
           @click=${() => props.onWhatsAppStart(false)}
         >
-          ${props.whatsappBusy ? "Working…" : "Show QR"}
+          ${props.whatsappBusy ? t("common.working") : t("channelsView.actions.showQr")}
         </button>
         <button
           class="btn"
           ?disabled=${props.whatsappBusy}
           @click=${() => props.onWhatsAppStart(true)}
         >
-          Relink
+          ${t("channelsView.actions.relink")}
         </button>
         <button
           class="btn"
           ?disabled=${props.whatsappBusy}
           @click=${() => props.onWhatsAppWait()}
         >
-          Wait for scan
+          ${t("channelsView.actions.waitForScan")}
         </button>
         <button
           class="btn danger"
           ?disabled=${props.whatsappBusy}
           @click=${() => props.onWhatsAppLogout()}
         >
-          Logout
+          ${t("channelsView.actions.logout")}
         </button>
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          Refresh
+          ${t("common.refresh")}
         </button>
       </div>
 

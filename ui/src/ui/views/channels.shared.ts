@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
+import { formatDurationHuman, formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
@@ -34,5 +36,26 @@ export function renderChannelAccountCount(
   if (count < 2) {
     return nothing;
   }
-  return html`<div class="account-count">Accounts (${count})</div>`;
+  return html`<div class="account-count">${t("channelsView.accountCount", { count: String(count) })}</div>`;
+}
+
+export function formatBool(value: boolean | null | undefined, allowNa = false): string {
+  if (typeof value === "boolean") {
+    return value ? t("common.yes") : t("common.no");
+  }
+  return allowNa ? t("common.na") : t("common.no");
+}
+
+export function formatRelativeOrNa(value: number | null | undefined): string {
+  return value != null ? formatRelativeTimestamp(value) : t("common.na");
+}
+
+export function formatDurationOrNa(value: number | null | undefined): string {
+  return value != null ? formatDurationHuman(value) : t("common.na");
+}
+
+export function formatProbeResult(ok: boolean): string {
+  return t("channelsView.probe.result", {
+    status: ok ? t("channelsView.probe.ok") : t("channelsView.probe.failed"),
+  });
 }
