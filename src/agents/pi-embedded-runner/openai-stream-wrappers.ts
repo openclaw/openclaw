@@ -197,7 +197,7 @@ export function createOpenAIResponsesContextManagementWrapper(
             compactThreshold,
           });
         }
-        originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, model);
       },
     });
   };
@@ -226,7 +226,7 @@ export function createOpenAIServiceTierWrapper(
             payloadObj.service_tier = serviceTier;
           }
         }
-        originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, model);
       },
     });
   };

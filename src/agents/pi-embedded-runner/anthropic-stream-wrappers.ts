@@ -303,7 +303,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             );
           }
         }
-        originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, model);
       },
     });
   };
