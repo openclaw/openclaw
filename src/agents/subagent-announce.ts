@@ -51,7 +51,9 @@ import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
+/** Default timeout for announce calls. Bump from 60s to 90s to avoid false timeouts
+ * when agent runs take 60–80s (gateway timeout was causing retries and duplicate delivery #41235). */
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
@@ -158,10 +160,17 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
   });
 }
 
+function isGatewayTimeoutError(error: unknown): boolean {
+  return /gateway timeout/i.test(summarizeDeliveryError(error));
+}
+
 async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
   run: () => Promise<T>;
+  /** When true, do not retry on gateway timeout. Prevents duplicate user delivery
+   * when server may have succeeded but client timed out (#41235). */
+  noRetryOnGatewayTimeout?: boolean;
 }): Promise<T> {
   let retryIndex = 0;
   for (;;) {
@@ -171,6 +180,12 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
+      if (
+        params.noRetryOnGatewayTimeout === true &&
+        isGatewayTimeoutError(err)
+      ) {
+        throw err;
+      }
       const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
@@ -790,6 +805,7 @@ async function sendSubagentAnnounceDirectly(params: {
         ? "completion direct announce agent call"
         : "direct announce agent call",
       signal: params.signal,
+      noRetryOnGatewayTimeout: params.expectsCompletionMessage,
       run: async () =>
         await callGateway({
           method: "agent",

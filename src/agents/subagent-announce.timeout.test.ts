@@ -131,13 +131,13 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
   });
 
-  it("uses 60s timeout by default for direct announce agent call", async () => {
+  it("uses 90s timeout by default for direct announce agent call", async () => {
     await runAnnounceFlowForTest("run-default-timeout");
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(directAgentCall?.timeoutMs).toBe(60_000);
+    expect(directAgentCall?.timeoutMs).toBe(90_000);
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
