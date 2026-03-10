@@ -25,7 +25,7 @@ import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
-import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
+import { resolveChannelGroupRequireMention, resolveNeverReply } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -583,6 +583,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
         return;
       }
+    }
+    if (
+      isGroup &&
+      resolveNeverReply({ cfg: deps.cfg, channel: "signal", accountId: deps.accountId })
+    ) {
+      logVerbose("signal: group message stored for context (neverReply: true)");
+      const historyKey = groupId ?? "unknown";
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: deps.groupHistories,
+        historyKey,
+        limit: deps.historyLimit,
+        entry: {
+          sender: envelope.sourceName ?? senderDisplay,
+          body: messageText,
+          timestamp: envelope.timestamp ?? undefined,
+          messageId:
+            typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+        },
+      });
+      return;
     }
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;

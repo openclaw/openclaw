@@ -3,6 +3,7 @@ import { parseActivationCommand } from "../../../auto-reply/group-activation.js"
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
+import { resolveNeverReply } from "../../../config/group-policy.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
@@ -84,6 +85,13 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
+  }
+
+  if (resolveNeverReply({ cfg: params.cfg, channel: "whatsapp" })) {
+    return skipGroupMessageAndStoreHistory(
+      params,
+      `Group message stored (neverReply) in ${params.conversationId}`,
+    );
   }
 
   noteGroupMember(

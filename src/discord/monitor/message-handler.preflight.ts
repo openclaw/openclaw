@@ -19,6 +19,7 @@ import { logInboundDrop } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
 import { loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import { resolveNeverReply } from "../../config/group-policy.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import {
@@ -565,6 +566,17 @@ export async function preflightDiscordMessage(
           messageId: message.id,
         } satisfies HistoryEntry)
       : undefined;
+
+  if (isGuildMessage && resolveNeverReply({ cfg: freshCfg, channel: "discord" })) {
+    logDebug("[discord-preflight] drop: neverReply");
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.guildHistories,
+      historyKey: messageChannelId,
+      limit: params.historyLimit,
+      entry: historyEntry ?? null,
+    });
+    return null;
+  }
 
   const threadOwnerId = threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined;
   const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({

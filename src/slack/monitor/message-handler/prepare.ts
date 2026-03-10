@@ -24,6 +24,7 @@ import { resolveConversationLabel } from "../../../channels/conversation-label.j
 import { logInboundDrop } from "../../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { recordInboundSession } from "../../../channels/session.js";
+import { resolveNeverReply } from "../../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
@@ -416,6 +417,28 @@ export async function prepareSlackMessage(params: {
     : true;
   if (isRoom && !channelUserAuthorized) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
+    return null;
+  }
+
+  if (
+    (isRoom || isGroupDm) &&
+    resolveNeverReply({ cfg: ctx.cfg, channel: "slack", accountId: account.accountId })
+  ) {
+    logVerbose("slack: drop message (neverReply)");
+    const pendingText = (message.text ?? "").trim();
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: ctx.channelHistories,
+      historyKey,
+      limit: ctx.historyLimit,
+      entry: pendingText
+        ? {
+            sender: await resolveSenderName(),
+            body: pendingText,
+            timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+            messageId: message.ts,
+          }
+        : null,
+    });
     return null;
   }
 
