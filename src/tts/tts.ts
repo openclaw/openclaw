@@ -323,7 +323,10 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
     azure: {
-      apiKey: raw.azure?.apiKey,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.azure?.apiKey,
+        path: "messages.tts.azure.apiKey",
+      }),
       endpoint:
         raw.azure?.endpoint?.trim() ||
         resolveAzureFoundryEndpointEnv(process.env)?.value ||

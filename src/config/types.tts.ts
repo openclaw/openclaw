@@ -64,7 +64,7 @@ export type TtsConfig = {
   };
   /** Azure AI Foundry TTS configuration. */
   azure?: {
-    apiKey?: string;
+    apiKey?: SecretInput;
     endpoint?: string;
     model?: string;
     voice?: string;
