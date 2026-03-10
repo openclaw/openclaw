@@ -1257,6 +1257,37 @@ describe("sendMessageTelegram", () => {
       expect.objectContaining({ maxBytes: 42 * 1024 * 1024 }),
     );
   });
+
+  it("chunks long html-mode text and keeps buttons on the last chunk only", async () => {
+    const chatId = "123";
+    const htmlText = `<b>${"A".repeat(5000)}</b>`;
+
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 90, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 91, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, htmlText, {
+      token: "tok",
+      api,
+      textMode: "html",
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const firstCall = sendMessage.mock.calls[0];
+    const secondCall = sendMessage.mock.calls[1];
+    expect(firstCall).toBeDefined();
+    expect(secondCall).toBeDefined();
+    expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
+    expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
+    expect(firstCall[2]?.reply_markup).toBeUndefined();
+    expect(secondCall[2]?.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
+    });
+    expect(res.messageId).toBe("91");
+  });
 });
 
 describe("reactMessageTelegram", () => {

@@ -241,6 +241,158 @@ export function renderTelegramHtmlText(
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
 }
 
+type TelegramHtmlTag = {
+  name: string;
+  openTag: string;
+  closeTag: string;
+};
+
+const TELEGRAM_SELF_CLOSING_HTML_TAGS = new Set(["br"]);
+
+function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
+  return tags.map((tag) => tag.openTag).join("");
+}
+
+function buildTelegramHtmlCloseSuffix(tags: TelegramHtmlTag[]): string {
+  return tags
+    .slice()
+    .toReversed()
+    .map((tag) => tag.closeTag)
+    .join("");
+}
+
+function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
+  return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
+}
+
+function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
+  if (text.length <= maxLength) {
+    return text.length;
+  }
+  const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
+  let splitAt = normalizedMaxLength;
+  const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
+  const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
+  if (lastAmpersand > lastSemicolon) {
+    splitAt = lastAmpersand;
+  }
+  return splitAt > 0 ? splitAt : normalizedMaxLength;
+}
+
+function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
+  for (let index = tags.length - 1; index >= 0; index -= 1) {
+    if (tags[index]?.name === name) {
+      tags.splice(index, 1);
+      return;
+    }
+  }
+}
+
+export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
+  if (!html) {
+    return [];
+  }
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (html.length <= normalizedLimit) {
+    return [html];
+  }
+
+  const chunks: string[] = [];
+  const openTags: TelegramHtmlTag[] = [];
+  let current = "";
+  let chunkHasContent = false;
+
+  const resetCurrent = () => {
+    current = buildTelegramHtmlOpenPrefix(openTags);
+    chunkHasContent = false;
+  };
+
+  const flushCurrent = () => {
+    if (!chunkHasContent) {
+      return;
+    }
+    chunks.push(`${current}${buildTelegramHtmlCloseSuffix(openTags)}`);
+    resetCurrent();
+  };
+
+  const appendText = (segment: string) => {
+    let remaining = segment;
+    while (remaining.length > 0) {
+      const available =
+        normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
+      if (available <= 0) {
+        const prefix = buildTelegramHtmlOpenPrefix(openTags);
+        if (!chunkHasContent && current === prefix) {
+          current += remaining;
+          chunkHasContent = true;
+          remaining = "";
+          break;
+        }
+        flushCurrent();
+        continue;
+      }
+      if (remaining.length <= available) {
+        current += remaining;
+        chunkHasContent = true;
+        break;
+      }
+      const splitAt = findTelegramHtmlSafeSplitIndex(remaining, available);
+      current += remaining.slice(0, splitAt);
+      chunkHasContent = true;
+      remaining = remaining.slice(splitAt);
+      flushCurrent();
+    }
+  };
+
+  resetCurrent();
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    appendText(html.slice(lastIndex, tagStart));
+
+    const rawTag = match[0];
+    const isClosing = match[1] === "</";
+    const tagName = match[2].toLowerCase();
+    const isSelfClosing =
+      !isClosing &&
+      (TELEGRAM_SELF_CLOSING_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+
+    if (!isClosing) {
+      const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;
+      if (
+        chunkHasContent &&
+        current.length +
+          rawTag.length +
+          buildTelegramHtmlCloseSuffixLength(openTags) +
+          nextCloseLength >
+          normalizedLimit
+      ) {
+        flushCurrent();
+      }
+    }
+
+    current += rawTag;
+    chunkHasContent = true;
+    if (isClosing) {
+      popTelegramHtmlTag(openTags, tagName);
+    } else if (!isSelfClosing) {
+      openTags.push({
+        name: tagName,
+        openTag: rawTag,
+        closeTag: `</${tagName}>`,
+      });
+    }
+    lastIndex = tagEnd;
+  }
+
+  appendText(html.slice(lastIndex));
+  flushCurrent();
+  return chunks.length > 0 ? chunks : [html];
+}
+
 function splitTelegramChunkByHtmlLimit(
   chunk: MarkdownIR,
   htmlLimit: number,

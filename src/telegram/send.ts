@@ -26,7 +26,7 @@ import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helper
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText } from "./format.js";
+import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -600,13 +600,14 @@ export async function sendMessageTelegram(
     rawText: string,
     params?: Record<string, unknown>,
     fallbackText?: string,
+    preRenderedHtml?: string,
   ) => {
     return await withTelegramThreadFallback(
       params,
       "message",
       opts.verbose,
       async (effectiveParams, label) => {
-        const htmlText = renderHtmlText(rawText);
+        const htmlText = preRenderedHtml ?? renderHtmlText(rawText);
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
           baseParams.link_preview_options = linkPreviewOptions;
@@ -645,6 +646,47 @@ export async function sendMessageTelegram(
         });
       },
     );
+  };
+
+  const buildTextParams = (isLastChunk: boolean) =>
+    hasThreadParams || (isLastChunk && replyMarkup)
+      ? {
+          ...threadParams,
+          ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }
+      : undefined;
+
+  const sendChunkedText = async (
+    rawText: string,
+    context: string,
+  ): Promise<{ messageId: string; chatId: string }> => {
+    const chunks = splitTelegramHtmlChunks(rawText, 4000).map((chunk) => ({
+      rawText: chunk,
+      htmlText: chunk,
+      plainText: chunk,
+    }));
+
+    let lastMessageId = "";
+    let lastChatId = chatId;
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      if (!chunk) {
+        continue;
+      }
+      const isLastChunk = index === chunks.length - 1;
+      const res = await sendTelegramText(
+        chunk.rawText,
+        buildTextParams(isLastChunk),
+        chunk.plainText,
+        chunk.htmlText,
+      );
+      const messageId = resolveTelegramMessageIdOrThrow(res, context);
+      recordSentMessage(chatId, messageId);
+      lastMessageId = String(messageId);
+      lastChatId = String(res?.chat?.id ?? chatId);
+    }
+
+    return { messageId: lastMessageId, chatId: lastChatId };
   };
 
   if (mediaUrl) {
@@ -801,21 +843,15 @@ export async function sendMessageTelegram(
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
-      const textParams =
-        hasThreadParams || replyMarkup
-          ? {
-              ...threadParams,
-              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-            }
-          : undefined;
+      if (textMode === "html") {
+        const textResult = await sendChunkedText(followUpText, "text follow-up send");
+        return { messageId: textResult.messageId, chatId: resolvedChatId };
+      }
+      const textParams = buildTextParams(true);
       const textRes = await sendTelegramText(followUpText, textParams);
-      // Return the text message ID as the "main" message (it's the actual content).
       const textMessageId = resolveTelegramMessageIdOrThrow(textRes, "text follow-up send");
       recordSentMessage(chatId, textMessageId);
-      return {
-        messageId: String(textMessageId),
-        chatId: resolvedChatId,
-      };
+      return { messageId: String(textMessageId), chatId: resolvedChatId };
     }
 
     return { messageId: String(mediaMessageId), chatId: resolvedChatId };
@@ -824,22 +860,22 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const textParams =
-    hasThreadParams || replyMarkup
-      ? {
-          ...threadParams,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }
-      : undefined;
-  const res = await sendTelegramText(text, textParams, opts.plainText);
-  const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
-  recordSentMessage(chatId, messageId);
+  let textResult: { messageId: string; chatId: string };
+  if (textMode === "html") {
+    textResult = await sendChunkedText(text, "text send");
+  } else {
+    const textParams = buildTextParams(true);
+    const res = await sendTelegramText(text, textParams, opts.plainText);
+    const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
+    recordSentMessage(chatId, messageId);
+    textResult = { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  }
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
     direction: "outbound",
   });
-  return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  return textResult;
 }
 
 export async function sendTypingTelegram(

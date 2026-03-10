@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -111,5 +111,13 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml("||secret|| trailing ||");
     expect(res).toContain("<tg-spoiler>secret</tg-spoiler>");
     expect(res).toContain("trailing ||");
+  });
+
+  it("splits long html text without breaking balanced tags", () => {
+    const chunks = splitTelegramHtmlChunks(`<b>${"A".repeat(5000)}</b>`, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks[0]).toMatch(/^<b>.*<\/b>$/);
+    expect(chunks[1]).toMatch(/^<b>.*<\/b>$/);
   });
 });
