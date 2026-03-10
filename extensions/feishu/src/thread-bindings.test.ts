@@ -12,8 +12,6 @@ import {
   createFeishuThreadBindingManager,
   ensureFeishuThreadBindingManagerForAccount,
   rehydrateFeishuThreadBindingManagerForAccount,
-  recordFeishuNativeThreadBinding,
-  resolveFeishuThreadBindingByNativeThread,
   stopFeishuThreadBindingManager,
 } from "./thread-bindings.js";
 
@@ -53,71 +51,6 @@ describe("feishu thread bindings", () => {
         conversationId: "oc_chat_1:thread:om_root_1",
       })?.targetSessionKey,
     ).toBe("agent:codex:acp:s1");
-  });
-
-  it("resolves native thread id aliases back to the canonical root-message binding", async () => {
-    createFeishuThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:s1",
-      targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_chat_1:thread:om_root_1",
-      },
-      placement: "current",
-      metadata: {
-        nativeThreadId: "omt_thread_1",
-      },
-    });
-
-    expect(
-      resolveFeishuThreadBindingByNativeThread({
-        accountId: "default",
-        chatId: "oc_chat_1",
-        nativeThreadId: "omt_thread_1",
-      })?.targetSessionKey,
-    ).toBe("agent:codex:acp:s1");
-  });
-
-  it("records native thread ids for an existing canonical binding", async () => {
-    createFeishuThreadBindingManager({
-      accountId: "default",
-      persist: false,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:s3",
-      targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_chat_3:thread:om_root_3",
-      },
-      placement: "current",
-    });
-
-    const updated = recordFeishuNativeThreadBinding({
-      accountId: "default",
-      chatId: "oc_chat_3",
-      rootMessageId: "om_root_3",
-      nativeThreadId: "omt_thread_3",
-    });
-
-    expect(updated?.nativeThreadId).toBe("omt_thread_3");
-    expect(
-      resolveFeishuThreadBindingByNativeThread({
-        accountId: "default",
-        chatId: "oc_chat_3",
-        nativeThreadId: "omt_thread_3",
-      })?.conversation.conversationId,
-    ).toBe("oc_chat_3:thread:om_root_3");
   });
 
   it("re-registers the shared adapter when reusing an existing manager", () => {
@@ -189,9 +122,6 @@ describe("feishu thread bindings", () => {
         conversationId: "oc_chat_4:thread:om_root_4",
       },
       placement: "current",
-      metadata: {
-        nativeThreadId: "omt_thread_4",
-      },
     });
 
     stopFeishuThreadBindingManager("default");
@@ -201,13 +131,6 @@ describe("feishu thread bindings", () => {
         channel: "feishu",
         accountId: "default",
         conversationId: "oc_chat_4:thread:om_root_4",
-      }),
-    ).toBeNull();
-    expect(
-      resolveFeishuThreadBindingByNativeThread({
-        accountId: "default",
-        chatId: "oc_chat_4",
-        nativeThreadId: "omt_thread_4",
       }),
     ).toBeNull();
   });
@@ -305,7 +228,6 @@ describe("feishu thread bindings", () => {
                 targetSessionKey: "agent:codex:acp:fresh",
                 boundAt: 2,
                 lastActivityAt: 3,
-                nativeThreadId: "omt_thread_rebind",
               },
             ],
           },
@@ -327,9 +249,6 @@ describe("feishu thread bindings", () => {
         }),
       ).toMatchObject({
         targetSessionKey: "agent:codex:acp:fresh",
-        metadata: {
-          nativeThreadId: "omt_thread_rebind",
-        },
       });
     } finally {
       process.env.HOME = previousHome;
@@ -365,9 +284,6 @@ describe("feishu thread bindings", () => {
           conversationId: "oc_chat_unbind:thread:om_root_unbind",
         },
         placement: "current",
-        metadata: {
-          nativeThreadId: "omt_thread_unbind",
-        },
       });
       await __testing.flushPersistQueueForTests("work");
 
@@ -386,13 +302,6 @@ describe("feishu thread bindings", () => {
           channel: "feishu",
           accountId: "work",
           conversationId: "oc_chat_unbind:thread:om_root_unbind",
-        }),
-      ).toBeNull();
-      expect(
-        resolveFeishuThreadBindingByNativeThread({
-          accountId: "work",
-          chatId: "oc_chat_unbind",
-          nativeThreadId: "omt_thread_unbind",
         }),
       ).toBeNull();
     } finally {
@@ -498,9 +407,6 @@ describe("feishu thread bindings", () => {
           conversationId,
         },
         placement: "current",
-        metadata: {
-          nativeThreadId: "omt_pending_unbind",
-        },
       });
       await __testing.flushPersistQueueForTests("work");
 

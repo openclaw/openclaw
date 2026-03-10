@@ -1771,8 +1771,16 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("preserves topic routing when a rootless follow-up is recovered by native thread id", async () => {
+  it("ignores topic-binding recovery when a follow-up only carries thread_id", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:group:oc-bound-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
 
     const cfg: ClawdbotConfig = {
       channels: {
@@ -1803,9 +1811,6 @@ describe("handleFeishuMessage command authorization", () => {
         conversationId: "oc-bound-group:thread:om_bound_root",
       },
       placement: "current",
-      metadata: {
-        nativeThreadId: "omt_bound_native",
-      },
     });
 
     const event: FeishuMessageEvent = {
@@ -1823,15 +1828,12 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        SessionKey: "agent:main:acp:bound-rootless",
-        MessageThreadId: "om_bound_root",
-        RootMessageId: "om_bound_root",
-        NativeChannelId: "oc-bound-group:thread:om_bound_root",
-        OriginatingTo: "chat:oc-bound-group",
-      }),
-    );
+    const context = mockFinalizeInboundContext.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(context.SessionKey).toBe("agent:main:feishu:group:oc-bound-group");
+    expect(context.MessageThreadId).toBeUndefined();
+    expect(context.RootMessageId).toBeUndefined();
+    expect(context.NativeChannelId).toBeUndefined();
+    expect(context.OriginatingTo).toBe("chat:oc-bound-group");
   });
 
   it("rehydrates persisted Feishu rebinds before trusting a stale local binding", async () => {
@@ -1880,9 +1882,6 @@ describe("handleFeishuMessage command authorization", () => {
           conversationId: "oc-rebind-group:thread:om_rebind_root",
         },
         placement: "current",
-        metadata: {
-          nativeThreadId: "omt_rebind_native",
-        },
       });
       await __testing.flushPersistQueueForTests("default");
 
@@ -1899,7 +1898,6 @@ describe("handleFeishuMessage command authorization", () => {
                 targetSessionKey: "agent:main:acp:fresh-topic",
                 boundAt: 2,
                 lastActivityAt: 3,
-                nativeThreadId: "omt_rebind_native",
               },
             ],
           },
@@ -1992,9 +1990,6 @@ describe("handleFeishuMessage command authorization", () => {
           conversationId: "oc-unbound-group:thread:om_unbound_root",
         },
         placement: "current",
-        metadata: {
-          nativeThreadId: "omt_unbound_native",
-        },
       });
       await __testing.flushPersistQueueForTests("default");
 

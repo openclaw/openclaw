@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
-const recordFeishuNativeThreadBindingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -15,10 +14,6 @@ vi.mock("./media.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
-}));
-
-vi.mock("./thread-bindings.js", () => ({
-  recordFeishuNativeThreadBinding: recordFeishuNativeThreadBindingMock,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -203,55 +198,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     );
   });
 
-  it("records native thread aliases for routed Feishu thread targets", async () => {
-    sendMessageFeishuMock.mockResolvedValue({
-      messageId: "text_msg",
-      nativeThreadId: "omt_thread_3",
-    });
-
-    await sendText({
-      cfg: {} as any,
-      to: "channel:oc_thread_chat:thread:om_root_3",
-      text: "hello",
-      accountId: "main",
-    } as any);
-
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
-      accountId: "main",
-      chatId: "oc_thread_chat",
-      rootMessageId: "om_root_3",
-      nativeThreadId: "omt_thread_3",
-    });
-  });
-
-  it("records native thread aliases for explicit threadId sends", async () => {
-    sendMessageFeishuMock.mockResolvedValue({
-      messageId: "text_msg",
-      nativeThreadId: "omt_thread_explicit",
-    });
-
-    await sendText({
-      cfg: {} as any,
-      to: "chat:oc_thread_chat",
-      threadId: "om_root_explicit",
-      text: "hello",
-      accountId: "main",
-    } as any);
-
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
-      accountId: "main",
-      chatId: "oc_thread_chat",
-      rootMessageId: "om_root_explicit",
-      nativeThreadId: "omt_thread_explicit",
-    });
-  });
-
   it("normalizes canonical thread targets before explicit threadId sends", async () => {
-    sendMessageFeishuMock.mockResolvedValue({
-      messageId: "text_msg",
-      nativeThreadId: "omt_thread_explicit",
-    });
-
     await sendText({
       cfg: {} as any,
       to: "chat:oc_thread_chat:thread:om_root_3",
@@ -269,12 +216,6 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         accountId: "main",
       }),
     );
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
-      accountId: "main",
-      chatId: "oc_thread_chat",
-      rootMessageId: "om_root_explicit",
-      nativeThreadId: "omt_thread_explicit",
-    });
   });
 });
 
@@ -460,35 +401,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     );
   });
 
-  it("records native thread aliases for explicit threadId media sends", async () => {
-    sendMediaFeishuMock.mockResolvedValue({
-      messageId: "media_msg",
-      nativeThreadId: "omt_thread_media",
-    });
-
-    await feishuOutbound.sendMedia?.({
-      cfg: {} as any,
-      to: "chat:oc_thread_chat",
-      text: "",
-      mediaUrl: "https://example.com/image.png",
-      threadId: "om_root_media",
-      accountId: "main",
-    });
-
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
-      accountId: "main",
-      chatId: "oc_thread_chat",
-      rootMessageId: "om_root_media",
-      nativeThreadId: "omt_thread_media",
-    });
-  });
-
   it("normalizes canonical thread targets before explicit threadId media sends", async () => {
-    sendMediaFeishuMock.mockResolvedValue({
-      messageId: "media_msg",
-      nativeThreadId: "omt_thread_media_explicit",
-    });
-
     await feishuOutbound.sendMedia?.({
       cfg: {} as any,
       to: "chat:oc_thread_chat:thread:om_root_media_old",
@@ -507,11 +420,5 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         accountId: "main",
       }),
     );
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
-      accountId: "main",
-      chatId: "oc_thread_chat",
-      rootMessageId: "om_root_media_explicit",
-      nativeThreadId: "omt_thread_media_explicit",
-    });
   });
 });

@@ -37,9 +37,7 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 import {
   ensureFeishuThreadBindingManagerForAccount,
-  recordFeishuNativeThreadBinding,
   rehydrateFeishuThreadBindingManagerForAccount,
-  resolveFeishuThreadBindingByNativeThread,
 } from "./thread-bindings.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -76,9 +74,8 @@ function resolveFeishuThreadRootMessageId(ctx: FeishuMessageContext): string | u
   if (ctx.rootId?.trim()) {
     return ctx.rootId.trim();
   }
-  // Root messages in Feishu topics can arrive without root_id. Follow-up
-  // replies without root_id must not fall back to their own message id,
-  // or the derived thread key will drift on every turn.
+  // Topic root messages can arrive without root_id, but follow-ups should
+  // not derive their own conversation key from thread_id/message_id.
   if (ctx.threadId?.trim() && !ctx.parentId?.trim()) {
     return ctx.messageId.trim();
   }
@@ -88,12 +85,7 @@ function resolveFeishuThreadRootMessageId(ctx: FeishuMessageContext): string | u
 function resolveFeishuNativeConversationId(params: {
   chatId: string;
   threadRootMessageId?: string;
-  threadBindingConversationId?: string;
 }): string {
-  const boundConversationId = params.threadBindingConversationId?.trim();
-  if (boundConversationId) {
-    return boundConversationId;
-  }
   return (
     buildFeishuThreadConversationId({
       chatId: params.chatId,
@@ -1239,22 +1231,13 @@ export async function handleFeishuMessage(params: {
     let threadBinding = null as ReturnType<
       ReturnType<typeof getSessionBindingService>["resolveByConversation"]
     >;
-    if (isGroup && (threadConversationId || ctx.threadId?.trim())) {
+    if (isGroup && threadConversationId) {
       const resolveThreadBinding = () =>
-        (threadConversationId
-          ? getSessionBindingService().resolveByConversation({
-              channel: "feishu",
-              accountId: account.accountId,
-              conversationId: threadConversationId,
-            })
-          : null) ??
-        (ctx.threadId?.trim()
-          ? resolveFeishuThreadBindingByNativeThread({
-              accountId: account.accountId,
-              chatId: ctx.chatId,
-              nativeThreadId: ctx.threadId,
-            })
-          : null);
+        getSessionBindingService().resolveByConversation({
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: threadConversationId,
+        });
       threadBinding = resolveThreadBinding();
       if (shouldRehydrateFeishuThreadBindings(account.accountId)) {
         // ACP thread bindings can be rebound by a different module instance than
@@ -1270,18 +1253,6 @@ export async function handleFeishuMessage(params: {
       }
       const boundSessionKey = threadBinding?.targetSessionKey?.trim();
       if (threadBinding && boundSessionKey) {
-        if (
-          ctx.threadId?.trim() &&
-          threadBinding.conversation.conversationId === threadConversationId &&
-          threadRootMessageId
-        ) {
-          recordFeishuNativeThreadBinding({
-            accountId: account.accountId,
-            chatId: ctx.chatId,
-            rootMessageId: threadRootMessageId,
-            nativeThreadId: ctx.threadId,
-          });
-        }
         const boundAgentId =
           typeof threadBinding.metadata?.agentId === "string" &&
           threadBinding.metadata.agentId.trim()
@@ -1435,11 +1406,10 @@ export async function handleFeishuMessage(params: {
         parseFeishuConversationTarget(threadBinding?.conversation.conversationId ?? "")
           .rootMessageId;
       const nativeConversationId =
-        isGroup && (canonicalThreadRootMessageId || threadBinding?.conversation.conversationId)
+        isGroup && canonicalThreadRootMessageId
           ? resolveFeishuNativeConversationId({
               chatId: ctx.chatId,
               threadRootMessageId: canonicalThreadRootMessageId,
-              threadBindingConversationId: threadBinding?.conversation.conversationId,
             })
           : undefined;
       return core.channel.reply.finalizeInboundContext({
