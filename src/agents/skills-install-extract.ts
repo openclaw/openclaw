@@ -3,6 +3,9 @@ import fs from "node:fs";
 import {
   createTarEntrySafetyChecker,
   extractArchive as extractArchiveSafe,
+  mergeExtractedTreeIntoDestination,
+  prepareArchiveDestinationDir,
+  withStagedArchiveDestination,
 } from "../infra/archive.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseTarVerboseMetadata } from "./skills-install-tar-verbose.js";
@@ -66,6 +69,7 @@ export async function extractArchive(params: {
         return { stdout: "", stderr: "tar not found on PATH", code: null };
       }
 
+      const destinationRealDir = await prepareArchiveDestinationDir(targetDir);
       const preflightHash = await hashFileSha256(archivePath);
 
       // Preflight list to prevent zip-slip style traversal before extraction.
@@ -99,7 +103,7 @@ export async function extractArchive(params: {
         };
       }
       const checkTarEntrySafety = createTarEntrySafetyChecker({
-        rootDir: targetDir,
+        rootDir: destinationRealDir,
         stripComponents: strip,
         escapeLabel: "targetDir",
       });
@@ -129,11 +133,25 @@ export async function extractArchive(params: {
         };
       }
 
-      const argv = ["tar", "xf", archivePath, "-C", targetDir];
-      if (strip > 0) {
-        argv.push("--strip-components", String(strip));
-      }
-      return await runCommandWithTimeout(argv, { timeoutMs });
+      return await withStagedArchiveDestination({
+        destinationRealDir,
+        run: async (stagingDir) => {
+          const argv = ["tar", "xf", archivePath, "-C", stagingDir];
+          if (strip > 0) {
+            argv.push("--strip-components", String(strip));
+          }
+          const extractResult = await runCommandWithTimeout(argv, { timeoutMs });
+          if (extractResult.code !== 0) {
+            return extractResult;
+          }
+          await mergeExtractedTreeIntoDestination({
+            sourceDir: stagingDir,
+            destinationDir: destinationRealDir,
+            destinationRealDir,
+          });
+          return extractResult;
+        },
+      });
     }
 
     return { stdout: "", stderr: `unsupported archive type: ${archiveType}`, code: null };
