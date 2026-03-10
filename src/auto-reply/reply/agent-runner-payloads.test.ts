@@ -169,7 +169,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("filters final payload when block pipeline sent same text with different replyToId", async () => {
+  it("drops all final payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
       isAborted: () => false,
@@ -179,7 +179,8 @@ describe("buildReplyPayloads media filter integration", () => {
       stop: () => {},
       hasBuffered: () => false,
     };
-    // Pipeline streamed successfully → shouldDropFinalPayloads = true → all final payloads dropped
+    // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
+    // without aborting, so hasSentPayload is never reached.
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       blockStreamingEnabled: true,

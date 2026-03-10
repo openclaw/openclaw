@@ -52,6 +52,8 @@ export type MattermostAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Control reply threading (off|first|all). Default: "all". */
+  replyToMode?: "off" | "first" | "all";
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /** Action toggles for this account. */
