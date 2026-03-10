@@ -38,7 +38,7 @@ import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
-import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import { runDaemonInstall, runDaemonRestart, runDaemonStop } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -819,6 +819,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
+  let serviceStoppedForWindowsPackageUpdate = false;
   const gatewayPort = resolveGatewayPort(
     configSnapshot.valid ? configSnapshot.config : undefined,
     process.env,
@@ -829,6 +830,26 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       if (loaded) {
         restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
         refreshGatewayServiceEnv = true;
+        if (process.platform === "win32" && updateInstallKind === "package") {
+          if (!opts.json) {
+            defaultRuntime.log(
+              theme.muted("Stopping service before package update to release file locks..."),
+            );
+          }
+          try {
+            await runDaemonStop({ json: opts.json || undefined });
+            serviceStoppedForWindowsPackageUpdate = true;
+          } catch (err) {
+            defaultRuntime.error(
+              [
+                `Failed to stop gateway before update: ${String(err)}`,
+                `Run \`${replaceCliName(formatCliCommand("openclaw gateway stop"), CLI_NAME)}\` and retry.`,
+              ].join("\n"),
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+        }
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
@@ -862,6 +883,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   printResult(result, { ...opts, hideSteps: showProgress });
 
   if (result.status === "error") {
+    if (serviceStoppedForWindowsPackageUpdate && shouldRestart) {
+      if (!opts.json) {
+        defaultRuntime.log(
+          theme.warn("Update failed after stopping the service. Attempting to restore it..."),
+        );
+      }
+      try {
+        if (restartScriptPath) {
+          await runRestartScript(restartScriptPath);
+        } else {
+          await runDaemonRestart();
+        }
+      } catch (err) {
+        if (!opts.json) {
+          defaultRuntime.log(theme.warn(`Failed to restore service automatically: ${String(err)}`));
+        }
+      }
+    }
     defaultRuntime.exit(1);
     return;
   }
