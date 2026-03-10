@@ -96,8 +96,13 @@ export async function runCli(argv: string[] = process.argv) {
   // Install undici's EnvHttpProxyAgent as the global dispatcher so all
   // outbound HTTP — including LLM streaming — routes through the proxy.
   if (hasProxyEnvConfigured()) {
-    const { EnvHttpProxyAgent, setGlobalDispatcher } = await import("undici");
-    setGlobalDispatcher(new EnvHttpProxyAgent());
+    try {
+      const { EnvHttpProxyAgent, setGlobalDispatcher } = await import("undici");
+      setGlobalDispatcher(new EnvHttpProxyAgent());
+    } catch (err) {
+      // Non-fatal: log and continue without proxy. A bad proxy URL should not crash the CLI.
+      console.warn("[openclaw] Failed to install proxy dispatcher:", err);
+    }
   }
 
   try {
