@@ -892,7 +892,7 @@ Primary reference:
 
 - `channels.telegram.enabled`: enable/disable channel startup.
 - `channels.telegram.botToken`: bot token (BotFather).
-- `channels.telegram.tokenFile`: read token from file path.
+- `channels.telegram.tokenFile`: read token from a regular file path. Symlinks are rejected.
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can recover allowlist entries from pairing-store files in allowlist migration flows.
 - `channels.telegram.actions.poll`: enable or disable Telegram poll creation (default: enabled; still requires `sendMessage`).
@@ -953,7 +953,7 @@ Primary reference:
 
 Telegram-specific high-signal fields:
 
-- startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*`
+- startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*` (`tokenFile` must point to a regular file; symlinks are rejected)
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
