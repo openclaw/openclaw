@@ -4,6 +4,7 @@ import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  formatAcpClientStopReason,
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
   resolvePermissionRequest,
@@ -109,6 +110,20 @@ describe("resolveAcpClientSpawnEnv", () => {
 
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
     expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+});
+
+describe("formatAcpClientStopReason", () => {
+  it("suppresses default end_turn stop reason output", () => {
+    expect(formatAcpClientStopReason("end_turn")).toBeNull();
+  });
+
+  it("suppresses missing stop reason output", () => {
+    expect(formatAcpClientStopReason(undefined)).toBeNull();
+  });
+
+  it("renders non-default stop reasons for visibility", () => {
+    expect(formatAcpClientStopReason("max_tokens")).toBe("\n[max_tokens]\n");
   });
 });
 
