@@ -138,6 +138,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["opencode-zen"],
   },
   {
+    value: "opencode-go",
+    label: "OpenCode Go",
+    hint: "API key",
+    choices: ["opencode-go"],
+  },
+  {
     value: "xiaomi",
     label: "Xiaomi",
     hint: "API key",
@@ -295,7 +301,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Highspeed",
-    hint: "Official fast tier",
+    hint: "Official fast tier (legacy: Lightning)",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

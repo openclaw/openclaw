@@ -33,6 +33,7 @@ model as `provider/model`.
 - [Mistral](/providers/mistral)
 - [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)
+- [OpenCode Go](/providers/opencode-go)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)

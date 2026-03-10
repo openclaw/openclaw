@@ -39,6 +39,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [NVIDIA](/providers/nvidia)
 - [Ollama (local models)](/providers/ollama)
 - [OpenAI (API + Codex)](/providers/openai)
+- [OpenCode Go](/providers/opencode-go)
 - [OpenCode Zen](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)

@@ -3,6 +3,7 @@ import {
   setByteplusApiKey,
   setCloudflareAiGatewayConfig,
   setMoonshotApiKey,
+  setOpencodeGoApiKey,
   setOpenaiApiKey,
   setVolcengineApiKey,
 } from "./onboard-auth.js";
@@ -22,6 +23,7 @@ describe("onboard auth credentials secret refs", () => {
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "VOLCANO_ENGINE_API_KEY",
     "BYTEPLUS_API_KEY",
+    "OPENCODE_API_KEY",
   ]);
 
   afterEach(async () => {
@@ -206,5 +208,21 @@ describe("onboard auth credentials secret refs", () => {
       keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
     });
     expect(parsed.profiles?.["byteplus:default"]?.key).toBeUndefined();
+  });
+
+  it("stores env-backed opencode-go key as keyRef in ref mode", async () => {
+    await expectStoredAuthKey({
+      prefix: "openclaw-onboard-auth-credentials-opencode-go-ref-",
+      envVar: "OPENCODE_API_KEY",
+      envValue: "sk-opencode-go-env",
+      profileId: "opencode-go:default",
+      apply: async (agentDir) => {
+        await setOpencodeGoApiKey("sk-opencode-go-env", agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
+      },
+      expected: {
+        keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+      },
+      absent: ["key"],
+    });
   });
 });
