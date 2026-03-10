@@ -261,6 +261,7 @@ function Toggle({
 
 export function ToolsPanel({ agentId, request }: ToolsPanelProps) {
   const [configForm, setConfigForm] = useState<Record<string, unknown> | null>(null);
+  const [configHash, setConfigHash] = useState<string | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
@@ -279,6 +280,7 @@ export function ToolsPanel({ agentId, request }: ToolsPanelProps) {
     try {
       const res = await request<ConfigSnapshot>("config.get");
       setConfigForm(res.config ?? {});
+      setConfigHash(res.hash ?? null);
       setConfigDirty(false);
     } catch (e) {
       console.error(e);
@@ -320,12 +322,13 @@ export function ToolsPanel({ agentId, request }: ToolsPanelProps) {
   }, [agentId, loadConfig, loadTools, loadSkills]);
 
   const handleConfigSave = async () => {
-    if (!configForm) {
+    if (!configForm || !configHash) {
       return;
     }
     setConfigSaving(true);
     try {
-      await request("config.set", { config: configForm });
+      const raw = JSON.stringify(configForm);
+      await request("config.set", { raw, baseHash: configHash });
       setConfigDirty(false);
     } catch (e) {
       console.error("Failed to save config:", e);
