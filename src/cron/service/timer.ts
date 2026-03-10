@@ -1142,11 +1142,11 @@ export async function executeJobCore(
     return resolveAbortError();
   }
 
-  onExecutionStart?.();
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message: job.payload.message,
     abortSignal,
+    onExecutionStart,
   });
 
   if (abortSignal?.aborted) {
