@@ -268,6 +268,37 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     );
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
+
+  it("emits the shared approver-DM notice when another approval client received the request", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable-dm-redirect",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Telegram",
+            sentApproverDms: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Approval required. I sent the allowed approvers DMs.",
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
 });
 
 describe("messaging tool media URL tracking", () => {

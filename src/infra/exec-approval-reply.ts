@@ -30,7 +30,12 @@ export type ExecApprovalUnavailableReplyParams = {
   warningText?: string;
   channelLabel?: string;
   reason: ExecApprovalUnavailableReason;
+  sentApproverDms?: boolean;
 };
+
+export function getExecApprovalApproverDmNoticeText(): string {
+  return "Approval required. I sent the allowed approvers DMs.";
+}
 
 function buildFence(text: string, language?: string): string {
   let fence = "```";
@@ -129,6 +134,13 @@ export function buildExecApprovalUnavailableReplyPayload(
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText, "");
+  }
+
+  if (params.sentApproverDms) {
+    lines.push(getExecApprovalApproverDmNoticeText());
+    return {
+      text: lines.join("\n\n"),
+    };
   }
 
   if (params.reason === "initiating-platform-disabled") {

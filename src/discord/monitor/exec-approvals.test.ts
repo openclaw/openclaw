@@ -800,6 +800,80 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
 
     clearPendingTimeouts(handler);
   });
+
+  it("posts an in-channel note when target is dm and the request came from a non-DM discord conversation", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockRestPost.mockImplementation(
+      async (route: string, params?: { body?: { content?: string } }) => {
+        if (route === Routes.channelMessages("999888777")) {
+          expect(params?.body?.content).toContain("I sent the allowed approvers DMs");
+          return { id: "note-1", channel_id: "999888777" };
+        }
+        if (route === Routes.userChannels()) {
+          return { id: "dm-1" };
+        }
+        if (route === Routes.channelMessages("dm-1")) {
+          return { id: "msg-1", channel_id: "dm-1" };
+        }
+        throw new Error(`unexpected route: ${route}`);
+      },
+    );
+
+    await internals.handleApprovalRequested(createRequest());
+
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("999888777"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: expect.stringContaining("I sent the allowed approvers DMs"),
+        }),
+      }),
+    );
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("dm-1"),
+      expect.objectContaining({
+        body: expect.any(Object),
+      }),
+    );
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("does not post an in-channel note when the request already came from a discord DM", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockRestPost.mockImplementation(async (route: string) => {
+      if (route === Routes.userChannels()) {
+        return { id: "dm-1" };
+      }
+      if (route === Routes.channelMessages("dm-1")) {
+        return { id: "msg-1", channel_id: "dm-1" };
+      }
+      throw new Error(`unexpected route: ${route}`);
+    });
+
+    await internals.handleApprovalRequested(
+      createRequest({ sessionKey: "agent:main:discord:dm:123" }),
+    );
+
+    expect(mockRestPost).not.toHaveBeenCalledWith(
+      Routes.channelMessages("999888777"),
+      expect.anything(),
+    );
+
+    clearPendingTimeouts(handler);
+  });
 });
 
 describe("DiscordExecApprovalHandler gateway auth resolution", () => {

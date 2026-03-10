@@ -1,6 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { loadConfig } from "../config/config.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
-import { resolveExecApprovalInitiatingSurfaceState } from "../infra/exec-approval-surface.js";
+import {
+  hasConfiguredExecApprovalDmRoute,
+  resolveExecApprovalInitiatingSurfaceState,
+} from "../infra/exec-approval-surface.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -179,6 +183,10 @@ export async function processGatewayAllowlist(
       channel: params.turnSourceChannel,
       accountId: params.turnSourceAccountId,
     });
+    const cfg = loadConfig();
+    const sentApproverDms =
+      (initiatingSurface.kind === "disabled" || initiatingSurface.kind === "unsupported") &&
+      hasConfiguredExecApprovalDmRoute(cfg);
     const unavailableReason =
       preResolvedDecision === null
         ? "no-approval-route"
@@ -323,6 +331,7 @@ export async function processGatewayAllowlist(
                     warningText,
                     reason: unavailableReason,
                     channelLabel: initiatingSurface.channelLabel,
+                    sentApproverDms,
                   }).text ?? "")
                 : buildApprovalPendingMessage({
                     warningText,
@@ -340,6 +349,7 @@ export async function processGatewayAllowlist(
                 status: "approval-unavailable",
                 reason: unavailableReason,
                 channelLabel: initiatingSurface.channelLabel,
+                sentApproverDms,
                 host: "gateway",
                 command: params.command,
                 cwd: params.workdir,

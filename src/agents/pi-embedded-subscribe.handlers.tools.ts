@@ -187,6 +187,7 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
   warningText?: string;
   channelLabel?: string;
+  sentApproverDms?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -212,6 +213,7 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     reason,
     warningText: typeof details.warningText === "string" ? details.warningText : undefined,
     channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+    sentApproverDms: details.sentApproverDms === true,
   };
 }
 
@@ -258,6 +260,7 @@ function emitToolResultOutput(params: {
           reason: approvalUnavailable.reason,
           warningText: approvalUnavailable.warningText,
           channelLabel: approvalUnavailable.channelLabel,
+          sentApproverDms: approvalUnavailable.sentApproverDms,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
