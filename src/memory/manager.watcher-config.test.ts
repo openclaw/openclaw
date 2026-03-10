@@ -96,6 +96,7 @@ describe("memory watcher config", () => {
       ]),
     );
     expect(options.ignoreInitial).toBe(true);
+    expect(options.depth).toBe(2);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
     const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
