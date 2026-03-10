@@ -1,4 +1,4 @@
-import { discoverModelScopeModels, isModelScopePolicyLocked } from "../agents/modelscope-models.js";
+import { discoverModelScopeModels } from "../agents/modelscope-models.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
@@ -83,13 +83,6 @@ export async function applyAuthChoiceModelScope(
               ? defaultRef
               : options[0].value,
           });
-
-  if (isModelScopePolicyLocked(selectedModelRef)) {
-    await params.prompter.note(
-      "Provider locked — direct model selection without router policies.",
-      "ModelScope",
-    );
-  }
 
   const applied = await applyDefaultModelChoice({
     config: nextConfig,

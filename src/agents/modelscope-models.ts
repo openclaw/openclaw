@@ -12,13 +12,6 @@ export const MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1";
  */
 export const MODELSCOPE_POLICY_SUFFIXES: readonly string[] = [];
 
-/**
- * Always returns false since ModelScope doesn't have policy-locked models.
- */
-export function isModelScopePolicyLocked(_modelRef: string): boolean {
-  return false;
-}
-
 /** Default cost — all ModelScope models are currently free. */
 const MODELSCOPE_DEFAULT_COST = {
   input: 0,
@@ -67,7 +60,7 @@ export const MODELSCOPE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "Qwen/Qwen3-8B",
     name: "Qwen3 8B",
-    reasoning: false,
+    reasoning: true,
     input: ["text"],
     contextWindow: 32768,
     maxTokens: 8192,
@@ -76,7 +69,7 @@ export const MODELSCOPE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "Qwen/Qwen3-32B",
     name: "Qwen3 32B",
-    reasoning: false,
+    reasoning: true,
     input: ["text"],
     contextWindow: 32768,
     maxTokens: 8192,
