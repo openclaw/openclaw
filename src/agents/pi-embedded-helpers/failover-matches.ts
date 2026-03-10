@@ -17,7 +17,7 @@ const ERROR_PATTERNS = {
     "tokens per day",
   ],
   overloaded: [
-    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
+    /overloaded_error|"type"\s*:\s*"overloaded_error"|负载(?:已经)?达到上限/i,
     "overloaded",
     // Match "service unavailable" only when combined with an explicit overload
     // indicator — a generic 503 from a proxy/CDN should not be classified as
@@ -47,6 +47,7 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
+    "stream ended before first chunk",
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,

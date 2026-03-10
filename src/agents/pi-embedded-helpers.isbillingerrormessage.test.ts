@@ -731,6 +731,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(ANTHROPIC_OVERLOADED_PAYLOAD)).toBe("overloaded");
+    expect(
+      classifyFailoverReason(
+        '500 {"error":{"type":"new_api_error","message":"当前模型 claude-opus-4-6 负载已经达到上限，请稍后重试"}}',
+      ),
+    ).toBe("overloaded");
     expect(classifyFailoverReason(OPENROUTER_CREDITS_MESSAGE)).toBe("billing");
     expect(classifyFailoverReason(TOGETHER_PAYMENT_REQUIRED_MESSAGE)).toBe("billing");
     expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
@@ -781,6 +786,7 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("stream ended before first chunk")).toBe("timeout");
     expect(classifyFailoverReason("Connection error.")).toBe("timeout");
     expect(classifyFailoverReason("fetch failed")).toBe("timeout");
     expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
