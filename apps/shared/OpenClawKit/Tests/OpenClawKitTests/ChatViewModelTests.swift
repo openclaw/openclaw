@@ -605,6 +605,39 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
     }
 
+    @Test func selectingProviderQualifiedModelDisambiguatesDuplicateModelIDs() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: OpenClawChatSessionsDefaults(model: "openrouter/gpt-4.1-mini", contextTokens: nil),
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: "openrouter/gpt-4.1-mini"),
+            ])
+        let models = [
+            modelChoice(id: "gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
+            modelChoice(id: "gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openrouter"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        #expect(await MainActor.run { vm.modelSelectionID } == "openrouter/gpt-4.1-mini")
+
+        await MainActor.run { vm.selectModel("openai/gpt-4.1-mini") }
+
+        try await waitUntil("provider-qualified model patched") {
+            let patched = await transport.patchedModels()
+            return patched == ["openai/gpt-4.1-mini"]
+        }
+    }
+
     @Test func explicitThinkingLevelWinsOverHistoryAndPersistsChanges() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",

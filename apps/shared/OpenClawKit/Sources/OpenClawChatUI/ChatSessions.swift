@@ -1,7 +1,7 @@
 import Foundation
 
 public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
-    public var id: String { self.modelID }
+    public var id: String { self.selectionID }
 
     public let modelID: String
     public let name: String
@@ -15,13 +15,18 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         self.contextWindow = contextWindow
     }
 
-    public var displayLabel: String {
+    /// Provider-qualified model ref used for picker identity and selection tags.
+    public var selectionID: String {
         if self.modelID.contains("/") {
             return self.modelID
         }
         let trimmedProvider = self.provider.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedProvider.isEmpty else { return self.modelID }
         return "\(trimmedProvider)/\(self.modelID)"
+    }
+
+    public var displayLabel: String {
+        self.selectionID
     }
 }
 

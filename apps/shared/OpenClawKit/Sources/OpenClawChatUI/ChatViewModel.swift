@@ -163,7 +163,7 @@ public final class OpenClawChatViewModel {
     }
 
     public var defaultModelLabel: String {
-        guard let defaultModelID = self.normalizedModelID(self.sessionDefaults?.model) else {
+        guard let defaultModelID = self.normalizedModelSelectionID(self.sessionDefaults?.model) else {
             return "Default"
         }
         return "Default: \(self.modelLabel(for: defaultModelID))"
@@ -510,8 +510,8 @@ public final class OpenClawChatViewModel {
         do {
             try await self.transport.setSessionModel(
                 sessionKey: self.sessionKey,
-                model: self.modelID(forSelectionID: next))
-            self.updateCurrentSessionModel(self.modelID(forSelectionID: next))
+                model: self.modelRef(forSelectionID: next))
+            self.updateCurrentSessionModel(self.modelRef(forSelectionID: next))
         } catch {
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
@@ -543,7 +543,7 @@ public final class OpenClawChatViewModel {
 
     private func syncSelectedModel() {
         let explicitModelID = self.sessions.first(where: { $0.key == self.sessionKey })?.model
-            .flatMap(self.normalizedModelID)
+            .flatMap(self.normalizedModelSelectionID)
         if let explicitModelID {
             self.modelSelectionID = explicitModelID
             return
@@ -557,14 +557,21 @@ public final class OpenClawChatViewModel {
         return trimmed
     }
 
-    private func normalizedModelID(_ modelID: String?) -> String? {
+    private func normalizedModelSelectionID(_ modelID: String?) -> String? {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        if trimmed.contains("/") {
+            return trimmed
+        }
+        let matches = self.modelChoices.filter { $0.modelID == trimmed }
+        if matches.count == 1 {
+            return matches[0].selectionID
+        }
         return trimmed
     }
 
-    private func modelID(forSelectionID selectionID: String) -> String? {
+    private func modelRef(forSelectionID selectionID: String) -> String? {
         let normalized = self.normalizedSelectionID(selectionID)
         if normalized == Self.defaultModelSelectionID {
             return nil
@@ -573,7 +580,8 @@ public final class OpenClawChatViewModel {
     }
 
     private func modelLabel(for modelID: String) -> String {
-        self.modelChoices.first(where: { $0.modelID == modelID })?.displayLabel ?? modelID
+        self.modelChoices.first(where: { $0.selectionID == modelID || $0.modelID == modelID })?.displayLabel ??
+            modelID
     }
 
     private func updateCurrentSessionModel(_ modelID: String?) {

@@ -113,7 +113,7 @@ struct OpenClawChatComposer: View {
         {
             Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
             ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.modelID)
+                Text(model.displayLabel).tag(model.selectionID)
             }
         }
         .labelsHidden()

@@ -80,8 +80,8 @@ import {
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
-import { OPENCODE_GO_DEFAULT_MODEL } from "./opencode-go-model-default.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
+import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./opencode-go-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
@@ -261,10 +261,10 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     envLabel: "OPENCODE_API_KEY",
     promptMessage: "Enter OpenCode Go API key",
     setCredential: setOpencodeGoApiKey,
-    defaultModel: OPENCODE_GO_DEFAULT_MODEL,
+    defaultModel: OPENCODE_GO_DEFAULT_MODEL_REF,
     applyDefaultConfig: applyOpencodeGoConfig,
     applyProviderConfig: applyOpencodeGoProviderConfig,
-    noteDefault: OPENCODE_GO_DEFAULT_MODEL,
+    noteDefault: OPENCODE_GO_DEFAULT_MODEL_REF,
     noteMessage: [
       "OpenCode Go provides access to Kimi, GLM, and MiniMax models through the Go endpoint.",
       "Get your API key at: https://opencode.ai/auth",
