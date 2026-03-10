@@ -132,10 +132,17 @@ function toArchiveSubpath(relativePath: string): string {
   return relativePath.replaceAll("\\", "/");
 }
 
+function isArchivePathWithin(child: string, parent: string): boolean {
+  const relative = path.posix.relative(parent, child);
+  return relative === "" || (!relative.startsWith("../") && relative !== "..");
+}
+
 function buildCoveredAssetArchivePath(params: {
+  kind: BackupAssetKind;
   coveredSourcePath: string;
   backupStateDir: string | undefined;
   stateArchivePath: string | undefined;
+  entryPaths: Set<string>;
 }): string | undefined {
   if (!params.backupStateDir || !params.stateArchivePath) {
     return undefined;
@@ -143,6 +150,7 @@ function buildCoveredAssetArchivePath(params: {
 
   const backupStateAliases = buildPathAliases(path.resolve(params.backupStateDir));
   const coveredSourceAliases = buildPathAliases(path.resolve(params.coveredSourcePath));
+  let fallbackCandidate: string | undefined;
 
   for (const backupStateAlias of backupStateAliases) {
     for (const coveredSourceAlias of coveredSourceAliases) {
@@ -155,15 +163,28 @@ function buildCoveredAssetArchivePath(params: {
         continue;
       }
 
-      return path.posix.join(params.stateArchivePath, toArchiveSubpath(relative));
+      const candidate = path.posix.join(params.stateArchivePath, toArchiveSubpath(relative));
+      fallbackCandidate ??= candidate;
+      const hasExactEntry = params.entryPaths.has(candidate);
+      const hasNestedEntry = [...params.entryPaths].some(
+        (entryPath) => entryPath !== candidate && isArchivePathWithin(entryPath, candidate),
+      );
+      if (params.kind === "config" ? hasExactEntry : hasExactEntry || hasNestedEntry) {
+        return candidate;
+      }
     }
   }
-  return undefined;
+  return fallbackCandidate;
 }
 
-function buildCoveredAssetManifestEntries(
-  manifest: Awaited<ReturnType<typeof readVerifiedBackupArchive>>["manifest"],
-): BackupManifestAsset[] {
+function buildCoveredAssetManifestEntries(params: {
+  verifiedArchive: Awaited<ReturnType<typeof readVerifiedBackupArchive>>;
+  currentStateDir: string;
+  currentConfigPath: string;
+  currentOauthDir: string;
+}): BackupManifestAsset[] {
+  const verifiedArchive = params.verifiedArchive;
+  const manifest = verifiedArchive.manifest;
   const supportedCoveredKinds: BackupAssetKind[] = ["config", "credentials"];
   const explicitKinds = new Set(manifest.assets.map((asset) => asset.kind));
   const stateAssetArchivePath = manifest.assets.find(
@@ -177,21 +198,31 @@ function buildCoveredAssetManifestEntries(
       continue;
     }
 
-    const coveredEntry = coveredEntries.find(
+    const activeTargetPath = kind === "config" ? params.currentConfigPath : params.currentOauthDir;
+    if (isPathWithin(activeTargetPath, params.currentStateDir)) {
+      continue;
+    }
+
+    const skippedCoveredEntry = coveredEntries.find(
       (entry) =>
         entry?.kind === kind &&
         entry?.reason === "covered" &&
         typeof entry?.sourcePath === "string" &&
         entry.sourcePath.trim().length > 0,
     );
-    if (!coveredEntry || typeof coveredEntry.sourcePath !== "string") {
+    const legacyCoveredSourcePath =
+      kind === "config" ? manifest.paths?.configPath : manifest.paths?.oauthDir;
+    const coveredSourcePath = skippedCoveredEntry?.sourcePath ?? legacyCoveredSourcePath;
+    if (!coveredSourcePath?.trim()) {
       continue;
     }
 
     const archivePath = buildCoveredAssetArchivePath({
-      coveredSourcePath: coveredEntry.sourcePath,
+      kind,
+      coveredSourcePath,
       backupStateDir: manifest.paths?.stateDir,
       stateArchivePath: stateAssetArchivePath,
+      entryPaths: verifiedArchive.entryPaths,
     });
     if (!archivePath) {
       continue;
@@ -199,7 +230,7 @@ function buildCoveredAssetManifestEntries(
 
     synthesized.push({
       kind,
-      sourcePath: coveredEntry.sourcePath,
+      sourcePath: coveredSourcePath,
       archivePath,
     });
   }
@@ -370,7 +401,15 @@ async function buildRestoreItems(params: {
         currentStateDir,
       })
     : new Map<string, string>();
-  const restorableAssets = [...manifest.assets, ...buildCoveredAssetManifestEntries(manifest)];
+  const restorableAssets = [
+    ...manifest.assets,
+    ...buildCoveredAssetManifestEntries({
+      verifiedArchive,
+      currentStateDir,
+      currentConfigPath,
+      currentOauthDir,
+    }),
+  ];
 
   const items: BackupRestoreItem[] = [];
   const skipped: BackupRestoreSkipped[] = [];
@@ -477,6 +516,7 @@ async function extractAssetToStage(params: {
   archivePath: string;
   assetArchivePath: string;
   stageRoot: string;
+  targetType: RestoreTargetType;
 }): Promise<string> {
   const archivePathParts = params.assetArchivePath.split("/");
   const strip = Math.max(archivePathParts.length - 1, 0);
@@ -492,7 +532,15 @@ async function extractAssetToStage(params: {
     },
     filter: (entryPath) => matchesArchivePath(entryPath, params.assetArchivePath),
   });
-  return path.join(params.stageRoot, path.posix.basename(params.assetArchivePath));
+  const stagedAssetPath = path.join(params.stageRoot, path.posix.basename(params.assetArchivePath));
+  if (
+    params.targetType === "directory" &&
+    !(await pathExists(stagedAssetPath)) &&
+    (await fs.readdir(params.stageRoot).catch(() => [])).length > 0
+  ) {
+    return params.stageRoot;
+  }
+  return stagedAssetPath;
 }
 
 async function copyStagedAsset(params: {
@@ -572,6 +620,7 @@ async function stageRestoreItems(params: {
       archivePath: params.archivePath,
       assetArchivePath: item.archivePath,
       stageRoot: assetStageRoot,
+      targetType: item.targetType,
     });
     if (!(await pathExists(stagedAssetPath))) {
       throw new Error(`Restore staging failed for asset: ${item.archivePath}`);
@@ -729,50 +778,55 @@ export async function backupRestoreCommand(
 ): Promise<BackupRestoreResult> {
   const archivePath = resolveUserPath(opts.archive);
   const includeWorkspace = opts.includeWorkspace ?? true;
-  const restorePlan = await buildRestoreItems({
-    archivePath,
-    includeWorkspace,
-  });
+  const workingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-"));
+  try {
+    const pinnedArchivePath = path.join(workingRoot, "archive.tar.gz");
+    await fs.copyFile(archivePath, pinnedArchivePath);
 
-  await assertRestoreTargetsReady({
-    archivePath,
-    items: restorePlan.items,
-    force: Boolean(opts.force),
-  });
+    const restorePlan = await buildRestoreItems({
+      archivePath: pinnedArchivePath,
+      includeWorkspace,
+    });
 
-  const result: BackupRestoreResult = {
-    archivePath,
-    createdAt: restorePlan.createdAt,
-    runtimeVersion: restorePlan.runtimeVersion,
-    dryRun: Boolean(opts.dryRun),
-    force: Boolean(opts.force),
-    includeWorkspace,
-    restored: restorePlan.items.map((item) => ({
-      kind: item.kind,
-      sourcePath: item.sourcePath,
-      targetPath: item.targetPath,
-    })),
-    skipped: restorePlan.skipped,
-    updatedConfigWorkspacePaths: 0,
-  };
+    await assertRestoreTargetsReady({
+      archivePath,
+      items: restorePlan.items,
+      force: Boolean(opts.force),
+    });
 
-  if (!opts.dryRun) {
-    const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-"));
-    try {
+    const result: BackupRestoreResult = {
+      archivePath,
+      createdAt: restorePlan.createdAt,
+      runtimeVersion: restorePlan.runtimeVersion,
+      dryRun: Boolean(opts.dryRun),
+      force: Boolean(opts.force),
+      includeWorkspace,
+      restored: restorePlan.items.map((item) => ({
+        kind: item.kind,
+        sourcePath: item.sourcePath,
+        targetPath: item.targetPath,
+      })),
+      skipped: restorePlan.skipped,
+      updatedConfigWorkspacePaths: 0,
+    };
+
+    if (!opts.dryRun) {
+      const stageRoot = path.join(workingRoot, "staged-assets");
+      await fs.mkdir(stageRoot, { recursive: true });
       const stagedRestore = await stageRestoreItems({
-        archivePath,
+        archivePath: pinnedArchivePath,
         items: restorePlan.items,
         workspaceRewrites: restorePlan.workspaceRewrites,
         stageRoot,
       });
       await publishRestorePlan(stagedRestore.stagedItems);
       result.updatedConfigWorkspacePaths = stagedRestore.updatedConfigWorkspacePaths;
-    } finally {
-      await fs.rm(stageRoot, { recursive: true, force: true }).catch(() => undefined);
+      clearConfigCache();
     }
-    clearConfigCache();
-  }
 
-  runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatRestoreSummary(result));
-  return result;
+    runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatRestoreSummary(result));
+    return result;
+  } finally {
+    await fs.rm(workingRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
 }

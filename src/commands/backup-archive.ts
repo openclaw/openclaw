@@ -46,6 +46,7 @@ export type VerifiedBackupArchive = {
   archivePath: string;
   manifest: BackupManifest;
   entryCount: number;
+  entryPaths: Set<string>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -288,6 +289,10 @@ function isFileArchiveEntryType(type: string): boolean {
   return type === "File" || type === "OldFile" || type === "ContiguousFile";
 }
 
+function isDirectoryArchiveEntryType(type: string): boolean {
+  return type === "Directory";
+}
+
 function verifyManifestAgainstEntries(
   manifest: BackupManifest,
   entries: ArchiveEntryRecord[],
@@ -326,6 +331,12 @@ function verifyManifestAgainstEntries(
         );
       }
       continue;
+    }
+
+    if (exactEntry && !isDirectoryArchiveEntryType(exactEntry.type)) {
+      throw new Error(
+        `Archive has invalid file payload for directory manifest asset: ${assetArchivePath}`,
+      );
     }
 
     if (!exact && !nested) {
@@ -404,5 +415,6 @@ export async function readVerifiedBackupArchive(
     archivePath,
     manifest,
     entryCount: entries.length,
+    entryPaths: normalizedEntrySet,
   };
 }

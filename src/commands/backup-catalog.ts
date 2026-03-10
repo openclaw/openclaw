@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { selectStyled } from "../terminal/prompt-select-styled.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { pathExists, resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { readVerifiedBackupArchive } from "./backup-archive.js";
 
@@ -35,15 +36,6 @@ export type BackupListOptions = {
 
 const DEFAULT_BACKUP_DIRNAME = "Backups";
 
-function compareCatalogEntries(left: BackupCatalogEntry, right: BackupCatalogEntry): number {
-  const leftTime = Date.parse(left.createdAt);
-  const rightTime = Date.parse(right.createdAt);
-  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
-    return rightTime - leftTime;
-  }
-  return right.archivePath.localeCompare(left.archivePath);
-}
-
 async function canonicalizeSearchRoot(targetPath: string): Promise<string> {
   const resolved = path.resolve(targetPath);
   try {
@@ -67,8 +59,6 @@ async function resolveBackupSearchRoots(searchPath?: string): Promise<string[]> 
   }
 
   const roots = new Set<string>();
-  roots.add(await canonicalizeSearchRoot(process.cwd()));
-
   const homeDir = resolveHomeDir();
   if (homeDir) {
     const backupsDir = path.join(homeDir, DEFAULT_BACKUP_DIRNAME);
@@ -90,21 +80,25 @@ async function listCandidateArchives(searchRoot: string): Promise<string[]> {
 
 export async function readBackupCatalog(searchPath?: string): Promise<BackupCatalogResult> {
   const searchRoots = await resolveBackupSearchRoots(searchPath);
-  const archives: BackupCatalogEntry[] = [];
+  const archives: Array<{ entry: BackupCatalogEntry; sortTimeMs: number }> = [];
   const skipped: BackupCatalogSkipped[] = [];
 
   for (const searchRoot of searchRoots) {
     const candidates = await listCandidateArchives(searchRoot);
     for (const archivePath of candidates) {
       try {
+        const archiveStat = await fs.stat(archivePath);
         const verified = await readVerifiedBackupArchive(archivePath);
         archives.push({
-          archivePath,
-          displayArchivePath: shortenHomePath(archivePath),
-          createdAt: verified.manifest.createdAt,
-          runtimeVersion: verified.manifest.runtimeVersion,
-          assetCount: verified.manifest.assets.length,
-          includeWorkspace: verified.manifest.options?.includeWorkspace !== false,
+          entry: {
+            archivePath,
+            displayArchivePath: shortenHomePath(archivePath),
+            createdAt: verified.manifest.createdAt,
+            runtimeVersion: verified.manifest.runtimeVersion,
+            assetCount: verified.manifest.assets.length,
+            includeWorkspace: verified.manifest.options?.includeWorkspace !== false,
+          },
+          sortTimeMs: archiveStat.mtimeMs,
         });
       } catch (err) {
         skipped.push({
@@ -115,17 +109,24 @@ export async function readBackupCatalog(searchPath?: string): Promise<BackupCata
     }
   }
 
-  archives.sort(compareCatalogEntries);
+  archives.sort((left, right) => {
+    if (left.sortTimeMs !== right.sortTimeMs) {
+      return right.sortTimeMs - left.sortTimeMs;
+    }
+    return right.entry.archivePath.localeCompare(left.entry.archivePath);
+  });
   return {
     searchRoots,
-    archives,
+    archives: archives.map((archive) => archive.entry),
     skipped,
   };
 }
 
 function formatCatalogSummary(result: BackupCatalogResult): string {
   if (result.archives.length === 0) {
-    const roots = result.searchRoots.map((root) => shortenHomePath(root)).join(", ");
+    const roots = result.searchRoots
+      .map((root) => sanitizeTerminalText(shortenHomePath(root)))
+      .join(", ");
     return `No validated backup archives found in: ${roots}`;
   }
 
@@ -133,10 +134,13 @@ function formatCatalogSummary(result: BackupCatalogResult): string {
     `Found ${result.archives.length} validated backup archive${result.archives.length === 1 ? "" : "s"}:`,
   ];
   for (const archive of result.archives) {
+    const createdAt = sanitizeTerminalText(archive.createdAt);
+    const runtimeVersion = sanitizeTerminalText(archive.runtimeVersion);
+    const displayArchivePath = sanitizeTerminalText(archive.displayArchivePath);
     lines.push(
-      `- ${archive.createdAt} (${archive.runtimeVersion}, ${archive.assetCount} asset${
+      `- ${createdAt} (${runtimeVersion}, ${archive.assetCount} asset${
         archive.assetCount === 1 ? "" : "s"
-      }, workspace ${archive.includeWorkspace ? "included" : "excluded"}): ${archive.displayArchivePath}`,
+      }, workspace ${archive.includeWorkspace ? "included" : "excluded"}): ${displayArchivePath}`,
     );
   }
 
@@ -183,10 +187,11 @@ export async function chooseBackupArchiveForRestore(params: {
     message: "Choose a backup version to restore",
     options: result.archives.map((archive) => ({
       value: archive.archivePath,
-      label: archive.createdAt,
+      label: sanitizeTerminalText(archive.createdAt),
       hint:
-        `${archive.runtimeVersion} | ${archive.assetCount} asset${archive.assetCount === 1 ? "" : "s"} | ` +
-        archive.displayArchivePath,
+        `${sanitizeTerminalText(archive.runtimeVersion)} | ${archive.assetCount} asset${
+          archive.assetCount === 1 ? "" : "s"
+        } | ` + sanitizeTerminalText(archive.displayArchivePath),
     })),
   });
 

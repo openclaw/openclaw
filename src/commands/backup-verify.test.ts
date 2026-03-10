@@ -163,6 +163,50 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("fails when a directory-backed asset payload is a file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-state-file-payload-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const payloadFilePath = path.join(root, "payload", "posix", "tmp", ".openclaw");
+      await fs.mkdir(path.dirname(payloadFilePath), { recursive: true });
+      await fs.writeFile(payloadFilePath, "not-a-directory\n", "utf8");
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw`,
+          },
+        ],
+      };
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /invalid file payload for directory manifest asset/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when archive paths contain traversal segments", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-traversal-"));
     const archivePath = path.join(tempDir, "broken.tar.gz");

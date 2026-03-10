@@ -158,4 +158,39 @@ describe("backup catalog", () => {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
+
+  it("uses the default Backups directory instead of the current working directory", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const backupsDir = path.join(tempHome.home, "Backups");
+    const cwdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-catalog-cwd-"));
+    const previousCwd = process.cwd();
+
+    try {
+      await fs.mkdir(backupsDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const trusted = await backupCreateCommand(runtime, {
+        output: backupsDir,
+        nowMs: Date.parse("2026-03-09T00:00:00.000Z"),
+      });
+      await backupCreateCommand(runtime, {
+        output: cwdDir,
+        nowMs: Date.parse("2099-01-01T00:00:00.000Z"),
+      });
+
+      process.chdir(cwdDir);
+      const resolved = await resolveLatestBackupArchiveForRestore({});
+
+      expect(resolved).toBe(await fs.realpath(trusted.archivePath));
+    } finally {
+      process.chdir(previousCwd);
+      await fs.rm(cwdDir, { recursive: true, force: true });
+    }
+  });
 });
