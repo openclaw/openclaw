@@ -8,7 +8,10 @@ export type SentMessageCache = {
   has: (scope: string, lookup: SentMessageLookup) => boolean;
 };
 
-const SENT_MESSAGE_TEXT_TTL_MS = 5000;
+// Text TTL must be long enough to catch delayed self-echoes (the imsg daemon
+// can re-emit sent messages as inbound notifications several seconds later,
+// especially when multiple handles/devices are involved).
+const SENT_MESSAGE_TEXT_TTL_MS = 60_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
