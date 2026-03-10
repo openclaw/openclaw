@@ -220,6 +220,16 @@
 
 ---
 
+## Git 규칙 (크론/서브에이전트)
+
+**크론 세션과 서브에이전트는 git commit/push를 하지 않는다.**
+
+- 파일 수정은 자유롭게 (memory, Obsidian 등)
+- 작업 완료 후 `sessions_send`로 메인 세션에 통보:
+  - 메시지 형식: `[GIT_REQUEST] 수정 파일: memory/xxx.md, memory/yyy.md — 사유: daily intelligence update`
+- 메인 세션이 적절한 타이밍에 묶어서 커밋/push
+- 바틀넥 발생 시 Git 전용 persistent 세션으로 업그레이드 검토
+
 ## Implementation Note
 
 **실행 우선.** 판단이 애매한 작업은 스킵해도 됨. 목표는 건강 유지, 관료주의가 아님.
