@@ -1,0 +1,42 @@
+name: Build Release Branch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # Pack into a tarball (identical to what npm registry serves)
+      - run: pnpm pack
+
+      # Upload tarball as a GitHub release asset
+      # Creates/updates a "latest" release so the URL is stable:
+      # npm install -g https://github.com/Lilac-Labs/openclaw/releases/latest/download/openclaw.tgz
+      - run: |
+          mv openclaw-*.tgz openclaw.tgz
+          gh release delete latest --yes 2>/dev/null || true
+          gh release create latest openclaw.tgz \
+            --title "Latest Build" \
+            --notes "Auto-built from main ($(date -u +%Y-%m-%dT%H:%M:%SZ))" \
+            --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
