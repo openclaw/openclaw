@@ -486,6 +486,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.)
     // and multi-tool JSON payloads ({"tool_uses":[...]}) emitted by some providers.
+    // Note: stripMultiToolCallJsonPayload is stateless — it only strips complete JSON blobs
+    // within a single chunk. If a payload spans chunk boundaries, the partial fragment may
+    // slip through here; the authoritative defense is extractAssistantText at message_end.
     const chunk = stripMultiToolCallJsonPayload(
       stripDowngradedToolCallText(stripBlockTags(text, state.blockState)),
     ).trimEnd();

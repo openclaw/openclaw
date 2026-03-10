@@ -254,7 +254,10 @@ export function stripMultiToolCallJsonPayload(text: string): string {
     }
 
     // Lightweight check: "tool_uses": must appear near the start of the object.
-    const lookAhead = text.slice(startIdx, startIdx + 60);
+    // 60 chars is intentionally tight — target providers always emit this key first
+    // (e.g. `{"tool_uses":[...]}`), so a small window avoids scanning unrelated objects.
+    const TOOL_USES_LOOKAHEAD = 60;
+    const lookAhead = text.slice(startIdx, startIdx + TOOL_USES_LOOKAHEAD);
     if (!/"tool_uses"\s*:/.test(lookAhead)) {
       result += text.slice(cursor, startIdx + 1);
       cursor = startIdx + 1;
