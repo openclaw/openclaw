@@ -1,0 +1,39 @@
+name: Trigger D0 Gateway Skills Hot-Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - ".github/workflows/dispatch-d0-gateway.yaml"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    name: Trigger donut-backend Gateway Skills Hot-Update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_DEPLOY_APP_ID }}
+          private-key: ${{ secrets.GH_DEPLOY_APP_PRIVATE_KEY }}
+          owner: DonutLabs-ai
+          repositories: donut-backend
+
+      - name: Trigger donut-backend deploy-d0-gateway workflow
+        run: |
+          curl -sf -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+            https://api.github.com/repos/DonutLabs-ai/donut-backend/dispatches \
+            -d '{
+              "event_type": "openclaw-updated",
+              "client_payload": {
+                "openclaw_ref": "${{ github.ref_name }}",
+                "openclaw_sha": "${{ github.sha }}",
+                "triggered_by": "openclaw"
+              }
+            }'
+          echo "Triggered donut-backend gateway skills hot-update (openclaw ref: ${{ github.ref_name }}, sha: ${{ github.sha }})"
