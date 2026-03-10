@@ -514,6 +514,54 @@ describe("resolveModel", () => {
     });
   });
 
+  it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("keeps proxied openai completions transport untouched", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+    });
+  });
+
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     mockDiscoveredModel({
       provider: "anthropic",
