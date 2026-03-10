@@ -3,7 +3,7 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
-import { parsePostContent } from "./post.js";
+import { parsePostContent, escapeUnderscoresInMarkdownLinks } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -290,7 +290,9 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const messageText = escapeUnderscoresInMarkdownLinks(
+    getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode),
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -459,7 +461,9 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
+  const messageText = escapeUnderscoresInMarkdownLinks(
+    getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode),
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
