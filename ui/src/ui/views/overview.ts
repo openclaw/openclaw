@@ -7,6 +7,7 @@ import type { GatewayHelloOk } from "../gateway.ts";
 import { formatNextRun } from "../presenter.ts";
 import type { UiSettings } from "../storage.ts";
 import { shouldShowPairingHint } from "./overview-hints.ts";
+import { updateOverviewGatewayUrl } from "./overview-settings.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -205,11 +206,7 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
+                props.onSettingsChange(updateOverviewGatewayUrl(props.settings, v));
               }}
               placeholder="ws://100.x.y.z:18789"
             />
