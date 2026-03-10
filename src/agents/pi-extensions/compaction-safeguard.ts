@@ -29,6 +29,9 @@ const log = createSubsystemLogger("compaction-safeguard");
 
 // Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
+// Track session managers where compaction was already cancelled due to no real messages,
+// so repeated attempts within the same session run only log at debug level.
+const noRealMessagesCancelledSessions = new WeakSet<object>();
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -699,10 +702,28 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
-      log.warn(
-        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+      // When there are no summarizable messages (all messages are "recent"), cancelling
+      // compaction leaves context unchanged but the SDK will re-trigger on every subsequent
+      // assistant response — creating a cancel loop that blocks cron lanes (#41981).
+      // Instead of cancelling, return a minimal compaction result so the SDK writes a
+      // compaction boundary entry. This marks the session as "recently compacted" and
+      // prevents immediate re-triggering.
+      const alreadyCancelled = noRealMessagesCancelledSessions.has(ctx.sessionManager);
+      if (!alreadyCancelled) {
+        noRealMessagesCancelledSessions.add(ctx.sessionManager);
+      }
+      const logFn = alreadyCancelled ? log.debug.bind(log) : log.info.bind(log);
+      logFn(
+        "Compaction safeguard: no real conversation messages to summarize; writing empty compaction boundary to prevent re-trigger loop.",
       );
-      return { cancel: true };
+      const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
+      return {
+        compaction: {
+          summary: fallbackSummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+        },
+      };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
