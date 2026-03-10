@@ -43,6 +43,16 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("strips DeepSeek full-width delimiter tokens", () => {
+    expect(sanitizeUserFacingText("<｜Assistant｜>Hello there")).toBe("Hello there");
+    expect(sanitizeUserFacingText("<｜begin▁of▁sentence｜>Test")).toBe("Test");
+  });
+
+  it("strips mixed-case special tokens", () => {
+    expect(sanitizeUserFacingText("<|ASSISTANT|>response")).toBe("response");
+    expect(sanitizeUserFacingText("<|User|>prompt<|Assistant|>reply")).toBe("promptreply");
+  });
+
   it("does not strip normal angle brackets", () => {
     expect(sanitizeUserFacingText("a < b && c > d")).toBe("a < b && c > d");
   });
