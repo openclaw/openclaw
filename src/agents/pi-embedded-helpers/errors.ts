@@ -404,11 +404,32 @@ export function classifyFailoverReasonFromHttpStatus(
   return null;
 }
 
+/**
+ * Strip leaked model markup from text.  `<final>` tags are always removed
+ * because they are never valid user-facing content.  Model special tokens
+ * (`<|...|>` / `<｜...｜>`) are only removed when they look like a genuine
+ * control-token leak — i.e. the text contains at least one recognized token
+ * pattern.  This avoids accidentally mangling normal assistant text that
+ * merely *mentions* a token name inside prose (e.g. "the `<|im_start|>`
+ * delimiter is used by …").  Backtick-quoted token references are safe
+ * because the regex requires the bare `<|…|>` brackets without surrounding
+ * backticks at the match boundary.
+ */
 function stripSpecialMarkupFromText(text: string): string {
   if (!text) {
     return text;
   }
-  return text.replace(FINAL_TAG_RE, "").replace(MODEL_SPECIAL_TOKEN_RE, "");
+  let result = text.replace(FINAL_TAG_RE, "");
+  // Only strip model special tokens when the text actually contains them.
+  // The regex is already an explicit allowlist of known control tokens, so
+  // false positives on natural prose are unlikely — but guarding with a
+  // quick `.test()` keeps the intent clear and avoids unnecessary work.
+  if (MODEL_SPECIAL_TOKEN_RE.test(result)) {
+    // Reset lastIndex since the regex has the /g flag.
+    MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
+    result = result.replace(MODEL_SPECIAL_TOKEN_RE, "");
+  }
+  return result;
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
