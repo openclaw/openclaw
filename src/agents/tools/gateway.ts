@@ -116,19 +116,43 @@ function resolveGatewayOverrideToken(params: {
 /**
  * Resolves whether a GatewayCallOptions points to a local or remote gateway.
  * Returns "remote" when a remote gatewayUrl override is present, OR when
- * gateway.mode=remote is configured and no override is provided (config-based remote).
+ * gateway.mode=remote is configured with a gateway.remote.url set.
  * Returns "local" for explicit loopback URL overrides (127.0.0.1, localhost, [::1]).
- * Returns undefined only when no override is present and gateway.mode is not "remote"
- * (i.e. the default local gateway).
+ * Returns undefined when no override is present and the effective target is the local gateway
+ * (including the gateway.mode=remote + missing gateway.remote.url fallback-to-local case).
+ *
+ * This mirrors the URL resolution path used by callGateway/buildGatewayConnectionDetails so
+ * that deliveryContext suppression decisions are based on the actual connection target, not just
+ * the configured mode. Two mismatches fixed vs the previous version:
+ * 1. gateway.mode=remote without gateway.remote.url: callGateway falls back to local loopback;
+ *    classifying that as "remote" would incorrectly suppress deliveryContext.
+ * 2. Env URL overrides (OPENCLAW_GATEWAY_URL / CLAWDBOT_GATEWAY_URL) are picked up by
+ *    callGateway but were ignored here, causing incorrect local/remote classification.
  */
 export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverrideTarget | undefined {
   const cfg = loadConfig();
   if (trimToUndefined(opts?.gatewayUrl) === undefined) {
-    // No explicit URL override — fall back to config-based mode.
-    // When gateway.mode=remote, callGatewayTool() routes to the configured
-    // gateway.remote.url, so this is effectively a remote target even without
-    // an explicit gatewayUrl param.
-    return cfg.gateway?.mode === "remote" ? "remote" : undefined;
+    // No explicit gatewayUrl param — mirror callGateway's resolution path.
+    // Check env URL overrides first (same precedence as buildGatewayConnectionDetails).
+    const envUrlOverride =
+      trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
+      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL);
+    if (envUrlOverride !== undefined) {
+      try {
+        return validateGatewayUrlOverrideForAgentTools({
+          cfg,
+          urlOverride: envUrlOverride,
+        }).target;
+      } catch {
+        // Malformed or security-rejected env URL; fall through to config-based resolution.
+      }
+    }
+    // No env override. When mode=remote with a configured remote URL → truly remote.
+    // When mode=remote but remote.url is absent, callGateway falls back to local loopback —
+    // classify that as local (undefined) so deliveryContext is not suppressed.
+    const remoteUrl =
+      cfg.gateway?.mode === "remote" ? trimToUndefined(cfg.gateway?.remote?.url) : undefined;
+    return cfg.gateway?.mode === "remote" && remoteUrl !== undefined ? "remote" : undefined;
   }
   return validateGatewayUrlOverrideForAgentTools({
     cfg,

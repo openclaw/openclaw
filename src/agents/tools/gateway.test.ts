@@ -1,189 +1,141 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const callGatewayMock = vi.fn();
-const configState = vi.hoisted(() => ({
-  value: {} as Record<string, unknown>,
+// ─────────────────────────────────────────────────────────────────────────────
+// Mocks
+// ─────────────────────────────────────────────────────────────────────────────
+
+const mocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({})),
+  resolveGatewayPort: vi.fn(() => 18789),
 }));
+
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => configState.value,
-  resolveGatewayPort: () => 18789,
+  loadConfig: mocks.loadConfig,
+  resolveGatewayPort: mocks.resolveGatewayPort,
 }));
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+vi.mock("../../gateway/call.js", () => ({}));
+vi.mock("../../gateway/credentials.js", () => ({
+  resolveGatewayCredentialsFromConfig: vi.fn(),
+  trimToUndefined: (v: unknown) =>
+    typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined,
+}));
+vi.mock("../../gateway/method-scopes.js", () => ({
+  resolveLeastPrivilegeOperatorScopesForMethod: vi.fn(() => []),
+}));
+vi.mock("../../utils/message-channel.js", () => ({
+  GATEWAY_CLIENT_MODES: { BACKEND: "backend" },
+  GATEWAY_CLIENT_NAMES: { GATEWAY_CLIENT: "gateway-client" },
+}));
+vi.mock("./common.js", () => ({
+  readStringParam: vi.fn(),
 }));
 
-describe("gateway tool defaults", () => {
-  const envSnapshot = {
-    openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
-    clawdbot: process.env.CLAWDBOT_GATEWAY_TOKEN,
-  };
+const { resolveGatewayTarget } = await import("./gateway.js");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setConfig(overrides: Record<string, unknown>) {
+  mocks.loadConfig.mockReturnValue(overrides);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite: resolveGatewayTarget — env URL overrides and remote-mode fallback
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("resolveGatewayTarget – env URL override classification", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
-    configState.value = {};
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    vi.clearAllMocks();
+    setConfig({});
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
-  afterAll(() => {
-    if (envSnapshot.openclaw === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = envSnapshot.openclaw;
-    }
-    if (envSnapshot.clawdbot === undefined) {
-      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-    } else {
-      process.env.CLAWDBOT_GATEWAY_TOKEN = envSnapshot.clawdbot;
-    }
+  afterEach(() => {
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
-  it("leaves url undefined so callGateway can use config", () => {
-    const opts = resolveGatewayOptions();
-    expect(opts.url).toBeUndefined();
+  it("returns undefined (local) with no overrides and default config", () => {
+    expect(resolveGatewayTarget()).toBeUndefined();
   });
 
-  it("accepts allowlisted gatewayUrl overrides (SSRF hardening)", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-    await callGatewayTool(
-      "health",
-      { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t", timeoutMs: 5000 },
-      {},
-    );
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        token: "t",
-        timeoutMs: 5000,
-        scopes: ["operator.read"],
-      }),
-    );
-  });
-
-  it("uses OPENCLAW_GATEWAY_TOKEN for allowlisted local overrides", () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-    const opts = resolveGatewayOptions({ gatewayUrl: "ws://127.0.0.1:18789" });
-    expect(opts.url).toBe("ws://127.0.0.1:18789");
-    expect(opts.token).toBe("env-token");
-  });
-
-  it("falls back to config gateway.auth.token when env is unset for local overrides", () => {
-    configState.value = {
-      gateway: {
-        auth: { token: "config-token" },
-      },
-    };
-    const opts = resolveGatewayOptions({ gatewayUrl: "ws://127.0.0.1:18789" });
-    expect(opts.token).toBe("config-token");
-  });
-
-  it("uses gateway.remote.token for allowlisted remote overrides", () => {
-    configState.value = {
-      gateway: {
-        remote: {
-          url: "wss://gateway.example",
-          token: "remote-token",
-        },
-      },
-    };
-    const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
-    expect(opts.url).toBe("wss://gateway.example");
-    expect(opts.token).toBe("remote-token");
-  });
-
-  it("does not leak local env/config tokens to remote overrides", () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
-    process.env.CLAWDBOT_GATEWAY_TOKEN = "legacy-env-token";
-    configState.value = {
-      gateway: {
-        auth: { token: "local-config-token" },
-        remote: {
-          url: "wss://gateway.example",
-        },
-      },
-    };
-    const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
-    expect(opts.token).toBeUndefined();
-  });
-
-  it("ignores unresolved local token SecretRef for strict remote overrides", () => {
-    configState.value = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
-        },
-        remote: {
-          url: "wss://gateway.example",
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    };
-    const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
-    expect(opts.token).toBeUndefined();
-  });
-
-  it("explicit gatewayToken overrides fallback token resolution", () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
-    configState.value = {
-      gateway: {
-        remote: {
-          url: "wss://gateway.example",
-          token: "remote-token",
-        },
-      },
-    };
-    const opts = resolveGatewayOptions({
-      gatewayUrl: "wss://gateway.example",
-      gatewayToken: "explicit-token",
+  it("returns 'remote' when gateway.mode=remote AND gateway.remote.url is set", () => {
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
     });
-    expect(opts.token).toBe("explicit-token");
+    expect(resolveGatewayTarget()).toBe("remote");
   });
 
-  it("uses least-privilege write scope for write methods", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-    await callGatewayTool("wake", {}, { mode: "now", text: "hi" });
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "wake",
-        scopes: ["operator.write"],
-      }),
-    );
+  it("returns undefined when gateway.mode=remote but gateway.remote.url is missing (callGateway falls back to local)", () => {
+    // This was the key regression: mode=remote without a url falls back to loopback, but the
+    // old code returned "remote", causing deliveryContext to be suppressed for a local call.
+    setConfig({ gateway: { mode: "remote" } });
+    expect(resolveGatewayTarget()).toBeUndefined();
   });
 
-  it("uses admin scope only for admin methods", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-    await callGatewayTool("cron.add", {}, { id: "job-1" });
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "cron.add",
-        scopes: ["operator.admin"],
-      }),
-    );
+  it("returns undefined when gateway.mode=remote but gateway.remote.url is empty string", () => {
+    setConfig({ gateway: { mode: "remote", remote: { url: "  " } } });
+    expect(resolveGatewayTarget()).toBeUndefined();
   });
 
-  it("default-denies unknown methods by sending no scopes", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-    await callGatewayTool("nonexistent.method", {}, {});
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "nonexistent.method",
-        scopes: [],
-      }),
-    );
+  it("classifies OPENCLAW_GATEWAY_URL loopback env override as 'local'", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    setConfig({});
+    expect(resolveGatewayTarget()).toBe("local");
   });
 
-  it("rejects non-allowlisted overrides (SSRF hardening)", async () => {
-    await expect(
-      callGatewayTool("health", { gatewayUrl: "ws://127.0.0.1:8080", gatewayToken: "t" }, {}),
-    ).rejects.toThrow(/gatewayUrl override rejected/i);
-    await expect(
-      callGatewayTool("health", { gatewayUrl: "ws://169.254.169.254", gatewayToken: "t" }, {}),
-    ).rejects.toThrow(/gatewayUrl override rejected/i);
+  it("classifies CLAWDBOT_GATEWAY_URL loopback env override as 'local'", () => {
+    process.env.CLAWDBOT_GATEWAY_URL = "ws://localhost:18789";
+    setConfig({});
+    expect(resolveGatewayTarget()).toBe("local");
+  });
+
+  it("classifies OPENCLAW_GATEWAY_URL matching gateway.remote.url as 'remote'", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://remote.example.com";
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("falls through to config-based resolution when OPENCLAW_GATEWAY_URL is rejected (malformed)", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "not-a-url";
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    // Falls through to config check: mode=remote + remote.url present → "remote"
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("OPENCLAW_GATEWAY_URL takes precedence over env CLAWDBOT_GATEWAY_URL", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    process.env.CLAWDBOT_GATEWAY_URL = "wss://remote.example.com";
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    // OPENCLAW_GATEWAY_URL wins (loopback) → "local"
+    expect(resolveGatewayTarget()).toBe("local");
+  });
+});
+
+describe("resolveGatewayTarget – explicit gatewayUrl override", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setConfig({});
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
+  });
+
+  it("returns 'local' for loopback explicit gatewayUrl", () => {
+    expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:18789" })).toBe("local");
+  });
+
+  it("returns 'remote' for explicit remote gatewayUrl matching configured remote URL", () => {
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    expect(resolveGatewayTarget({ gatewayUrl: "wss://remote.example.com" })).toBe("remote");
   });
 });

@@ -98,7 +98,11 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
       bestEffort: true,
     });
   } catch {
-    // bestEffort: true means this should not throw, but guard anyway
+    // bestEffort: true means this should not throw, but guard anyway.
+    // If it does throw (channel plugin/runtime error before best-effort handling is applied),
+    // enqueue a system event so the user receives the restart notice even on delivery failure.
+    // This preserves the prior behaviour where delivery errors in this path produced a fallback event.
+    enqueueSystemEvent(message, { sessionKey });
   }
 
   // Step 2: trigger an agent resume turn so the agent can continue autonomously

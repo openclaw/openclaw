@@ -245,6 +245,21 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
 
     expect(mocks.agentCommand).toHaveBeenCalled();
   });
+
+  it("enqueues system event when deliverOutboundPayloads throws so user is not left silent", async () => {
+    // Guard: if the channel plugin throws before bestEffort handling kicks in, the catch block
+    // must enqueue a system event — otherwise the user receives neither the deterministic notice
+    // nor any fallback, regressing the prior behaviour. See PR #34580 CR comment 2909058539.
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("plugin error"));
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+    // Resume step must still run after delivery failure
+    expect(mocks.agentCommand).toHaveBeenCalled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
