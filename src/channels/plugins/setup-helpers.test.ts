@@ -30,7 +30,7 @@ describe("applySetupAccountConfigPatch", () => {
     });
   });
 
-  it("patches named account config and preserves existing account enabled flag", () => {
+  it("patches named account config, enables channel, and preserves account enabled flag", () => {
     const next = applySetupAccountConfigPatch({
       cfg: asConfig({
         channels: {

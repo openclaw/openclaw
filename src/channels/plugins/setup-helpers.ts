@@ -185,7 +185,8 @@ export function patchScopedAccountConfig(params: {
             ...existingAccount,
             ...(ensureAccountEnabled
               ? {
-                  enabled: true,
+                  enabled:
+                    typeof existingAccount.enabled === "boolean" ? existingAccount.enabled : true,
                 }
               : {}),
             ...accountPatch,
