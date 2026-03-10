@@ -32,6 +32,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleVoiceConnectUiHttpRequest } from "./voice-connect-ui.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -750,6 +751,18 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               root: controlUiRoot,
+            }),
+        });
+      }
+
+      // Voice Connect UI: separate SPA mounted under /voice-connect (or configured basePath).
+      if (configSnapshot.gateway?.voiceConnectUi?.enabled !== false) {
+        requestStages.push({
+          name: "voice-connect-ui-http",
+          run: () =>
+            handleVoiceConnectUiHttpRequest(req, res, {
+              basePath: configSnapshot.gateway?.voiceConnectUi?.basePath,
+              config: configSnapshot,
             }),
         });
       }
