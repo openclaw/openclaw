@@ -14,7 +14,7 @@ import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
-import { cacheStreamingText } from "./streaming-text-cache.js";
+
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -225,19 +225,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      // Cache full text before closing so the "Show full text" card-action
-      // button can retrieve it later.
-      const messageId = streaming.getMessageId();
-      if (messageId && streamText) {
-        cacheStreamingText(messageId, streamText);
-      }
-      // Show the "full text" button when tool calls or block replies occurred —
-      // these intermediate steps may cause incomplete card rendering.
+      // Append a collapsed panel with the full text when tool calls or block
+      // replies occurred — these intermediate steps may cause incomplete card
+      // rendering, and the panel lets users expand to see the complete response.
       const hadIntermediateSteps = hadBlockReply || hadToolUse;
       params.runtime.log?.(
-        `feishu[${account.accountId}] closeStreaming: hadBlockReply=${hadBlockReply}, hadToolUse=${hadToolUse}, hadIntermediateSteps=${hadIntermediateSteps}`,
+        `feishu[${account.accountId}] closeStreaming: hadBlockReply=${hadBlockReply}, hadToolUse=${hadToolUse}, addPanel=${hadIntermediateSteps}`,
       );
-      await streaming.close(text, { addShowFullTextButton: hadIntermediateSteps });
+      await streaming.close(text, { addFullTextPanel: hadIntermediateSteps });
     }
     streaming = null;
     streamingStartPromise = null;

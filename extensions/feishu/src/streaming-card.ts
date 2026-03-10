@@ -324,7 +324,7 @@ export class FeishuStreamingSession {
     await this.queue;
   }
 
-  async close(finalText?: string, options?: { addShowFullTextButton?: boolean }): Promise<void> {
+  async close(finalText?: string, options?: { addFullTextPanel?: boolean }): Promise<void> {
     if (!this.state || this.closed) {
       return;
     }
@@ -355,22 +355,29 @@ export class FeishuStreamingSession {
       },
     ];
 
-    if (options?.addShowFullTextButton) {
+    if (options?.addFullTextPanel && text) {
       batchActions.push({
         action: "add_elements",
         params: {
           type: "append",
           elements: [
             {
-              tag: "button",
-              text: { tag: "plain_text", content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D" },
-              type: "default",
-              size: "small",
-              value: {
-                command: "__show_full_text__",
-                message_id: this.state.messageId,
+              tag: "collapsible_panel",
+              expanded: false,
+              header: {
+                title: {
+                  tag: "plain_text",
+                  content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D",
+                },
               },
-              element_id: "show_full_btn",
+              element_id: "full_text_panel",
+              elements: [
+                {
+                  tag: "markdown",
+                  content: text,
+                  element_id: "full_text_content",
+                },
+              ],
             },
           ],
         },
