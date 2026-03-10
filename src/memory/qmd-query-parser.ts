@@ -138,7 +138,7 @@ function normalizeQmdResultsFromUnknown(payload: unknown): QmdQueryResult[] | nu
     value = value.result;
   }
   if (Array.isArray(value)) {
-    return value as QmdQueryResult[];
+    return normalizeQmdResultArray(value);
   }
   if (!isRecord(value)) {
     return null;
@@ -146,14 +146,25 @@ function normalizeQmdResultsFromUnknown(payload: unknown): QmdQueryResult[] | nu
   if (isRecord(value.structuredContent)) {
     value = value.structuredContent;
     if (isRecord(value) && Array.isArray(value.results)) {
-      return value.results as QmdQueryResult[];
+      return normalizeQmdResultArray(value.results);
     }
     return null;
   }
   if (Array.isArray(value.results)) {
-    return value.results as QmdQueryResult[];
+    return normalizeQmdResultArray(value.results);
   }
   return null;
+}
+
+function normalizeQmdResultArray(value: unknown[]): QmdQueryResult[] | null {
+  const filtered = value.filter((entry): entry is JsonRecord => isRecord(entry));
+  if (filtered.length === 0) {
+    return null;
+  }
+  return filtered.map((entry) => ({
+    ...entry,
+    score: typeof entry.score === "number" ? entry.score : Number(entry.score),
+  }));
 }
 
 function extractFirstJsonArray(raw: string): string | null {
@@ -170,10 +181,13 @@ function extractFirstJsonValue(raw: string): string | null {
   if (arrayStart < 0 && objectStart < 0) {
     return null;
   }
-  if (arrayStart >= 0 && (objectStart < 0 || arrayStart < objectStart)) {
+  if (objectStart >= 0 && (arrayStart < 0 || objectStart < arrayStart)) {
+    return extractJsonValue(raw, objectStart, "{", "}");
+  }
+  if (arrayStart >= 0) {
     return extractJsonValue(raw, arrayStart, "[", "]");
   }
-  return extractJsonValue(raw, objectStart, "{", "}");
+  return null;
 }
 
 function extractJsonValue(raw: string, start: number, open: string, close: string): string | null {
