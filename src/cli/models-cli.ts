@@ -296,7 +296,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("add")
-    .description("Interactive auth helper (setup-token or paste token)")
+    .description("Interactive auth helper (Anthropic OAuth, setup-token, or paste token)")
     .action(async () => {
       await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
