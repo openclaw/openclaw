@@ -172,8 +172,8 @@ export class ExecApprovalManager {
       return { id: idOrPrefix };
     }
     const matches: string[] = [];
-    for (const key of this.pending.keys()) {
-      if (key.startsWith(idOrPrefix)) {
+    for (const [key, entry] of this.pending.entries()) {
+      if (entry.record.resolvedAtMs === undefined && key.startsWith(idOrPrefix)) {
         matches.push(key);
       }
     }
