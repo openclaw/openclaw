@@ -1286,6 +1286,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
         defaultRuntime.log(
           `[warn] Unexpected agent.wait status run=${runId} status=${wait?.status}`,
         );
+        if (!subagentRuns.has(runId)) {
+          return;
+        }
         await new Promise((resolve) => setTimeout(resolve, 5_000));
         continue;
       }
