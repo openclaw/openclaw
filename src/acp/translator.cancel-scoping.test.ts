@@ -112,9 +112,33 @@ describe("acp translator cancel and run scoping", () => {
 
     await harness.agent.cancel({ sessionId: "session-1" } as CancelNotification);
 
-    expect(harness.requestSpy).toHaveBeenCalledWith("chat.abort", {
-      sessionKey,
-    });
+    const abortCalls = harness.requestSpy.mock.calls.filter(([method]) => method === "chat.abort");
+    expect(abortCalls).toHaveLength(0);
+  });
+
+  it("cancel from a session without active run does not abort another session sharing the same key", async () => {
+    const sessionKey = "agent:main:shared";
+    const harness = createHarness([
+      { sessionId: "session-1", sessionKey },
+      { sessionId: "session-2", sessionKey },
+    ]);
+    const pending2 = await startPendingPrompt(harness, "session-2");
+
+    await harness.agent.cancel({ sessionId: "session-1" } as CancelNotification);
+
+    const abortCalls = harness.requestSpy.mock.calls.filter(([method]) => method === "chat.abort");
+    expect(abortCalls).toHaveLength(0);
+    expect(harness.sessionStore.getSession("session-2")?.activeRunId).toBe(pending2.runId);
+
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        runId: pending2.runId,
+        sessionKey,
+        seq: 1,
+        state: "final",
+      }),
+    );
+    await expect(pending2.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
   it("drops chat events when runId does not match the active prompt", async () => {

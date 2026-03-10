@@ -637,10 +637,19 @@ export class AcpGatewayAgent implements Agent {
     const activeRunId = session.activeRunId;
 
     this.sessionStore.cancelActiveRun(params.sessionId);
+    if (!activeRunId) {
+      const pending = this.pendingPrompts.get(params.sessionId);
+      if (pending) {
+        this.pendingPrompts.delete(params.sessionId);
+        pending.resolve({ stopReason: "cancelled" });
+      }
+      return;
+    }
+
     try {
       await this.gateway.request("chat.abort", {
         sessionKey: session.sessionKey,
-        ...(activeRunId ? { runId: activeRunId } : {}),
+        runId: activeRunId,
       });
     } catch (err) {
       this.log(`cancel error: ${String(err)}`);
