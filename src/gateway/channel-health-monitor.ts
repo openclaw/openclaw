@@ -229,6 +229,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             `[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason}, consecutive: ${nextConsecutive})`,
           );
 
+          // Optimistically increment consecutiveRestarts before the restart
+          // attempt so that if the restart fails, backoff still increases on
+          // the next cycle and the escalation callback does not re-fire at
+          // the same threshold level.
+          record.consecutiveRestarts = nextConsecutive;
+          restartRecords.set(key, record);
+
           // Escalation: after N consecutive restarts without stability, notify
           // the caller so it can take channel-specific recovery action (e.g.
           // clearing Discord resume state to force a fresh IDENTIFY).
@@ -248,7 +255,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             await channelManager.startChannel(channelId as ChannelId, accountId);
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
-            record.consecutiveRestarts = nextConsecutive;
             restartRecords.set(key, record);
           } catch (err) {
             log.error?.(
