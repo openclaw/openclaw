@@ -301,7 +301,7 @@ export function buildGatewayCronService(params: {
     resetCommandLanes: ({ job }) => {
       const runLaneReset = (lane: string) => {
         const result = resetLane(lane, {
-          dropQueued: true,
+          dropQueued: false,
           skipIfActive: true,
         });
         if (result.droppedQueued > 0) {
@@ -310,7 +310,7 @@ export function buildGatewayCronService(params: {
               lane: result.lane,
               droppedQueued: result.droppedQueued,
             },
-            "cron: dropped queued lane tasks during degraded runner recovery",
+            "cron: unexpected queued task drop during degraded runner recovery",
           );
         }
         if (!result.reset && result.activeBefore > 0) {

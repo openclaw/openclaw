@@ -1033,17 +1033,66 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastStatus).toBe("ok");
   });
 
-  it("resets command lanes when isolated cron runs stay degraded across retries (#41423)", async () => {
+  it("resets command lanes when isolated cron runs report structured timeout degradation (#41423)", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
 
     const cronJob = createIsolatedRegressionJob({
-      id: "degraded-41423",
-      name: "degraded isolated",
+      id: "degraded-41423-timeout",
+      name: "degraded isolated timeout",
       scheduledAt,
       schedule: { kind: "cron", expr: "*/5 * * * * *", tz: "UTC" },
       payload: { kind: "agentTurn", message: "run" },
       state: { nextRunAtMs: scheduledAt, consecutiveErrors: 1 },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const events: CronEvent[] = [];
+    const resetCommandLanes = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      resetCommandLanes,
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "error" as const,
+        error: "cron: job execution timed out",
+        errorKind: "isolated-runner-timeout" as const,
+      })),
+    });
+
+    await onTimer(state);
+
+    expect(resetCommandLanes).toHaveBeenCalledTimes(1);
+    expect(resetCommandLanes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: cronJob.id }),
+      }),
+    );
+    const job = state.store?.jobs.find((entry) => entry.id === cronJob.id);
+    expect(job?.state.lastError).toBe("cron: job execution timed out");
+    const finished = events.find((evt) => evt.action === "finished" && evt.jobId === cronJob.id);
+    expect(finished?.error).toBe("cron: job execution timed out");
+  });
+
+  it("does not reset command lanes from free-form isolated error text alone (#41423)", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "degraded-41423-untyped",
+      name: "degraded isolated untyped",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "*/5 * * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: scheduledAt, consecutiveErrors: 2 },
     });
     await writeCronJobs(store.storePath, [cronJob]);
 
@@ -1069,12 +1118,7 @@ describe("Cron issue regressions", () => {
 
     await onTimer(state);
 
-    expect(resetCommandLanes).toHaveBeenCalledTimes(1);
-    expect(resetCommandLanes).toHaveBeenCalledWith(
-      expect.objectContaining({
-        job: expect.objectContaining({ id: cronJob.id }),
-      }),
-    );
+    expect(resetCommandLanes).not.toHaveBeenCalled();
     const job = state.store?.jobs.find((entry) => entry.id === cronJob.id);
     expect(job?.state.lastError).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",

@@ -694,11 +694,21 @@ export async function runCronIsolatedAgentTurn(params: {
       }
     }
   } catch (err) {
-    return withRunSession({ status: "error", error: String(err) });
+    const errorText = String(err);
+    const isTimeoutAbort = isAborted() || errorText.trim() === abortReason();
+    return withRunSession({
+      status: "error",
+      error: errorText,
+      errorKind: isTimeoutAbort ? "isolated-runner-timeout" : undefined,
+    });
   }
 
   if (isAborted()) {
-    return withRunSession({ status: "error", error: abortReason() });
+    return withRunSession({
+      status: "error",
+      error: abortReason(),
+      errorKind: "isolated-runner-timeout",
+    });
   }
   if (!runResult) {
     return withRunSession({ status: "error", error: "cron isolated run returned no result" });
@@ -771,7 +781,12 @@ export async function runCronIsolatedAgentTurn(params: {
   }
 
   if (isAborted()) {
-    return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+    return withRunSession({
+      status: "error",
+      error: abortReason(),
+      errorKind: "isolated-runner-timeout",
+      ...telemetry,
+    });
   }
   const firstText = payloads[0]?.text ?? "";
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
