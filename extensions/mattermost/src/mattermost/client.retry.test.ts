@@ -239,12 +239,12 @@ describe("createMattermostDirectChannelWithRetry", () => {
     });
 
     expect(delays).toHaveLength(2);
-    // First retry should be around initialDelayMs (100ms) + jitter
+    // First retry: exponentialDelay = 100ms, jitter = 0-100ms, total = 100-200ms
     expect(delays[0]).toBeGreaterThanOrEqual(100);
-    expect(delays[0]).toBeLessThanOrEqual(1000);
-    // Second retry should be around initialDelayMs * 2 (200ms) + jitter
+    expect(delays[0]).toBeLessThanOrEqual(200);
+    // Second retry: exponentialDelay = 200ms, jitter = 0-200ms, total = 200-400ms
     expect(delays[1]).toBeGreaterThanOrEqual(200);
-    expect(delays[1]).toBeLessThanOrEqual(1000);
+    expect(delays[1]).toBeLessThanOrEqual(400);
   });
 
   it("respects maxDelayMs cap", async () => {
@@ -343,5 +343,28 @@ describe("createMattermostDirectChannelWithRetry", () => {
 
     expect(capturedSignal).toBeDefined();
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("retries on 5xx even if error message contains 4xx substring", async () => {
+    // This tests the fix for the ordering bug: 503 with "upstream 404" should be retried
+    mockFetch
+      .mockRejectedValueOnce(new Error("Mattermost API 503: upstream returned 404 Not Found"))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({ id: "dm-channel-5xx-with-404" }),
+      } as Response);
+
+    const client = createMockClient();
+
+    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+      maxRetries: 3,
+      initialDelayMs: 10,
+    });
+
+    // Should retry and succeed on second attempt
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.id).toBe("dm-channel-5xx-with-404");
   });
 });
