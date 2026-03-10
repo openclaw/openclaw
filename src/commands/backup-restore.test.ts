@@ -311,6 +311,44 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("rejects archives that live inside restore targets even through target aliases", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-inside-target-"),
+    );
+
+    try {
+      await fs.writeFile(path.join(sourceStateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const realTargetHome = await createExtraHome("openclaw-backup-restore-inside-real-");
+      const aliasTargetHome = `${realTargetHome}-alias`;
+      await fs.symlink(realTargetHome, aliasTargetHome);
+      extraHomes.push(aliasTargetHome);
+      setActiveHome(aliasTargetHome);
+
+      const archiveInsideTarget = path.join(realTargetHome, ".openclaw", "inside-target.tar.gz");
+      await fs.copyFile(created.archivePath, archiveInsideTarget);
+
+      await expect(
+        backupRestoreCommand(runtime, {
+          archive: archiveInsideTarget,
+        }),
+      ).rejects.toThrow(/must not live inside a restore target/i);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to overwrite existing restore targets without --force", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(

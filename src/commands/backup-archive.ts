@@ -199,6 +199,7 @@ async function scanArchive(params: { archivePath: string }): Promise<{
   const manifestRawByPath = new Map<string, string>();
   let scanError: Error | null = null;
   let manifestTooLargeError: Error | null = null;
+  let rootManifestCount = 0;
   await tar.t({
     file: params.archivePath,
     gzip: true,
@@ -237,6 +238,14 @@ async function scanArchive(params: { archivePath: string }): Promise<{
       });
 
       if (!isRootManifestEntry(normalized)) {
+        entry.resume();
+        return;
+      }
+      rootManifestCount += 1;
+      if (rootManifestCount > 1) {
+        scanError = new Error(
+          `Expected exactly one backup manifest entry, found ${rootManifestCount}.`,
+        );
         entry.resume();
         return;
       }

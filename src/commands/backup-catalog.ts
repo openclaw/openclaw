@@ -36,6 +36,15 @@ export type BackupListOptions = {
 
 const DEFAULT_BACKUP_DIRNAME = "Backups";
 
+function compareCatalogEntries(left: BackupCatalogEntry, right: BackupCatalogEntry): number {
+  const leftTime = Date.parse(left.createdAt);
+  const rightTime = Date.parse(right.createdAt);
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+  return right.archivePath.localeCompare(left.archivePath);
+}
+
 async function canonicalizeSearchRoot(targetPath: string): Promise<string> {
   const resolved = path.resolve(targetPath);
   try {
@@ -80,25 +89,21 @@ async function listCandidateArchives(searchRoot: string): Promise<string[]> {
 
 export async function readBackupCatalog(searchPath?: string): Promise<BackupCatalogResult> {
   const searchRoots = await resolveBackupSearchRoots(searchPath);
-  const archives: Array<{ entry: BackupCatalogEntry; sortTimeMs: number }> = [];
+  const archives: BackupCatalogEntry[] = [];
   const skipped: BackupCatalogSkipped[] = [];
 
   for (const searchRoot of searchRoots) {
     const candidates = await listCandidateArchives(searchRoot);
     for (const archivePath of candidates) {
       try {
-        const archiveStat = await fs.stat(archivePath);
         const verified = await readVerifiedBackupArchive(archivePath);
         archives.push({
-          entry: {
-            archivePath,
-            displayArchivePath: shortenHomePath(archivePath),
-            createdAt: verified.manifest.createdAt,
-            runtimeVersion: verified.manifest.runtimeVersion,
-            assetCount: verified.manifest.assets.length,
-            includeWorkspace: verified.manifest.options?.includeWorkspace !== false,
-          },
-          sortTimeMs: archiveStat.mtimeMs,
+          archivePath,
+          displayArchivePath: shortenHomePath(archivePath),
+          createdAt: verified.manifest.createdAt,
+          runtimeVersion: verified.manifest.runtimeVersion,
+          assetCount: verified.manifest.assets.length,
+          includeWorkspace: verified.manifest.options?.includeWorkspace !== false,
         });
       } catch (err) {
         skipped.push({
@@ -109,15 +114,10 @@ export async function readBackupCatalog(searchPath?: string): Promise<BackupCata
     }
   }
 
-  archives.sort((left, right) => {
-    if (left.sortTimeMs !== right.sortTimeMs) {
-      return right.sortTimeMs - left.sortTimeMs;
-    }
-    return right.entry.archivePath.localeCompare(left.entry.archivePath);
-  });
+  archives.sort(compareCatalogEntries);
   return {
     searchRoots,
-    archives: archives.map((archive) => archive.entry),
+    archives,
     skipped,
   };
 }

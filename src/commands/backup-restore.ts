@@ -15,6 +15,7 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import { readVerifiedBackupArchive, type BackupManifestAsset } from "./backup-archive.js";
 import type { BackupAssetKind } from "./backup-shared.js";
@@ -117,10 +118,22 @@ function normalizeWorkspaceAssetOrder(
 }
 
 async function canonicalizePath(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return path.resolve(targetPath);
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+
+  while (true) {
+    try {
+      const realProbe = await fs.realpath(probe);
+      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
   }
 }
 
@@ -478,6 +491,7 @@ async function assertRestoreTargetsReady(params: {
   const conflicts: string[] = [];
 
   for (const item of params.items) {
+    const targetRealPath = await canonicalizePath(item.targetPath);
     const targetExists = await pathExists(item.targetPath);
     if (targetExists && !params.force) {
       const isEmptyDirectory =
@@ -490,9 +504,9 @@ async function assertRestoreTargetsReady(params: {
         conflicts.push(item.displayTargetPath);
       }
     }
-    if (isPathWithin(archiveRealPath, item.targetPath)) {
+    if (isPathWithin(archiveRealPath, targetRealPath)) {
       throw new Error(
-        `Restore archive must not live inside a restore target: ${archiveRealPath} is inside ${item.targetPath}`,
+        `Restore archive must not live inside a restore target: ${archiveRealPath} is inside ${targetRealPath}`,
       );
     }
   }
@@ -734,13 +748,66 @@ async function publishRestorePlan(stagedItems: StagedBackupRestoreItem[]): Promi
   }
 }
 
+async function chmodIfPresent(
+  targetPath: string,
+  mode: number,
+  require: "file" | "dir",
+): Promise<void> {
+  try {
+    const st = await fs.lstat(targetPath);
+    if (st.isSymbolicLink()) {
+      return;
+    }
+    if (require === "file" && !st.isFile()) {
+      return;
+    }
+    if (require === "dir" && !st.isDirectory()) {
+      return;
+    }
+    await fs.chmod(targetPath, mode);
+  } catch {
+    // Best-effort hardening only.
+  }
+}
+
+async function chmodTreeFiles(
+  targetPath: string,
+  dirMode: number,
+  fileMode: number,
+): Promise<void> {
+  await chmodIfPresent(targetPath, dirMode, "dir");
+  const entries = await fs.readdir(targetPath, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const entryPath = path.join(targetPath, entry.name);
+    if (entry.isDirectory()) {
+      // eslint-disable-next-line no-await-in-loop
+      await chmodTreeFiles(entryPath, dirMode, fileMode);
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await chmodIfPresent(entryPath, fileMode, "file");
+  }
+}
+
+async function applyRestorePermissionBaseline(): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  await chmodIfPresent(resolveStateDir(), 0o700, "dir");
+  await chmodIfPresent(resolveConfigPath(), 0o600, "file");
+  await chmodTreeFiles(resolveOAuthDir(), 0o700, 0o600);
+}
+
 function formatRestoreSummary(result: BackupRestoreResult): string {
   const lines = [
     result.dryRun
-      ? `Planned restore from backup archive: ${result.archivePath}`
-      : `Restored backup archive: ${result.archivePath}`,
-    `Backup created at: ${result.createdAt}`,
-    `Backup runtime version: ${result.runtimeVersion}`,
+      ? `Planned restore from backup archive: ${sanitizeTerminalText(shortenHomePath(result.archivePath))}`
+      : `Restored backup archive: ${sanitizeTerminalText(shortenHomePath(result.archivePath))}`,
+    `Backup created at: ${sanitizeTerminalText(result.createdAt)}`,
+    `Backup runtime version: ${sanitizeTerminalText(result.runtimeVersion)}`,
   ];
 
   lines.push(
@@ -749,13 +816,15 @@ function formatRestoreSummary(result: BackupRestoreResult): string {
     }:`,
   );
   for (const entry of result.restored) {
-    lines.push(`- ${entry.kind}: ${shortenHomePath(entry.targetPath)}`);
+    lines.push(`- ${entry.kind}: ${sanitizeTerminalText(shortenHomePath(entry.targetPath))}`);
   }
 
   if (result.skipped.length > 0) {
     lines.push(`Skipped ${result.skipped.length} path${result.skipped.length === 1 ? "" : "s"}:`);
     for (const entry of result.skipped) {
-      lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason})`);
+      lines.push(
+        `- ${entry.kind}: ${sanitizeTerminalText(entry.displayPath)} (${sanitizeTerminalText(entry.reason)})`,
+      );
     }
   }
 
@@ -820,6 +889,7 @@ export async function backupRestoreCommand(
         stageRoot,
       });
       await publishRestorePlan(stagedRestore.stagedItems);
+      await applyRestorePermissionBaseline();
       result.updatedConfigWorkspacePaths = stagedRestore.updatedConfigWorkspacePaths;
       clearConfigCache();
     }
