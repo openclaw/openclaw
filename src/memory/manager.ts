@@ -733,6 +733,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           failures: this.readonlyRecoveryFailures,
           lastError: this.readonlyRecoveryLastError,
         },
+        sessionSync: {
+          enabled: this.sources.has("sessions"),
+          dirty: this.sessionsDirty,
+          dirtyFiles: this.sessionsDirtyFiles.size,
+          pendingFiles: this.sessionPendingFiles.size,
+          pendingBytes: Array.from(this.sessionDeltas.values()).reduce(
+            (sum, entry) => sum + entry.pendingBytes,
+            0,
+          ),
+          pendingMessages: Array.from(this.sessionDeltas.values()).reduce(
+            (sum, entry) => sum + entry.pendingMessages,
+            0,
+          ),
+          lastSyncAt: this.lastSessionSyncAt ? this.lastSessionSyncAt.getTime() : null,
+          lastSyncReason: this.lastSessionSyncReason,
+          lastSyncError: this.lastSessionSyncError,
+        },
       },
     };
   }

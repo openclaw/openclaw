@@ -136,6 +136,9 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  protected lastSessionSyncAt: number | null = null;
+  protected lastSessionSyncReason: string | null = null;
+  protected lastSessionSyncError: string | null = null;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -427,13 +430,18 @@ export abstract class MemoryManagerSyncOps {
 
   private scheduleSessionDirty(sessionFile: string) {
     this.sessionPendingFiles.add(sessionFile);
+    log.debug("memory session delta scheduled", {
+      pendingFiles: this.sessionPendingFiles.size,
+    });
     if (this.sessionWatchTimer) {
       return;
     }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
       void this.processSessionDeltaBatch().catch((err) => {
-        log.warn(`memory session delta failed: ${String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory session delta failed: ${message}`);
+        this.lastSessionSyncError = message;
       });
     }, SESSION_DIRTY_DEBOUNCE_MS);
   }
@@ -470,8 +478,13 @@ export abstract class MemoryManagerSyncOps {
       shouldSync = true;
     }
     if (shouldSync) {
+      log.debug("memory session delta marked dirty", {
+        dirtyFiles: this.sessionsDirtyFiles.size,
+      });
       void this.sync({ reason: "session-delta" }).catch((err) => {
-        log.warn(`memory sync failed (session-delta): ${String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory sync failed (session-delta): ${message}`);
+        this.lastSessionSyncError = message;
       });
     }
   }
@@ -909,7 +922,27 @@ export abstract class MemoryManagerSyncOps {
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
+        this.lastSessionSyncReason = params?.reason ?? "unspecified";
+        this.lastSessionSyncError = null;
+        log.debug("memory session sync start", {
+          reason: this.lastSessionSyncReason,
+          needsFullReindex,
+          dirtyFiles: this.sessionsDirtyFiles.size,
+          pendingFiles: this.sessionPendingFiles.size,
+        });
+        try {
+          await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
+          this.lastSessionSyncAt = Date.now();
+          log.debug("memory session sync complete", {
+            reason: this.lastSessionSyncReason,
+            dirtyFiles: this.sessionsDirtyFiles.size,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.lastSessionSyncError = message;
+          log.warn(`memory session sync failed: ${message}`);
+          throw err;
+        }
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1073,7 +1106,30 @@ export abstract class MemoryManagerSyncOps {
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        const sessionStart = performance.now();
+        this.lastSessionSyncError = null;
+        this.lastSessionSyncReason = params.reason ?? "reindex";
+        log.debug("memory sessions: sync starting", {
+          pendingFiles: this.sessionPendingFiles.size,
+          dirtyFiles: this.sessionsDirtyFiles.size,
+          pendingBytes: this.sessionDeltas.pendingBytes,
+          pendingMessages: this.sessionDeltas.pendingMessages,
+          reason: this.lastSessionSyncReason,
+        });
+        try {
+          await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+          this.lastSessionSyncAt = new Date();
+          log.debug("memory sessions: sync completed", {
+            durationMs: Math.round(performance.now() - sessionStart),
+            pendingFiles: this.sessionPendingFiles.size,
+            dirtyFiles: this.sessionsDirtyFiles.size,
+          });
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          this.lastSessionSyncError = errorMessage;
+          log.warn("memory sessions: sync failed", { err: errorMessage, reason: this.lastSessionSyncReason });
+          throw err;
+        }
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1144,7 +1200,30 @@ export abstract class MemoryManagerSyncOps {
     }
 
     if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      const sessionStart = performance.now();
+      this.lastSessionSyncError = null;
+      this.lastSessionSyncReason = params.reason ?? "reindex";
+      log.debug("memory sessions: sync starting", {
+        pendingFiles: this.sessionPendingFiles.size,
+        dirtyFiles: this.sessionsDirtyFiles.size,
+        pendingBytes: this.sessionDeltas.pendingBytes,
+        pendingMessages: this.sessionDeltas.pendingMessages,
+        reason: this.lastSessionSyncReason,
+      });
+      try {
+        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        this.lastSessionSyncAt = new Date();
+        log.debug("memory sessions: sync completed", {
+          durationMs: Math.round(performance.now() - sessionStart),
+          pendingFiles: this.sessionPendingFiles.size,
+          dirtyFiles: this.sessionsDirtyFiles.size,
+        });
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        this.lastSessionSyncError = errorMessage;
+        log.warn("memory sessions: sync failed", { err: errorMessage, reason: this.lastSessionSyncReason });
+        throw err;
+      }
       this.sessionsDirty = false;
       this.sessionsDirtyFiles.clear();
     } else if (this.sessionsDirtyFiles.size > 0) {

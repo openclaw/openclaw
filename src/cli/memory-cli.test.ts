@@ -296,6 +296,38 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("prints session sync status in memory status output", async () => {
+    const close = vi.fn(async () => {});
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          custom: {
+            sessionSync: {
+              enabled: true,
+              dirty: true,
+              dirtyFiles: 2,
+              pendingBytes: 10,
+              pendingMessages: 3,
+              lastSyncAt: Date.now() - 1500,
+            },
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Sessions: enabled"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Session state: dirty (2)"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Session pending: 10 bytes, 3 msgs"));
+    expect(close).toHaveBeenCalled();
+  });
+
   it("enables verbose logging with --verbose", async () => {
     const close = vi.fn(async () => {});
     mockManager({

@@ -545,6 +545,44 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
       }
     }
+    const sessionSync = (status.custom as { sessionSync?: Record<string, unknown> } | undefined)
+      ?.sessionSync as
+      | {
+          enabled?: boolean;
+          dirty?: boolean;
+          dirtyFiles?: number;
+          pendingFiles?: number;
+          pendingBytes?: number;
+          pendingMessages?: number;
+          lastSyncAt?: number | null;
+          lastSyncError?: string | null;
+        }
+      | undefined;
+    if (sessionSync) {
+      const sessionsEnabled = sessionSync.enabled ? "enabled" : "disabled";
+      const sessionsColor = sessionSync.enabled ? theme.success : theme.muted;
+      lines.push(`${label("Sessions")} ${colorize(rich, sessionsColor, sessionsEnabled)}`);
+      const dirtyFiles = sessionSync.dirtyFiles ?? 0;
+      const stateLabel = sessionSync.dirty ? `dirty (${dirtyFiles})` : "clean";
+      const stateColor = sessionSync.dirty ? theme.warn : theme.muted;
+      const sessionStateParts: string[] = [colorize(rich, stateColor, stateLabel)];
+      if (sessionSync.lastSyncError) {
+        sessionStateParts.push(muted(`error: ${sessionSync.lastSyncError}`));
+      } else if (typeof sessionSync.lastSyncAt === "number") {
+        const ageSeconds = Math.max(0, Math.floor((Date.now() - sessionSync.lastSyncAt) / 1000));
+        sessionStateParts.push(muted(`last sync ${ageSeconds}s ago`));
+      }
+      lines.push(`${label("Session state")} ${sessionStateParts.join(" ")}`);
+      if (opts.deep) {
+        const pendingBytes = sessionSync.pendingBytes ?? 0;
+        const pendingMessages = sessionSync.pendingMessages ?? 0;
+        lines.push(
+          `${label("Session pending")} ${muted(
+            `${pendingBytes} bytes, ${pendingMessages} msgs`,
+          )}`,
+        );
+      }
+    }
     if (status.batch) {
       const batchState = status.batch.enabled ? "enabled" : "disabled";
       const batchColor = status.batch.enabled ? theme.success : theme.warn;

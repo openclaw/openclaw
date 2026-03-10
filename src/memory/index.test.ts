@@ -291,6 +291,97 @@ describe("memory index", () => {
     }
   });
 
+  it("records session sync status after indexing", async () => {
+    const stateDir = path.join(fixtureRoot, "state-session-status");
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, "session-status.jsonl"),
+      `${sourceChangeSessionLogLines}\n`,
+    );
+
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-session-status.sqlite"),
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+    });
+
+    try {
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      const manager = requireManager(result);
+      await manager.sync?.({ reason: "test", force: true });
+      const status = manager.status();
+      const sessionSync = (status.custom as { sessionSync?: Record<string, unknown> } | undefined)
+        ?.sessionSync as
+        | {
+            enabled?: boolean;
+            dirty?: boolean;
+            dirtyFiles?: number;
+            pendingFiles?: number;
+            pendingBytes?: number;
+            pendingMessages?: number;
+            lastSyncAt?: number | null;
+            lastSyncReason?: string | null;
+            lastSyncError?: string | null;
+          }
+        | undefined;
+      expect(sessionSync?.enabled).toBe(true);
+      expect(sessionSync?.dirty).toBe(false);
+      expect(sessionSync?.lastSyncAt).toEqual(expect.any(Number));
+      expect(sessionSync?.lastSyncReason).toBe("test");
+      expect(sessionSync?.lastSyncError).toBeNull();
+      expect(sessionSync?.pendingFiles).toBeGreaterThanOrEqual(0);
+      expect(sessionSync?.pendingBytes).toBeGreaterThanOrEqual(0);
+      expect(sessionSync?.pendingMessages).toBeGreaterThanOrEqual(0);
+      await manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves dirty state and records session sync error on failure", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-session-error.sqlite"),
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    const syncSessionFiles = vi
+      .spyOn(manager as unknown as { syncSessionFiles: () => Promise<void> }, "syncSessionFiles")
+      .mockRejectedValue(new Error("session sync boom"));
+    (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = true;
+    (manager as unknown as { sessionsDirtyFiles: Set<string> }).sessionsDirtyFiles.add(
+      "dummy-session.jsonl",
+    );
+
+    await expect(manager.sync?.({ reason: "test", force: true })).rejects.toThrow(
+      "session sync boom",
+    );
+    const status = manager.status();
+    const sessionSync = (status.custom as { sessionSync?: Record<string, unknown> } | undefined)
+      ?.sessionSync as
+      | {
+          dirty?: boolean;
+          lastSyncError?: string | null;
+        }
+      | undefined;
+    expect(syncSessionFiles).toHaveBeenCalled();
+    expect(status.dirty).toBe(true);
+    expect(sessionSync?.dirty).toBe(true);
+    expect(sessionSync?.lastSyncError).toBe("session sync boom");
+    await manager.close?.();
+  });
+
   it("reindexes when the embedding model changes", async () => {
     const base = createCfg({ storePath: indexModelPath });
     const baseAgents = base.agents!;
