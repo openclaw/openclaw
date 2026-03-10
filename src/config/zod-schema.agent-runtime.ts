@@ -148,18 +148,21 @@ export const SandboxDockerSchema = z
           });
           continue;
         }
-        let colonCount = 0;
-        for(let bindIndex = 0; bindIndex < bind.length; bindIndex += 1){
-          if (bind.indexOf(bindIndex) === ':'){
-            colonCount += 1;
-          }
-        }
-        let firstColon = bind.indexOf(":");
-        if (colonCount == 3){
-          firstColon = bind.indexOf(":", firstColon + 1);
-        }
-        const windowsPrefix = /^[A-Z]:/;
-        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
+import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
+
+// Replace the colonCount block with:
+const windowsPrefix = /^[A-Za-z]:/;
+const parsed = splitSandboxBindSpec(bind);
+const source = (parsed ? parsed.host : bind).trim();
+if (!source.startsWith("/") && !windowsPrefix.test(source)) {
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["binds", i],
+    message:
+      `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+      "Only absolute POSIX paths are supported for sandbox binds.",
+  });
+}
         if (!source.startsWith("/") && !windowsPrefix.test(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
