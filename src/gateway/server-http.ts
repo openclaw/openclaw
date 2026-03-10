@@ -298,6 +298,7 @@ function buildPluginRequestStages(params: {
   if (!params.handlePluginRequest) {
     return [];
   }
+  let pluginGatewayAuthSatisfied = false;
   return [
     {
       name: "plugin-auth",
@@ -325,6 +326,7 @@ function buildPluginRequestStages(params: {
         if (!pluginAuthOk) {
           return true;
         }
+        pluginGatewayAuthSatisfied = true;
         return false;
       },
     },
@@ -333,7 +335,11 @@ function buildPluginRequestStages(params: {
       run: () => {
         const pathContext =
           params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
-        return params.handlePluginRequest?.(params.req, params.res, pathContext) ?? false;
+        return (
+          params.handlePluginRequest?.(params.req, params.res, pathContext, {
+            gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+          }) ?? false
+        );
       },
     },
   ];
@@ -383,6 +389,14 @@ export function createHooksRequestHandler(
       return true;
     }
 
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("Allow", "POST");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
+    }
+
     const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
     if (!safeEqualSecret(token, hooksConfig.token)) {
@@ -403,14 +417,6 @@ export function createHooksRequestHandler(
       return true;
     }
     hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
-
-    if (req.method !== "POST") {
-      res.statusCode = 405;
-      res.setHeader("Allow", "POST");
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Method Not Allowed");
-      return true;
-    }
 
     const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {

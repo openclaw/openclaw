@@ -5,7 +5,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -171,28 +171,30 @@ export async function checkInboundAccessControl(params: {
       if (suppressPairingReply) {
         logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
       } else {
-        const { code, created } = await upsertChannelPairingRequest({
+        await issuePairingChallenge({
           channel: "whatsapp",
-          id: candidate,
-          accountId: account.accountId,
+          senderId: candidate,
+          senderIdLine: `Your WhatsApp phone number: ${candidate}`,
           meta: { name: (params.pushName ?? "").trim() || undefined },
-        });
-        if (created) {
-          logVerbose(
-            `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
-          );
-          try {
-            await params.sock.sendMessage(params.remoteJid, {
-              text: buildPairingReply({
-                channel: "whatsapp",
-                idLine: `Your WhatsApp phone number: ${candidate}`,
-                code,
-              }),
-            });
-          } catch (err) {
+          upsertPairingRequest: async ({ id, meta }) =>
+            await upsertChannelPairingRequest({
+              channel: "whatsapp",
+              id,
+              accountId: account.accountId,
+              meta,
+            }),
+          onCreated: () => {
+            logVerbose(
+              `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
+            );
+          },
+          sendPairingReply: async (text) => {
+            await params.sock.sendMessage(params.remoteJid, { text });
+          },
+          onReplyError: (err) => {
             logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
-          }
-        }
+          },
+        });
       }
       return {
         allowed: false,

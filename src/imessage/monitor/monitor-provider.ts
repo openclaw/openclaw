@@ -30,7 +30,7 @@ import {
   resolveIMessageRemoteAttachmentRoots,
 } from "../../media/inbound-path-policy.js";
 import { kindFromMime } from "../../media/mime.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -50,6 +50,7 @@ import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
+import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -98,6 +99,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
+  const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -253,46 +255,69 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose,
     });
 
+    // Build conversation key for rate limiting (used by both drop and dispatch paths).
+    const chatId = message.chat_id ?? undefined;
+    const senderForKey = (message.sender ?? "").trim();
+    const conversationKey = chatId != null ? `group:${chatId}` : `dm:${senderForKey}`;
+    const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
+
     if (decision.kind === "drop") {
+      // Record echo/reflection drops so the rate limiter can detect sustained loops.
+      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
+      // are normal and should not escalate.
+      const isLoopDrop =
+        decision.reason === "echo" ||
+        decision.reason === "reflected assistant content" ||
+        decision.reason === "from me";
+      if (isLoopDrop) {
+        loopRateLimiter.record(rateLimitKey);
+      }
       return;
     }
 
-    const chatId = message.chat_id ?? undefined;
+    // After repeated echo/reflection drops for a conversation, suppress all
+    // remaining messages as a safety net against amplification that slips
+    // through the primary guards.
+    if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
+      logVerbose(`imessage: rate-limited conversation ${conversationKey} (echo loop detected)`);
+      return;
+    }
+
     if (decision.kind === "pairing") {
       const sender = (message.sender ?? "").trim();
       if (!sender) {
         return;
       }
-      const { code, created } = await upsertChannelPairingRequest({
+      await issuePairingChallenge({
         channel: "imessage",
-        id: decision.senderId,
-        accountId: accountInfo.accountId,
+        senderId: decision.senderId,
+        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
         meta: {
           sender: decision.senderId,
           chatId: chatId ? String(chatId) : undefined,
         },
-      });
-      if (created) {
-        logVerbose(`imessage pairing request sender=${decision.senderId}`);
-        try {
-          await sendMessageIMessage(
-            sender,
-            buildPairingReply({
-              channel: "imessage",
-              idLine: `Your iMessage sender id: ${decision.senderId}`,
-              code,
-            }),
-            {
-              client,
-              maxBytes: mediaMaxBytes,
-              accountId: accountInfo.accountId,
-              ...(chatId ? { chatId } : {}),
-            },
-          );
-        } catch (err) {
+        upsertPairingRequest: async ({ id, meta }) =>
+          await upsertChannelPairingRequest({
+            channel: "imessage",
+            id,
+            accountId: accountInfo.accountId,
+            meta,
+          }),
+        onCreated: () => {
+          logVerbose(`imessage pairing request sender=${decision.senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessageIMessage(sender, text, {
+            client,
+            maxBytes: mediaMaxBytes,
+            accountId: accountInfo.accountId,
+            ...(chatId ? { chatId } : {}),
+          });
+        },
+        onReplyError: (err) => {
           logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
-        }
-      }
+        },
+      });
       return;
     }
 
