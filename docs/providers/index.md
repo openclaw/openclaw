@@ -27,6 +27,9 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Provider docs
 
 - [Amazon Bedrock](/providers/bedrock)
+- [Azure Foundry (Azure OpenAI)](/providers/azure-foundry)
+- [Z.AI](/providers/zai)
+- [Xiaomi](/providers/xiaomi)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [GLM models](/providers/glm)

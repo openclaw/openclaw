@@ -26,8 +26,14 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import {
+  resolveAzureFoundryApiKeyEnv,
+  resolveAzureFoundryApiVersionEnv,
+  resolveAzureFoundryEndpointEnv,
+} from "../providers/azure-foundry/env.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
+  azureTTS,
   DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
   elevenLabsTTS,
@@ -54,6 +60,10 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_AZURE_ENDPOINT = "https://models.inference.ai.azure.com";
+const DEFAULT_AZURE_TTS_MODEL = "tts-1";
+const DEFAULT_AZURE_TTS_VOICE = "alloy";
+const DEFAULT_AZURE_TTS_API_VERSION = "2025-04-01-preview";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -117,6 +127,13 @@ export type ResolvedTtsConfig = {
     baseUrl: string;
     model: string;
     voice: string;
+  };
+  azure: {
+    apiKey?: string;
+    endpoint: string;
+    model: string;
+    voice: string;
+    apiVersion: string;
   };
   edge: {
     enabled: boolean;
@@ -304,6 +321,22 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       ).replace(/\/+$/, ""),
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+    },
+    azure: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.azure?.apiKey,
+        path: "messages.tts.azure.apiKey",
+      }),
+      endpoint:
+        raw.azure?.endpoint?.trim() ||
+        resolveAzureFoundryEndpointEnv(process.env)?.value ||
+        DEFAULT_AZURE_ENDPOINT,
+      model: raw.azure?.model ?? DEFAULT_AZURE_TTS_MODEL,
+      voice: raw.azure?.voice ?? DEFAULT_AZURE_TTS_VOICE,
+      apiVersion:
+        raw.azure?.apiVersion?.trim() ||
+        resolveAzureFoundryApiVersionEnv(process.env)?.value ||
+        DEFAULT_AZURE_TTS_API_VERSION,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -523,10 +556,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "azure") {
+    return config.azure.apiKey || resolveAzureFoundryApiKeyEnv(process.env)?.value;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "azure"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -683,6 +719,17 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "azure") {
+        audioBuffer = await azureTTS({
+          text: params.text,
+          apiKey,
+          endpoint: config.azure.endpoint,
+          model: config.azure.model,
+          voice: config.azure.voice,
+          apiVersion: config.azure.apiVersion,
+          responseFormat: output.openai,
+          timeoutMs: config.timeoutMs,
+        });
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -711,7 +758,7 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat: provider === "elevenlabs" ? output.elevenlabs : output.openai,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -783,15 +830,27 @@ export async function textToSpeechTelephony(params: {
       }
 
       const output = TELEPHONY_OUTPUT.openai;
-      const audioBuffer = await openaiTTS({
-        text: params.text,
-        apiKey,
-        baseUrl: config.openai.baseUrl,
-        model: config.openai.model,
-        voice: config.openai.voice,
-        responseFormat: output.format,
-        timeoutMs: config.timeoutMs,
-      });
+      const audioBuffer =
+        provider === "azure"
+          ? await azureTTS({
+              text: params.text,
+              apiKey,
+              endpoint: config.azure.endpoint,
+              model: config.azure.model,
+              voice: config.azure.voice,
+              apiVersion: config.azure.apiVersion,
+              responseFormat: output.format,
+              timeoutMs: config.timeoutMs,
+            })
+          : await openaiTTS({
+              text: params.text,
+              apiKey,
+              baseUrl: config.openai.baseUrl,
+              model: config.openai.model,
+              voice: config.openai.voice,
+              responseFormat: output.format,
+              timeoutMs: config.timeoutMs,
+            });
 
       return {
         success: true,

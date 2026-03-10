@@ -230,6 +230,44 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves azure-foundry key from AZURE_FOUNDRY_API_KEY", async () => {
+    await withEnvAsync(
+      {
+        AZURE_FOUNDRY_API_KEY: "foundry-primary", // pragma: allowlist secret
+        AZURE_OPENAI_API_KEY: undefined,
+        AZURE_INFERENCE_CREDENTIAL: undefined,
+        AZURE_AI_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "azure-foundry",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("foundry-primary");
+        expect(resolved.source).toContain("AZURE_FOUNDRY_API_KEY");
+      },
+    );
+  });
+
+  it("resolves azure-foundry key from AZURE_OPENAI_API_KEY when foundry var is unset", async () => {
+    await withEnvAsync(
+      {
+        AZURE_FOUNDRY_API_KEY: undefined,
+        AZURE_OPENAI_API_KEY: "openai-alias", // pragma: allowlist secret
+        AZURE_INFERENCE_CREDENTIAL: undefined,
+        AZURE_AI_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "azure-foundry",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("openai-alias");
+        expect(resolved.source).toContain("AZURE_OPENAI_API_KEY");
+      },
+    );
+  });
+
   it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
     await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
       const resolved = await resolveApiKeyForProvider({

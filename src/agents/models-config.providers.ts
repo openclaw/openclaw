@@ -1,11 +1,22 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import {
+  resolveAzureFoundryApiKeyEnv,
+  resolveAzureFoundryEndpointEnv,
+} from "../providers/azure-foundry/env.js";
+import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { discoverAzureFoundryModels } from "./azure-foundry-discovery.js";
+import {
+  AZURE_FOUNDRY_ANTHROPIC_MODELS,
+  AZURE_FOUNDRY_MODEL_CATALOG,
+  buildAzureFoundryAnthropicModelDefinition,
+  buildAzureFoundryModelDefinition,
+} from "./azure-foundry-models.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
@@ -456,6 +467,7 @@ function withApiKey(
   build: (params: {
     apiKey: string;
     discoveryApiKey?: string;
+    env: NodeJS.ProcessEnv;
   }) => ProviderConfig | Promise<ProviderConfig>,
 ): ImplicitProviderLoader {
   return async (ctx) => {
@@ -464,7 +476,7 @@ function withApiKey(
       return undefined;
     }
     return {
-      [providerKey]: await build({ apiKey, discoveryApiKey }),
+      [providerKey]: await build({ apiKey, discoveryApiKey, env: ctx.env }),
     };
   };
 }
@@ -507,6 +519,11 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey,
   })),
   withApiKey("together", async ({ apiKey }) => ({ ...buildTogetherProvider(), apiKey })),
+  withApiKey("azure-foundry", async ({ apiKey, env }) => {
+    const azureEndpoint =
+      resolveAzureFoundryEndpointEnv(env)?.value || "https://models.inference.ai.azure.com";
+    return { ...buildAzureFoundryProvider(azureEndpoint), apiKey };
+  }),
   withApiKey("huggingface", async ({ apiKey, discoveryApiKey }) => ({
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
     apiKey,
@@ -658,6 +675,31 @@ async function resolveVllmImplicitProvider(
   };
 }
 
+function buildAzureFoundryProvider(endpoint: string): ProviderConfig {
+  // Strip trailing slashes and any existing OpenAI-compatible suffix to avoid double-pathing.
+  const trimmedEndpoint = endpoint
+    .replace(/\/+$/, "")
+    .replace(/\/openai\/v\d+$/i, "")
+    .replace(/\/v\d+$/i, "");
+  const openaiBaseUrl = `${trimmedEndpoint}/openai/v1`;
+  const anthropicBaseUrl = `${trimmedEndpoint}/anthropic`;
+  return {
+    // Use bare endpoint as provider baseUrl so it doesn't override per-model baseUrl.
+    // Each model sets its own baseUrl (OpenAI or Anthropic path).
+    baseUrl: trimmedEndpoint,
+    api: "openai-completions",
+    models: [
+      ...AZURE_FOUNDRY_MODEL_CATALOG.map((m) => ({
+        ...buildAzureFoundryModelDefinition(m),
+        baseUrl: openaiBaseUrl,
+      })),
+      ...AZURE_FOUNDRY_ANTHROPIC_MODELS.map((m) =>
+        buildAzureFoundryAnthropicModelDefinition(m, anthropicBaseUrl),
+      ),
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<ModelsConfig["providers"]> {
@@ -729,6 +771,28 @@ export async function resolveImplicitProviders(
               : implicitBedrock.models,
         }
       : implicitBedrock;
+  }
+
+  const implicitAzureFoundry = await resolveImplicitAzureFoundryProvider({
+    agentDir: params.agentDir,
+    config: params.config,
+    env,
+  });
+  if (implicitAzureFoundry) {
+    const existing = providers["azure-foundry"];
+    providers["azure-foundry"] = existing
+      ? {
+          ...existing,
+          ...implicitAzureFoundry,
+          // Prefer discovered models when available; fall back to existing catalog.
+          models:
+            Array.isArray(implicitAzureFoundry.models) && implicitAzureFoundry.models.length > 0
+              ? implicitAzureFoundry.models
+              : existing.models,
+          // Keep existing apiKey/auth if implicit didn't provide one.
+          apiKey: existing.apiKey ?? implicitAzureFoundry.apiKey,
+        }
+      : implicitAzureFoundry;
   }
 
   return providers;
@@ -822,5 +886,76 @@ export async function resolveImplicitBedrockProvider(params: {
     api: "bedrock-converse-stream",
     auth: "aws-sdk",
     models,
+  } satisfies ProviderConfig;
+}
+
+export async function resolveImplicitAzureFoundryProvider(params: {
+  agentDir: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderConfig | null> {
+  const env = params.env ?? process.env;
+  const discoveryConfig = params.config?.models?.azureFoundryDiscovery;
+  const enabled = discoveryConfig?.enabled;
+  const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const hasApiKey = Boolean(resolveAzureFoundryApiKeyEnv(env)?.value);
+  const hasProfile = listProfilesForProvider(authStore, "azure-foundry").length > 0;
+
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasApiKey && !hasProfile) {
+    return null;
+  }
+
+  const endpoint =
+    discoveryConfig?.endpoint?.trim() ||
+    resolveAzureFoundryEndpointEnv(env)?.value ||
+    "https://models.inference.ai.azure.com";
+  const profileResolution = resolveApiKeyFromProfiles({
+    provider: "azure-foundry",
+    store: authStore,
+    env,
+  });
+  const envApiKey = resolveAzureFoundryApiKeyEnv(env)?.value;
+  // For discovery, prefer the actual secret value (discoveryApiKey) over markers/refs.
+  const discoveryApiKey =
+    envApiKey ??
+    profileResolution?.discoveryApiKey ??
+    (profileResolution?.source === "plaintext" ? profileResolution?.apiKey : undefined) ??
+    "";
+  // For provider config, use the marker/ref (which gets resolved at request time).
+  const apiKey =
+    envApiKey ??
+    (typeof profileResolution === "string" ? profileResolution : profileResolution?.apiKey) ??
+    "";
+
+  if (!apiKey && !hasProfile) {
+    return null;
+  }
+
+  const models = await discoverAzureFoundryModels({
+    endpoint,
+    apiKey: discoveryApiKey,
+    config: discoveryConfig,
+  });
+  if (models.length === 0) {
+    return null;
+  }
+
+  const trimmedEndpoint = endpoint.replace(/\/+$/, "");
+  const openaiBaseUrl = `${trimmedEndpoint}/openai/v1`;
+  // Use bare endpoint at provider level so model-specific baseUrl (e.g. /anthropic for Claude)
+  // isn't overridden by applyConfiguredProviderOverrides.
+  // Each non-Anthropic discovered model gets the OpenAI baseUrl at model level.
+  const modelsWithBaseUrl = models.map((m) => ({
+    ...m,
+    baseUrl: m.baseUrl ?? openaiBaseUrl,
+  }));
+  return {
+    baseUrl: trimmedEndpoint,
+    api: "openai-completions",
+    apiKey,
+    models: modelsWithBaseUrl,
   } satisfies ProviderConfig;
 }

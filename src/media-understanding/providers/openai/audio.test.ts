@@ -81,4 +81,28 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       }),
     ).rejects.toThrow("Audio transcription response missing text");
   });
+
+  it("appends query params to the transcription URL", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    const result = await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "voice.ogg",
+      mime: "audio/ogg",
+      apiKey: "test-key",
+      model: "gpt-4o-transcribe-diarize",
+      baseUrl:
+        "https://oc-01-resource.cognitiveservices.azure.com/openai/deployments/gpt-4o-transcribe-diarize",
+      query: {
+        "api-version": "2025-03-01-preview",
+      },
+      timeoutMs: 5000,
+      fetchFn,
+    });
+
+    expect(result.text).toBe("ok");
+    expect(getRequest().url).toBe(
+      "https://oc-01-resource.cognitiveservices.azure.com/openai/deployments/gpt-4o-transcribe-diarize/audio/transcriptions?api-version=2025-03-01-preview",
+    );
+  });
 });

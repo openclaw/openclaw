@@ -45,6 +45,7 @@ export type ModelDefinitionConfig = {
   };
   contextWindow: number;
   maxTokens: number;
+  baseUrl?: string;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
 };
@@ -69,8 +70,18 @@ export type BedrockDiscoveryConfig = {
   defaultMaxTokens?: number;
 };
 
+export type AzureFoundryDiscoveryConfig = {
+  enabled?: boolean;
+  endpoint?: string;
+  providerFilter?: string[];
+  refreshInterval?: number;
+  defaultContextWindow?: number;
+  defaultMaxTokens?: number;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   bedrockDiscovery?: BedrockDiscoveryConfig;
+  azureFoundryDiscovery?: AzureFoundryDiscoveryConfig;
 };

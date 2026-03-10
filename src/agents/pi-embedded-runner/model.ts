@@ -122,7 +122,7 @@ export function buildInlineProviderModels(
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
-      baseUrl: entry?.baseUrl,
+      baseUrl: model.baseUrl || entry?.baseUrl,
       api: model.api ?? entry?.api,
       headers: (() => {
         const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers);

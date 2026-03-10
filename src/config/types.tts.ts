@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "azure";
 
 export type TtsMode = "final" | "all";
 
@@ -61,6 +61,14 @@ export type TtsConfig = {
     baseUrl?: string;
     model?: string;
     voice?: string;
+  };
+  /** Azure AI Foundry TTS configuration. */
+  azure?: {
+    apiKey?: SecretInput;
+    endpoint?: string;
+    model?: string;
+    voice?: string;
+    apiVersion?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

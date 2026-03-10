@@ -478,6 +478,14 @@ export async function applyMediaUnderstanding(params: {
       .find((value) => value && value.trim()) ?? undefined;
 
   const attachments = normalizeMediaAttachments(ctx);
+  if (attachments.length > 0) {
+    const summary = attachments
+      .map((a) => `${a.mime ?? "no-mime"}@${a.path ?? a.url ?? "no-path"}`)
+      .join(", ");
+    if (shouldLogVerbose()) {
+      logVerbose(`[media-apply] Processing ${attachments.length} attachment(s): ${summary}`);
+    }
+  }
   const providerRegistry = buildProviderRegistry(params.providers);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),

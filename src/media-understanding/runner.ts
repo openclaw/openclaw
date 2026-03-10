@@ -648,7 +648,7 @@ async function runAttachmentEntries(params: {
         }),
       );
       if (shouldLogVerbose()) {
-        logVerbose(`${capability} understanding failed: ${String(err)}`);
+        logVerbose(`${capability} understanding failed for entry ${entryType}: ${String(err)}`);
       }
     }
   }
@@ -670,6 +670,9 @@ export async function runCapability(params: {
   const { capability, cfg, ctx } = params;
   const config = params.config ?? cfg.tools?.media?.[capability];
   if (config?.enabled === false) {
+    if (shouldLogVerbose()) {
+      logVerbose(`${capability} skipped: explicitly disabled in config`);
+    }
     return {
       outputs: [],
       decision: { capability, outcome: "disabled", attachments: [] },
@@ -683,6 +686,12 @@ export async function runCapability(params: {
     policy: attachmentPolicy,
   });
   if (selected.length === 0) {
+    if (capability === "audio") {
+      const mimes = params.media.map((m) => m.mime ?? "no-mime").join(", ");
+      if (shouldLogVerbose()) {
+        logVerbose(`audio skipped: no audio attachments found (mimes: ${mimes})`);
+      }
+    }
     return {
       outputs: [],
       decision: { capability, outcome: "no-attachment", attachments: [] },
@@ -691,6 +700,9 @@ export async function runCapability(params: {
 
   const scopeDecision = resolveScopeDecision({ scope: config?.scope, ctx });
   if (scopeDecision === "deny") {
+    if (shouldLogVerbose()) {
+      logVerbose(`${capability} skipped: denied by scope policy`);
+    }
     if (shouldLogVerbose()) {
       logVerbose(`${capability} understanding disabled by scope policy.`);
     }
@@ -757,6 +769,9 @@ export async function runCapability(params: {
     });
   }
   if (resolvedEntries.length === 0) {
+    if (shouldLogVerbose()) {
+      logVerbose(`${capability} skipped: no provider entries resolved (no API key or no config)`);
+    }
     return {
       outputs: [],
       decision: {
