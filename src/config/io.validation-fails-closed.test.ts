@@ -185,6 +185,80 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("fails closed when route binding includes ACP-only fields", async () => {
+    await withTempHomeConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        bindings: [
+          {
+            type: "route",
+            agentId: "main",
+            match: {
+              channel: "discord",
+              peer: { kind: "direct", id: "user-1" },
+            },
+            acp: {
+              mode: "persistent",
+            },
+          },
+        ],
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (err) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect(errorSpy).toHaveBeenCalled();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).not.toContain("unknown config key ignored");
+      },
+    );
+  });
+
+  it("fails closed when binding type discriminator is non-string", async () => {
+    await withTempHomeConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        bindings: [
+          {
+            type: 42,
+            agentId: "main",
+            match: {
+              channel: "discord",
+              peer: { kind: "direct", id: "user-1" },
+            },
+            acp: {
+              mode: "persistent",
+            },
+          },
+        ],
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        let thrown: unknown;
+        try {
+          loadConfig();
+        } catch (err) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string } | undefined)?.code).toBe("INVALID_CONFIG");
+        expect(errorSpy).toHaveBeenCalled();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText.toLowerCase()).not.toContain("unknown config key ignored");
+      },
+    );
+  });
+
   it("still throws INVALID_CONFIG for invalid known fields", async () => {
     await withTempHomeConfig(
       {

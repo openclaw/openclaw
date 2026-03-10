@@ -185,11 +185,14 @@ function compareIssueScore(a: IssueScore, b: IssueScore): number {
   if (a.rootTypeMismatch !== b.rootTypeMismatch) {
     return a.rootTypeMismatch - b.rootTypeMismatch;
   }
-  if (a.discriminatorMismatch !== b.discriminatorMismatch) {
-    return a.discriminatorMismatch - b.discriminatorMismatch;
-  }
+  // Prefer preserving fields that are known to some union branch, even when
+  // another branch's discriminator happens to match. That keeps mixed known
+  // union config fail-closed instead of stripping cross-branch payloads.
   if (a.unknown !== b.unknown) {
     return a.unknown - b.unknown;
+  }
+  if (a.discriminatorMismatch !== b.discriminatorMismatch) {
+    return a.discriminatorMismatch - b.discriminatorMismatch;
   }
   if (a.otherHard !== b.otherHard) {
     return a.otherHard - b.otherHard;
@@ -249,7 +252,7 @@ function classifyLiteralTypeIssue(
     }
     return "other";
   }
-  if (rawType == null || typeof rawType !== "string") {
+  if (rawType == null) {
     return "missing";
   }
   return "other";
