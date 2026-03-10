@@ -105,11 +105,23 @@ async function resolveOutputPath(params: {
     if (stat.isDirectory()) {
       return path.join(resolved, basename);
     }
-  } catch {
-    // Treat as a file path when the target does not exist yet.
+    // If it's a file, use it directly as the archive path
+    return resolved;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    // Path doesn't exist — check if it looks like an explicit archive filename
+    if (code === "ENOENT") {
+      const ext = path.extname(resolved).toLowerCase();
+      const isArchiveExtension = ext === ".gz" || ext === ".zip" || ext === ".tgz";
+      if (!isArchiveExtension) {
+        // No archive extension — treat as a directory
+        return path.join(resolved, basename);
+      }
+      // Has archive extension — treat as explicit filename
+      return resolved;
+    }
+    throw err;
   }
-
-  return resolved;
 }
 
 async function assertOutputPathReady(outputPath: string): Promise<void> {
