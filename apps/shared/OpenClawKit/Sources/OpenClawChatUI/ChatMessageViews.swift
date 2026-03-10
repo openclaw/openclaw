@@ -618,9 +618,20 @@ private struct ChatAssistantTextBody: View {
     let markdownVariant: ChatMarkdownVariant
     let includesThinking: Bool
 
+    /// Filter out think blocks first, then parse for adaptive card markers.
+    /// This prevents cards inside `<think>` blocks from leaking when thinking is hidden.
+    private var filteredText: String {
+        let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
+        return segments.map(\.text).joined(separator: "\n\n")
+    }
+
+    /// Parse adaptive card markers from the already-filtered text (cached per render cycle).
+    private var parsedCard: ParsedAdaptiveCard? {
+        AdaptiveCardParser.parseAdaptiveCardMarkers(from: self.filteredText)
+    }
+
     var body: some View {
-        // Check for adaptive card markers before standard markdown rendering
-        if let parsed = AdaptiveCardParser.parseAdaptiveCardMarkers(from: self.text) {
+        if let parsed = self.parsedCard {
             VStack(alignment: .leading, spacing: 10) {
                 if !parsed.fallbackText.isEmpty {
                     let segments = AssistantTextParser.segments(

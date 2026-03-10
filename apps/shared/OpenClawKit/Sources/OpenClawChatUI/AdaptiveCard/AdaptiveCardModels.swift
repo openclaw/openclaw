@@ -126,10 +126,19 @@ enum CardAction: Codable {
 
         init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
-            if let dict = try? container.decode([String: String].self) {
+            // Try types from most specific to least specific (JSONValue-style)
+            if let dict = try? container.decode([String: AnyCodableAction].self) {
                 self.value = dict
+            } else if let arr = try? container.decode([AnyCodableAction].self) {
+                self.value = arr
             } else if let str = try? container.decode(String.self) {
                 self.value = str
+            } else if let num = try? container.decode(Double.self) {
+                self.value = num
+            } else if let bool = try? container.decode(Bool.self) {
+                self.value = bool
+            } else if let int = try? container.decode(Int.self) {
+                self.value = int
             } else {
                 self.value = ""
             }
@@ -137,10 +146,18 @@ enum CardAction: Codable {
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.singleValueContainer()
-            if let dict = self.value as? [String: String] {
+            if let dict = self.value as? [String: AnyCodableAction] {
                 try container.encode(dict)
+            } else if let arr = self.value as? [AnyCodableAction] {
+                try container.encode(arr)
             } else if let str = self.value as? String {
                 try container.encode(str)
+            } else if let num = self.value as? Double {
+                try container.encode(num)
+            } else if let bool = self.value as? Bool {
+                try container.encode(bool)
+            } else if let int = self.value as? Int {
+                try container.encode(int)
             }
         }
     }

@@ -58,7 +58,7 @@ struct AdaptiveCardView: View {
 
     private func textBlockFont(_ tb: CardElement.TextBlock) -> Font {
         switch tb.size?.lowercased() {
-        case "extralarge", "extraLarge":
+        case "extralarge":
             return .title
         case "large":
             return .title2
@@ -92,14 +92,16 @@ struct AdaptiveCardView: View {
     private func renderColumnSet(_ cs: CardElement.ColumnSet) -> some View {
         HStack(alignment: .top, spacing: 8) {
             ForEach(cs.columns.indices, id: \.self) { i in
+                let col = cs.columns[i]
+                let widthStr = col.width?.lowercased()
                 VStack(alignment: .leading, spacing: 6) {
-                    if let items = cs.columns[i].items {
+                    if let items = col.items {
                         ForEach(items.indices, id: \.self) { j in
                             self.renderElement(items[j])
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: widthStr == "auto" ? nil : .infinity, alignment: .leading)
             }
         }
     }
@@ -139,6 +141,10 @@ struct AdaptiveCardView: View {
                         .frame(height: 40)
                 }
             }
+        } else {
+            Label(img.altText ?? "Image", systemImage: "photo")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -177,15 +183,11 @@ struct AdaptiveCardView: View {
                 .controlSize(.small)
             }
         case .submit(let a):
-            Button {
-                // Submit action tap (logged for debugging)
-                print("[AdaptiveCard] Action.Submit tapped: \(a.title ?? "untitled")")
-            } label: {
-                Text(a.title ?? "Submit")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            Button(a.title ?? "Submit") { }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(true)
+                .help("Card actions not yet supported")
         case .unknown:
             EmptyView()
         }
