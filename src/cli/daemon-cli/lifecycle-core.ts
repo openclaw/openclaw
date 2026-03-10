@@ -238,6 +238,19 @@ export async function runServiceStart(params: {
     } catch {
       started = true;
     }
+
+    if (!started) {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded: false,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
+
     emit({
       ok: true,
       result: "started",

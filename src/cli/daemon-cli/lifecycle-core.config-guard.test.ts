@@ -178,6 +178,41 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     });
 
     expect(service.restart).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("started");
+    expect(payload.service?.loaded).toBe(true);
+  });
+
+  it("falls back to not-loaded guidance when recovery restart does not load service", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.message).toContain("not loaded");
+    expect(payload.service?.loaded).toBe(false);
   });
 
   it("falls back to not-loaded guidance when recovery restart fails", async () => {
