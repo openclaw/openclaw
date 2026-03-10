@@ -363,6 +363,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
         accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
       });
     },
   },

@@ -21,7 +21,11 @@ import {
 import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
-import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import {
+  monitorWebhook,
+  monitorWebSocket,
+  type ChannelStatusCallback,
+} from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -132,6 +136,8 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  /** Called on each received event to keep lastEventAt fresh for health monitoring. */
+  onEvent?: () => void;
 };
 
 /**
@@ -231,7 +237,7 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, runtime, chatHistories, fireAndForget, onEvent } = context;
   const core = getFeishuRuntime();
   const inboundDebounceMs = core.channel.debounce.resolveInboundDebounceMs({
     cfg,
@@ -378,6 +384,7 @@ function registerEventHandlers(
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
+      onEvent?.();
       const processMessage = async () => {
         const event = data as unknown as FeishuMessageEvent;
         await inboundDebouncer.enqueue(event);
@@ -395,9 +402,11 @@ function registerEventHandlers(
       }
     },
     "im.message.message_read_v1": async () => {
+      onEvent?.();
       // Ignore read receipts
     },
     "im.chat.member.bot.added_v1": async (data) => {
+      onEvent?.();
       try {
         const event = data as unknown as FeishuBotAddedEvent;
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
@@ -406,6 +415,7 @@ function registerEventHandlers(
       }
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
+      onEvent?.();
       try {
         const event = data as unknown as { chat_id: string };
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
@@ -414,6 +424,7 @@ function registerEventHandlers(
       }
     },
     "im.message.reaction.created_v1": async (data) => {
+      onEvent?.();
       const processReaction = async () => {
         const event = data as FeishuReactionCreatedEvent;
         const myBotId = botOpenIds.get(accountId);
@@ -459,9 +470,11 @@ function registerEventHandlers(
       }
     },
     "im.message.reaction.deleted_v1": async () => {
+      onEvent?.();
       // Ignore reaction removals
     },
     "card.action.trigger": async (data: unknown) => {
+      onEvent?.();
       try {
         const event = data as unknown as FeishuCardActionEvent;
         const promise = handleFeishuCardAction({
@@ -495,10 +508,12 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  /** Optional callback to push connection lifecycle status to the gateway health monitor. */
+  setStatus?: ChannelStatusCallback;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
-  const { cfg, account, runtime, abortSignal } = params;
+  const { cfg, account, runtime, abortSignal, setStatus } = params;
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
 
@@ -530,16 +545,23 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const eventDispatcher = createEventDispatcher(account);
   const chatHistories = new Map<string, HistoryEntry[]>();
 
+  // Create a lightweight callback that updates lastEventAt on every
+  // inbound event so the gateway health monitor can detect stale connections.
+  const onEvent: (() => void) | undefined = setStatus
+    ? () => setStatus({ accountId, lastEventAt: Date.now() })
+    : undefined;
+
   registerEventHandlers(eventDispatcher, {
     cfg,
     accountId,
     runtime,
     chatHistories,
     fireAndForget: true,
+    onEvent,
   });
 
   if (connectionMode === "webhook") {
-    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher, setStatus });
   }
-  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher, setStatus });
 }

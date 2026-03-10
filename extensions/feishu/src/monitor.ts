@@ -12,12 +12,15 @@ import {
   isWebhookRateLimitedForTest,
   stopFeishuMonitorState,
 } from "./monitor.state.js";
+import type { ChannelStatusCallback } from "./monitor.transport.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  /** Optional callback to push connection lifecycle status to the gateway health monitor. */
+  setStatus?: ChannelStatusCallback;
 };
 
 export {
@@ -46,6 +49,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      setStatus: opts.setStatus,
     });
   }
 
@@ -83,6 +87,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        setStatus: opts.setStatus,
       }),
     );
   }
