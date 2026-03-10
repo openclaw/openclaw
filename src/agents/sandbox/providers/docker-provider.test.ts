@@ -133,6 +133,25 @@ describe("DockerProvider", () => {
       expect(mockExecDocker).not.toHaveBeenCalled();
     });
 
+    it("restarts existing stopped container instead of creating new one", async () => {
+      mockDockerContainerState.mockResolvedValue({
+        exists: true,
+        running: false,
+      });
+      mockExecDockerRaw.mockResolvedValue({
+        stdout: Buffer.from(""),
+        stderr: Buffer.from(""),
+        code: 0,
+      });
+
+      const result = await provider.ensureSandbox(baseParams);
+
+      expect(result).toBe("openclaw-sandbox-sess-abc");
+      // Should call start (not create) then apply metadata block
+      expect(mockExecDocker).toHaveBeenCalledTimes(1);
+      expect(mockExecDocker.mock.calls[0][0]).toEqual(["start", "openclaw-sandbox-sess-abc"]);
+    });
+
     it("includes resource limit flags when cfg.resourceLimits is specified", async () => {
       const params = {
         ...baseParams,
@@ -228,6 +247,34 @@ describe("DockerProvider", () => {
       expect(startCall).toContain("start");
       expect(startCall).toContain("openclaw-sandbox-sess-abc");
     });
+
+    it("applies metadata egress block after starting container", async () => {
+      mockExecDockerRaw.mockResolvedValue({
+        stdout: Buffer.from(""),
+        stderr: Buffer.from(""),
+        code: 0,
+      });
+
+      await provider.ensureSandbox(baseParams);
+
+      // applyMetadataEgressBlock calls execDockerRaw with iptables rules
+      expect(mockExecDockerRaw).toHaveBeenCalledTimes(1);
+      const call = mockExecDockerRaw.mock.calls[0];
+      const args = call[0];
+      expect(args[0]).toBe("exec");
+      expect(args[1]).toBe("openclaw-sandbox-sess-abc");
+      expect(args[2]).toBe("sh");
+      expect(args[3]).toBe("-c");
+      // Verify iptables rules target metadata endpoints
+      const shCmd = args[4];
+      expect(shCmd).toContain("iptables");
+      expect(shCmd).toContain("169.254.169.254");
+      expect(shCmd).toContain("100.100.100.200");
+      expect(shCmd).toContain("ip6tables");
+      expect(shCmd).toContain("fd00:ec2::254");
+      // Defense-in-depth: /etc/hosts poisoning for DNS-based metadata
+      expect(shCmd).toContain("metadata.google.internal");
+    });
   });
 
   describe("exec", () => {
@@ -241,7 +288,7 @@ describe("DockerProvider", () => {
       });
 
       expect(result).toEqual({ stdout, stderr, code: 0 });
-      expect(mockExecDockerRaw).toHaveBeenCalledWith(["ls", "-la"], {
+      expect(mockExecDockerRaw).toHaveBeenCalledWith(["exec", "container-1", "ls", "-la"], {
         timeout: 5000,
       });
     });

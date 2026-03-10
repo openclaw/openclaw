@@ -347,7 +347,7 @@ describe("GVisorProvider", () => {
       });
 
       expect(result).toEqual({ stdout, stderr, code: 0 });
-      expect(mockExecDockerRaw).toHaveBeenCalledWith(["ls", "-la"], {
+      expect(mockExecDockerRaw).toHaveBeenCalledWith(["exec", "container-1", "ls", "-la"], {
         timeout: 5000,
       });
     });

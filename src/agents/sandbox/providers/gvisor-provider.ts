@@ -6,6 +6,7 @@ import {
   buildResourceLimitFlags,
   DEFAULT_NETWORK_MODE,
   buildNetworkFlag,
+  applyMetadataEgressBlock,
   filterSecretsFromEnv,
   syncToSandbox as fsSyncToSandbox,
   syncFromSandbox as fsSyncFromSandbox,
@@ -169,6 +170,9 @@ export class GVisorProvider implements ISandboxProvider, IBrowserCapable {
 
     // Start the container
     await execDocker(["start", containerName]);
+
+    // Block egress to cloud metadata endpoints (SSRF defense-in-depth)
+    await applyMetadataEgressBlock(containerName);
 
     return containerName;
   }

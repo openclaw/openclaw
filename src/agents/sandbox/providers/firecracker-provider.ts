@@ -8,8 +8,17 @@ import type { SandboxClient, ExecClient, BrowserClient } from "../grpc/client.js
 import { mapGrpcError } from "../grpc/errors.js";
 import type { HealthClient } from "../grpc/health.js";
 import { checkFirecrackerHealth } from "../grpc/health.js";
-// @ts-expect-error -- Generated proto code; available at runtime after buf generate
-import { SandboxState as ProtoSandboxState } from "../proto/openclaw/sandbox/v1/sandbox.js";
+/**
+ * Proto enum values for SandboxState (openclaw.sandbox.v1.SandboxState).
+ * Inlined to avoid runtime dependency on generated proto code that requires buf generate.
+ */
+const ProtoSandboxState = {
+  SANDBOX_STATE_UNSPECIFIED: 0,
+  SANDBOX_STATE_CREATING: 1,
+  SANDBOX_STATE_RUNNING: 2,
+  SANDBOX_STATE_STOPPED: 3,
+  SANDBOX_STATE_ERROR: 4,
+} as const;
 import type {
   ISandboxProvider,
   ProviderHealthResult,

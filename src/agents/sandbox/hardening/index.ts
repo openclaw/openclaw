@@ -4,7 +4,11 @@
 
 export { DEFAULT_RESOURCE_LIMITS, buildResourceLimitFlags } from "./resource-limits.js";
 
-export { DEFAULT_NETWORK_MODE, buildNetworkFlag } from "./network-isolation.js";
+export {
+  DEFAULT_NETWORK_MODE,
+  buildNetworkFlag,
+  applyMetadataEgressBlock,
+} from "./network-isolation.js";
 
 export { syncToSandbox, syncFromSandbox } from "./filesystem.js";
 

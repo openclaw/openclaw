@@ -4,7 +4,11 @@ import {
   syncToSandbox as fsSyncToSandbox,
   syncFromSandbox as fsSyncFromSandbox,
 } from "../hardening/filesystem.js";
-import { DEFAULT_NETWORK_MODE, buildNetworkFlag } from "../hardening/network-isolation.js";
+import {
+  DEFAULT_NETWORK_MODE,
+  buildNetworkFlag,
+  applyMetadataEgressBlock,
+} from "../hardening/network-isolation.js";
 import { DEFAULT_RESOURCE_LIMITS, buildResourceLimitFlags } from "../hardening/resource-limits.js";
 import { filterSecretsFromEnv } from "../hardening/secret-filter.js";
 import { listSandboxContainers } from "../manage.js";
@@ -72,9 +76,15 @@ export class DockerProvider implements ISandboxProvider, IBrowserCapable {
   async ensureSandbox(params: EnsureSandboxParams): Promise<string> {
     const containerName = `openclaw-sandbox-${params.sessionKey}`;
 
-    // Check if container already exists and is running
+    // Check if container already exists
     const state = await dockerContainerState(containerName);
     if (state.exists && state.running) {
+      return containerName;
+    }
+    if (state.exists && !state.running) {
+      // Container exists but stopped — restart it
+      await execDocker(["start", containerName]);
+      await applyMetadataEgressBlock(containerName);
       return containerName;
     }
 
@@ -107,6 +117,9 @@ export class DockerProvider implements ISandboxProvider, IBrowserCapable {
 
     // Start the container
     await execDocker(["start", containerName]);
+
+    // Block egress to cloud metadata endpoints (SSRF defense-in-depth)
+    await applyMetadataEgressBlock(containerName);
 
     return containerName;
   }
