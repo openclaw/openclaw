@@ -219,11 +219,12 @@ describe("modelsAuthCleanCommand", () => {
     expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 
-  it("always passes readOnly:true to ensureAuthProfileStore even when not dry-run (default agent)", async () => {
-    // P2 (#2914164081): store was previously loaded readOnly:false before the empty-config
-    // safety guard ran, causing unwanted write side-effects (external CLI sync, legacy migration).
-    // The probe load must always be read-only; the write-enabled load is deferred to
-    // updateAuthProfileStoreWithLock which only runs when cleanup actually proceeds.
+  it("passes readOnly:false to ensureAuthProfileStore when not dry-run (default agent)", async () => {
+    // #2914711181: the probe for actual cleanup must use readOnly:false so legacy
+    // auth.json → auth-profiles.json migration runs before
+    // updateAuthProfileStoreWithLock's ensureAuthStoreFile can create an empty
+    // placeholder (which would cause the write-enabled load inside the lock to
+    // return an empty store and skip all removals).
     const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
@@ -234,14 +235,12 @@ describe("modelsAuthCleanCommand", () => {
 
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ readOnly: true }),
+      expect.objectContaining({ readOnly: false }),
     );
   });
 
-  it("always passes readOnly:true to loadAgentLocalAuthProfileStore even when not dry-run (non-default agent)", async () => {
-    // P2 (#2914199338): for non-dry non-main-agent runs, the store was loaded readOnly:false
-    // before any validation, triggering write side-effects before guards were checked.
-    // The probe load must always be read-only regardless of dry-run or agent type.
+  it("passes readOnly:false to loadAgentLocalAuthProfileStore when not dry-run (non-default agent)", async () => {
+    // #2914711181: same as above for non-default agent path.
     const store = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
@@ -254,7 +253,7 @@ describe("modelsAuthCleanCommand", () => {
 
     expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ readOnly: true }),
+      expect.objectContaining({ readOnly: false }),
     );
   });
 
