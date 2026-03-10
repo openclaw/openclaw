@@ -118,6 +118,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -191,6 +192,7 @@ function createPluginHandler(
           ...resolveCtx(overrides),
           text: caption,
           mediaUrl,
+          audioAsVoice: overrides?.audioAsVoice,
         });
       }
       return sendText({
@@ -332,6 +334,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
     text: payload.text ?? "",
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
     channelData: payload.channelData,
+    ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
   };
 }
 
@@ -724,6 +727,7 @@ async function deliverOutboundPayloadsCore(
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
+        audioAsVoice: effectivePayload.audioAsVoice || undefined,
       };
       if (handler.sendPayload && effectivePayload.channelData) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);

@@ -402,6 +402,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       replyToId,
       threadId,
       silent,
+      audioAsVoice,
     }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
@@ -415,6 +416,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         replyToMessageId,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
+        asVoice: audioAsVoice ?? undefined,
       });
       return { channel: "telegram", ...result };
     },
