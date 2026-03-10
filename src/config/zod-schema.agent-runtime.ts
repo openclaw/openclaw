@@ -616,6 +616,7 @@ export const MemorySearchSchema = z
       .optional(),
     chunking: z
       .object({
+        strategy: z.enum(["token", "section"]).optional(),
         tokens: z.number().int().positive().optional(),
         overlap: z.number().int().nonnegative().optional(),
       })
