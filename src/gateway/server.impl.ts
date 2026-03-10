@@ -21,7 +21,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { listConfiguredDiscordAccountIds } from "../discord/accounts.js";
+import { listConfiguredDiscordAccountIds, listDiscordAccountIds } from "../discord/accounts.js";
 import {
   evictPersistentState as evictDiscordPersistentState,
   markStable as markDiscordStable,
@@ -1066,13 +1066,24 @@ export async function startGatewayServer(
             }
             // Evict persistent state for discord accounts no longer in the new config.
             if (prevDiscordAccountIds.length > 0) {
-              // Use listConfiguredDiscordAccountIds (not listDiscordAccountIds) so
-              // that removing Discord entirely produces an empty set and all
-              // previous account entries are evicted — listDiscordAccountIds
-              // falls back to ["default"] when no accounts are configured,
-              // which would prevent eviction of the implicit default account.
+              // Determine currently-active account IDs with care:
+              //   - listDiscordAccountIds returns ["default"] for BOTH the single-account
+              //     token shape (Discord still active) AND when Discord is fully removed
+              //     (wrong — would prevent eviction of the implicit default account).
+              //   - listConfiguredDiscordAccountIds returns [] for the single-account
+              //     token shape (wrong — causes "default" to be evicted on every reload).
+              //
+              // Fix: treat Discord as configured if a top-level token exists OR if any
+              // explicit accounts are configured.  When configured, listDiscordAccountIds
+              // correctly resolves the active account set (including the implicit "default"
+              // for the single-account token shape).  When not configured, use an empty
+              // set so all previous entries are evicted.
+              const hasDiscordConfig = !!(
+                prepared.config.channels?.discord?.token ||
+                listConfiguredDiscordAccountIds(prepared.config).length > 0
+              );
               const nextDiscordAccountIds = new Set(
-                listConfiguredDiscordAccountIds(prepared.config),
+                hasDiscordConfig ? listDiscordAccountIds(prepared.config) : [],
               );
               for (const id of prevDiscordAccountIds) {
                 if (!nextDiscordAccountIds.has(id)) {
