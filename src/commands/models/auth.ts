@@ -350,9 +350,13 @@ function isLoopbackHost(host?: string): boolean {
 
 async function assertNotRemoteNodeHostAuthWrite(): Promise<void> {
   const nodeConfig = await loadNodeHostConfig();
-  if (!nodeConfig?.token) return;
+  if (!nodeConfig?.token) {
+    return;
+  }
   const gatewayHost = nodeConfig.gateway?.host;
-  if (isLoopbackHost(gatewayHost)) return;
+  if (isLoopbackHost(gatewayHost)) {
+    return;
+  }
 
   throw new Error(
     "This machine is configured as a remote node host. `openclaw models auth login` would write OAuth credentials locally and not to the gateway. Run this command on the gateway host instead.",
