@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import {
+  buildPendingHistoryContextFromMap,
   createWebhookInFlightLimiter,
   createReplyPrefixOptions,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   registerWebhookTargetWithPluginRoute,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
@@ -15,7 +17,11 @@ import {
   updateGoogleChatMessage,
 } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
-import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
+import {
+  applyGoogleChatInboundAccessPolicy,
+  isSenderAllowed,
+  spaceHistories,
+} from "./monitor-access.js";
 import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
@@ -230,8 +236,26 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
+  const historyLimit = config.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const combinedBody = isGroup
+    ? buildPendingHistoryContextFromMap({
+        historyMap: spaceHistories,
+        historyKey: spaceId,
+        limit: historyLimit,
+        currentMessage: body,
+        formatEntry: (entry) =>
+          core.channel.reply.formatInboundEnvelope({
+            channel: "Google Chat",
+            from: fromLabel,
+            timestamp: entry.timestamp,
+            body: entry.body,
+            senderLabel: entry.sender,
+          }),
+      })
+    : body;
+
   const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
+    Body: combinedBody,
     BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,

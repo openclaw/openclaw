@@ -8,6 +8,7 @@ import {
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
+  resolveNeverReply,
   resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -144,6 +145,16 @@ export async function handleIrcInbound(params: {
     const groupAccess = resolveIrcGroupAccessGate({ groupPolicy, groupMatch });
     if (!groupAccess.allowed) {
       runtime.log?.(`irc: drop channel ${message.target} (${groupAccess.reason})`);
+      return;
+    }
+    if (
+      resolveNeverReply({
+        cfg: config as OpenClawConfig,
+        channel: "irc",
+        accountId: account.accountId,
+      })
+    ) {
+      runtime.log?.("irc: drop channel message (neverReply)");
       return;
     }
   }

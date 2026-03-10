@@ -113,7 +113,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
 }
 
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
-const spaceHistories = new Map<string, HistoryEntry[]>();
+export const spaceHistories = new Map<string, HistoryEntry[]>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
   const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
