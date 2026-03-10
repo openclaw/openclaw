@@ -296,6 +296,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
       // If the file existed before our write (slug collision), restore the
       // original content instead of deleting — avoids erasing prior history.
       if (event.context.blockSessionSave === true && inlineWriteHappened) {
+        // Privacy note: late-set blockSessionSave retracts the file but does NOT
+        // prevent transcript content from having already been sent to the LLM
+        // provider for slug generation. To prevent transcript processing entirely,
+        // set blockSessionSave before the session-memory handler runs (pre-set path).
+        log.warn(
+          "blockSessionSave was set by a late hook — memory file will be retracted, but " +
+            "transcript content may have already been sent to the LLM provider for slug generation. " +
+            "To prevent transcript processing entirely, set blockSessionSave before the " +
+            "session-memory handler runs.",
+        );
         if (preExistingContent !== null) {
           // Slug collision: another entry already existed at this filename
           // before our inline write. Restore the original content rather
@@ -321,7 +331,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
             // triggerInternalHook logs them. Note: errors are caught
             // per-action and do NOT propagate to the session caller;
             // the file may remain on disk under adversarial FS conditions.
-            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            if (
+              !(err instanceof Error) ||
+              !("code" in err) ||
+              (err as NodeJS.ErrnoException).code !== "ENOENT"
+            ) {
               throw err;
             }
           }
