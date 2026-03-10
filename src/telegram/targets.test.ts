@@ -16,8 +16,12 @@ describe("stripTelegramInternalPrefixes", () => {
     expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe("-100123");
   });
 
-  it("does not strip group prefix without telegram prefix", () => {
-    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("group:-100123");
+  it("strips bare group prefix without telegram prefix", () => {
+    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("-100123");
+  });
+
+  it("strips group prefix from realistic group chat id", () => {
+    expect(stripTelegramInternalPrefixes("group:-1003786508776")).toBe("-1003786508776");
   });
 
   it("is idempotent", () => {
@@ -78,6 +82,13 @@ describe("parseTelegramTarget", () => {
       chatType: "group",
     });
   });
+
+  it("strips bare group: prefix before parsing", () => {
+    expect(parseTelegramTarget("group:-1003786508776")).toEqual({
+      chatId: "-1003786508776",
+      chatType: "group",
+    });
+  });
 });
 
 describe("normalizeTelegramChatId", () => {
@@ -91,6 +102,10 @@ describe("normalizeTelegramChatId", () => {
   it("keeps numeric chat ids unchanged", () => {
     expect(normalizeTelegramChatId("-1001234567890")).toBe("-1001234567890");
     expect(normalizeTelegramChatId("123456789")).toBe("123456789");
+  });
+
+  it("strips bare group: prefix and resolves numeric id", () => {
+    expect(normalizeTelegramChatId("group:-1003786508776")).toBe("-1003786508776");
   });
 
   it("returns undefined for empty input", () => {
