@@ -45,7 +45,8 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider, isTtsProviderConfigured } =
+  tts;
 
 const {
   isValidVoiceId,
@@ -661,6 +662,58 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+  });
+
+  describe("CLI TTS provider", () => {
+    it("resolves CLI config with defaults", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "cli",
+            cli: {
+              command: "say",
+              args: ["-o", "{{TtsOutputPath}}", "{{TtsText}}"],
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+
+      expect(config.provider).toBe("cli");
+      expect(config.cli.command).toBe("say");
+      expect(config.cli.args).toEqual(["-o", "{{TtsOutputPath}}", "{{TtsText}}"]);
+    });
+
+    it("is configured when command is set", () => {
+      const cfg: OpenClawConfig = {
+        messages: {
+          tts: {
+            cli: {
+              command: "say",
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = resolveTtsConfig(cfg);
+      expect(isTtsProviderConfigured(config, "cli")).toBe(true);
+    });
+
+    it("is not configured when command is empty", () => {
+      const cfg: OpenClawConfig = {
+        messages: { tts: {} },
+      } as OpenClawConfig;
+      const config = resolveTtsConfig(cfg);
+      expect(isTtsProviderConfigured(config, "cli")).toBe(false);
+    });
+
+    it("accepts cli as provider override in directives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=cli]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("cli");
     });
   });
 });

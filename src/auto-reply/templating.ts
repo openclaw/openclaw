@@ -179,6 +179,10 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /** TTS template variables */
+  TtsText?: string;
+  TtsOutputPath?: string;
+  TtsOutputFormat?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

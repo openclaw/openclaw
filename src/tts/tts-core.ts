@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -11,7 +11,9 @@ import {
 } from "../agents/model-selection.js";
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type {
   ResolvedTtsConfig,
   ResolvedTtsModelOverrides,
@@ -151,7 +153,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "cli"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -696,4 +703,39 @@ export async function edgeTTS(params: {
     timeout: config.timeoutMs ?? timeoutMs,
   });
   await tts.ttsPromise(text, outputPath);
+}
+
+export async function cliTTS(params: {
+  text: string;
+  outputPath: string;
+  config: ResolvedTtsConfig["cli"];
+  outputFormat: "mp3" | "opus" | "pcm";
+  timeoutMs: number;
+}): Promise<void> {
+  const { text, outputPath, config, outputFormat, timeoutMs } = params;
+
+  const templateCtx = {
+    TtsText: text,
+    TtsOutputPath: outputPath,
+    TtsOutputFormat: outputFormat,
+  };
+  const env = {
+    ...process.env,
+    TTS_OUTPUT_PATH: outputPath,
+    TTS_OUTPUT_FORMAT: outputFormat,
+  };
+
+  const resolvedArgs = (config.args ?? []).map((arg) => applyTemplate(arg, templateCtx));
+
+  const result = await runCommandWithTimeout([config.command, ...resolvedArgs], { timeoutMs, env });
+
+  if (result.code !== 0) {
+    throw new Error(
+      `CLI TTS failed with exit code ${result.code}: ${result.stderr || result.stdout}`,
+    );
+  }
+
+  if (!existsSync(outputPath)) {
+    throw new Error(`CLI TTS did not produce output file: ${outputPath}`);
+  }
 }

@@ -29,6 +29,7 @@ import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
+  cliTTS,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
@@ -71,6 +72,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  cli: "opus" as const,
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -78,6 +80,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  cli: "mp3" as const,
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -85,6 +88,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  cli: { format: "pcm" as const, sampleRate: 22050 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -130,6 +134,10 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  cli: {
+    command: string;
+    args?: string[];
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -317,6 +325,10 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    cli: {
+      command: raw.cli?.command?.trim() ?? "",
+      args: raw.cli?.args ?? [],
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -526,7 +538,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "cli"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -535,6 +547,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "cli") {
+    return Boolean(config.cli?.command);
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -653,6 +668,40 @@ export async function textToSpeech(params: {
         };
       }
 
+      if (provider === "cli") {
+        if (!config.cli.command) {
+          errors.push("cli: not configured");
+          continue;
+        }
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const outputFormat = output.cli;
+        const extension = output.extension;
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+
+        await cliTTS({
+          text: params.text,
+          config: config.cli,
+          outputFormat: outputFormat,
+          outputPath: audioPath,
+          timeoutMs: config.timeoutMs,
+        });
+
+        scheduleCleanup(tempDir);
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: outputFormat,
+          voiceCompatible,
+        };
+      }
+
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
         errors.push(`${provider}: no API key`);
@@ -748,6 +797,46 @@ export async function textToSpeechTelephony(params: {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
         continue;
+      }
+
+      if (provider === "cli") {
+        if (!config.cli.command) {
+          errors.push("cli: not configured");
+          continue;
+        }
+
+        const output = TELEPHONY_OUTPUT.cli;
+        const extension = `.${output.format}`;
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+
+        try {
+          await cliTTS({
+            text: params.text,
+            config: config.cli,
+            outputPath: audioPath,
+            outputFormat: output.format,
+            timeoutMs: config.timeoutMs,
+          });
+
+          const audioBuffer = readFileSync(audioPath);
+          scheduleCleanup(tempDir);
+
+          return {
+            success: true,
+            audioBuffer,
+            latencyMs: Date.now() - providerStart,
+            provider,
+            outputFormat: output.format,
+            sampleRate: output.sampleRate,
+          };
+        } catch (err) {
+          scheduleCleanup(tempDir);
+          throw err;
+        }
       }
 
       const apiKey = resolveTtsApiKey(config, provider);
