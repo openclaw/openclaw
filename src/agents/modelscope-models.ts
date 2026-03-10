@@ -123,33 +123,39 @@ function displayNameFromApiEntry(entry: ModelScopeModelEntry, inferredName: stri
 
 /**
  * Discover models from ModelScope Inference API (GET /v1/models).
- * No API key required — endpoint is publicly accessible.
+ * Uses the provided API key for authenticated discovery if available.
  */
-export async function discoverModelScopeModels(_apiKey: string): Promise<ModelDefinitionConfig[]> {
-  // In test environments, return empty or static list
+export async function discoverModelScopeModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+  // In test environments, return static catalog
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
     return MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
   }
 
+  const trimmedKey = apiKey?.trim();
   try {
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+    };
+
+    if (trimmedKey) {
+      headers["Authorization"] = `Bearer ${trimmedKey}`;
+    }
+
     const response = await fetch(`${MODELSCOPE_BASE_URL}/models`, {
       signal: AbortSignal.timeout(10_000),
-      headers: {
-        "Content-Type": "application/json",
-      },
-      // No Authorization header needed
+      headers,
     });
 
     if (!response.ok) {
-      log.warn(`GET /v1/models failed: HTTP ${response.status}, returning empty list`);
-      return [];
+      log.warn(`GET /v1/models failed: HTTP ${response.status}, using static catalog`);
+      return MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
     }
 
     const body = (await response.json()) as OpenAIListModelsResponse;
     const data = body?.data;
     if (!Array.isArray(data) || data.length === 0) {
-      log.warn("No models in response");
-      return [];
+      log.warn("No models in response, using static catalog");
+      return MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
     }
 
     const catalogById = new Map(MODELSCOPE_MODEL_CATALOG.map((m) => [m.id, m] as const));
@@ -184,9 +190,11 @@ export async function discoverModelScopeModels(_apiKey: string): Promise<ModelDe
       }
     }
 
-    return models;
+    return models.length > 0
+      ? models
+      : MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
   } catch (error) {
-    log.warn(`ModelScope model discovery failed: ${String(error)}`);
-    return [];
+    log.warn(`ModelScope model discovery failed: ${String(error)}, using static catalog`);
+    return MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
   }
 }
