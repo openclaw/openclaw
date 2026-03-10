@@ -11,11 +11,13 @@ import {
   type MemorySearchManager,
   type MemorySyncProgressUpdate,
   type ResolvedQmdConfig,
+  type ResolvedChainConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, MemorySearchManager>;
+  chainManagerCache: Map<string, MemorySearchManager>;
 };
 
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
@@ -24,12 +26,14 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
     () => ({
       qmdManagerCache: new Map<string, MemorySearchManager>(),
+      chainManagerCache: new Map<string, MemorySearchManager>(),
     }),
   );
 }
 
 const log = createSubsystemLogger("memory");
-const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
+const { qmdManagerCache: QMD_MANAGER_CACHE, chainManagerCache: CHAIN_MANAGER_CACHE } =
+  getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {
@@ -48,50 +52,76 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
-  if (resolved.backend === "chain" && resolved.chain) {
-    const { ChainMemoryManager } = await import("./chain/manager.js");
-    const { MemoryIndexManager } = await loadManagerRuntime();
-    const { QmdMemoryManager } = await import("./qmd-manager.js");
 
-    const manager = await ChainMemoryManager.create({
-      config: {
-        providers: resolved.chain.providers,
-        global: resolved.chain.global ?? {
-          defaultTimeout: 5000,
-          enableFallback: true,
-          healthCheckInterval: 30000,
+  // Chain Memory Backend
+  if (resolved.backend === "chain" && resolved.chain) {
+    const statusOnly = params.purpose === "status";
+
+    // Use cache for non-status requests
+    let cacheKey: string | undefined;
+    if (!statusOnly) {
+      cacheKey = buildChainCacheKey(params.agentId, resolved.chain);
+      const cached = CHAIN_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
+      }
+    }
+
+    try {
+      const { ChainMemoryManager } = await import("./chain/manager.js");
+      const { MemoryIndexManager } = await loadManagerRuntime();
+      const { QmdMemoryManager } = await import("./qmd-manager.js");
+
+      const manager = await ChainMemoryManager.create({
+        config: {
+          providers: resolved.chain.providers,
+          global: resolved.chain.global ?? {
+            defaultTimeout: 5000,
+            enableFallback: true,
+            healthCheckInterval: 30000,
+          },
         },
-      },
-      getBackendManager: async (backend: string, providerConfig?: unknown) => {
-        switch (backend) {
-          case "builtin": {
-            const result = await MemoryIndexManager.get(params);
-            if (!result) {
-              throw new Error("Failed to create builtin memory manager");
+        getBackendManager: async (backend: string, providerConfig?: unknown) => {
+          switch (backend) {
+            case "builtin": {
+              const result = await MemoryIndexManager.get(params);
+              if (!result) {
+                throw new Error("Failed to create builtin memory manager");
+              }
+              return result;
             }
-            return result;
-          }
-          case "qmd": {
-            const qmdResult = await QmdMemoryManager.create({
-              cfg: params.cfg,
-              agentId: params.agentId,
-              resolved,
-              mode: "full",
-            });
-            if (!qmdResult) {
-              throw new Error("Failed to create qmd memory manager");
+            case "qmd": {
+              const qmdResult = await QmdMemoryManager.create({
+                cfg: params.cfg,
+                agentId: params.agentId,
+                resolved,
+                mode: statusOnly ? "status" : "full",
+              });
+              if (!qmdResult) {
+                throw new Error("Failed to create qmd memory manager");
+              }
+              return qmdResult;
             }
-            return qmdResult;
+            default:
+              throw new Error(
+                `Unknown backend '${backend}' for chain memory. ` +
+                  `Supported: builtin, qmd. Provider config: ${JSON.stringify(providerConfig)}`,
+              );
           }
-          default:
-            throw new Error(
-              `Unknown backend '${backend}' for chain memory. ` +
-                `Supported: builtin, qmd. Provider config: ${JSON.stringify(providerConfig)}`,
-            );
-        }
-      },
-    });
-    return { manager };
+        },
+      });
+
+      // Cache for non-status requests
+      if (!statusOnly && cacheKey) {
+        CHAIN_MANAGER_CACHE.set(cacheKey, manager);
+      }
+
+      return { manager };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`chain memory unavailable: ${message}`);
+      return { manager: null, error: message };
+    }
   }
 
   if (resolved.backend === "qmd" && resolved.qmd) {
@@ -205,13 +235,22 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
-  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  const qmdManagers = Array.from(QMD_MANAGER_CACHE.values());
   QMD_MANAGER_CACHE.clear();
-  for (const manager of managers) {
+  for (const manager of qmdManagers) {
     try {
       await manager.close?.();
     } catch (err) {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+  const chainManagers = Array.from(CHAIN_MANAGER_CACHE.values());
+  CHAIN_MANAGER_CACHE.clear();
+  for (const manager of chainManagers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close chain memory manager: ${String(err)}`);
     }
   }
   if (managerRuntimePromise !== null) {
@@ -369,4 +408,9 @@ function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
   return `${agentId}:${JSON.stringify(config)}`;
+}
+
+function buildChainCacheKey(agentId: string, config: ResolvedChainConfig): string {
+  // Build stable cache key for chain managers
+  return `${agentId}:chain:${JSON.stringify(config)}`;
 }

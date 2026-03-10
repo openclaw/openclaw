@@ -478,6 +478,13 @@ export function resolveMemoryBackendConfig(params: {
  * Resolve Chain Memory Backend configuration
  */
 function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig {
+  // Resolve global config first (P2 fix: use global defaultTimeout for providers)
+  const globalConfig = {
+    defaultTimeout: chainConfig.global?.defaultTimeout ?? 5000,
+    enableFallback: chainConfig.global?.enableFallback ?? true,
+    healthCheckInterval: chainConfig.global?.healthCheckInterval ?? 30000,
+  };
+
   const resolvedProviders: ResolvedChainProvider[] = chainConfig.providers.map((provider) => ({
     name: provider.name,
     priority: provider.priority,
@@ -485,10 +492,10 @@ function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig
     plugin: provider.plugin,
     enabled: provider.enabled ?? true,
     timeout: {
-      add: provider.timeout?.add ?? 5000,
-      search: provider.timeout?.search ?? 5000,
-      update: provider.timeout?.update ?? 5000,
-      delete: provider.timeout?.delete ?? 5000,
+      add: provider.timeout?.add ?? globalConfig.defaultTimeout,
+      search: provider.timeout?.search ?? globalConfig.defaultTimeout,
+      update: provider.timeout?.update ?? globalConfig.defaultTimeout,
+      delete: provider.timeout?.delete ?? globalConfig.defaultTimeout,
     },
     retry: {
       maxAttempts: provider.retry?.maxAttempts ?? 3,
@@ -502,10 +509,6 @@ function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig
 
   return {
     providers: resolvedProviders,
-    global: {
-      defaultTimeout: chainConfig.global?.defaultTimeout ?? 5000,
-      enableFallback: chainConfig.global?.enableFallback ?? true,
-      healthCheckInterval: chainConfig.global?.healthCheckInterval ?? 30000,
-    },
+    global: globalConfig,
   };
 }
