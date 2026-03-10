@@ -57,7 +57,7 @@ function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
-function normalizeArchivePath(entryPath: string, label: string): string {
+export function normalizeArchivePath(entryPath: string, label: string): string {
   const trimmed = stripTrailingSlashes(entryPath.trim());
   if (!trimmed) {
     throw new Error(`${label} is empty.`);

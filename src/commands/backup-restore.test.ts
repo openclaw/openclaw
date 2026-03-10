@@ -317,6 +317,77 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("restores verified archives whose manifest asset paths need archive normalization", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-normalized-archive-paths-"),
+    );
+    const archivePath = path.join(archiveDir, "normalized.tar.gz");
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.writeFile(path.join(sourceStateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(archiveDir, rootName);
+      const stateArchiveRelativePath = path.join(
+        "payload",
+        "posix",
+        sourceStateDir.replace(/^\/+/u, ""),
+      );
+      const statePayloadDir = path.join(root, stateArchiveRelativePath);
+      await fs.mkdir(statePayloadDir, { recursive: true });
+      await fs.writeFile(path.join(statePayloadDir, "openclaw.json"), "{}", "utf8");
+      await fs.writeFile(path.join(statePayloadDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: rootName,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              stateDir: sourceStateDir,
+            },
+            assets: [
+              {
+                kind: "state",
+                sourcePath: sourceStateDir,
+                archivePath: `${rootName}//${stateArchiveRelativePath.replaceAll(path.sep, "/")}/`,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: archiveDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const targetHome = await createExtraHome("openclaw-backup-restore-normalized-target-");
+      setActiveHome(targetHome);
+
+      await backupRestoreCommand(runtime, {
+        archive: archivePath,
+      });
+
+      expect(await fs.readFile(path.join(targetHome, ".openclaw", "state.txt"), "utf8")).toBe(
+        "state\n",
+      );
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports dry-run without writing restore targets", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-restore-dry-"));

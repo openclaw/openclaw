@@ -17,7 +17,11 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
-import { readVerifiedBackupArchive, type BackupManifestAsset } from "./backup-archive.js";
+import {
+  normalizeArchivePath,
+  readVerifiedBackupArchive,
+  type BackupManifestAsset,
+} from "./backup-archive.js";
 import type { BackupAssetKind } from "./backup-shared.js";
 import { collectWorkspaceDirs, isPathWithin } from "./cleanup-utils.js";
 
@@ -573,10 +577,14 @@ async function assertRestoreTargetsReady(params: {
 }
 
 function matchesArchivePath(entryPath: string, assetArchivePath: string): boolean {
-  const normalizedEntryPath = entryPath.replace(/\/+$/u, "");
+  const normalizedEntryPath = normalizeArchivePath(entryPath, "Archive entry");
+  const normalizedAssetArchivePath = normalizeArchivePath(
+    assetArchivePath,
+    "Backup manifest asset path",
+  );
   return (
-    normalizedEntryPath === assetArchivePath ||
-    normalizedEntryPath.startsWith(`${assetArchivePath}/`)
+    normalizedEntryPath === normalizedAssetArchivePath ||
+    normalizedEntryPath.startsWith(`${normalizedAssetArchivePath}/`)
   );
 }
 
@@ -586,7 +594,11 @@ async function extractAssetToStage(params: {
   stageRoot: string;
   targetType: RestoreTargetType;
 }): Promise<string> {
-  const archivePathParts = params.assetArchivePath.split("/");
+  const normalizedAssetArchivePath = normalizeArchivePath(
+    params.assetArchivePath,
+    "Backup manifest asset path",
+  );
+  const archivePathParts = normalizedAssetArchivePath.split("/");
   const strip = Math.max(archivePathParts.length - 1, 0);
   await tar.x({
     file: params.archivePath,
@@ -600,7 +612,10 @@ async function extractAssetToStage(params: {
     },
     filter: (entryPath) => matchesArchivePath(entryPath, params.assetArchivePath),
   });
-  const stagedAssetPath = path.join(params.stageRoot, path.posix.basename(params.assetArchivePath));
+  const stagedAssetPath = path.join(
+    params.stageRoot,
+    path.posix.basename(normalizedAssetArchivePath),
+  );
   if (
     params.targetType === "directory" &&
     !(await pathExists(stagedAssetPath)) &&
