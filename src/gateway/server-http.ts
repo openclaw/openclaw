@@ -431,6 +431,19 @@ export function createHooksRequestHandler(
     let payload: Record<string, unknown> | object;
     let headers: Record<string, string>;
     if (hooksConfig.auth === "signature") {
+      // Fail fast: reject requests that lack all expected signature headers before
+      // reading the body, avoiding unnecessary I/O for completely unsigned requests.
+      const reqHeaders = normalizeHookHeaders(req);
+      const hasAnySignatureHeader = hooksConfig.signatureProviders.some(
+        (p) => reqHeaders[p.header] !== undefined,
+      );
+      if (!hasAnySignatureHeader) {
+        hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Unauthorized");
+        return true;
+      }
       const rawResult = await readRawBody(req, hooksConfig.maxBodyBytes);
       if (!rawResult.ok) {
         const status =
@@ -443,7 +456,7 @@ export function createHooksRequestHandler(
         sendJson(res, status, { ok: false, error: rawResult.error });
         return true;
       }
-      headers = normalizeHookHeaders(req);
+      headers = reqHeaders;
       const sigResult = verifyHookSignature({
         rawBody: rawResult.raw,
         headers,
