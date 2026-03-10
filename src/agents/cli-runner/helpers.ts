@@ -212,7 +212,7 @@ const SANDBOX_DENIED_RE =
  * Codex output merely discusses sandbox behavior.
  */
 const SANDBOX_DENIED_TEXT_RE =
-  /sandbox policy:\s*\S+ denied|permission denied.*sandbox|write.*denied.*sandbox|read.only.*sandbox/i;
+  /sandbox policy:\s*.+? denied|permission denied.*sandbox|write.*denied.*sandbox|read.only.*sandbox/i;
 
 /**
  * Detect sandbox-denied signals in raw text output (used for resume text-mode).

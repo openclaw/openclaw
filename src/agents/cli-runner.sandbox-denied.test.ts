@@ -229,4 +229,8 @@ describe("detectSandboxDeniedInText", () => {
   it("does not flag empty text", () => {
     expect(detectSandboxDeniedInText("")).toBe(false);
   });
+
+  it("detects multi-word path sandbox policy denial", () => {
+    expect(detectSandboxDeniedInText("sandbox policy: write to /workspace/file denied")).toBe(true);
+  });
 });
