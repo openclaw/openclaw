@@ -74,7 +74,7 @@ export const googlechatDock: ChannelDock = {
     resolveRequireMention: resolveGoogleChatGroupRequireMention,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "all",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const threadId = context.MessageThreadId ?? context.ReplyToId;
       return {
@@ -421,7 +421,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         chatId: space,
       };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+      threadId,
+    }) => {
       if (!mediaUrl) {
         throw new Error("Google Chat mediaUrl is required.");
       }
@@ -443,10 +452,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
-      const loaded = await runtime.channel.media.fetchRemoteMedia({
-        url: mediaUrl,
-        maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-      });
+      const isHttp = /^https?:\/\//i.test(mediaUrl);
+      const loaded = isHttp
+        ? await runtime.channel.media.fetchRemoteMedia({
+            url: mediaUrl,
+            maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
+          })
+        : await runtime.media.loadWebMedia(mediaUrl, {
+            localRoots: mediaLocalRoots,
+            maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
+          });
       const upload = await uploadGoogleChatAttachment({
         account,
         space,

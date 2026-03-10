@@ -92,11 +92,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
   const mentionAnnotations = annotations.filter((entry) => entry.type === "USER_MENTION");
   const hasAnyMention = mentionAnnotations.length > 0;
   const botTargets = new Set(["users/app", botUser?.trim()].filter(Boolean) as string[]);
-  
-  if (hasAnyMention) {
-    console.log(`[googlechat/access] extractMentionInfo: botTargets=${Array.from(botTargets).join(",")}, mentions=${JSON.stringify(mentionAnnotations.map(m => m.userMention?.user))}`);
-  }
-  
+
   const wasMentioned = mentionAnnotations.some((entry) => {
     const user = entry.userMention?.user;
     const userName = user?.name;
@@ -111,7 +107,6 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
     }
     // Google Workspace Add-ons mention target might be different, e.g. "users/1015421516681" or user.type === "BOT"
     if (user?.type === "BOT") {
-      console.log(`[googlechat/access] Matched mention by type===BOT: ${userName}`);
       return true;
     }
     return false;
@@ -288,10 +283,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     const requireMention = groupEntry?.requireMention ?? account.config.requireMention ?? true;
     const annotations = message.annotations ?? [];
     const mentionInfo = extractMentionInfo(annotations, account.config.botUser);
-    
-    // DEBUG:
-    console.log(`[googlechat/access] Group message, space=${spaceId}, requireMention=${requireMention}, botUser=${account.config.botUser}, annotations_len=${annotations.length}, hasAny=${mentionInfo.hasAnyMention}, wasMentioned=${mentionInfo.wasMentioned}`);
-    
+
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg: config,
       surface: "googlechat",
@@ -310,7 +302,6 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     effectiveWasMentioned = mentionGate.effectiveWasMentioned;
     if (mentionGate.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
-      console.log(`[googlechat/access] Dropping group message due to mention rules (shouldSkip)`);
       return { ok: false };
     }
   }
@@ -319,7 +310,6 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     logVerbose(
       `drop group message (sender policy blocked, reason=${access.reason}, space=${spaceId})`,
     );
-    console.log(`[googlechat/access] Dropping group message due to sender policy (reason=${access.reason})`);
     return { ok: false };
   }
 

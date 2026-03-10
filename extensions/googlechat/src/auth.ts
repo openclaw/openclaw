@@ -1,6 +1,6 @@
-import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { GoogleAuth, OAuth2Client } from "google-auth-library";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
@@ -186,7 +186,8 @@ export type GoogleChatAudienceType = "app-url" | "project-number";
 
 // Google OAuth2 JWKS endpoint for manual JWT verification
 const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
-let cachedJwks: { fetchedAt: number; keys: Array<{ kid: string; [k: string]: unknown }> } | null = null;
+let cachedJwks: { fetchedAt: number; keys: Array<{ kid: string; [k: string]: unknown }> } | null =
+  null;
 
 async function fetchGoogleJwks(): Promise<Array<{ kid: string; [k: string]: unknown }>> {
   const now = Date.now();
@@ -202,9 +203,19 @@ async function fetchGoogleJwks(): Promise<Array<{ kid: string; [k: string]: unkn
   return data.keys;
 }
 
-async function manualVerifyGoogleJwt(idToken: string, expectedAudience: string): Promise<{
+async function manualVerifyGoogleJwt(
+  idToken: string,
+  expectedAudience: string,
+): Promise<{
   ok: boolean;
-  payload?: { iss?: string; aud?: string; email?: string; email_verified?: boolean; exp?: number; sub?: string };
+  payload?: {
+    iss?: string;
+    aud?: string;
+    email?: string;
+    email_verified?: boolean;
+    exp?: number;
+    sub?: string;
+  };
   reason?: string;
 }> {
   const crypto = await import("node:crypto");
@@ -216,7 +227,14 @@ async function manualVerifyGoogleJwt(idToken: string, expectedAudience: string):
 
   const [headerB64, payloadB64, signatureB64] = parts;
   let header: { kid?: string; alg?: string };
-  let payload: { iss?: string; aud?: string; email?: string; email_verified?: boolean; exp?: number; sub?: string };
+  let payload: {
+    iss?: string;
+    aud?: string;
+    email?: string;
+    email_verified?: boolean;
+    exp?: number;
+    sub?: string;
+  };
 
   try {
     header = JSON.parse(Buffer.from(headerB64, "base64url").toString());
@@ -232,7 +250,10 @@ async function manualVerifyGoogleJwt(idToken: string, expectedAudience: string):
 
   // Check audience
   if (payload.aud !== expectedAudience) {
-    return { ok: false, reason: `audience mismatch: expected=${expectedAudience} got=${payload.aud}` };
+    return {
+      ok: false,
+      reason: `audience mismatch: expected=${expectedAudience} got=${payload.aud}`,
+    };
   }
 
   // Check issuer
@@ -279,22 +300,19 @@ export async function verifyGoogleChatRequest(params: {
     return { ok: false, reason: "missing audience" };
   }
   const audienceType = params.audienceType ?? null;
-  console.log(`[googlechat/auth] verifying token audienceType=${audienceType} audience=${audience}`);
 
   if (audienceType === "app-url") {
     try {
       const result = await manualVerifyGoogleJwt(bearer, audience);
       if (!result.ok) {
-        console.log(`[googlechat/auth] app-url verify failed: ${result.reason}`);
         return { ok: false, reason: result.reason };
       }
       const email = result.payload?.email ?? "";
       const ok =
-        result.payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
-      console.log(`[googlechat/auth] app-url verify: ok=${ok} email=${email}`);
+        result.payload?.email_verified &&
+        (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
       return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
-      console.log(`[googlechat/auth] app-url verify error: ${err instanceof Error ? err.message : String(err)}`);
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }
   }
@@ -305,7 +323,6 @@ export async function verifyGoogleChatRequest(params: {
       await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
       return { ok: true };
     } catch (err) {
-      console.log(`[googlechat/auth] project-number verify failed: ${err instanceof Error ? err.message : String(err)}`);
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }
   }

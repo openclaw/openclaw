@@ -98,7 +98,6 @@ async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTar
     return;
   }
   if (eventType === "ADDED_TO_SPACE" && !event.message) {
-    console.log(`[googlechat] bot added to space: id=${event.space.name} type=${event.space.type}`);
     return;
   }
   if (!event.message) {
@@ -178,7 +177,11 @@ async function processMessageWithPipeline(params: {
   if (msgId) {
     pruneDedup();
     if (recentlyProcessedMessages.has(msgId)) {
-      console.warn(`[googlechat/dedup] Skipping duplicate message: ${msgId} (already processed within ${DEDUP_TTL_MS}ms)`);
+      logVerbose(
+        core,
+        runtime,
+        `skipping duplicate message: ${msgId} (already processed within ${DEDUP_TTL_MS}ms)`,
+      );
       return;
     }
     recentlyProcessedMessages.set(msgId, Date.now());
@@ -186,7 +189,6 @@ async function processMessageWithPipeline(params: {
 
   const spaceType = (space.type ?? "").toUpperCase();
   const isGroup = spaceType !== "DM" && spaceType !== "DIRECT_MESSAGE";
-  console.log(`[googlechat] space: id=${spaceId} type=${spaceType} isGroup=${isGroup} msgId=${msgId}`);
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
@@ -487,8 +489,6 @@ async function deliverGoogleChatReply(params: {
     const chunkLimit = account.config.textChunkLimit ?? 4000;
     const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
     const chunks = core.channel.text.chunkMarkdownTextWithMode(payload.text, chunkLimit, chunkMode);
-    
-    console.log(`[googlechat/delivery] Sending chunked text (${chunks.length} chunks) to space ${spaceId}, thread=${payload.replyToId}`);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
@@ -514,7 +514,11 @@ async function deliverGoogleChatReply(params: {
       }
     }
   } else {
-    console.warn(`[googlechat/delivery] Bot generated an empty response payload for space ${spaceId}, thread=${payload.replyToId}`);
+    logVerbose(
+      core,
+      runtime,
+      `Bot generated an empty response payload for space ${spaceId}, thread=${payload.replyToId}`,
+    );
   }
 }
 
