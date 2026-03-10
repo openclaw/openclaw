@@ -387,7 +387,7 @@ export async function runConfigRestore(opts: { runtime?: RuntimeEnv } = {}) {
 
     runtime.log(success(`Config restored from backup: ${shortBackupPath}`));
     runtime.log("");
-    runtime.log(info(`Please run ${formatCliCommand("openclaw doctor --fix")} to verify, then restart the gateway.`));
+    runtime.log(info(`Please run ${formatCliCommand("openclaw doctor --fix")} to verify, then run ${formatCliCommand("openclaw gateway restart")}.`));
   } catch (err) {
     runtime.error(danger(`Config restore failed: ${String(err)}`));
     runtime.exit(1);
