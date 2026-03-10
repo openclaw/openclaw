@@ -16,7 +16,7 @@ export function resolveToolDeliveryPayload(
   payload: ReplyPayload,
   options?: { allowText?: boolean; allowExecApproval?: boolean },
 ): ReplyPayload | null {
-  const allowText = options?.allowText !== false;
+  const allowText = options?.allowText === true;
   const allowExecApproval = options?.allowExecApproval !== false;
   if (allowText && payload.text?.trim()) {
     return payload;
