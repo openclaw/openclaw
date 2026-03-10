@@ -57,4 +57,16 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /**
+   * Delay in ms between missed job executions on startup.
+   * Prevents overwhelming the gateway when many jobs are overdue.
+   * Default: 5000.
+   */
+  missedJobStaggerMs?: number;
+  /**
+   * Maximum number of missed jobs to run immediately on startup.
+   * Additional missed jobs will be rescheduled to fire gradually.
+   * Default: 5.
+   */
+  maxMissedJobsPerRestart?: number;
 };

@@ -235,6 +235,8 @@ export function buildGatewayCronService(params: {
     defaultAgentId,
     resolveSessionStorePath,
     sessionStorePath,
+    missedJobStaggerMs: params.cfg.cron?.missedJobStaggerMs,
+    maxMissedJobsPerRestart: params.cfg.cron?.maxMissedJobsPerRestart,
     enqueueSystemEvent: (text, opts) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
       const sessionKey = resolveCronSessionKey({
