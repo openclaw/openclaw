@@ -347,6 +347,7 @@ export function renderApp(state: AppViewState) {
         ${
           state.tab === "overview"
             ? renderOverview({
+                basePath: state.basePath,
                 connected: state.connected,
                 hello: state.hello,
                 settings: state.settings,

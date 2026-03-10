@@ -7,6 +7,7 @@ import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function createProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
   return {
+    basePath: "",
     connected: true,
     hello: null,
     settings: {
@@ -304,26 +305,223 @@ describe("renderOverview growth foundation panel", () => {
       node.getAttribute("href"),
     );
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
     );
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Factions%2Fcurrent.md",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Factions%2Fcurrent.md",
     );
     expect(links).toContain("https://github.com/users/yui-stingray/projects/1");
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Fcurrent-proposal.json",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Fcurrent-proposal.json",
     );
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Freceipts%2F2026-03-06-issue-10.json",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Freceipts%2F2026-03-06-issue-10.json",
     );
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Fissue-17%2Foutcome-bundle.json",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Fissue-17%2Foutcome-bundle.json",
     );
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Farchive%2Fissue-15--20260306T000000Z%2Farchive-receipt.json",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Farchive%2Fissue-15--20260306T000000Z%2Farchive-receipt.json",
     );
     expect(links).toContain(
-      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Frelay%2Fcurrent.md",
+      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Frelay%2Fcurrent.md",
+    );
+  });
+
+  it("targets the active gateway origin for growth file links when basePath is remote", () => {
+    const container = document.createElement("div");
+    render(
+      renderOverview(
+        createProps({
+          settings: {
+            ...createProps().settings,
+            gatewayUrl: "wss://gateway.example.com/openclaw",
+          },
+          growthFoundation: {
+            available: true,
+            projectId: "growth-foundation",
+            alertStatus: "clear",
+            alertTransition: "steady-clear",
+            alertUpdatedAt: null,
+            actionsStatus: "actionable",
+            actionsUpdatedAt: null,
+            priorityNow: [],
+            thisWeek: [],
+            thisWeekItems: [],
+            completedThisWeekItems: [],
+            completedHistoryItems: [],
+            notificationStatus: "clear",
+            notificationCount: 1,
+            notificationItems: [
+              {
+                id: "weekly",
+                severity: "info",
+                title: "Weekly review",
+                detail: "Open the weekly review",
+                path: "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+                source: "weekly",
+              },
+            ],
+            watch: [],
+            reviewCount: 0,
+            completedReviewCount: 0,
+            alertsPath: null,
+            actionsPath: null,
+            completedHistoryPath: null,
+            heartbeatPath: null,
+            weeklyReviewPath:
+              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+            codexSmokeStatus: "missing",
+            codexSmokePeriod: null,
+            codexSmokeJobId: null,
+            codexSmokeUpdatedAt: null,
+            codexSmokeStatePath: null,
+            codexReviewSmokeStatus: "missing",
+            codexReviewSmokePeriod: null,
+            codexReviewSmokeJobId: null,
+            codexReviewSmokeSourceJobId: null,
+            codexReviewSmokeUpdatedAt: null,
+            codexReviewSmokeStatePath: null,
+            codexReviewSmokeDiffPath: null,
+            codexReviewSmokeBackfillCount: 0,
+            codexReviewSmokeBackfillItems: [],
+            codexReviewSmokeBackfillStatePath: null,
+            codexSmokeBackfillCount: 0,
+            codexSmokeBackfillItems: [],
+            codexSmokeBackfillStatePath: null,
+            githubSyncStatus: "missing",
+            githubSyncIssueCount: 0,
+            githubSyncUpdatedAt: null,
+            githubSyncCurrentPath: null,
+            githubProjectStatus: "missing",
+            githubProjectTitle: null,
+            githubProjectUrl: null,
+            githubProjectItemCount: 0,
+            githubWritebackStatus: "missing",
+            githubWritebackIssueRef: null,
+            githubWritebackActions: [],
+            githubWritebackCloseIssue: false,
+            githubWritebackOperator: null,
+            githubWritebackProposalUpdatedAt: null,
+            githubWritebackReceiptAppliedAt: null,
+            githubWritebackProposalPath: null,
+            githubWritebackReceiptPath: null,
+            relayStatus: "missing",
+            relayChannel: null,
+            relayMode: null,
+            relayCandidateCount: 0,
+            relayUpdatedAt: null,
+            relayCurrentPath: null,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const links = Array.from(container.querySelectorAll("a")).map((node) =>
+      node.getAttribute("href"),
+    );
+    expect(links).toContain(
+      "https://gateway.example.com/openclaw/__openclaw/growth-foundation/file?path=memory%2Fprojects%2Fgrowth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
+    );
+  });
+
+  it("falls back to the mounted basePath for growth file links when gatewayUrl is empty", () => {
+    const container = document.createElement("div");
+    render(
+      renderOverview(
+        createProps({
+          basePath: "/openclaw",
+          settings: {
+            ...createProps().settings,
+            gatewayUrl: "",
+          },
+          growthFoundation: {
+            available: true,
+            projectId: "growth-foundation",
+            alertStatus: "clear",
+            alertTransition: "steady-clear",
+            alertUpdatedAt: null,
+            actionsStatus: "actionable",
+            actionsUpdatedAt: null,
+            priorityNow: [],
+            thisWeek: [],
+            thisWeekItems: [],
+            completedThisWeekItems: [],
+            completedHistoryItems: [],
+            notificationStatus: "clear",
+            notificationCount: 1,
+            notificationItems: [
+              {
+                id: "weekly",
+                severity: "info",
+                title: "Weekly review",
+                detail: "Open the weekly review",
+                path: "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+                source: "weekly",
+              },
+            ],
+            watch: [],
+            reviewCount: 0,
+            completedReviewCount: 0,
+            alertsPath: null,
+            actionsPath: null,
+            completedHistoryPath: null,
+            heartbeatPath: null,
+            weeklyReviewPath:
+              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+            codexSmokeStatus: "missing",
+            codexSmokePeriod: null,
+            codexSmokeJobId: null,
+            codexSmokeUpdatedAt: null,
+            codexSmokeStatePath: null,
+            codexReviewSmokeStatus: "missing",
+            codexReviewSmokePeriod: null,
+            codexReviewSmokeJobId: null,
+            codexReviewSmokeSourceJobId: null,
+            codexReviewSmokeUpdatedAt: null,
+            codexReviewSmokeStatePath: null,
+            codexReviewSmokeDiffPath: null,
+            codexReviewSmokeBackfillCount: 0,
+            codexReviewSmokeBackfillItems: [],
+            codexReviewSmokeBackfillStatePath: null,
+            codexSmokeBackfillCount: 0,
+            codexSmokeBackfillItems: [],
+            codexSmokeBackfillStatePath: null,
+            githubSyncStatus: "missing",
+            githubSyncIssueCount: 0,
+            githubSyncUpdatedAt: null,
+            githubSyncCurrentPath: null,
+            githubProjectStatus: "missing",
+            githubProjectTitle: null,
+            githubProjectUrl: null,
+            githubProjectItemCount: 0,
+            githubWritebackStatus: "missing",
+            githubWritebackIssueRef: null,
+            githubWritebackActions: [],
+            githubWritebackCloseIssue: false,
+            githubWritebackOperator: null,
+            githubWritebackProposalUpdatedAt: null,
+            githubWritebackReceiptAppliedAt: null,
+            githubWritebackProposalPath: null,
+            githubWritebackReceiptPath: null,
+            relayStatus: "missing",
+            relayChannel: null,
+            relayMode: null,
+            relayCandidateCount: 0,
+            relayUpdatedAt: null,
+            relayCurrentPath: null,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const links = Array.from(container.querySelectorAll("a")).map((node) =>
+      node.getAttribute("href"),
+    );
+    expect(links).toContain(
+      "/openclaw/__openclaw/growth-foundation/file?path=memory%2Fprojects%2Fgrowth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
     );
   });
 

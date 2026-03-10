@@ -5,6 +5,8 @@ import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(),
+  authorizeWsControlUiGatewayConnect: vi.fn(),
+  isLocalDirectRequest: vi.fn(),
 }));
 
 vi.mock("./http-common.js", () => ({
@@ -15,7 +17,8 @@ vi.mock("./http-utils.js", () => ({
   getBearerToken: vi.fn(),
 }));
 
-const { authorizeHttpGatewayConnect } = await import("./auth.js");
+const { authorizeHttpGatewayConnect, authorizeWsControlUiGatewayConnect, isLocalDirectRequest } =
+  await import("./auth.js");
 const { sendGatewayAuthFailure } = await import("./http-common.js");
 const { getBearerToken } = await import("./http-utils.js");
 
@@ -35,6 +38,7 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isLocalDirectRequest).mockReturnValue(false);
   });
 
   it("disables tailscale header auth for HTTP bearer checks", async () => {
@@ -67,6 +71,42 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
         connectAuth: { token: "abc", password: "abc" },
       }),
     );
+    expect(vi.mocked(sendGatewayAuthFailure)).not.toHaveBeenCalled();
+  });
+
+  it("uses the ws control-ui auth surface when requested", async () => {
+    vi.mocked(getBearerToken).mockReturnValue("abc");
+    vi.mocked(authorizeWsControlUiGatewayConnect).mockResolvedValue({
+      ok: true,
+      method: "tailscale",
+      user: "peter",
+    });
+
+    const ok = await authorizeGatewayBearerRequestOrReply({
+      ...makeAuthorizeParams(),
+      authSurface: "ws-control-ui",
+    });
+
+    expect(ok).toBe(true);
+    expect(vi.mocked(authorizeWsControlUiGatewayConnect)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectAuth: { token: "abc", password: "abc" },
+      }),
+    );
+    expect(vi.mocked(authorizeHttpGatewayConnect)).not.toHaveBeenCalled();
+  });
+
+  it("allows configured local-direct requests without shared auth", async () => {
+    vi.mocked(isLocalDirectRequest).mockReturnValue(true);
+
+    const ok = await authorizeGatewayBearerRequestOrReply({
+      ...makeAuthorizeParams(),
+      allowLocalDirect: true,
+    });
+
+    expect(ok).toBe(true);
+    expect(vi.mocked(authorizeHttpGatewayConnect)).not.toHaveBeenCalled();
+    expect(vi.mocked(authorizeWsControlUiGatewayConnect)).not.toHaveBeenCalled();
     expect(vi.mocked(sendGatewayAuthFailure)).not.toHaveBeenCalled();
   });
 });

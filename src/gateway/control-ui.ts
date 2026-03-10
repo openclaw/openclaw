@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -50,6 +51,7 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_GROWTH_MAX_BYTES = 64 * 1024;
 const CONTROL_UI_GROWTH_FILE_MAX_BYTES = 256 * 1024;
 const CONTROL_UI_GROWTH_ACTION_MAX_BYTES = 8 * 1024;
+const GROWTH_FOUNDATION_PROJECT_NAME = "growth-foundation";
 const CONTROL_UI_GROWTH_READABLE_EXTENSIONS = new Set([".json", ".md", ".patch", ".txt"]);
 
 export type ControlUiRequestOptions = {
@@ -504,10 +506,11 @@ function resolveWorkspaceRoot(config?: OpenClawConfig): string | null {
     }
     return configured;
   }
-  if (!home) {
+  try {
+    return resolveDefaultAgentWorkspaceDir(process.env);
+  } catch {
     return null;
   }
-  return path.join(home, ".openclaw", "workspace");
 }
 
 function readWorkspaceTextFile(
@@ -959,21 +962,43 @@ function resolveGrowthProjectFiles(
     return null;
   }
 
-  let best: { projectId: string; actionsPath: string; alertsPath: string; score: number } | null =
-    null;
+  let best: {
+    projectId: string;
+    actionsPath: string;
+    alertsPath: string;
+    matchScore: number;
+    freshnessScore: number;
+  } | null = null;
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
     }
     const projectId = entry.name;
-    const actionsPath = path.join("memory", "projects", projectId, "actions", "current.md");
-    const alertsPath = path.join("memory", "projects", projectId, "alerts", "current.md");
+    const actionsPath = path.posix.join("memory", "projects", projectId, "actions", "current.md");
+    const alertsPath = path.posix.join("memory", "projects", projectId, "alerts", "current.md");
     try {
       const actionsStat = fs.statSync(path.join(workspaceRoot, actionsPath));
       const alertsStat = fs.statSync(path.join(workspaceRoot, alertsPath));
-      const score = Math.max(actionsStat.mtimeMs, alertsStat.mtimeMs);
-      if (!best || score > best.score) {
-        best = { projectId, actionsPath, alertsPath, score };
+      const actionsText = readWorkspaceTextFile(workspaceRoot, actionsPath) ?? "";
+      const alertsText = readWorkspaceTextFile(workspaceRoot, alertsPath) ?? "";
+      const actionsFields = parseMarkdownKeyValueList(actionsText);
+      const alertsFields = parseMarkdownKeyValueList(alertsText);
+      const displayProjectId = actionsFields.project?.trim() || alertsFields.project?.trim() || "";
+      const metadataMatches = displayProjectId === GROWTH_FOUNDATION_PROJECT_NAME;
+      const directoryMatches =
+        projectId === GROWTH_FOUNDATION_PROJECT_NAME ||
+        projectId.endsWith(`_${GROWTH_FOUNDATION_PROJECT_NAME}`);
+      if (!metadataMatches && !directoryMatches) {
+        continue;
+      }
+      const matchScore = metadataMatches ? 2 : 1;
+      const freshnessScore = Math.max(actionsStat.mtimeMs, alertsStat.mtimeMs);
+      if (
+        !best ||
+        matchScore > best.matchScore ||
+        (matchScore === best.matchScore && freshnessScore > best.freshnessScore)
+      ) {
+        best = { projectId, actionsPath, alertsPath, matchScore, freshnessScore };
       }
     } catch {
       continue;

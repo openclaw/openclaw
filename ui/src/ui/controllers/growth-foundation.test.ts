@@ -307,6 +307,36 @@ describe("loadGrowthFoundationSummary", () => {
     vi.unstubAllGlobals();
   });
 
+  it("loads the growth foundation summary from the active gateway when gatewayUrl is cross-origin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ available: true, projectId: "growth-foundation", reviewCount: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "/openclaw",
+      settings: { gatewayUrl: "wss://gateway.example.com/openclaw", token: "shared-token" },
+      growthFoundation: null,
+    };
+
+    await loadGrowthFoundationSummary(state);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.example.com/openclaw/__openclaw/growth-foundation.json",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          Authorization: "Bearer shared-token",
+        }),
+      }),
+    );
+    expect(state.growthFoundation?.projectId).toBe("growth-foundation");
+
+    vi.unstubAllGlobals();
+  });
+
   it("submits a review action and updates the snapshot", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -538,6 +568,54 @@ describe("loadGrowthFoundationSummary", () => {
     expect(state.growthFoundation?.completedReviewCount).toBe(1);
     expect(state.growthFoundation?.githubWritebackStatus).toBe("applied");
     expect(state.growthFoundationActionBusyKey).toBeNull();
+    expect(state.growthFoundationActionError).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("submits review actions to the active gateway when gatewayUrl is cross-origin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        action: "complete",
+        itemKey: "item-1",
+        snapshot: { available: true, projectId: "growth-foundation", reviewCount: 0 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "/openclaw",
+      settings: { gatewayUrl: "wss://gateway.example.com/openclaw", token: "shared-token" },
+      growthFoundation: {
+        available: true,
+        projectId: "growth-foundation",
+        workspaceProjectId: "2026-03-06_growth-foundation",
+      },
+      growthFoundationActionBusyKey: null,
+      growthFoundationActionError: null,
+    };
+
+    await submitGrowthFoundationReviewAction(state, { action: "complete", itemKey: "item-1" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.example.com/openclaw/__openclaw/growth-foundation/review-action",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: "Bearer shared-token",
+        }),
+        body: JSON.stringify({
+          action: "complete",
+          itemKey: "item-1",
+          projectId: "2026-03-06_growth-foundation",
+        }),
+      }),
+    );
+    expect(state.growthFoundation?.projectId).toBe("growth-foundation");
     expect(state.growthFoundationActionError).toBeNull();
 
     vi.unstubAllGlobals();

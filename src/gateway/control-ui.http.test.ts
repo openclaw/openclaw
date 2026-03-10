@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -13,6 +14,14 @@ import {
 } from "./control-ui-contract.js";
 import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({ status: 0, stdout: "ok\n", stderr: "" })),
+  };
+});
 
 describe("handleControlUiHttpRequest", () => {
   async function withControlUiRoot<T>(params: {
@@ -906,6 +915,193 @@ describe("handleControlUiHttpRequest", () => {
           expect(parsed.relayCurrentPath).toBe(
             "memory/projects/growth-foundation/relay/current.md",
           );
+        } finally {
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("uses the profiled default workspace when config workspace is unset", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-growth-profile-workspace-"));
+        const prevHome = process.env.HOME;
+        const prevProfile = process.env.OPENCLAW_PROFILE;
+        const workspace = path.join(home, ".openclaw", "workspace-staging");
+        const projectDir = path.join(workspace, "memory", "projects", "growth-foundation");
+        try {
+          process.env.HOME = home;
+          process.env.OPENCLAW_PROFILE = "staging";
+          await fs.mkdir(path.join(projectDir, "actions"), { recursive: true });
+          await fs.mkdir(path.join(projectDir, "alerts"), { recursive: true });
+          await fs.writeFile(
+            path.join(projectDir, "actions", "current.md"),
+            [
+              "# Growth Action Items",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- updated_at: `2026-03-06T13:54:16+09:00`",
+              "",
+              "## Priority Now",
+              "",
+              "- none",
+              "",
+              "## This Week",
+              "",
+              "- none",
+              "",
+              "## Watch",
+              "",
+              "- none",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(projectDir, "alerts", "current.md"),
+            [
+              "# Growth Alert State",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- transition: `steady-clear`",
+              "- updated_at: `2026-03-06T13:54:36+09:00`",
+              "",
+            ].join("\n"),
+          );
+
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {},
+            },
+          );
+
+          expect(handled).toBe(true);
+          const parsed = parseGrowthPayload(end);
+          expect(parsed.available).toBe(true);
+          expect(parsed.projectId).toBe("growth-foundation");
+          expect(parsed.workspaceProjectId).toBe("growth-foundation");
+        } finally {
+          if (prevHome === undefined) {
+            delete process.env.HOME;
+          } else {
+            process.env.HOME = prevHome;
+          }
+          if (prevProfile === undefined) {
+            delete process.env.OPENCLAW_PROFILE;
+          } else {
+            process.env.OPENCLAW_PROFILE = prevProfile;
+          }
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("prefers the growth foundation project over newer unrelated workspace projects", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-growth-project-select-"));
+        const workspace = path.join(home, ".openclaw", "workspace");
+        try {
+          const growthProjectId = "2026-03-06_growth-foundation";
+          const growthProjectDir = path.join(workspace, "memory", "projects", growthProjectId);
+          const otherProjectDir = path.join(
+            workspace,
+            "memory",
+            "projects",
+            "2026-03-10_other-project",
+          );
+          await fs.mkdir(path.join(growthProjectDir, "actions"), { recursive: true });
+          await fs.mkdir(path.join(growthProjectDir, "alerts"), { recursive: true });
+          await fs.mkdir(path.join(otherProjectDir, "actions"), { recursive: true });
+          await fs.mkdir(path.join(otherProjectDir, "alerts"), { recursive: true });
+          await fs.writeFile(
+            path.join(growthProjectDir, "actions", "current.md"),
+            [
+              "# Growth Action Items",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `actionable`",
+              "- updated_at: `2026-03-06T13:54:16+09:00`",
+              "",
+              "## Priority Now",
+              "",
+              "- none",
+              "",
+              "## This Week",
+              "",
+              "- [ ] Review `queue-output-1`",
+              "",
+              "## Watch",
+              "",
+              "- none",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(growthProjectDir, "alerts", "current.md"),
+            [
+              "# Growth Alert State",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- transition: `steady-clear`",
+              "- updated_at: `2026-03-06T13:54:36+09:00`",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(otherProjectDir, "actions", "current.md"),
+            [
+              "# Other Project Action Items",
+              "",
+              "- project: `other-project`",
+              "- status: `blocked`",
+              "- updated_at: `2026-03-10T18:00:00+09:00`",
+              "",
+              "## Priority Now",
+              "",
+              "- investigate unrelated issue",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(otherProjectDir, "alerts", "current.md"),
+            [
+              "# Other Project Alert State",
+              "",
+              "- project: `other-project`",
+              "- status: `active`",
+              "- transition: `page-human`",
+              "- updated_at: `2026-03-10T18:00:00+09:00`",
+              "",
+            ].join("\n"),
+          );
+
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: { agents: { defaults: { workspace } } },
+            },
+          );
+
+          expect(handled).toBe(true);
+          const parsed = parseGrowthPayload(end);
+          expect(parsed.available).toBe(true);
+          expect(parsed.projectId).toBe("growth-foundation");
+          expect(parsed.workspaceProjectId).toBe(growthProjectId);
+          expect(parsed.alertStatus).toBe("clear");
+          expect(parsed.reviewCount).toBe(1);
+          expect(parsed.thisWeekItems[0]?.display).toBe("Review queue-output-1");
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }
@@ -1827,6 +2023,19 @@ describe("handleControlUiHttpRequest", () => {
           expect(payload.success).toBe(true);
           expect(payload.action).toBe("complete");
           expect(payload.snapshot.projectId).toBe("growth-foundation");
+          expect(spawnSync).toHaveBeenCalledWith(
+            "python3",
+            expect.arrayContaining([
+              path.join(scriptsDir, "complete_growth_action.py"),
+              "--project",
+              "growth-foundation",
+              "--item-key",
+              "item-1",
+              "--action",
+              "complete",
+            ]),
+            expect.objectContaining({ encoding: "utf8", timeout: 45_000 }),
+          );
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }
@@ -1915,6 +2124,19 @@ describe("handleControlUiHttpRequest", () => {
           expect(payload.action).toBe("complete");
           expect(payload.snapshot.projectId).toBe("growth-foundation");
           expect(payload.snapshot.workspaceProjectId).toBe(workspaceProjectId);
+          expect(spawnSync).toHaveBeenCalledWith(
+            "python3",
+            expect.arrayContaining([
+              path.join(scriptsDir, "complete_growth_action.py"),
+              "--project",
+              workspaceProjectId,
+              "--item-key",
+              "item-1",
+              "--action",
+              "complete",
+            ]),
+            expect.objectContaining({ encoding: "utf8", timeout: 45_000 }),
+          );
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }
