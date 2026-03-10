@@ -568,7 +568,10 @@ export async function startGatewayServer(
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
-  const serverStartedAt = Date.now();
+  const serverStartedAt = Date.now(); 
+  let _readinessFn: ReturnType<typeof createReadinessChecker> | undefined;
+  const getReadiness: ReturnType<typeof createReadinessChecker> = (...args) =>
+    _readinessFn?.(...args as []) ?? { ready: false, channels: [], failing: [], uptimeMs: 0 };
 
   const {
     canvasHost,
@@ -604,6 +607,7 @@ export async function startGatewayServer(
     rateLimiter: authRateLimiter,
     gatewayTls,
     hooksConfig: () => hooksConfig,
+    getReadiness,
     pluginRegistry,
     deps,
     canvasRuntime,
@@ -649,7 +653,7 @@ export async function startGatewayServer(
     channelRuntime: createPluginRuntime().channel,
     onInboundMessage: createEmitInboundUserMessage(broadcast),
   });
-  const _getReadiness = createReadinessChecker({
+  _readinessFn = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
   });

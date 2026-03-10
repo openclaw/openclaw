@@ -93,16 +93,20 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         senderName: context.ctxPayload.From,
       });
     }
-    await dispatchTelegramMessage({
-      context,
-      bot,
-      cfg,
-      runtime,
-      replyToMode,
-      streamMode,
-      textLimit,
-      telegramCfg,
-      opts,
-    });
+    try {
+      await dispatchTelegramMessage({
+        context,
+        bot,
+        cfg,
+        runtime,
+        replyToMode,
+        streamMode,
+        textLimit,
+        telegramCfg,
+        opts,
+      });
+    } catch (err) {
+      runtime.error("Failed to dispatch telegram message", err);
+    }
   };
 };
