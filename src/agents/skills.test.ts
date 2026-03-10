@@ -12,7 +12,7 @@ import {
   buildWorkspaceSkillSnapshot,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
-import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
+import { getActiveSkillEnvKeys, getBaselineProcessEnv } from "./skills/env-overrides.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
@@ -447,6 +447,44 @@ describe("applySkillEnvOverrides", () => {
       } finally {
         restore();
         expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("getBaselineProcessEnv does not include skill-injected keys", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "baseline-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "baseline-env-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["BASELINE_TEST_KEY"]},"primaryEnv":"BASELINE_TEST_KEY"}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["BASELINE_TEST_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "baseline-env-skill": { apiKey: "agent-a-token" }, // pragma: allowlist secret
+            },
+          },
+        },
+      });
+
+      try {
+        // process.env is polluted with the skill key
+        expect(process.env.BASELINE_TEST_KEY).toBe("agent-a-token");
+
+        // baseline snapshot should NOT contain the injected key
+        const baseline = getBaselineProcessEnv();
+        expect(baseline.BASELINE_TEST_KEY).toBeUndefined();
+      } finally {
+        restore();
       }
     });
   });

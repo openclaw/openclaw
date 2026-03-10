@@ -30,6 +30,35 @@ export function getActiveSkillEnvKeys(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
 
+/**
+ * Frozen snapshot of `process.env` captured before any skill overrides
+ * are applied. ACP spawn uses this instead of the live `process.env` so
+ * that agent-specific API keys injected by skill config never leak into
+ * child processes belonging to other agents.
+ *
+ * Captured lazily on the first `applySkillEnvOverrides` /
+ * `applySkillEnvOverridesFromSnapshot` call.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/42189
+ */
+let baselineProcessEnv: Readonly<NodeJS.ProcessEnv> | undefined;
+
+function captureBaselineEnvOnce(): void {
+  if (baselineProcessEnv) {
+    return;
+  }
+  baselineProcessEnv = Object.freeze({ ...process.env });
+}
+
+/**
+ * Returns a shallow copy of the `process.env` snapshot taken before any
+ * skill-config env overrides were applied.  Falls back to a copy of the
+ * current `process.env` when no overrides have been applied yet.
+ */
+export function getBaselineProcessEnv(): NodeJS.ProcessEnv {
+  return { ...(baselineProcessEnv ?? process.env) };
+}
+
 function acquireActiveSkillEnvKey(key: string, value: string): boolean {
   const active = activeSkillEnvEntries.get(key);
   if (active) {
@@ -211,6 +240,7 @@ function createEnvReverter(updates: EnvUpdate[]) {
 }
 
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+  captureBaselineEnvOnce();
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
 
@@ -237,6 +267,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
 }) {
+  captureBaselineEnvOnce();
   const { snapshot, config } = params;
   if (!snapshot) {
     return () => {};
