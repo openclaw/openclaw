@@ -1,0 +1,102 @@
+/* 
+  Localizable.strings (Japanese)
+  OpenClaw
+
+  Created for internationalization support.
+*/
+
+// MARK: - Settings Tab
+"settings.title" = "設定";
+"settings.gateway.title" = "ゲートウェイ";
+"settings.gateway.status.connected" = "接続済み";
+"settings.gateway.status.not_connected" = "未接続";
+"settings.gateway.setup.instructions" = "1. Telegramを開き、ボットにメッセージを送信：/pair\n2. 返されたセットアップコードをコピー\n3. ここに貼り付けて接続をタップ\n4. Telegramに戻り、/pair approveを実行";
+"settings.gateway.setup.code.placeholder" = "セットアップコードを貼り付け";
+"settings.gateway.connect.button" = "セットアップコードで接続";
+"settings.gateway.connecting" = "接続中…";
+"settings.gateway.connect.manual" = "接続（手動）";
+"settings.gateway.bot.picker" = "ボット";
+"settings.gateway.bot.default" = "デフォルト";
+"settings.gateway.bot.description" = "チャットとトークがどのボットと通信するかを制御します。";
+"settings.gateway.discovery" = "検出";
+"settings.gateway.status" = "ステータス";
+"settings.gateway.auto_connect" = "起動時に自動接続";
+"settings.gateway.server" = "サーバー";
+"settings.gateway.address" = "アドレス";
+"settings.gateway.disconnect" = "接続解除";
+"settings.gateway.advanced.title" = "詳細";
+"settings.gateway.manual.title" = "手動ゲートウェイを使用";
+"settings.gateway.manual.host" = "ホスト";
+"settings.gateway.manual.port" = "ポート（オプション）";
+"settings.gateway.manual.tls" = "TLSを使用";
+"settings.gateway.manual.description" = "mDNS/Bonjour検出がブロックされている場合に使用します。tailnet DNS（TLS）ではポートを空のままにして443を使用し、それ以外は18789を使用します。";
+"settings.gateway.debug.logs" = "検出デバッグログ";
+"settings.gateway.discovery_logs" = "検出ログ";
+"settings.gateway.debug.canvas" = "キャンバスデバッグステータス";
+"settings.gateway.auth.token" = "ゲートウェイ認証トークン";
+"settings.gateway.auth.password" = "ゲートウェイパスワード";
+"settings.gateway.reset.onboarding" = "オンボーディングをリセット";
+"settings.gateway.debug.title" = "デバッグ";
+"settings.gateway.no.gateways" = "まだゲートウェイが見つかりません。";
+"settings.gateway.no.gateways.description" = "ゲートウェイが他のネットワークにある場合は、接続してDNSが機能していることを確認してください。";
+"settings.gateway.connect.last_known" = "最後の既知に接続";
+"settings.gateway.setup.applied_connecting" = "セットアップコードが適用されました。接続中…";
+"settings.gateway.no.other.gateways" = "他のゲートウェイが見つかりません。";
+
+// MARK: - Device Section
+"settings.device.title" = "デバイス";
+"settings.device.features.title" = "機能";
+"settings.device.voice_wake" = "音声ウェイク";
+"settings.device.voice_wake.description" = "ウェイクワードアクティベーションを有効にして、ハンズフリーセッションを開始します。";
+"settings.device.talk_mode" = "トークモード";
+"settings.device.talk_mode.description" = "接続されたOpenClawエージェントとの音声会話モードを有効にします。";
+"settings.device.background_listening" = "バックグラウンドリスニング";
+"settings.device.background_listening.description" = "アプリがバックグラウンドでもリスニングを続けます。バッテリーをより消費します。";
+"settings.device.wake_words" = "ウェイクワード";
+"settings.device.allow_camera" = "カメラを許可";
+"settings.device.allow_camera.description" = "OpenClawがフォアグラウンドの時、ゲートウェイが写真や短い動画クリップを要求することを許可します。";
+"settings.device.location_access" = "位置情報アクセス";
+"settings.device.location_access.description" = "OpenClawの位置情報権限を制御します。オフは位置情報ツールを無効にし、使用中はフォアグラウンド位置情報を有効にし、常にバックグラウンド位置情報を有効にします。";
+"settings.device.location.off" = "オフ";
+"settings.device.location.while_using" = "使用中のみ";
+"settings.device.location.always" = "常に";
+"settings.device.prevent_sleep" = "スリープを防止";
+"settings.device.prevent_sleep.description" = "OpenClawが開いている間、画面を起動したままにします。";
+"settings.device.advanced.title" = "詳細";
+"settings.device.talk_voice.gateway" = "トーク音声（ゲートウェイ）";
+"settings.device.provider" = "プロバイダー";
+"settings.device.api_key" = "APIキー";
+"settings.device.configured" = "設定済み";
+"settings.device.not_configured" = "未設定";
+"settings.device.not_loaded" = "未読み込み";
+"settings.device.default_model" = "デフォルトモデル";
+"settings.device.default_voice" = "デフォルト音声";
+"settings.device.talk_voice.description" = "ゲートウェイ上のtalk.apiKey、talk.modelId、talk.voiceIdで設定されます。";
+"settings.device.show_talk_button" = "トークボタンを表示";
+"settings.device.show_talk_button.description" = "メインインターフェースにフローティングトークボタンを表示します。";
+"settings.device.default_share_instruction" = "デフォルト共有指示";
+"settings.device.default_share_instruction.description" = "iOSからOpenClawにコンテンツを共有する際にこの指示を追加します。";
+"settings.device.run_share_self_test" = "共有自己テストを実行";
+"settings.device.device_info.title" = "デバイス情報";
+"settings.device.name" = "名前";
+"settings.device.device" = "デバイス";
+"settings.device.platform" = "プラットフォーム";
+"settings.device.openclaw" = "OpenClaw";
+"settings.device.default_name" = "iOS ノード";
+
+// MARK: - Common
+"common.close" = "閉じる";
+"common.ok" = "OK";
+"common.cancel" = "キャンセル";
+"common.reset" = "リセット";
+"common.copy_url" = "URLをコピー";
+"common.copy_host" = "ホストをコピー";
+"common.copy_port" = "ポートをコピー";
+"common.connect" = "接続";
+
+// MARK: - Alerts
+"alert.reset_onboarding.title" = "オンボーディングをリセットしますか？";
+"alert.reset_onboarding.message" = "これにより接続が切断され、保存されたゲートウェイ接続と認証情報がクリアされ、オンボーディングウィザードが再度開きます。";
+"alert.location_access.title" = "位置情報アクセス";
+"alert.default_share_instruction.title" = "デフォルト共有指示";
+"alert.default_share_instruction.message" = "iOSからOpenClawにコンテンツを共有する際にこの指示を追加します。";

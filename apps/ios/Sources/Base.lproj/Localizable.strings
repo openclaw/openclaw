@@ -1,0 +1,102 @@
+/* 
+  Localizable.strings
+  OpenClaw
+
+  Created for internationalization support.
+*/
+
+// MARK: - Settings Tab
+"settings.title" = "Settings";
+"settings.gateway.title" = "Gateway";
+"settings.gateway.status.connected" = "Connected";
+"settings.gateway.status.not_connected" = "Not connected";
+"settings.gateway.setup.instructions" = "1. Open Telegram and message your bot: /pair\n2. Copy the setup code it returns\n3. Paste here and tap Connect\n4. Back in Telegram, run /pair approve";
+"settings.gateway.setup.code.placeholder" = "Paste setup code";
+"settings.gateway.connect.button" = "Connect with setup code";
+"settings.gateway.connecting" = "Connecting…";
+"settings.gateway.connect.manual" = "Connect (Manual)";
+"settings.gateway.bot.picker" = "Bot";
+"settings.gateway.bot.default" = "Default";
+"settings.gateway.bot.description" = "Controls which bot Chat and Talk speak to.";
+"settings.gateway.discovery" = "Discovery";
+"settings.gateway.status" = "Status";
+"settings.gateway.auto_connect" = "Auto-connect on launch";
+"settings.gateway.server" = "Server";
+"settings.gateway.address" = "Address";
+"settings.gateway.disconnect" = "Disconnect";
+"settings.gateway.advanced.title" = "Advanced";
+"settings.gateway.manual.title" = "Use Manual Gateway";
+"settings.gateway.manual.host" = "Host";
+"settings.gateway.manual.port" = "Port (optional)";
+"settings.gateway.manual.tls" = "Use TLS";
+"settings.gateway.manual.description" = "Use this when mDNS/Bonjour discovery is blocked. Leave port empty for 443 on tailnet DNS (TLS) or 18789 otherwise.";
+"settings.gateway.debug.logs" = "Discovery Debug Logs";
+"settings.gateway.discovery_logs" = "Discovery Logs";
+"settings.gateway.debug.canvas" = "Debug Canvas Status";
+"settings.gateway.auth.token" = "Gateway Auth Token";
+"settings.gateway.auth.password" = "Gateway Password";
+"settings.gateway.reset.onboarding" = "Reset Onboarding";
+"settings.gateway.debug.title" = "Debug";
+"settings.gateway.no.gateways" = "No gateways found yet.";
+"settings.gateway.no.gateways.description" = "If your gateway is on another network, connect it and ensure DNS is working.";
+"settings.gateway.connect.last_known" = "Connect last known";
+"settings.gateway.setup.applied_connecting" = "Setup code applied. Connecting…";
+"settings.gateway.no.other.gateways" = "No other gateways found.";
+
+// MARK: - Device Section
+"settings.device.title" = "Device";
+"settings.device.features.title" = "Features";
+"settings.device.voice_wake" = "Voice Wake";
+"settings.device.voice_wake.description" = "Enables wake-word activation to start a hands-free session.";
+"settings.device.talk_mode" = "Talk Mode";
+"settings.device.talk_mode.description" = "Enables voice conversation mode with your connected OpenClaw agent.";
+"settings.device.background_listening" = "Background Listening";
+"settings.device.background_listening.description" = "Keeps listening while the app is backgrounded. Uses more battery.";
+"settings.device.wake_words" = "Wake Words";
+"settings.device.allow_camera" = "Allow Camera";
+"settings.device.allow_camera.description" = "Allows the gateway to request photos or short video clips while OpenClaw is foregrounded.";
+"settings.device.location_access" = "Location Access";
+"settings.device.location_access.description" = "Controls location permissions for OpenClaw. Off disables location tools, While Using enables foreground location, and Always enables background location.";
+"settings.device.location.off" = "Off";
+"settings.device.location.while_using" = "While Using";
+"settings.device.location.always" = "Always";
+"settings.device.prevent_sleep" = "Prevent Sleep";
+"settings.device.prevent_sleep.description" = "Keeps the screen awake while OpenClaw is open.";
+"settings.device.advanced.title" = "Advanced";
+"settings.device.talk_voice.gateway" = "Talk Voice (Gateway)";
+"settings.device.provider" = "Provider";
+"settings.device.api_key" = "API Key";
+"settings.device.configured" = "Configured";
+"settings.device.not_configured" = "Not configured";
+"settings.device.not_loaded" = "Not loaded";
+"settings.device.default_model" = "Default Model";
+"settings.device.default_voice" = "Default Voice";
+"settings.device.talk_voice.description" = "Configured on gateway via talk.apiKey, talk.modelId, and talk.voiceId.";
+"settings.device.show_talk_button" = "Show Talk Button";
+"settings.device.show_talk_button.description" = "Shows the floating Talk button in the main interface.";
+"settings.device.default_share_instruction" = "Default Share Instruction";
+"settings.device.default_share_instruction.description" = "Appends this instruction when sharing content into OpenClaw from iOS.";
+"settings.device.run_share_self_test" = "Run Share Self-Test";
+"settings.device.device_info.title" = "Device Info";
+"settings.device.name" = "Name";
+"settings.device.device" = "Device";
+"settings.device.platform" = "Platform";
+"settings.device.openclaw" = "OpenClaw";
+"settings.device.default_name" = "iOS Node";
+
+// MARK: - Common
+"common.close" = "Close";
+"common.ok" = "OK";
+"common.cancel" = "Cancel";
+"common.reset" = "Reset";
+"common.copy_url" = "Copy URL";
+"common.copy_host" = "Copy Host";
+"common.copy_port" = "Copy Port";
+"common.connect" = "Connect";
+
+// MARK: - Alerts
+"alert.reset_onboarding.title" = "Reset Onboarding?";
+"alert.reset_onboarding.message" = "This will disconnect, clear saved gateway connection + credentials, and reopen the onboarding wizard.";
+"alert.location_access.title" = "Location Access";
+"alert.default_share_instruction.title" = "Default Share Instruction";
+"alert.default_share_instruction.message" = "Appends this instruction when sharing content into OpenClaw from iOS.";
