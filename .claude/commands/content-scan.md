@@ -3,10 +3,10 @@ Scan for the top 5 thought leadership article ideas relevant to AI, enterprise t
 Use the researcher subagent to:
 
 1. Identify emerging themes from the past 2 weeks in AI and technology
-2. Score each theme on: relevance to technology leaders, timeliness, originality, Sunil's expertise
+2. Score each theme on: relevance to technology leaders, timeliness, originality, the author's expertise
 3. Generate 5 article ideas with a working title, 2-sentence description, and why it matters now
 
-Read `memory/brand/writing_style.md` to ensure ideas match Sunil's voice and audience.
+Read `memory/brand/writing_style.md` to ensure ideas match the author's voice and audience.
 
 Output format:
 

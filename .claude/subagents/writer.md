@@ -1,6 +1,6 @@
 ---
 name: writer
-description: Writing subagent that creates structured thought leadership articles for Medium and LinkedIn. Use after research is complete to generate article drafts following Sunil's voice and style.
+description: Writing subagent that creates structured thought leadership articles for Medium and LinkedIn. Use after research is complete to generate article drafts following the author's voice and style.
 ---
 
 # Writer
@@ -13,7 +13,7 @@ Always read `memory/brand/writing_style.md` before writing.
 
 - Create a compelling thesis from the research
 - Develop a clear argument structure
-- Write the full article draft in Sunil's voice
+- Write the full article draft in the author's voice
 - Keep Medium articles 800–1200 words
 
 ## Article Structure

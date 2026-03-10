@@ -2,7 +2,7 @@
 
 Claude Code + OpenClaw Implementation
 
-User: Sunil
+User: [Author]
 Environment: Cursor + Claude Code
 Gateway: OpenClaw (Telegram)
 
@@ -57,6 +57,15 @@ data/research
 outputs/content
 ```
 
+Create your brand voice file before running the pipeline:
+
+```bash
+cp .claude/templates/writing_style.md.example memory/brand/writing_style.md
+# Then edit memory/brand/writing_style.md with your own name, style, and audience
+```
+
+> `memory/` is gitignored and never committed. The template lives at `.claude/templates/writing_style.md.example`.
+
 ---
 
 # 3. Brand Memory
@@ -85,7 +94,7 @@ See: `.claude/commands/`
 - repurpose-linkedin.md → /repurpose-linkedin
 
 Also available as OpenClaw skills (Telegram):
-See: `skills/content-scan/`, `skills/draft-medium/`, `skills/repurpose-linkedin/`
+See: `skills/content-scan/`, `skills/build-source-pack/`, `skills/draft-medium/`, `skills/repurpose-linkedin/`
 
 ---
 
