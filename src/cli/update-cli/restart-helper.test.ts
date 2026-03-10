@@ -76,6 +76,7 @@ describe("restart-helper", () => {
       expect(content).toContain("systemctl --user restart 'openclaw-gateway.service'");
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
+      expect(content).toContain('rmdir "$(dirname "$0")" 2>/dev/null || true');
       await cleanupScript(scriptPath);
     });
 
@@ -130,6 +131,7 @@ describe("restart-helper", () => {
       expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
+      expect(content).toContain('rmdir "%~dp0" 2>nul');
       await cleanupScript(scriptPath);
     });
 

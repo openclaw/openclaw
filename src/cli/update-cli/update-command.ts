@@ -39,6 +39,7 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
 import { runDaemonInstall, runDaemonRestart, runDaemonStop } from "../daemon-cli.js";
+import { createNullWriter } from "../daemon-cli/response.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -198,6 +199,10 @@ async function refreshGatewayServiceEnv(params: {
     );
   }
 
+  // Avoid emitting extra daemon output in `update --json` mode.
+  if (params.jsonMode) {
+    return;
+  }
   await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
 }
 
@@ -539,7 +544,15 @@ async function maybeRestartService(params: {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else {
-        restarted = await runDaemonRestart();
+        if (params.opts.json) {
+          await resolveGatewayService().restart({
+            env: process.env,
+            stdout: createNullWriter(),
+          });
+          restarted = true;
+        } else {
+          restarted = await runDaemonRestart();
+        }
       }
 
       if (!params.opts.json && restarted) {
@@ -646,7 +659,14 @@ async function restoreServiceAfterStoppedWindowsPackageUpdate(params: {
     if (params.restartScriptPath) {
       await runRestartScript(params.restartScriptPath);
     } else {
-      await runDaemonRestart();
+      if (params.opts.json) {
+        await resolveGatewayService().restart({
+          env: process.env,
+          stdout: createNullWriter(),
+        });
+      } else {
+        await runDaemonRestart();
+      }
     }
   } catch (err) {
     if (!params.opts.json) {
@@ -876,8 +896,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
               );
             }
             try {
-              // Keep `update --json` output as a single JSON payload.
-              await runDaemonStop({ json: undefined });
+              if (opts.json) {
+                await resolveGatewayService().stop({
+                  env: process.env,
+                  stdout: createNullWriter(),
+                });
+              } else {
+                await runDaemonStop({ json: undefined });
+              }
               serviceStoppedForWindowsPackageUpdate = true;
             } catch (err) {
               defaultRuntime.error(

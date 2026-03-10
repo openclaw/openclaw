@@ -76,6 +76,7 @@ sleep 1
 systemctl --user restart '${escaped}'
 # Self-cleanup
 rm -f "$0"
+rmdir "$(dirname "$0")" 2>/dev/null || true
 `;
     } else if (platform === "darwin") {
       const label = resolveLaunchdLabel(env);
@@ -100,6 +101,7 @@ if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
 fi
 # Self-cleanup
 rm -f "$0"
+rmdir "$(dirname "$0")" 2>/dev/null || true
 `;
     } else if (platform === "win32") {
       const taskName = resolveWindowsTaskName(env);
@@ -132,6 +134,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${port} .*LISTENING"'
 schtasks /Run /TN "${taskName}"
 REM Self-cleanup
 del "%~f0"
+rmdir "%~dp0" 2>nul
 `;
     } else {
       return null;
