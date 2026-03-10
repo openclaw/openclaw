@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -19,6 +20,8 @@ import {
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
+
+const log = createSubsystemLogger("model-auth");
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -221,7 +224,14 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      // Log profile resolution errors instead of silently swallowing them.
+      // This makes it much easier to debug authentication issues with providers
+      // like MiniMax, Kimi, etc. where silent failures lead to confusing
+      // "No API key found" errors despite profiles being configured.
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`Profile "${candidate}" for provider "${provider}" failed to resolve: ${message}`);
+    }
   }
 
   const envResolved = resolveEnvApiKey(provider);

@@ -90,8 +90,19 @@ export async function minimaxUnderstandImage(params: {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+    // Provide actionable error messages based on HTTP status codes so users
+    // can quickly diagnose invalid API keys, expired tokens, and quota issues
+    // instead of seeing a generic "request failed" message.
+    const hint =
+      res.status === 401
+        ? " Check that your MiniMax API key is valid and has not expired."
+        : res.status === 403
+          ? " Your MiniMax API key may lack the required permissions for this model."
+          : res.status === 429
+            ? " MiniMax rate limit exceeded — wait a moment and try again."
+            : "";
     throw new Error(
-      `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
+      `MiniMax VLM request failed (${res.status} ${res.statusText}).${hint}${trace}${
         body ? ` Body: ${body.slice(0, 400)}` : ""
       }`,
     );
