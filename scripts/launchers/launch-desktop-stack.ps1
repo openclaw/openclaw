@@ -49,7 +49,22 @@ function Resolve-LaunchCommand {
         }
     }
 
-    throw "Neither pnpm.cmd nor corepack.cmd was found in PATH."
+    Write-Host ""
+    Write-Host "ERROR: Neither pnpm.cmd nor corepack.cmd was found in PATH." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Install one of the following, then restart this script:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Option A - Install pnpm directly (recommended):" -ForegroundColor Yellow
+    Write-Host "    winget install pnpm.pnpm" -ForegroundColor White
+    Write-Host "  or" -ForegroundColor DarkGray
+    Write-Host "    npm install -g pnpm" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Option B - Enable corepack (ships with Node.js >= 16.9):" -ForegroundColor Yellow
+    Write-Host "    corepack enable" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  After installing, open a NEW terminal window and re-run this script." -ForegroundColor Yellow
+    Write-Host ""
+    throw "Neither pnpm.cmd nor corepack.cmd was found in PATH. See instructions above."
 }
 
 function Assert-DependenciesReady {
