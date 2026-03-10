@@ -1,5 +1,6 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { getChannelActivity } from "../infra/channel-activity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -16,6 +17,18 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 
+/**
+ * Maximum time the polling loop can run without any inbound message before
+ * we treat the connection as a zombie and force a restart.  This catches
+ * the case where `getUpdates` calls succeed on schedule (so the existing
+ * 90 s transport stall watchdog never fires) but the TCP connection has
+ * silently stopped delivering data.
+ *
+ * Configurable via `channels.telegram.accounts.<id>.network.zombieTimeoutMs`
+ * in openclaw.json; defaults to 15 minutes.
+ */
+const DEFAULT_ZOMBIE_INBOUND_TIMEOUT_MS = 15 * 60_000;
+
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 type TelegramPollingSessionOpts = {
@@ -29,6 +42,8 @@ type TelegramPollingSessionOpts = {
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
   log: (line: string) => void;
+  /** Override the default zombie-inbound timeout (ms). 0 disables the check. */
+  zombieInboundTimeoutMs?: number;
 };
 
 export class TelegramPollingSession {
@@ -198,10 +213,18 @@ export class TelegramPollingSession {
       }
     };
 
+    const zombieTimeoutMs = this.opts.zombieInboundTimeoutMs ?? DEFAULT_ZOMBIE_INBOUND_TIMEOUT_MS;
+    // Record the time when this polling cycle started so we don't trigger
+    // the zombie check before the bot has had a reasonable window to
+    // receive its first message.
+    const pollingStartedAt = Date.now();
+
     const watchdog = setInterval(() => {
       if (this.opts.abortSignal?.aborted) {
         return;
       }
+
+      // --- existing transport-level stall check ---
       const elapsed = Date.now() - lastGetUpdatesAt;
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
         stalledRestart = true;
@@ -209,6 +232,34 @@ export class TelegramPollingSession {
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
         );
         void stopRunner();
+        return;
+      }
+
+      // --- zombie polling check (issue #28622) ---
+      // getUpdates calls may succeed on schedule, but the TCP connection
+      // silently stops delivering data.  Detect this by checking how long
+      // it has been since the last *actual* inbound message.
+      if (zombieTimeoutMs > 0 && runner.isRunning()) {
+        const activity = getChannelActivity({
+          channel: "telegram",
+          accountId: this.opts.accountId,
+        });
+        const lastInbound = activity.inboundAt;
+        // Only check if we have ever received a message AND enough time
+        // has passed since the polling cycle started (avoid false
+        // positives during quiet periods right after startup).
+        if (lastInbound !== null) {
+          const inboundAge = Date.now() - lastInbound;
+          const sinceStart = Date.now() - pollingStartedAt;
+          if (inboundAge > zombieTimeoutMs && sinceStart > zombieTimeoutMs) {
+            stalledRestart = true;
+            this.opts.log(
+              `[telegram] Zombie polling detected (last inbound ${formatDurationPrecise(inboundAge)} ago, threshold ${formatDurationPrecise(zombieTimeoutMs)}); forcing restart.`,
+            );
+            void stopRunner();
+            return;
+          }
+        }
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
 
