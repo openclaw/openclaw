@@ -80,9 +80,31 @@ export function buildAgentSessionKey(params: {
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
+  /** Enable cross-channel shared memory for direct chats.
+   * When true, channel is omitted from sessionKey for direct chats,
+   * allowing memory/context sharing across channels.
+   */
+  crossChannelMemory?: boolean;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
+  const isDirectChat = !peer || peer.kind === "direct";
+  
+  // When crossChannelMemory is enabled and this is a direct chat,
+  // use a unified sessionKey that ignores the channel
+  if (params.crossChannelMemory && isDirectChat) {
+    return buildAgentPeerSessionKey({
+      agentId: params.agentId,
+      mainKey: DEFAULT_MAIN_KEY,
+      channel: "shared", // Use unified channel identifier
+      accountId: params.accountId,
+      peerKind: "direct",
+      peerId: peer ? normalizeId(peer.id) || "unknown" : null,
+      dmScope: params.dmScope,
+      identityLinks: params.identityLinks,
+    });
+  }
+  
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
     mainKey: DEFAULT_MAIN_KEY,
@@ -644,6 +666,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
+    // Check if this agent has cross-channel memory enabled
+    const agentConfig = listAgents(input.cfg).find(
+      (agent) => normalizeAgentId(agent.id) === normalizeAgentId(resolvedAgentId)
+    );
+    const crossChannelMemory = agentConfig?.crossChannelMemory ?? false;
+    
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
@@ -651,6 +679,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       peer,
       dmScope,
       identityLinks,
+      crossChannelMemory,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,

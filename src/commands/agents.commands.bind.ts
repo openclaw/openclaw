@@ -24,6 +24,8 @@ type AgentsBindOptions = {
   agent?: string;
   bind?: string[];
   json?: boolean;
+  /** Enable cross-channel shared memory for this agent. */
+  shareMemory?: boolean;
 };
 
 type AgentsUnbindOptions = {
@@ -230,7 +232,38 @@ export async function agentsBindCommand(
   }
 
   const result = applyAgentBindings(cfg, parsed.bindings);
+  let configUpdated = false;
+  
+  // Apply binding changes
   if (result.added.length > 0 || result.updated.length > 0) {
+    result.config = { ...result.config };
+    configUpdated = true;
+  }
+  
+  // Enable cross-channel memory if requested
+  if (opts.shareMemory) {
+    const agents = cfg.agents?.list ?? [];
+    const agentIndex = agents.findIndex(
+      (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId)
+    );
+    if (agentIndex >= 0) {
+      const updatedAgents = [...agents];
+      updatedAgents[agentIndex] = {
+        ...updatedAgents[agentIndex],
+        crossChannelMemory: true,
+      };
+      result.config.agents = {
+        ...result.config.agents,
+        list: updatedAgents,
+      };
+      configUpdated = true;
+      if (!opts.json) {
+        runtime.log("Enabled cross-channel shared memory.");
+      }
+    }
+  }
+
+  if (configUpdated) {
     await writeConfigFile(result.config);
     if (!opts.json) {
       logConfigUpdated(runtime);
@@ -243,6 +276,7 @@ export async function agentsBindCommand(
     updated: result.updated.map(describeBinding),
     skipped: result.skipped.map(describeBinding),
     conflicts: formatBindingConflicts(result.conflicts),
+    crossChannelMemory: opts.shareMemory ?? false,
   };
   if (
     emitJsonPayload({ runtime, json: opts.json, payload, conflictCount: result.conflicts.length })
@@ -255,7 +289,7 @@ export async function agentsBindCommand(
     for (const binding of result.added) {
       runtime.log(`- ${describeBinding(binding)}`);
     }
-  } else if (result.updated.length === 0) {
+  } else if (result.updated.length === 0 && !opts.shareMemory) {
     runtime.log("No new bindings added.");
   }
 
