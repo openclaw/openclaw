@@ -807,8 +807,6 @@ describe("applyExtraParamsToAgent", () => {
       provider: "kimi-coding",
       id: "k2p5",
       baseUrl: "https://api.kimi.com/coding/",
-      id: "k2p5",
-      baseUrl: "https://api.kimi.com/coding/",
       compat: {
         requiresOpenAiAnthropicToolPayload: true,
       },
