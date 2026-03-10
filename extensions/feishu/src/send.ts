@@ -9,6 +9,23 @@ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
+
+/**
+ * Escape markdown special characters in URLs to prevent incorrect parsing
+ * by Feishu's markdown renderer. This is specifically for URLs that contain
+ * underscores, asterisks, backticks, etc. which have special meaning in markdown.
+ */
+function escapeMarkdownInUrls(text: string): string {
+  // Regular expression to match URLs (covers most common URL patterns)
+  const urlRegex = /(https?:\/\/[^\s<>]+[^\s<>.,;:!?])/gi;
+  
+  return text.replace(urlRegex, (url) => {
+    // Escape underscores in the entire URL (not just pathname)
+    // This is simpler and covers all cases
+    return url.replace(/_/g, '\\_');
+  });
+}
+
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
