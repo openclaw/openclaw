@@ -296,15 +296,19 @@ export function buildGatewayCronService(params: {
         lane: "cron",
       });
     },
-    runBackupJob: async ({ job }) => {
+    runBackupJob: async ({ job, abortSignal }) => {
       if (job.payload.kind !== "backupCreate") {
         return { status: "error", error: 'cron backup jobs require payload.kind="backupCreate"' };
       }
 
       const result = await backupCreateCommand(
         {
-          log: () => {},
-          error: () => {},
+          log: (message) => {
+            cronLogger.info({ jobId: job.id, message }, "cron: backup log");
+          },
+          error: (message) => {
+            cronLogger.warn({ jobId: job.id, message }, "cron: backup error");
+          },
           exit: (code: number) => {
             throw new Error(`backup runtime exited with code ${code}`);
           },
@@ -314,6 +318,7 @@ export function buildGatewayCronService(params: {
           includeWorkspace: job.payload.includeWorkspace,
           onlyConfig: job.payload.onlyConfig,
           verify: job.payload.verify,
+          signal: abortSignal,
         },
       );
 

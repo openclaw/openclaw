@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,10 +6,40 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const tarCreateMock = vi.hoisted(() => vi.fn());
+const packInstances = vi.hoisted(() => [] as FakePack[]);
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
+
+class FakePack extends EventEmitter {
+  readonly add = vi.fn<(path: string) => this>();
+  readonly end = vi.fn<() => this>();
+  readonly pipe = vi.fn<(dest: NodeJS.WritableStream) => NodeJS.WritableStream>();
+  readonly destroy = vi.fn<(err?: Error) => this>();
+
+  constructor() {
+    super();
+    this.add.mockImplementation(() => this);
+    this.end.mockImplementation(() => this);
+    this.pipe.mockImplementation((dest) => dest);
+    this.destroy.mockImplementation((err?: Error) => {
+      queueMicrotask(() => {
+        if (err) {
+          this.emit("error", err);
+        }
+      });
+      return this;
+    });
+  }
+}
 
 vi.mock("tar", () => ({
   c: tarCreateMock,
+  Pack: class {
+    constructor() {
+      const pack = new FakePack();
+      packInstances.push(pack);
+      return pack;
+    }
+  },
 }));
 
 vi.mock("./backup-verify.js", () => ({
@@ -23,6 +54,7 @@ describe("backupCreateCommand atomic archive write", () => {
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-atomic-test-");
     tarCreateMock.mockReset();
+    packInstances.length = 0;
     backupVerifyCommandMock.mockReset();
   });
 
@@ -127,6 +159,72 @@ describe("backupCreateCommand atomic archive write", () => {
       expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
     } finally {
       linkSpy.mockRestore();
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects immediately when the backup signal is already aborted", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-abort-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const abortController = new AbortController();
+      abortController.abort("cron: job execution timed out");
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: path.join(archiveDir, "backup.tar.gz"),
+          signal: abortController.signal,
+        }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        message: "cron: job execution timed out",
+      });
+
+      expect(tarCreateMock).not.toHaveBeenCalled();
+      expect(packInstances).toHaveLength(0);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("destroys the in-flight tar pack when aborted during archive creation", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-abort-midrun-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const abortController = new AbortController();
+      const backupPromise = backupCreateCommand(runtime, {
+        output: path.join(archiveDir, "backup.tar.gz"),
+        signal: abortController.signal,
+      });
+
+      await vi.waitFor(() => {
+        expect(packInstances).toHaveLength(1);
+      });
+      abortController.abort("cron: job execution timed out");
+
+      await expect(backupPromise).rejects.toMatchObject({
+        name: "AbortError",
+        message: "cron: job execution timed out",
+      });
+
+      expect(packInstances[0]?.destroy).toHaveBeenCalled();
+    } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });

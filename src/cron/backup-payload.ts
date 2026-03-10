@@ -8,13 +8,7 @@ export type CronBackupCreatePayload = {
   verify?: boolean;
 };
 
-export type CronBackupCreatePayloadPatch = {
-  kind: typeof CRON_BACKUP_CREATE_KIND;
-  output?: string;
-  includeWorkspace?: boolean;
-  onlyConfig?: boolean;
-  verify?: boolean;
-};
+export type CronBackupCreatePayloadPatch = CronBackupCreatePayload;
 
 export function isCronBackupCreatePayload(
   payload: { kind?: unknown } | null | undefined,

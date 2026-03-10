@@ -196,6 +196,7 @@ describe("buildGatewayCronService", () => {
           output: "~/Backups/",
           includeWorkspace: false,
           verify: true,
+          signal: expect.any(AbortSignal),
         }),
       );
       expect(enqueueSystemEventMock).not.toHaveBeenCalled();
