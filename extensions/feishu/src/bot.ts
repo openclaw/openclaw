@@ -1050,7 +1050,11 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
-    if (requireMention && !ctx.mentionedBot) {
+    const mentionTriggers = feishuCfg?.mentionTriggers ?? [];
+    const triggeredByKeyword =
+      mentionTriggers.length > 0 &&
+      mentionTriggers.some((t) => t !== "@_bot_" && ctx.content.includes(t));
+    if (requireMention && !ctx.mentionedBot && !triggeredByKeyword) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
