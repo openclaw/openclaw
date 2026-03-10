@@ -335,6 +335,56 @@ describe("backup commands", () => {
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
 
+  it("rejects backup sources that contain symbolic links before writing an archive", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-outside-"));
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: externalWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(outsideDir, "shared.txt"), "shared\n", "utf8");
+      await fs.symlink(
+        path.join(outsideDir, "shared.txt"),
+        path.join(externalWorkspace, "shared.txt"),
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/contains symbolic links/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when config is invalid and workspace backup is enabled", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");

@@ -170,13 +170,15 @@ export function parseBackupManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
+async function listArchiveEntries(
+  archivePath: string,
+): Promise<Array<{ path: string; type?: string }>> {
+  const entries: Array<{ path: string; type?: string }> = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push(entry.path);
+      entries.push({ path: entry.path, type: entry.type });
     },
   });
   return entries;
@@ -285,10 +287,16 @@ export async function backupVerifyCommand(
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
+  const unsupportedLinkEntry = rawEntries.find(
+    (entry) => entry.type === "SymbolicLink" || entry.type === "Link",
+  );
+  if (unsupportedLinkEntry) {
+    throw new Error(`Archive contains unsupported tar link entry: ${unsupportedLinkEntry.path}`);
+  }
 
   const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
+    raw: entry.path,
+    normalized: normalizeArchivePath(entry.path, "Archive entry"),
   }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 

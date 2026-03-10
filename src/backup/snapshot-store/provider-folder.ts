@@ -97,9 +97,16 @@ export function createFolderSnapshotStore(
         return [];
       }
       const envelopes = entries.filter((entry) => entry.endsWith(".envelope.json")).toSorted();
-      return await Promise.all(
-        envelopes.map(async (entry) => await readEnvelopeFile(path.join(root, entry))),
+      const listed = await Promise.all(
+        envelopes.map(async (entry) => {
+          try {
+            return await readEnvelopeFile(path.join(root, entry));
+          } catch {
+            return undefined;
+          }
+        }),
       );
+      return listed.filter((entry): entry is BackupSnapshotEnvelope => entry !== undefined);
     },
 
     async downloadSnapshot(params) {

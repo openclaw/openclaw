@@ -138,4 +138,32 @@ describe("folder snapshot store", () => {
       }),
     ).rejects.toThrow("Invalid installationId");
   });
+
+  it("skips malformed envelope files while listing healthy snapshots", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-list-");
+    const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
+    const validEnvelope = createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID);
+    await fs.mkdir(snapshotRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.envelope.json`),
+      `${JSON.stringify(validEnvelope, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(snapshotRoot, "snap_2026-03-10T00-00-01-000Z_deadbeef.envelope.json"),
+      "{not-json",
+      "utf8",
+    );
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+
+    await expect(
+      store.listSnapshots({
+        installationId: VALID_INSTALLATION_ID,
+      }),
+    ).resolves.toEqual([validEnvelope]);
+  });
 });
