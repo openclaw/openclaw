@@ -2,6 +2,7 @@ import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { deriveBrowserStatusDiagnostics } from "../status-diagnostics.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
@@ -73,7 +74,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       detectError = String(err);
     }
 
-    res.json({
+    const status = {
       enabled: current.resolved.enabled,
       profile: profileCtx.profile.name,
       running: cdpReady,
@@ -92,6 +93,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
       attachOnly: profileCtx.profile.attachOnly,
+    };
+
+    res.json({
+      ...status,
+      diagnostics: deriveBrowserStatusDiagnostics(status),
     });
   });
 
