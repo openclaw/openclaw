@@ -1,27 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJob } from "./types.js";
+import {
+  createNoopLogger,
+  createCronStoreHarness,
+  createRunningCronServiceState,
+} from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
+import type { CronJob } from "./types.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness();
 
 function createDueRecurringJob(params: {
   id: string;
@@ -44,6 +34,14 @@ function createDueRecurringJob(params: {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("CronService - timer re-arm when running (#12025)", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -61,20 +59,10 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
 
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createRunningCronServiceState({
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-
-    // Simulate a job that is currently running.
-    state.running = true;
-    state.store = {
-      version: 1,
       jobs: [
         createDueRecurringJob({
           id: "recurring-job",
@@ -82,7 +70,7 @@ describe("CronService - timer re-arm when running (#12025)", () => {
           nextRunAtMs: now + 5 * 60_000,
         }),
       ],
-    };
+    });
 
     // Before the fix in #12025, this would return without re-arming,
     // silently killing the scheduler.
@@ -100,6 +88,66 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     // state.running should still be true (onTimer bailed out, didn't
     // touch it — the original caller's finally block handles that).
     expect(state.running).toBe(true);
+
+    timeoutSpy.mockRestore();
+    await store.cleanup();
+  });
+
+  it("arms a watchdog timer while a timer tick is still executing", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            createDueRecurringJob({
+              id: "long-running-job",
+              nowMs: now,
+              nextRunAtMs: now,
+            }),
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => await deferredRun.promise),
+    });
+
+    let settled = false;
+    const timerPromise = onTimer(state);
+    void timerPromise.finally(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(state.running).toBe(true);
+    expect(state.timer).not.toBeNull();
+
+    const delays = timeoutSpy.mock.calls
+      .map(([, delay]) => delay)
+      .filter((d): d is number => typeof d === "number");
+    expect(delays).toContain(60_000);
+
+    deferredRun.resolve({ status: "ok", summary: "done" });
+    await timerPromise;
+    expect(state.running).toBe(false);
 
     timeoutSpy.mockRestore();
     await store.cleanup();

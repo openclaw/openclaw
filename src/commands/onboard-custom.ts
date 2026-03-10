@@ -1,17 +1,65 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import {
+  normalizeSecretInput,
+  normalizeOptionalSecretInput,
+} from "../utils/normalize-secret-input.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { ensureApiKeyFromEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
+import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = 4096;
+const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
-const VERIFY_TIMEOUT_MS = 10000;
+const VERIFY_TIMEOUT_MS = 30_000;
+
+function normalizeContextWindowForCustomModel(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
+  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
+}
+
+/**
+ * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
+ * Matches both:
+ * - https://*.services.ai.azure.com (Azure AI Foundry)
+ * - https://*.openai.azure.com (classic Azure OpenAI)
+ */
+function isAzureUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    return host.endsWith(".services.ai.azure.com") || host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Transforms an Azure AI Foundry/OpenAI URL to include the deployment path.
+ * Azure requires: https://host/openai/deployments/<model-id>/chat/completions?api-version=2024-xx-xx-preview
+ * But we can't add query params here, so we just add the path prefix.
+ * The api-version will be handled by the Azure OpenAI client or as a query param.
+ *
+ * Example:
+ *   https://my-resource.services.ai.azure.com + gpt-5-nano
+ *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
+ */
+function transformAzureUrl(baseUrl: string, modelId: string): string {
+  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  // Check if the URL already includes the deployment path
+  if (normalizedUrl.includes("/openai/deployments/")) {
+    return normalizedUrl;
+  }
+  return `${normalizedUrl}/openai/deployments/${modelId}`;
+}
 
 export type CustomApiCompatibility = "openai" | "anthropic";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
@@ -27,7 +75,7 @@ export type ApplyCustomApiConfigParams = {
   baseUrl: string;
   modelId: string;
   compatibility: CustomApiCompatibility;
-  apiKey?: string;
+  apiKey?: SecretInput;
   providerId?: string;
   alias?: string;
 };
@@ -169,6 +217,14 @@ function resolveAliasError(params: {
   return `Alias ${normalized} already points to ${existingKey}.`;
 }
 
+function buildAzureOpenAiHeaders(apiKey: string) {
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers["api-key"] = apiKey;
+  }
+  return headers;
+}
+
 function buildOpenAiHeaders(apiKey: string) {
   const headers: Record<string, string> = {};
   if (apiKey) {
@@ -210,35 +266,90 @@ type VerificationResult = {
   error?: unknown;
 };
 
-async function requestOpenAiVerification(params: {
+function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefined {
+  if (isSecretRef(value)) {
+    return value;
+  }
+  return normalizeOptionalSecretInput(value);
+}
+
+function resolveVerificationEndpoint(params: {
   baseUrl: string;
-  apiKey: string;
   modelId: string;
+  endpointPath: "chat/completions" | "messages";
+}) {
+  const resolvedUrl = isAzureUrl(params.baseUrl)
+    ? transformAzureUrl(params.baseUrl, params.modelId)
+    : params.baseUrl;
+  const endpointUrl = new URL(
+    params.endpointPath,
+    resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
+  );
+  if (isAzureUrl(params.baseUrl)) {
+    endpointUrl.searchParams.set("api-version", "2024-10-21");
+  }
+  return endpointUrl.href;
+}
+
+async function requestVerification(params: {
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
 }): Promise<VerificationResult> {
-  const endpoint = new URL(
-    "chat/completions",
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
-  ).href;
   try {
     const res = await fetchWithTimeout(
-      endpoint,
+      params.endpoint,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...buildOpenAiHeaders(params.apiKey),
+          ...params.headers,
         },
-        body: JSON.stringify({
-          model: params.modelId,
-          messages: [{ role: "user", content: "Hi" }],
-          max_tokens: 5,
-        }),
+        body: JSON.stringify(params.body),
       },
       VERIFY_TIMEOUT_MS,
     );
     return { ok: res.ok, status: res.status };
   } catch (error) {
     return { ok: false, error };
+  }
+}
+
+async function requestOpenAiVerification(params: {
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+}): Promise<VerificationResult> {
+  const endpoint = resolveVerificationEndpoint({
+    baseUrl: params.baseUrl,
+    modelId: params.modelId,
+    endpointPath: "chat/completions",
+  });
+  const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
+  const headers = isBaseUrlAzureUrl
+    ? buildAzureOpenAiHeaders(params.apiKey)
+    : buildOpenAiHeaders(params.apiKey);
+  if (isBaseUrlAzureUrl) {
+    return await requestVerification({
+      endpoint,
+      headers,
+      body: {
+        messages: [{ role: "user", content: "Hi" }],
+        max_completion_tokens: 5,
+        stream: false,
+      },
+    });
+  } else {
+    return await requestVerification({
+      endpoint,
+      headers,
+      body: {
+        model: params.modelId,
+        messages: [{ role: "user", content: "Hi" }],
+        max_tokens: 1,
+        stream: false,
+      },
+    });
   }
 }
 
@@ -247,37 +358,35 @@ async function requestAnthropicVerification(params: {
   apiKey: string;
   modelId: string;
 }): Promise<VerificationResult> {
-  const endpoint = new URL(
-    "messages",
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
-  ).href;
-  try {
-    const res = await fetchWithTimeout(
-      endpoint,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAnthropicHeaders(params.apiKey),
-        },
-        body: JSON.stringify({
-          model: params.modelId,
-          max_tokens: 16,
-          messages: [{ role: "user", content: "Hi" }],
-        }),
-      },
-      VERIFY_TIMEOUT_MS,
-    );
-    return { ok: res.ok, status: res.status };
-  } catch (error) {
-    return { ok: false, error };
-  }
+  // Use a base URL with /v1 injected for this raw fetch only. The rest of the app uses the
+  // Anthropic client, which appends /v1 itself; config should store the base URL
+  // without /v1 to avoid /v1/v1/messages at runtime. See docs/gateway/configuration-reference.md.
+  const baseUrlForRequest = /\/v1\/?$/.test(params.baseUrl.trim())
+    ? params.baseUrl.trim()
+    : params.baseUrl.trim().replace(/\/?$/, "") + "/v1";
+  const endpoint = resolveVerificationEndpoint({
+    baseUrl: baseUrlForRequest,
+    modelId: params.modelId,
+    endpointPath: "messages",
+  });
+  return await requestVerification({
+    endpoint,
+    headers: buildAnthropicHeaders(params.apiKey),
+    body: {
+      model: params.modelId,
+      max_tokens: 1,
+      messages: [{ role: "user", content: "Hi" }],
+      stream: false,
+    },
+  });
 }
 
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
+  config: OpenClawConfig;
+  secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
-}): Promise<{ baseUrl: string; apiKey: string }> {
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
     message: "API Base URL",
     initialValue: params.initialBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
@@ -291,12 +400,75 @@ async function promptBaseUrlAndKey(params: {
       }
     },
   });
-  const apiKeyInput = await params.prompter.text({
-    message: "API Key (leave blank if not required)",
-    placeholder: "sk-...",
-    initialValue: "",
+  const baseUrl = baseUrlInput.trim();
+  const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
+  let apiKeyInput: SecretInput | undefined;
+  const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
+    config: params.config,
+    provider: providerHint,
+    envLabel: "CUSTOM_API_KEY",
+    promptMessage: "API Key (leave blank if not required)",
+    normalize: normalizeSecretInput,
+    validate: () => undefined,
+    prompter: params.prompter,
+    secretInputMode: params.secretInputMode,
+    setCredential: async (apiKey) => {
+      apiKeyInput = apiKey;
+    },
   });
-  return { baseUrl: baseUrlInput.trim(), apiKey: apiKeyInput.trim() };
+  return {
+    baseUrl,
+    apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
+    resolvedApiKey: normalizeSecretInput(resolvedApiKey),
+  };
+}
+
+type CustomApiRetryChoice = "baseUrl" | "model" | "both";
+
+async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
+  return await prompter.select({
+    message: "What would you like to change?",
+    options: [
+      { value: "baseUrl", label: "Change base URL" },
+      { value: "model", label: "Change model" },
+      { value: "both", label: "Change base URL and model" },
+    ],
+  });
+}
+
+async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
+  return (
+    await prompter.text({
+      message: "Model ID",
+      placeholder: "e.g. llama3, claude-3-7-sonnet",
+      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
+    })
+  ).trim();
+}
+
+async function applyCustomApiRetryChoice(params: {
+  prompter: WizardPrompter;
+  config: OpenClawConfig;
+  secretInputMode?: SecretInputMode;
+  retryChoice: CustomApiRetryChoice;
+  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
+  let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
+  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
+    const retryInput = await promptBaseUrlAndKey({
+      prompter: params.prompter,
+      config: params.config,
+      secretInputMode: params.secretInputMode,
+      initialBaseUrl: baseUrl,
+    });
+    baseUrl = retryInput.baseUrl;
+    apiKey = retryInput.apiKey;
+    resolvedApiKey = retryInput.resolvedApiKey;
+  }
+  if (params.retryChoice === "model" || params.retryChoice === "both") {
+    modelId = await promptCustomApiModelId(params.prompter);
+  }
+  return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
 function resolveProviderApi(
@@ -400,9 +572,12 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
 
+  // Transform Azure URLs to include the deployment path for API calls
+  const resolvedBaseUrl = isAzureUrl(baseUrl) ? transformAzureUrl(baseUrl, modelId) : baseUrl;
+
   const providerIdResult = resolveCustomProviderId({
     config: params.config,
-    baseUrl,
+    baseUrl: resolvedBaseUrl,
     providerId: params.providerId,
   });
   const providerId = providerIdResult.providerId;
@@ -431,10 +606,20 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
   };
-  const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
+  const mergedModels = hasModel
+    ? existingModels.map((model) =>
+        model.id === modelId
+          ? {
+              ...model,
+              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
+            }
+          : model,
+      )
+    : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
-    params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);
+    normalizeOptionalProviderApiKey(params.apiKey) ??
+    normalizeOptionalProviderApiKey(existingApiKey);
 
   let config: OpenClawConfig = {
     ...params.config,
@@ -445,7 +630,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         ...providers,
         [providerId]: {
           ...existingProviderRest,
-          baseUrl,
+          baseUrl: resolvedBaseUrl,
           api: resolveProviderApi(params.compatibility),
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
           models: mergedModels.length > 0 ? mergedModels : [nextModel],
@@ -488,12 +673,18 @@ export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   config: OpenClawConfig;
+  secretInputMode?: SecretInputMode;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
 
-  const baseInput = await promptBaseUrlAndKey({ prompter });
+  const baseInput = await promptBaseUrlAndKey({
+    prompter,
+    config,
+    secretInputMode: params.secretInputMode,
+  });
   let baseUrl = baseInput.baseUrl;
   let apiKey = baseInput.apiKey;
+  let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
     message: "Endpoint compatibility",
@@ -504,13 +695,7 @@ export async function promptCustomApiConfig(params: {
     })),
   });
 
-  let modelId = (
-    await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-    })
-  ).trim();
+  let modelId = await promptCustomApiModelId(prompter);
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
@@ -519,13 +704,21 @@ export async function promptCustomApiConfig(params: {
     let verifiedFromProbe = false;
     if (!compatibility) {
       const probeSpinner = prompter.progress("Detecting endpoint type...");
-      const openaiProbe = await requestOpenAiVerification({ baseUrl, apiKey, modelId });
+      const openaiProbe = await requestOpenAiVerification({
+        baseUrl,
+        apiKey: resolvedApiKey,
+        modelId,
+      });
       if (openaiProbe.ok) {
         probeSpinner.stop("Detected OpenAI-compatible endpoint.");
         compatibility = "openai";
         verifiedFromProbe = true;
       } else {
-        const anthropicProbe = await requestAnthropicVerification({ baseUrl, apiKey, modelId });
+        const anthropicProbe = await requestAnthropicVerification({
+          baseUrl,
+          apiKey: resolvedApiKey,
+          modelId,
+        });
         if (anthropicProbe.ok) {
           probeSpinner.stop("Detected Anthropic-compatible endpoint.");
           compatibility = "anthropic";
@@ -536,31 +729,14 @@ export async function promptCustomApiConfig(params: {
             "This endpoint did not respond to OpenAI or Anthropic style requests.",
             "Endpoint detection",
           );
-          const retryChoice = await prompter.select({
-            message: "What would you like to change?",
-            options: [
-              { value: "baseUrl", label: "Change base URL" },
-              { value: "model", label: "Change model" },
-              { value: "both", label: "Change base URL and model" },
-            ],
-          });
-          if (retryChoice === "baseUrl" || retryChoice === "both") {
-            const retryInput = await promptBaseUrlAndKey({
-              prompter,
-              initialBaseUrl: baseUrl,
-            });
-            baseUrl = retryInput.baseUrl;
-            apiKey = retryInput.apiKey;
-          }
-          if (retryChoice === "model" || retryChoice === "both") {
-            modelId = (
-              await prompter.text({
-                message: "Model ID",
-                placeholder: "e.g. llama3, claude-3-7-sonnet",
-                validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-              })
-            ).trim();
-          }
+          const retryChoice = await promptCustomApiRetryChoice(prompter);
+          ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+            prompter,
+            config,
+            secretInputMode: params.secretInputMode,
+            retryChoice,
+            current: { baseUrl, apiKey, resolvedApiKey, modelId },
+          }));
           continue;
         }
       }
@@ -573,8 +749,8 @@ export async function promptCustomApiConfig(params: {
     const verifySpinner = prompter.progress("Verifying...");
     const result =
       compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey, modelId });
+        ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;
@@ -584,31 +760,14 @@ export async function promptCustomApiConfig(params: {
     } else {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
-    const retryChoice = await prompter.select({
-      message: "What would you like to change?",
-      options: [
-        { value: "baseUrl", label: "Change base URL" },
-        { value: "model", label: "Change model" },
-        { value: "both", label: "Change base URL and model" },
-      ],
-    });
-    if (retryChoice === "baseUrl" || retryChoice === "both") {
-      const retryInput = await promptBaseUrlAndKey({
-        prompter,
-        initialBaseUrl: baseUrl,
-      });
-      baseUrl = retryInput.baseUrl;
-      apiKey = retryInput.apiKey;
-    }
-    if (retryChoice === "model" || retryChoice === "both") {
-      modelId = (
-        await prompter.text({
-          message: "Model ID",
-          placeholder: "e.g. llama3, claude-3-7-sonnet",
-          validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-        })
-      ).trim();
-    }
+    const retryChoice = await promptCustomApiRetryChoice(prompter);
+    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+      prompter,
+      config,
+      secretInputMode: params.secretInputMode,
+      retryChoice,
+      current: { baseUrl, apiKey, resolvedApiKey, modelId },
+    }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }

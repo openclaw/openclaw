@@ -79,6 +79,10 @@ function unwrapQuoted(value: string): string | undefined {
   return trimmed.slice(1, -1).trim();
 }
 
+function mayContainFenceMarkers(input: string): boolean {
+  return input.includes("```") || input.includes("~~~");
+}
+
 // Check if a character offset is inside any fenced code block
 function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset: number): boolean {
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
@@ -96,12 +100,18 @@ export function splitMediaFromOutput(raw: string): {
   if (!trimmedRaw.trim()) {
     return { text: "" };
   }
+  const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const mayContainAudioTag = trimmedRaw.includes("[[");
+  if (!mayContainMediaToken && !mayContainAudioTag) {
+    return { text: trimmedRaw };
+  }
 
   const media: string[] = [];
   let foundMediaToken = false;
 
   // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
-  const fenceSpans = parseFenceSpans(trimmedRaw);
+  const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
+  const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
 
   // Collect tokens line by line so we can strip them cleanly.
   const lines = trimmedRaw.split("\n");
@@ -110,7 +120,7 @@ export function splitMediaFromOutput(raw: string): {
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
     // Skip MEDIA extraction if this line is inside a fenced code block
-    if (isInsideFence(fenceSpans, lineOffset)) {
+    if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;
@@ -191,6 +201,10 @@ export function splitMediaFromOutput(raw: string): {
         if (invalidParts.length > 0) {
           pieces.push(invalidParts.join(" "));
         }
+      } else if (looksLikeLocalPath) {
+        // Strip MEDIA: lines with local paths even when invalid (e.g. absolute paths
+        // from internal tools like TTS). They should never leak as visible text.
+        foundMediaToken = true;
       } else {
         // If no valid media was found in this match, keep the original token text.
         pieces.push(match[0]);

@@ -399,7 +399,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     }
   });
 
-  socket.once("error", (err) => {
+  socket.once("error", (err: unknown) => {
     fail(err);
   });
 

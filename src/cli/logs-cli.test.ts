@@ -1,5 +1,5 @@
-import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { formatLogTimestamp } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
@@ -12,9 +12,23 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
+let registerLogsCli: typeof import("./logs-cli.js").registerLogsCli;
+
+beforeAll(async () => {
+  ({ registerLogsCli } = await import("./logs-cli.js"));
+});
+
+async function runLogsCli(argv: string[]) {
+  await runRegisteredCli({
+    register: registerLogsCli as (program: import("commander").Command) => void,
+    argv,
+  });
+}
+
 describe("logs cli", () => {
   afterEach(() => {
-    callGatewayFromCli.mockReset();
+    callGatewayFromCli.mockClear();
+    vi.restoreAllMocks();
   });
 
   it("writes output directly to stdout/stderr", async () => {
@@ -29,24 +43,16 @@ describe("logs cli", () => {
 
     const stdoutWrites: string[] = [];
     const stderrWrites: string[] = [];
-    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
       stdoutWrites.push(String(chunk));
       return true;
     });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
       stderrWrites.push(String(chunk));
       return true;
     });
 
-    const { registerLogsCli } = await import("./logs-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerLogsCli(program);
-
-    await program.parseAsync(["logs"], { from: "user" });
-
-    stdoutSpy.mockRestore();
-    stderrSpy.mockRestore();
+    await runLogsCli(["logs"]);
 
     expect(stdoutWrites.join("")).toContain("Log file:");
     expect(stdoutWrites.join("")).toContain("raw line");
@@ -67,19 +73,12 @@ describe("logs cli", () => {
     });
 
     const stdoutWrites: string[] = [];
-    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
       stdoutWrites.push(String(chunk));
       return true;
     });
 
-    const { registerLogsCli } = await import("./logs-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerLogsCli(program);
-
-    await program.parseAsync(["logs", "--local-time", "--plain"], { from: "user" });
-
-    stdoutSpy.mockRestore();
+    await runLogsCli(["logs", "--local-time", "--plain"]);
 
     const output = stdoutWrites.join("");
     expect(output).toContain("line one");
@@ -95,25 +94,17 @@ describe("logs cli", () => {
     });
 
     const stderrWrites: string[] = [];
-    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => {
       const err = new Error("EPIPE") as NodeJS.ErrnoException;
       err.code = "EPIPE";
       throw err;
     });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
       stderrWrites.push(String(chunk));
       return true;
     });
 
-    const { registerLogsCli } = await import("./logs-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerLogsCli(program);
-
-    await program.parseAsync(["logs"], { from: "user" });
-
-    stdoutSpy.mockRestore();
-    stderrSpy.mockRestore();
+    await runLogsCli(["logs"]);
 
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
@@ -132,9 +123,8 @@ describe("logs cli", () => {
     it("formats local time in plain mode when localTime is true", () => {
       const utcTime = "2025-01-01T12:00:00.000Z";
       const result = formatLogTimestamp(utcTime, "plain", true);
-      // Should be local time without 'Z' suffix
-      expect(result).not.toContain("Z");
-      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      // Should be local time with explicit timezone offset (not 'Z' suffix).
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
       // The exact time depends on timezone, but should be different from UTC
       expect(result).not.toBe(utcTime);
     });
@@ -151,15 +141,13 @@ describe("logs cli", () => {
       }
     });
 
-    it("handles empty or invalid timestamps", () => {
-      expect(formatLogTimestamp(undefined)).toBe("");
-      expect(formatLogTimestamp("")).toBe("");
-      expect(formatLogTimestamp("invalid-date")).toBe("invalid-date");
-    });
-
-    it("preserves original value for invalid dates", () => {
-      const result = formatLogTimestamp("not-a-date");
-      expect(result).toBe("not-a-date");
+    it.each([
+      { input: undefined, expected: "" },
+      { input: "", expected: "" },
+      { input: "invalid-date", expected: "invalid-date" },
+      { input: "not-a-date", expected: "not-a-date" },
+    ])("preserves timestamp fallback for $input", ({ input, expected }) => {
+      expect(formatLogTimestamp(input)).toBe(expected);
     });
   });
 });

@@ -1,28 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
-
-function countLines(text: string) {
-  return text.split("\n").length;
-}
-
-function hasBalancedFences(chunk: string) {
-  let open: { markerChar: string; markerLen: number } | null = null;
-  for (const line of chunk.split("\n")) {
-    const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
-    if (!match) {
-      continue;
-    }
-    const marker = match[2];
-    if (!open) {
-      open = { markerChar: marker[0], markerLen: marker.length };
-      continue;
-    }
-    if (open.markerChar === marker[0] && marker.length >= open.markerLen) {
-      open = null;
-    }
-  }
-  return open === null;
-}
 
 describe("chunkDiscordText", () => {
   it("splits tall messages even when under 2000 chars", () => {

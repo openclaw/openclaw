@@ -1,3 +1,4 @@
+import type { BaseProbeResult } from "openclaw/plugin-sdk/irc";
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -7,7 +8,7 @@ import type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/irc";
 
 export type IrcChannelConfig = {
   requireMention?: boolean;
@@ -31,6 +32,11 @@ export type IrcNickServConfig = {
 export type IrcAccountConfig = {
   name?: string;
   enabled?: boolean;
+  /**
+   * Break-glass override: allow nick-only allowlist matching.
+   * Default behavior requires host/user-qualified identities.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   host?: string;
   port?: number;
   tls?: boolean;
@@ -42,6 +48,7 @@ export type IrcAccountConfig = {
   nickserv?: IrcNickServConfig;
   dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
+  defaultTo?: string;
   groupPolicy?: GroupPolicy;
   groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
@@ -61,6 +68,7 @@ export type IrcAccountConfig = {
 
 export type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
+  defaultAccount?: string;
 };
 
 export type CoreConfig = OpenClawConfig & {
@@ -83,12 +91,10 @@ export type IrcInboundMessage = {
   isGroup: boolean;
 };
 
-export type IrcProbe = {
-  ok: boolean;
+export type IrcProbe = BaseProbeResult<string> & {
   host: string;
   port: number;
   tls: boolean;
   nick: string;
   latencyMs?: number;
-  error?: string;
 };

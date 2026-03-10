@@ -1,5 +1,3 @@
-import type { OpenClawApp } from "./app.ts";
-import type { AgentsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
@@ -8,12 +6,18 @@ import {
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import type { OpenClawApp } from "./app.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents } from "./controllers/agents.ts";
+import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
-import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
+import {
+  loadCronJobs,
+  loadCronModelSuggestions,
+  loadCronRuns,
+  loadCronStatus,
+} from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
@@ -33,6 +37,7 @@ import {
 import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme.ts";
+import type { AgentsListResult } from "./types.ts";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -54,6 +59,7 @@ type SettingsHost = {
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   pendingGatewayUrl?: string | null;
+  pendingGatewayToken?: string | null;
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
@@ -89,27 +95,32 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const params = new URLSearchParams(url.search);
   const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 
-  const tokenRaw = params.get("token") ?? hashParams.get("token");
+  const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
+  const nextGatewayUrl = gatewayUrlRaw?.trim() ?? "";
+  const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== host.settings.gatewayUrl);
+  const tokenRaw = hashParams.get("token");
   const passwordRaw = params.get("password") ?? hashParams.get("password");
   const sessionRaw = params.get("session") ?? hashParams.get("session");
-  const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
   let shouldCleanUrl = false;
+
+  if (params.has("token")) {
+    params.delete("token");
+    shouldCleanUrl = true;
+  }
 
   if (tokenRaw != null) {
     const token = tokenRaw.trim();
-    if (token && token !== host.settings.token) {
+    if (token && gatewayUrlChanged) {
+      host.pendingGatewayToken = token;
+    } else if (token && token !== host.settings.token) {
       applySettings(host, { ...host.settings, token });
     }
-    params.delete("token");
     hashParams.delete("token");
     shouldCleanUrl = true;
   }
 
   if (passwordRaw != null) {
-    const password = passwordRaw.trim();
-    if (password) {
-      (host as { password: string }).password = password;
-    }
+    // Never hydrate password from URL params; strip only.
     params.delete("password");
     hashParams.delete("password");
     shouldCleanUrl = true;
@@ -128,9 +139,14 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (gatewayUrlRaw != null) {
-    const gatewayUrl = gatewayUrlRaw.trim();
-    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
-      host.pendingGatewayUrl = gatewayUrl;
+    if (gatewayUrlChanged) {
+      host.pendingGatewayUrl = nextGatewayUrl;
+      if (!tokenRaw?.trim()) {
+        host.pendingGatewayToken = null;
+      }
+    } else {
+      host.pendingGatewayUrl = null;
+      host.pendingGatewayToken = null;
     }
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");
@@ -147,24 +163,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 }
 
 export function setTab(host: SettingsHost, next: Tab) {
-  if (host.tab !== next) {
-    host.tab = next;
-  }
-  if (next === "chat") {
-    host.chatHasAutoScrolled = false;
-  }
-  if (next === "logs") {
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  } else {
-    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  }
-  if (next === "debug") {
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  } else {
-    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
-  }
-  void refreshActiveTab(host);
-  syncUrlWithTab(host, next, false);
+  applyTabSelection(host, next, { refreshPolicy: "always", syncUrl: true });
 }
 
 export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTransitionContext) {
@@ -202,6 +201,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "agents") {
     await loadAgents(host as unknown as OpenClawApp);
+    await loadToolsCatalog(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
     const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
@@ -346,6 +346,14 @@ export function onPopState(host: SettingsHost) {
 }
 
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
+  applyTabSelection(host, next, { refreshPolicy: "connected" });
+}
+
+function applyTabSelection(
+  host: SettingsHost,
+  next: Tab,
+  options: { refreshPolicy: "always" | "connected"; syncUrl?: boolean },
+) {
   if (host.tab !== next) {
     host.tab = next;
   }
@@ -362,8 +370,13 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   }
-  if (host.connected) {
+
+  if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);
+  }
+
+  if (options.syncUrl) {
+    syncUrlWithTab(host, next, false);
   }
 }
 
@@ -424,9 +437,18 @@ export async function loadChannelsTab(host: SettingsHost) {
 }
 
 export async function loadCron(host: SettingsHost) {
+  const cronHost = host as unknown as OpenClawApp;
   await Promise.all([
     loadChannels(host as unknown as OpenClawApp, false),
-    loadCronStatus(host as unknown as OpenClawApp),
-    loadCronJobs(host as unknown as OpenClawApp),
+    loadCronStatus(cronHost),
+    loadCronJobs(cronHost),
+    loadCronModelSuggestions(cronHost),
   ]);
+  if (cronHost.cronRunsScope === "all") {
+    await loadCronRuns(cronHost, null);
+    return;
+  }
+  if (cronHost.cronRunsJobId) {
+    await loadCronRuns(cronHost, cronHost.cronRunsJobId);
+  }
 }

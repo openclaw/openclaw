@@ -1,10 +1,10 @@
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
 } from "./provider-usage.types.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type GeminiUsageResponse = {
   buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
@@ -31,12 +31,10 @@ export async function fetchGeminiUsage(
   );
 
   if (!res.ok) {
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider,
-      displayName: PROVIDER_LABELS[provider],
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
+      status: res.status,
+    });
   }
 
   const data = (await res.json()) as GeminiUsageResponse;

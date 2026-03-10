@@ -1,7 +1,5 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import type { RuntimeEnv } from "../runtime.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
@@ -12,7 +10,9 @@ import {
   usesSlowDynamicCompletion,
 } from "../cli/completion-cli.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
 
