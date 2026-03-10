@@ -8,6 +8,17 @@ type ToolResultFlushManager = {
 };
 
 export const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
+export const PROBE_WAIT_FOR_IDLE_TIMEOUT_MS = 50;
+
+export function resolvePostRunIdleFlushTimeoutMs(opts: {
+  sessionId?: string;
+  timeoutMs?: number;
+}): number | undefined {
+  if (opts.sessionId?.startsWith("probe-")) {
+    return PROBE_WAIT_FOR_IDLE_TIMEOUT_MS;
+  }
+  return opts.timeoutMs;
+}
 
 async function waitForAgentIdleBestEffort(
   agent: IdleAwareAgent | null | undefined,
