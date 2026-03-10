@@ -250,6 +250,16 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.5)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
+    optionalDependencies:
+      nice-grpc:
+        specifier: ^2.1.14
+        version: 2.1.14
+      nice-grpc-client-middleware-deadline:
+        specifier: ^2.0.17
+        version: 2.0.17
+      nice-grpc-client-middleware-retry:
+        specifier: ^3.1.13
+        version: 3.1.13
 
   extensions/acpx:
     dependencies:
@@ -3643,6 +3653,9 @@ packages:
   abbrev@1.1.1:
     resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
 
+  abort-controller-x@0.4.3:
+    resolution: {integrity: sha512-VtUwTNU8fpMwvWGn4xE93ywbogTYsuT+AUxAXOeelbXuQVIwNmC5YLeho9sH4vZ4ITW8414TTAOG1nW6uIVHCA==}
+
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
     engines: {node: '>=6.5'}
@@ -5334,6 +5347,18 @@ packages:
     resolution: {integrity: sha512-dBpDMdxv9Irdq66304OLfEmQ9tbNRFnFTuZiLo+bD+r332bBmMJ8GBLXklIXXgxd3+v9+KUnZaUR5PJMa75Gsg==}
     engines: {node: '>= 0.4.0'}
 
+  nice-grpc-client-middleware-deadline@2.0.17:
+    resolution: {integrity: sha512-Pad2MHoeg9UC86TAYfO19R9FX4CjrbPs14seU64Vvr+BQjDT2B2SSfYuUD/EhL5FlrRNTFYlBlDSy9l24hqEdg==}
+
+  nice-grpc-client-middleware-retry@3.1.13:
+    resolution: {integrity: sha512-Q9I/wm5lYkDTveKFirrTHBkBY137yavXZ4xQDXTPIycUp7aLXD8xPTHFhqtAFWUw05aS91uffZZRgdv3HS0y/g==}
+
+  nice-grpc-common@2.0.2:
+    resolution: {integrity: sha512-7RNWbls5kAL1QVUOXvBsv1uO0wPQK3lHv+cY1gwkTzirnG1Nop4cBJZubpgziNbaVc/bl9QJcyvsf/NQxa3rjQ==}
+
+  nice-grpc@2.1.14:
+    resolution: {integrity: sha512-GK9pKNxlvnU5FAdaw7i2FFuR9CqBspcE+if2tqnKXBcE0R8525wj4BZvfcwj7FjvqbssqKxRHt2nwedalbJlww==}
+
   node-addon-api@8.6.0:
     resolution: {integrity: sha512-gBVjCaqDlRUk0EwoPNKzIr9KkS9041G/q31IBShPs1Xz6UTA+EXdZADbzqAJQrpDRq71CIMnOP5VMut3SL0z5Q==}
     engines: {node: ^18 || ^20 || >= 21}
@@ -6371,6 +6396,9 @@ packages:
 
   ts-algebra@2.0.0:
     resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
+
+  ts-error@1.0.6:
+    resolution: {integrity: sha512-tLJxacIQUM82IR7JO1UUkKlYuUTmoY9HBJAmNWFzheSlDS5SPMcNIepejHJa4BpPQLAcbRhRf3GDJzyj6rbKvA==}
 
   tsdown@0.21.0:
     resolution: {integrity: sha512-Sw/ehzVhjYLD7HVBPybJHDxpcaeyFjPcaDCME23o9O4fyuEl6ibYEdrnB8W8UchYAGoayKqzWQqx/oIp3jn/Vg==}
@@ -10838,6 +10866,9 @@ snapshots:
   abbrev@1.1.1:
     optional: true
 
+  abort-controller-x@0.4.3:
+    optional: true
+
   abort-controller@3.0.0:
     dependencies:
       event-target-shim: 5.0.1
@@ -12623,6 +12654,29 @@ snapshots:
 
   netmask@2.0.2: {}
 
+  nice-grpc-client-middleware-deadline@2.0.17:
+    dependencies:
+      nice-grpc-common: 2.0.2
+    optional: true
+
+  nice-grpc-client-middleware-retry@3.1.13:
+    dependencies:
+      abort-controller-x: 0.4.3
+      nice-grpc-common: 2.0.2
+    optional: true
+
+  nice-grpc-common@2.0.2:
+    dependencies:
+      ts-error: 1.0.6
+    optional: true
+
+  nice-grpc@2.1.14:
+    dependencies:
+      '@grpc/grpc-js': 1.14.3
+      abort-controller-x: 0.4.3
+      nice-grpc-common: 2.0.2
+    optional: true
+
   node-addon-api@8.6.0: {}
 
   node-api-headers@1.8.0: {}
@@ -13977,6 +14031,9 @@ snapshots:
   trim-lines@3.0.1: {}
 
   ts-algebra@2.0.0: {}
+
+  ts-error@1.0.6:
+    optional: true
 
   tsdown@0.21.0(@typescript/native-preview@7.0.0-dev.20260308.1)(typescript@5.9.3):
     dependencies:
