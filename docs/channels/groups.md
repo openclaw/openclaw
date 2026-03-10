@@ -32,6 +32,7 @@ Quick flow (what happens to a group message):
 ```
 groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
+neverReply? yes -> store for context only (no agent run)
 requireMention? yes -> mentioned? no -> store for context only
 otherwise -> reply
 ```
@@ -46,6 +47,30 @@ If you want...
 | Disable all group replies                    | `groupPolicy: "disabled"`                                  |
 | Only specific groups                         | `groups: { "<group-id>": { ... } }` (no `"*"` key)         |
 | Only you can trigger in groups               | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Observe all groups without ever replying     | `groupPolicy: "open"`, `neverReply: true`                  |
+
+## Passive observation (neverReply)
+
+Set `neverReply: true` to have the bot passively observe group conversations without ever replying, even when mentioned. Group messages are stored as pending context but never trigger an agent run -- zero token spend. DMs continue to work normally.
+
+```yaml
+channels:
+  telegram:
+    groupPolicy: open # controls which groups are observed
+    neverReply: true # never reply in groups, just store context
+```
+
+`neverReply` is resolved with the same fallback chain as other channel settings:
+
+1. Account-level (`channels.<provider>.accounts.<id>.neverReply`)
+2. Channel-level (`channels.<provider>.neverReply`)
+3. Defaults (`channels.defaults.neverReply`)
+
+Works with any `groupPolicy` value:
+
+- `open` + `neverReply: true` -- observe all groups silently.
+- `allowlist` + `neverReply: true` -- observe only allowlisted groups silently.
+- `disabled` -- nothing is observed (disabled takes precedence).
 
 ## Session keys
 
