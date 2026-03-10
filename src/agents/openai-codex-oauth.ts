@@ -107,7 +107,7 @@ function decodeJwt(token: string): JwtPayload | null {
       return null;
     }
     const payload = parts[1] ?? "";
-    return JSON.parse(atob(payload)) as JwtPayload;
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as JwtPayload;
   } catch {
     return null;
   }
