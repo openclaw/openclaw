@@ -335,13 +335,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // Re-deliver the full content: everything already in the stream message
       // plus the current payload that failed to append. Using only `payload`
       // here would drop all previously-streamed text.
-      if (orphanDeleted) {
-        const fallbackText = streamedText ? `${streamedText}\n${text}` : text;
-        await deliverNormally(
-          { ...payload, text: fallbackText },
-          streamSession?.threadTs ?? plannedThreadTs,
-        );
-      }
+      //
+      // Note: we deliver even when orphan deletion failed. The stream message
+      // is stuck in "streaming" state (never finalized via chat.stopStream)
+      // and may not render on mobile Slack — skipping deliverNormally here
+      // would silently drop content with no later recovery path (the
+      // finalizer is skipped because streamSession.stopped is already true).
+      // A cosmetic duplicate on desktop is preferable to a truncated answer.
+      const fallbackText = streamedText ? `${streamedText}\n${text}` : text;
+      await deliverNormally(
+        { ...payload, text: fallbackText },
+        streamSession?.threadTs ?? plannedThreadTs,
+      );
     }
   };
 
