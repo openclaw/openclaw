@@ -43,14 +43,16 @@ export class DefaultAotuiKernelService implements AotuiKernelService {
       return;
     }
 
-    if (this.desktopManager) {
-      await this.desktopManager.destroyAll(reason ?? "service_stop");
+    try {
+      if (this.desktopManager) {
+        await this.desktopManager.destroyAll(reason ?? "service_stop");
+      }
+    } finally {
+      this.desktopManager = undefined;
+      this.appRegistry = undefined;
+      this.kernel = undefined;
+      this.started = false;
     }
-
-    this.desktopManager = undefined;
-    this.appRegistry = undefined;
-    this.kernel = undefined;
-    this.started = false;
   }
 
   isStarted(): boolean {

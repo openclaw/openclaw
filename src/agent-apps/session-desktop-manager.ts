@@ -142,8 +142,16 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
 
   async destroyAll(reason?: string): Promise<void> {
     const sessionKeys = [...this.records.keys()];
+    const errors: unknown[] = [];
     for (const sessionKey of sessionKeys) {
-      await this.destroyDesktop(sessionKey, reason);
+      try {
+        await this.destroyDesktop(sessionKey, reason);
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, `destroyAll failed for ${errors.length} desktop(s)`);
     }
   }
 

@@ -147,4 +147,29 @@ describe("InMemorySessionDesktopManager", () => {
     expect(second.workspaceDir).toBe("/tmp/workspace-b");
     expect(manager.getDesktop("agent:main:discord:channel:dev")).toBe(second);
   });
+
+  it("attempts to destroy every desktop and aggregates failures", async () => {
+    const manager = new InMemorySessionDesktopManager(kernel as never);
+    await manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:one",
+      agentId: "main",
+    });
+    await manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:two",
+      agentId: "main",
+    });
+    kernel.destroyDesktop.mockImplementation(async (desktopId?: string) => {
+      if (desktopId === "agent:main:discord:channel:one") {
+        throw new Error("destroy failed");
+      }
+    });
+
+    await expect(manager.destroyAll("shutdown")).rejects.toThrow(
+      "destroyAll failed for 1 desktop(s)",
+    );
+
+    expect(kernel.destroyDesktop).toHaveBeenCalledTimes(2);
+    expect(manager.getDesktop("agent:main:discord:channel:one")).toBeDefined();
+    expect(manager.getDesktop("agent:main:discord:channel:two")).toBeUndefined();
+  });
 });
