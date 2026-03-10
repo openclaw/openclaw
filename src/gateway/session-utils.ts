@@ -639,6 +639,9 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
+  let provider = resolved.provider;
+  let model = resolved.model;
+
   // Prefer explicit per-session override (set at spawn/model-patch time)
   // over the last recorded runtime model identity. This ensures that when
   // a user (or tool) requests a specific model, that request wins for
