@@ -142,4 +142,37 @@ describe("ensureSkillSnapshot systemSent persistence (#41462)", () => {
     // System prompt will be sent again on retry
     expect(turn2.systemSent).toBe(true);
   });
+
+  it("should persist systemSent=true via updateSessionStoreEntry after successful retry (isNewSession=false)", async () => {
+    // Scenario: first turn fails (systemSent not persisted), second turn
+    // retries with isNewSession=false but systemSent still false on disk.
+    // After success, updateSessionStoreEntry should persist systemSent=true.
+    const storePath = path.join(tmpDir, "sessions-persist.json");
+    const sessionKey = "wa:persist-user";
+    const entryWithoutSystemSent: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      // systemSent is NOT true — simulates state after first-turn LLM failure
+    };
+
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entryWithoutSystemSent }));
+
+    const { updateSessionStoreEntry } = await import("../../config/sessions/store.js");
+
+    // Simulate the persistence guard from agent-runner.ts:
+    // `if (sessionKey && storePath && activeSessionEntry?.systemSent !== true)`
+    const activeSessionEntry = { ...entryWithoutSystemSent };
+    if (sessionKey && storePath && activeSessionEntry?.systemSent !== true) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({ systemSent: true }),
+      });
+    }
+
+    // Verify disk now has systemSent=true
+    const raw = await fs.readFile(storePath, "utf-8");
+    const persisted = JSON.parse(raw) as Record<string, SessionEntry>;
+    expect(persisted[sessionKey]?.systemSent).toBe(true);
+  });
 });
