@@ -336,7 +336,7 @@ export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
-export const MODELSCOPE_DEFAULT_MODEL_REF = "modelscope/Qwen/Qwen3-32B";
+export const MODELSCOPE_DEFAULT_MODEL_REF = "modelscope/Qwen/Qwen3.5-27B";
 
 export async function setZaiApiKey(
   key: SecretInput,

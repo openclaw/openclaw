@@ -75,6 +75,24 @@ export const MODELSCOPE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     maxTokens: 8192,
     cost: MODELSCOPE_DEFAULT_COST,
   },
+  {
+    id: "Qwen/Qwen3.5-27B",
+    name: "Qwen3.5 27B",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 66000,
+    cost: MODELSCOPE_DEFAULT_COST,
+  },
+  {
+    id: "Qwen/Qwen3.5-122B-A10B",
+    name: "Qwen3.5 122B A100B",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 66000,
+    cost: MODELSCOPE_DEFAULT_COST,
+  },
 ];
 
 export function buildModelScopeModelDefinition(
