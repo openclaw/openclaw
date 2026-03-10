@@ -14,7 +14,6 @@ import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
-
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -148,6 +147,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let hadBlockReply = false;
   let hadToolUse = false;
+  /** Accumulated history of intermediate steps (block narrations) for the collapsible panel. */
+  const historyEntries: string[] = [];
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -225,14 +226,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      // Append a collapsed panel with the full text when tool calls or block
-      // replies occurred — these intermediate steps may cause incomplete card
-      // rendering, and the panel lets users expand to see the complete response.
+      // Append a collapsed history panel when tool calls or block replies
+      // occurred — the panel shows accumulated intermediate steps so users
+      // can expand to see the full process log.
       const hadIntermediateSteps = hadBlockReply || hadToolUse;
       params.runtime.log?.(
-        `feishu[${account.accountId}] closeStreaming: hadBlockReply=${hadBlockReply}, hadToolUse=${hadToolUse}, addPanel=${hadIntermediateSteps}`,
+        `feishu[${account.accountId}] closeStreaming: hadBlockReply=${hadBlockReply}, hadToolUse=${hadToolUse}, addPanel=${hadIntermediateSteps}, historyEntries=${historyEntries.length}`,
       );
-      await streaming.close(text, { addFullTextPanel: hadIntermediateSteps });
+      const historyText =
+        historyEntries.length > 0 ? historyEntries.join("\n\n---\n\n") : undefined;
+      await streaming.close(text, { addFullTextPanel: hadIntermediateSteps, historyText });
     }
     streaming = null;
     streamingStartPromise = null;
@@ -297,6 +300,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Narration: replace card content so each step overwrites the previous one.
               // Users see the latest status, not a growing log of all narration.
+              historyEntries.push(text);
               streamText = text;
               partialUpdateQueue = partialUpdateQueue.then(async () => {
                 if (streaming?.isActive()) {
@@ -408,7 +412,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      disableBlockStreaming: true,
+      disableBlockStreaming: !streamingEnabled,
       onToolStart: () => {
         hadToolUse = true;
       },

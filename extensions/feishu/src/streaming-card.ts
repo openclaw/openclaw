@@ -324,7 +324,10 @@ export class FeishuStreamingSession {
     await this.queue;
   }
 
-  async close(finalText?: string, options?: { addFullTextPanel?: boolean }): Promise<void> {
+  async close(
+    finalText?: string,
+    options?: { addFullTextPanel?: boolean; historyText?: string },
+  ): Promise<void> {
     if (!this.state || this.closed) {
       return;
     }
@@ -356,6 +359,8 @@ export class FeishuStreamingSession {
     ];
 
     if (options?.addFullTextPanel && text) {
+      // Use accumulated history entries when available; fall back to final text
+      const panelContent = options.historyText ?? text;
       batchActions.push({
         action: "add_elements",
         params: {
@@ -367,14 +372,25 @@ export class FeishuStreamingSession {
               header: {
                 title: {
                   tag: "plain_text",
-                  content: "\u{1F4CB} \u67E5\u770B\u5B8C\u6574\u56DE\u590D",
+                  content: "history",
                 },
+                vertical_align: "center",
+                icon: {
+                  tag: "standard_icon",
+                  token: "down-small-ccm_outlined",
+                  size: "16px 16px",
+                },
+                icon_position: "follow_text",
+                icon_expanded_angle: -180,
               },
+              border: { color: "grey", corner_radius: "5px" },
+              padding: "8px 8px 8px 8px",
               element_id: "full_text_panel",
               elements: [
                 {
                   tag: "markdown",
-                  content: text,
+                  content: panelContent,
+                  text_size: "notation",
                   element_id: "full_text_content",
                 },
               ],
@@ -405,7 +421,9 @@ export class FeishuStreamingSession {
       const respText = await response.text();
       release();
       if (response.status !== 200 || !respText.includes('"code":0')) {
-        this.log?.(`batch_update failed: status=${response.status}, body=${respText.slice(0, 500)}`);
+        this.log?.(
+          `batch_update failed: status=${response.status}, body=${respText.slice(0, 500)}`,
+        );
       }
     } catch (e) {
       this.log?.(`Close failed: ${String(e)}`);
