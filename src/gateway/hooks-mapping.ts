@@ -3,6 +3,11 @@ import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.js";
+import {
+  renderIngressTemplate,
+  renderOptionalIngressTemplate,
+  type IngressTemplateContext,
+} from "./ingress-template.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -240,8 +245,9 @@ function buildActionFromMapping(
   mapping: HookMappingResolved,
   ctx: HookMappingContext,
 ): HookMappingResult {
+  const templateCtx: IngressTemplateContext = ctx;
   if (mapping.action === "wake") {
-    const text = renderTemplate(mapping.textTemplate ?? "", ctx);
+    const text = renderIngressTemplate(mapping.textTemplate ?? "", templateCtx);
     return {
       ok: true,
       action: {
@@ -251,22 +257,22 @@ function buildActionFromMapping(
       },
     };
   }
-  const message = renderTemplate(mapping.messageTemplate ?? "", ctx);
+  const message = renderIngressTemplate(mapping.messageTemplate ?? "", templateCtx);
   return {
     ok: true,
     action: {
       kind: "agent",
       message,
-      name: renderOptional(mapping.name, ctx),
+      name: renderOptionalIngressTemplate(mapping.name, templateCtx),
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
-      sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKey: renderOptionalIngressTemplate(mapping.sessionKey, templateCtx),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
-      to: renderOptional(mapping.to, ctx),
-      model: renderOptional(mapping.model, ctx),
-      thinking: renderOptional(mapping.thinking, ctx),
+      to: renderOptionalIngressTemplate(mapping.to, templateCtx),
+      model: renderOptionalIngressTemplate(mapping.model, templateCtx),
+      thinking: renderOptionalIngressTemplate(mapping.thinking, templateCtx),
       timeoutSeconds: mapping.timeoutSeconds,
     },
   };
@@ -431,96 +437,4 @@ function normalizeMatchPath(raw?: string): string | undefined {
     return undefined;
   }
   return trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
-}
-
-function renderOptional(value: string | undefined, ctx: HookMappingContext) {
-  if (!value) {
-    return undefined;
-  }
-  const rendered = renderTemplate(value, ctx).trim();
-  return rendered ? rendered : undefined;
-}
-
-function renderTemplate(template: string, ctx: HookMappingContext) {
-  if (!template) {
-    return "";
-  }
-  return template.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, expr: string) => {
-    const value = resolveTemplateExpr(expr.trim(), ctx);
-    if (value === undefined || value === null) {
-      return "";
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-      return String(value);
-    }
-    return JSON.stringify(value);
-  });
-}
-
-function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
-  if (expr === "path") {
-    return ctx.path;
-  }
-  if (expr === "now") {
-    return new Date().toISOString();
-  }
-  if (expr.startsWith("headers.")) {
-    return getByPath(ctx.headers, expr.slice("headers.".length));
-  }
-  if (expr.startsWith("query.")) {
-    return getByPath(
-      Object.fromEntries(ctx.url.searchParams.entries()),
-      expr.slice("query.".length),
-    );
-  }
-  if (expr.startsWith("payload.")) {
-    return getByPath(ctx.payload, expr.slice("payload.".length));
-  }
-  return getByPath(ctx.payload, expr);
-}
-
-// Block traversal into prototype-chain properties on attacker-controlled
-// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
-// for config path traversal.
-const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
-function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
-  if (!pathExpr) {
-    return undefined;
-  }
-  const parts: Array<string | number> = [];
-  const re = /([^.[\]]+)|(\[(\d+)\])/g;
-  let match = re.exec(pathExpr);
-  while (match) {
-    if (match[1]) {
-      parts.push(match[1]);
-    } else if (match[3]) {
-      parts.push(Number(match[3]));
-    }
-    match = re.exec(pathExpr);
-  }
-  let current: unknown = input;
-  for (const part of parts) {
-    if (current === null || current === undefined) {
-      return undefined;
-    }
-    if (typeof part === "number") {
-      if (!Array.isArray(current)) {
-        return undefined;
-      }
-      current = current[part] as unknown;
-      continue;
-    }
-    if (BLOCKED_PATH_KEYS.has(part)) {
-      return undefined;
-    }
-    if (typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
 }
