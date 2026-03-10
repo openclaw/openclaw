@@ -47,6 +47,13 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
   ).length;
 }
 
+function countIdMismatchWarnings(registry: ReturnType<typeof loadPluginManifestRegistry>): number {
+  return registry.diagnostics.filter(
+    (diagnostic) =>
+      diagnostic.level === "warn" && diagnostic.message?.includes("plugin id mismatch"),
+  ).length;
+}
+
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
   rootDir: string;
   linked: boolean;
@@ -130,6 +137,21 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
+  it("does not emit id mismatch warnings when candidate hint already matches manifest id", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "type", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "type",
+        rootDir: dir,
+        origin: "global",
+      }),
+    ]);
+
+    expect(countIdMismatchWarnings(registry)).toBe(0);
+  });
+
   it("emits duplicate warning for truly distinct plugins with same id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();

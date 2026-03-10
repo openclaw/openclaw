@@ -151,6 +151,36 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("pack/two");
   });
 
+  it("prefers plugin manifest ids over npm package names", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "type-pack");
+    fs.mkdirSync(path.join(globalExt, "src"), { recursive: true });
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@type-dot-com/type-openclaw-plugin",
+      extensions: ["./src/index.ts"],
+    });
+    fs.writeFileSync(
+      path.join(globalExt, "openclaw.plugin.json"),
+      JSON.stringify({ id: "type", configSchema: { type: "object" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("type");
+    expect(ids).not.toContain("type-openclaw-plugin");
+  });
+
   it("derives unscoped ids for scoped packages", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "voice-call-pack");
