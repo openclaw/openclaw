@@ -18,6 +18,14 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gat
 import { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
+import {
+  clearTelegramDmContextBinding,
+  getTelegramDmContextBinding,
+  parseTelegramChatId,
+  parseTelegramTopicId,
+  setTelegramDmContextBinding,
+  validateTargetChatId,
+} from "./dm-context-bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -583,6 +591,95 @@ export const registerTelegramNativeCommands = ({
             topicConfig,
             commandAuthorized,
           } = auth;
+
+          // Telegram DM explicit forum-topic context binding (native commands path).
+          // Note: the non-native message path handles this in bot-message.ts. Native commands
+          // bypass that pre-dispatch intercept, so we must support it here too.
+          if (!isGroup && (command.name === "set_context" || command.name === "context" || command.name === "clear_context")) {
+            const dmChatId = String(chatId);
+            const rest = (ctx.match?.trim() ?? "").trim();
+            logVerbose(`telegram dm context intercept (native): cmd=${command.name} dmChatId=${dmChatId}`);
+
+            if (command.name === "context") {
+              const binding = getTelegramDmContextBinding({ accountId: accountId, dmChatId });
+              const reply = binding
+                ? `Context bound: chat_id=${binding.chatId} topic_id=${binding.topicId} conversation=${binding.conversationId}`
+                : "No context bound. Use: /set_context <chat_id> <topic_id>";
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () => bot.api.sendMessage(chatId, reply),
+              });
+              return;
+            }
+
+            if (command.name === "clear_context") {
+              const existed = await clearTelegramDmContextBinding({
+                accountId: accountId,
+                dmChatId,
+              });
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () => bot.api.sendMessage(chatId, existed ? "Context cleared." : "No context to clear."),
+              });
+              return;
+            }
+
+            // set_context
+            const parts = rest.split(/\s+/).filter(Boolean);
+            const rawChatId = parts[0] ? parseTelegramChatId(parts[0]) : undefined;
+            const rawTopicId = parts[1] ? parseTelegramTopicId(parts[1]) : undefined;
+            const targetChatId = rawChatId ? validateTargetChatId(rawChatId) : undefined;
+            if (!targetChatId || !rawTopicId) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    "Usage: /set_context <chat_id> <topic_id> (chat_id must be negative, topic_id positive)",
+                  ),
+              });
+              return;
+            }
+
+            try {
+              await bot.api.getChat(targetChatId);
+              await bot.api.sendChatAction(targetChatId, "typing", { message_thread_id: rawTopicId });
+            } catch {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    `Cannot access target chat/topic (${targetChatId}:${rawTopicId}). Ensure bot is in the group and can post in that topic.`,
+                  ),
+              });
+              return;
+            }
+
+            const binding = await setTelegramDmContextBinding({
+              accountId: accountId,
+              dmChatId,
+              chatId: targetChatId,
+              topicId: rawTopicId,
+            });
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              fn: () => bot.api.sendMessage(chatId, `Context bound: ${binding.conversationId}`),
+            });
+            return;
+          }
+
+          const dmBinding = !isGroup
+            ? getTelegramDmContextBinding({ accountId: accountId, dmChatId: String(chatId) })
+            : undefined;
+          if (!isGroup && !dmBinding) {
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              fn: () => bot.api.sendMessage(chatId, "No context bound. Use: /set_context <chat_id> <topic_id>"),
+            });
+            return;
+          }
+
           const runtimeContext = await resolveCommandRuntimeContext({
             msg,
             isGroup,
@@ -595,7 +692,9 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
-          const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          const effectiveThreadSpec = dmBinding ? { scope: "forum" as const, id: dmBinding.topicId } : threadSpec;
+          const effectiveChatId = dmBinding ? dmBinding.chatId : chatId;
+          const threadParams = buildTelegramThreadParams(effectiveThreadSpec) ?? {};
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
@@ -670,13 +769,13 @@ export const registerTelegramNativeCommands = ({
               targetSessionKey: sessionKey,
             });
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
-            chatId,
+            chatId: effectiveChatId,
             accountId: route.accountId,
             sessionKeyForInternalHooks: commandSessionKey,
-            mirrorIsGroup: isGroup,
-            mirrorGroupId: isGroup ? String(chatId) : undefined,
+            mirrorIsGroup: dmBinding ? true : isGroup,
+            mirrorGroupId: dmBinding ? String(effectiveChatId) : isGroup ? String(chatId) : undefined,
             mediaLocalRoots,
-            threadSpec,
+            threadSpec: effectiveThreadSpec,
             tableMode,
             chunkMode,
           });
@@ -843,14 +942,26 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          const dmBinding = !isGroup
+            ? getTelegramDmContextBinding({ accountId: accountId, dmChatId: String(chatId) })
+            : undefined;
+          if (!isGroup && !dmBinding) {
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              fn: () => bot.api.sendMessage(chatId, "No context bound. Use: /set_context <chat_id> <topic_id>"),
+            });
+            return;
+          }
+          const effectiveThreadSpec = dmBinding ? { scope: "forum" as const, id: dmBinding.topicId } : threadSpec;
+          const effectiveChatId = dmBinding ? dmBinding.chatId : chatId;
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
-            chatId,
+            chatId: effectiveChatId,
             accountId: route.accountId,
             sessionKeyForInternalHooks: route.sessionKey,
-            mirrorIsGroup: isGroup,
-            mirrorGroupId: isGroup ? String(chatId) : undefined,
+            mirrorIsGroup: dmBinding ? true : isGroup,
+            mirrorGroupId: dmBinding ? String(effectiveChatId) : isGroup ? String(chatId) : undefined,
             mediaLocalRoots,
-            threadSpec,
+            threadSpec: effectiveThreadSpec,
             tableMode,
             chunkMode,
           });
