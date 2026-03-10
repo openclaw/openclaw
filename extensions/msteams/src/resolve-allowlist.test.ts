@@ -102,6 +102,26 @@ describe("resolveMSTeamsChannelAllowlist", () => {
     });
   });
 
+  it("falls back to Graph GUID when listChannelsForTeam throws", async () => {
+    // Edge case: API call fails (rate limit, network error). We fall back to
+    // the Graph GUID as the team key — the pre-fix behavior — so resolution
+    // still succeeds instead of propagating the error.
+    listTeamsByName.mockResolvedValueOnce([{ id: "guid-flaky", displayName: "Flaky Team" }]);
+    listChannelsForTeam.mockRejectedValueOnce(new Error("429 Too Many Requests"));
+
+    const [result] = await resolveMSTeamsChannelAllowlist({
+      cfg: {},
+      entries: ["Flaky Team"],
+    });
+
+    expect(result).toEqual({
+      input: "Flaky Team",
+      resolved: true,
+      teamId: "guid-flaky",
+      teamName: "Flaky Team",
+    });
+  });
+
   it("falls back to Graph GUID when General channel is not found", async () => {
     // Edge case: General channel was renamed or deleted. We fall back to the
     // Graph GUID so resolution still succeeds rather than silently breaking.

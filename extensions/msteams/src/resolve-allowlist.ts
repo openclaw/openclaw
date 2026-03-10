@@ -129,7 +129,12 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       // channelData.team.id at runtime, NOT the Graph API group GUID.
       // Fetch channels upfront so we can resolve the correct key format for
       // runtime matching and reuse the list for channel lookups.
-      const teamChannels = await listChannelsForTeam(token, graphTeamId);
+      let teamChannels: Awaited<ReturnType<typeof listChannelsForTeam>> = [];
+      try {
+        teamChannels = await listChannelsForTeam(token, graphTeamId);
+      } catch {
+        // API failure (rate limit, network error) — fall back to Graph GUID as team key
+      }
       const generalChannel = teamChannels.find((ch) => ch.displayName?.toLowerCase() === "general");
       // Use the General channel's conversation ID as the team key — this
       // matches what Bot Framework sends at runtime. Fall back to the Graph
