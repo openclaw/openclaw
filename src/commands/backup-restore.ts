@@ -19,6 +19,7 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   normalizeArchivePath,
+  type BackupManifest,
   readVerifiedBackupArchive,
   type BackupManifestAsset,
 } from "./backup-archive.js";
@@ -267,6 +268,24 @@ function resolvePathRelativeToStateDir(params: {
   return undefined;
 }
 
+function resolveCoveredSourcePath(
+  manifest: BackupManifest,
+  kind: "config" | "credentials",
+): string | undefined {
+  const coveredEntries = Array.isArray(manifest.skipped) ? manifest.skipped : [];
+  const skippedCoveredEntry = coveredEntries.find(
+    (entry) =>
+      entry?.kind === kind &&
+      entry?.reason === "covered" &&
+      typeof entry?.sourcePath === "string" &&
+      entry.sourcePath.trim().length > 0,
+  );
+  if (skippedCoveredEntry?.sourcePath?.trim()) {
+    return skippedCoveredEntry.sourcePath;
+  }
+  return kind === "config" ? manifest.paths?.configPath : manifest.paths?.oauthDir;
+}
+
 function buildCoveredAssetManifestEntries(params: {
   verifiedArchive: Awaited<ReturnType<typeof readVerifiedBackupArchive>>;
   currentStateDir: string;
@@ -280,7 +299,6 @@ function buildCoveredAssetManifestEntries(params: {
   const stateAssetArchivePath = manifest.assets.find(
     (asset) => asset.kind === "state",
   )?.archivePath;
-  const coveredEntries = Array.isArray(manifest.skipped) ? manifest.skipped : [];
   const synthesized: BackupManifestAsset[] = [];
 
   for (const kind of supportedCoveredKinds) {
@@ -289,16 +307,7 @@ function buildCoveredAssetManifestEntries(params: {
     }
 
     const activeTargetPath = kind === "config" ? params.currentConfigPath : params.currentOauthDir;
-    const skippedCoveredEntry = coveredEntries.find(
-      (entry) =>
-        entry?.kind === kind &&
-        entry?.reason === "covered" &&
-        typeof entry?.sourcePath === "string" &&
-        entry.sourcePath.trim().length > 0,
-    );
-    const legacyCoveredSourcePath =
-      kind === "config" ? manifest.paths?.configPath : manifest.paths?.oauthDir;
-    const coveredSourcePath = skippedCoveredEntry?.sourcePath ?? legacyCoveredSourcePath;
+    const coveredSourcePath = resolveCoveredSourcePath(manifest, kind);
     if (!coveredSourcePath?.trim()) {
       continue;
     }
@@ -515,6 +524,7 @@ async function buildRestoreItems(params: {
   items: BackupRestoreItem[];
   skipped: BackupRestoreSkipped[];
   workspaceRewrites: Map<string, string>;
+  coveredConfigRelativePath: string | null;
   createdAt: string;
   runtimeVersion: string;
 }> {
@@ -607,10 +617,22 @@ async function buildRestoreItems(params: {
   }
 
   items.sort((left, right) => restorePriority(left.kind) - restorePriority(right.kind));
+  const hasExplicitConfigAsset = restorableAssets.some((asset) => asset.kind === "config");
+  const coveredConfigSourcePath = hasExplicitConfigAsset
+    ? undefined
+    : resolveCoveredSourcePath(manifest, "config");
+  const coveredConfigRelativePath =
+    coveredConfigSourcePath && coveredConfigSourcePath.trim()
+      ? (resolvePathRelativeToStateDir({
+          targetPath: coveredConfigSourcePath,
+          stateDir: manifest.paths?.stateDir,
+        }) ?? null)
+      : null;
   return {
     items,
     skipped,
     workspaceRewrites,
+    coveredConfigRelativePath,
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
   };
@@ -769,6 +791,7 @@ async function stageRestoreItems(params: {
   archivePath: string;
   items: BackupRestoreItem[];
   workspaceRewrites: Map<string, string>;
+  coveredConfigRelativePath: string | null;
   stageRoot: string;
 }): Promise<{
   stagedItems: StagedBackupRestoreItem[];
@@ -796,12 +819,22 @@ async function stageRestoreItems(params: {
   }
 
   const configItem = stagedItems.find((item) => item.kind === "config");
+  const stateItem = stagedItems.find((item) => item.kind === "state");
+  const coveredConfigStagedPath =
+    !configItem && stateItem && params.coveredConfigRelativePath
+      ? path.join(stateItem.stagedPath, params.coveredConfigRelativePath)
+      : null;
   const updatedConfigWorkspacePaths = configItem
     ? await applyWorkspaceConfigRewritesToStagedConfig(
         configItem.stagedPath,
         params.workspaceRewrites,
       )
-    : 0;
+    : coveredConfigStagedPath && (await pathExists(coveredConfigStagedPath))
+      ? await applyWorkspaceConfigRewritesToStagedConfig(
+          coveredConfigStagedPath,
+          params.workspaceRewrites,
+        )
+      : 0;
 
   return {
     stagedItems,
@@ -1043,6 +1076,7 @@ export async function backupRestoreCommand(
         archivePath: pinnedArchivePath,
         items: restorePlan.items,
         workspaceRewrites: restorePlan.workspaceRewrites,
+        coveredConfigRelativePath: restorePlan.coveredConfigRelativePath,
         stageRoot,
       });
       await publishRestorePlan(stagedRestore.stagedItems);
