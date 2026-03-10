@@ -35,6 +35,7 @@ import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
+const MIN_BACKUP_CREATE_INTERVAL_MS = 60 * 60_000;
 const staggerOffsetCache = new Map<string, number>();
 
 function isFiniteTimestamp(value: unknown): value is number {
@@ -142,6 +143,40 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  }
+}
+
+function computeCronScheduleGapMs(schedule: Extract<CronJob["schedule"], { kind: "cron" }>) {
+  const firstRunAtMs = computeNextRunAtMs(schedule, 0);
+  if (!isFiniteTimestamp(firstRunAtMs)) {
+    return undefined;
+  }
+  const secondRunAtMs = computeNextRunAtMs(schedule, firstRunAtMs + 1);
+  if (!isFiniteTimestamp(secondRunAtMs)) {
+    return undefined;
+  }
+  const gapMs = secondRunAtMs - firstRunAtMs;
+  return gapMs > 0 ? gapMs : undefined;
+}
+
+function assertBackupCreateScheduleSafety(job: Pick<CronJob, "payload" | "schedule">) {
+  if (job.payload.kind !== CRON_BACKUP_CREATE_KIND) {
+    return;
+  }
+
+  if (job.schedule.kind === "every") {
+    const everyMs = coerceFiniteScheduleNumber(job.schedule.everyMs);
+    if (everyMs !== undefined && everyMs < MIN_BACKUP_CREATE_INTERVAL_MS) {
+      throw new Error("cron backupCreate jobs require a minimum interval of 1 hour");
+    }
+    return;
+  }
+
+  if (job.schedule.kind === "cron") {
+    const gapMs = computeCronScheduleGapMs(job.schedule);
+    if (gapMs !== undefined && gapMs < MIN_BACKUP_CREATE_INTERVAL_MS) {
+      throw new Error("cron backupCreate jobs must not run more frequently than once per hour");
+    }
   }
 }
 
@@ -557,6 +592,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  assertBackupCreateScheduleSafety(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -647,6 +683,7 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertBackupCreateScheduleSafety(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);

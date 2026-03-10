@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -30,6 +32,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveHomeDir, resolveUserPath } from "../utils.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -38,6 +41,37 @@ export type GatewayCronState = {
 };
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
+const CRON_BACKUP_OUTPUT_DIRNAME = "Backups";
+
+function isPathWithinBase(baseDir: string, candidate: string): boolean {
+  const relative = path.relative(baseDir, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveCronBackupOutput(rawOutput?: string): string {
+  const homeDir = resolveHomeDir() ?? os.homedir();
+  const baseDir = path.resolve(homeDir, CRON_BACKUP_OUTPUT_DIRNAME);
+  const trimmed = rawOutput?.trim();
+  const appendTrailingSeparator = (target: string) => `${target}${path.sep}`;
+
+  if (!trimmed) {
+    return appendTrailingSeparator(baseDir);
+  }
+
+  const candidate =
+    trimmed.startsWith("~") || path.isAbsolute(trimmed)
+      ? resolveUserPath(trimmed)
+      : path.resolve(baseDir, trimmed);
+
+  if (!isPathWithinBase(baseDir, candidate)) {
+    throw new Error(`cron backup output must stay within ~/${CRON_BACKUP_OUTPUT_DIRNAME}`);
+  }
+
+  if (candidate === baseDir || trimmed.endsWith("/") || trimmed.endsWith("\\")) {
+    return appendTrailingSeparator(candidate);
+  }
+  return candidate;
+}
 
 function trimToOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -301,20 +335,17 @@ export function buildGatewayCronService(params: {
         return { status: "error", error: 'cron backup jobs require payload.kind="backupCreate"' };
       }
 
+      const output = resolveCronBackupOutput(job.payload.output);
       const result = await backupCreateCommand(
         {
-          log: (message) => {
-            cronLogger.info({ jobId: job.id, message }, "cron: backup log");
-          },
-          error: (message) => {
-            cronLogger.warn({ jobId: job.id, message }, "cron: backup error");
-          },
+          log: () => {},
+          error: () => {},
           exit: (code: number) => {
             throw new Error(`backup runtime exited with code ${code}`);
           },
         },
         {
-          output: job.payload.output,
+          output,
           includeWorkspace: job.payload.includeWorkspace,
           onlyConfig: job.payload.onlyConfig,
           verify: job.payload.verify,
@@ -327,9 +358,19 @@ export function buildGatewayCronService(params: {
         : result.includeWorkspace
           ? "backup"
           : "backup (no workspace)";
+      cronLogger.info(
+        {
+          jobId: job.id,
+          scope,
+          verified: result.verified,
+          assetCount: result.assets.length,
+          skippedCount: result.skipped.length,
+        },
+        "cron: backup completed",
+      );
       return {
         status: "ok",
-        summary: `${scope} created: ${result.archivePath}${result.verified ? " (verified)" : ""}`,
+        summary: `${scope} created${result.verified ? " (verified)" : ""}`,
       };
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {

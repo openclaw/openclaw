@@ -193,13 +193,51 @@ describe("buildGatewayCronService", () => {
           exit: expect.any(Function),
         }),
         expect.objectContaining({
-          output: "~/Backups/",
+          output: `${path.join(os.homedir(), "Backups")}${path.sep}`,
           includeWorkspace: false,
           verify: true,
           signal: expect.any(AbortSignal),
         }),
       );
       expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("rejects scheduled backup outputs outside the backups directory", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-backup-output-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "scheduled-backup-invalid-output",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "backupCreate",
+          output: "../../outside.tar.gz",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(backupCreateCommandMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }

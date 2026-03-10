@@ -602,3 +602,40 @@ describe("createJob delivery defaults", () => {
     expect(job.delivery).toBeUndefined();
   });
 });
+
+describe("backupCreate scheduling guardrails", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  const backupJobInput = (schedule: CronJob["schedule"]) => ({
+    name: "scheduled-backup",
+    enabled: true,
+    schedule,
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "backupCreate" as const },
+  });
+
+  it("rejects backupCreate every schedules faster than one hour", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+
+    expect(() => createJob(state, backupJobInput({ kind: "every", everyMs: 30 * 60_000 }))).toThrow(
+      "cron backupCreate jobs require a minimum interval of 1 hour",
+    );
+  });
+
+  it("rejects backupCreate cron schedules faster than one hour", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+
+    expect(() =>
+      createJob(state, backupJobInput({ kind: "cron", expr: "*/15 * * * *", tz: "UTC" })),
+    ).toThrow("cron backupCreate jobs must not run more frequently than once per hour");
+  });
+
+  it("allows hourly backupCreate schedules", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+
+    expect(() =>
+      createJob(state, backupJobInput({ kind: "cron", expr: "0 * * * *", tz: "UTC" })),
+    ).not.toThrow();
+  });
+});
