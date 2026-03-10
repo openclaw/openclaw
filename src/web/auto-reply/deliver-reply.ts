@@ -13,6 +13,37 @@ import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
 const REASONING_PREFIX = "reasoning:";
+const RECENT_REPLY_TTL_MS = 2 * 60 * 1000;
+const recentReplyClaims = new Map<string, number>();
+
+function pruneRecentReplyClaims(now = Date.now()) {
+  for (const [key, expiresAt] of recentReplyClaims) {
+    if (expiresAt <= now) {
+      recentReplyClaims.delete(key);
+    }
+  }
+}
+
+function claimRecentReply(params: {
+  to: string;
+  chunks: readonly string[];
+  mediaList: readonly string[];
+  now?: number;
+}) {
+  const now = params.now ?? Date.now();
+  pruneRecentReplyClaims(now);
+  const signature = JSON.stringify({
+    to: params.to,
+    chunks: params.chunks,
+    media: params.mediaList,
+  });
+  const activeUntil = recentReplyClaims.get(signature);
+  if (typeof activeUntil === "number" && activeUntil > now) {
+    return false;
+  }
+  recentReplyClaims.set(signature, now + RECENT_REPLY_TTL_MS);
+  return true;
+}
 
 function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
@@ -57,6 +88,16 @@ export async function deliverWebReply(params: {
     : replyResult.mediaUrl
       ? [replyResult.mediaUrl]
       : [];
+  // Interrupt mode can supersede an in-flight run after the old reply has already
+  // entered the outbound path. Suppress a short-window resend of the exact same
+  // payload to the same recipient so the replacement run does not double-post it.
+  if (
+    (textChunks.length > 0 || mediaList.length > 0) &&
+    !claimRecentReply({ to: msg.from, chunks: textChunks, mediaList })
+  ) {
+    whatsappOutboundLog.warn(`Suppressed duplicate reply to ${msg.from}`);
+    return;
+  }
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
     let lastErr: unknown;

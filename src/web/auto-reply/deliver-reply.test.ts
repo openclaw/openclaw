@@ -5,6 +5,8 @@ import { loadWebMedia } from "../media.js";
 import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
 
+let msgCounter = 0;
+
 vi.mock("../../globals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../globals.js")>();
   return {
@@ -27,10 +29,11 @@ vi.mock("../../utils.js", async (importOriginal) => {
 });
 
 function makeMsg(): WebInboundMsg {
+  msgCounter += 1;
   return {
-    from: "+10000000000",
+    from: `+1000000000${msgCounter}`,
     to: "+20000000000",
-    id: "msg-1",
+    id: `msg-${msgCounter}`,
     reply: vi.fn(async () => undefined),
     sendMedia: vi.fn(async () => undefined),
   } as unknown as WebInboundMsg;
@@ -126,6 +129,60 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+  });
+
+  it("suppresses duplicate text replies to the same recipient within the dedupe window", async () => {
+    const first = makeMsg();
+    const second = makeMsg();
+    second.from = first.from;
+
+    await deliverWebReply({
+      replyResult: { text: "same reply" },
+      msg: first,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "same reply" },
+      msg: second,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(first.reply).toHaveBeenCalledTimes(1);
+    expect(second.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress different replies to the same recipient", async () => {
+    const first = makeMsg();
+    const second = makeMsg();
+    second.from = first.from;
+
+    await deliverWebReply({
+      replyResult: { text: "first reply" },
+      msg: first,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "second reply" },
+      msg: second,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(first.reply).toHaveBeenCalledTimes(1);
+    expect(second.reply).toHaveBeenCalledTimes(1);
   });
 
   it.each(["connection closed", "operation timed out"])(
