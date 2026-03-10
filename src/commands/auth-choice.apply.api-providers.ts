@@ -73,7 +73,6 @@ import {
   setMistralApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
-  setOpenrouterApiKey,
   setSambanovaApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
