@@ -66,13 +66,13 @@ describe("applyCommonstackConfig", () => {
     };
 
     const result = await applyCommonstackConfig(cfg, {
-      apiKey: "test-commonstack-key",
+      apiKey: "test-commonstack-key", // pragma: allowlist secret
       setDefaultModel: true,
       nonInteractive: false,
     });
 
     expect(mocks.scanCommonstackModels).toHaveBeenCalledWith({
-      apiKey: "test-commonstack-key",
+      apiKey: "test-commonstack-key", // pragma: allowlist secret
       probe: false,
     });
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
