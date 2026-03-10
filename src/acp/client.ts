@@ -19,6 +19,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
@@ -323,6 +324,8 @@ export type AcpClientOptions = {
   serverArgs?: string[];
   serverVerbose?: boolean;
   verbose?: boolean;
+  agentId?: string;
+  sessionKey?: string;
 };
 
 export type AcpClientHandle = {
@@ -348,7 +351,11 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
 
 export function resolveAcpClientSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
-  options?: { stripKeys?: ReadonlySet<string> },
+  options?: {
+    stripKeys?: ReadonlySet<string>;
+    agentId?: string;
+    sessionKey?: string;
+  },
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   if (options?.stripKeys) {
@@ -356,7 +363,19 @@ export function resolveAcpClientSpawnEnv(
       delete env[key];
     }
   }
+  const sessionKey = options?.sessionKey?.trim();
+  const runtimeAgentId = options?.agentId?.trim()
+    ? options.agentId.trim()
+    : sessionKey
+      ? resolveAgentIdFromSessionKey(sessionKey)
+      : undefined;
   env.OPENCLAW_SHELL = "acp-client";
+  if (runtimeAgentId) {
+    env.OPENCLAW_AGENT_ID = runtimeAgentId;
+  }
+  if (sessionKey) {
+    env.OPENCLAW_SESSION_KEY = sessionKey;
+  }
   return env;
 }
 
@@ -461,6 +480,8 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.runtime.js");
   const spawnEnv = resolveAcpClientSpawnEnv(process.env, {
     stripKeys: getActiveSkillEnvKeys(),
+    agentId: opts.agentId,
+    sessionKey: opts.sessionKey,
   });
   const spawnInvocation = resolveAcpClientSpawnInvocation(
     { serverCommand, serverArgs: effectiveArgs },

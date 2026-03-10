@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@mariozechner/pi-tui";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -21,8 +22,25 @@ type LocalShellDeps = {
   spawnCommand?: typeof spawn;
   getCwd?: () => string;
   env?: NodeJS.ProcessEnv;
+  agentId?: string | (() => string | undefined);
+  sessionKey?: string | (() => string | undefined);
   maxOutputChars?: number;
 };
+
+export function resolveTuiLocalRuntimeEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  opts: { agentId?: string; sessionKey?: string },
+): NodeJS.ProcessEnv {
+  const sessionKey = opts.sessionKey?.trim();
+  const runtimeAgentId =
+    opts.agentId?.trim() || (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+  return {
+    ...baseEnv,
+    OPENCLAW_SHELL: "tui-local",
+    ...(runtimeAgentId ? { OPENCLAW_AGENT_ID: runtimeAgentId } : {}),
+    ...(sessionKey ? { OPENCLAW_SESSION_KEY: sessionKey } : {}),
+  };
+}
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAsked = false;
@@ -31,6 +49,9 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   const spawnCommand = deps.spawnCommand ?? spawn;
   const getCwd = deps.getCwd ?? (() => process.cwd());
   const env = deps.env ?? process.env;
+  const getAgentId = typeof deps.agentId === "function" ? deps.agentId : () => deps.agentId;
+  const getSessionKey =
+    typeof deps.sessionKey === "function" ? deps.sessionKey : () => deps.sessionKey;
   const maxChars = deps.maxOutputChars ?? 40_000;
 
   const ensureLocalExecAllowed = async (): Promise<boolean> => {
@@ -111,7 +132,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         // and is gated behind an explicit in-session approval prompt.
         shell: true,
         cwd: getCwd(),
-        env: { ...env, OPENCLAW_SHELL: "tui-local" },
+        env: resolveTuiLocalRuntimeEnv(env, {
+          agentId: getAgentId(),
+          sessionKey: getSessionKey(),
+        }),
       });
 
       let stdout = "";

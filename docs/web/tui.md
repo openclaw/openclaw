@@ -114,6 +114,7 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - The TUI prompts once per session to allow local execution; declining keeps `!` disabled for the session.
 - Commands run in a fresh, non-interactive shell in the TUI working directory (no persistent `cd`/env).
 - Local shell commands receive `OPENCLAW_SHELL=tui-local` in their environment.
+- When the current TUI session is bound to an agent/session, local shell commands also receive `OPENCLAW_AGENT_ID` and `OPENCLAW_SESSION_KEY`.
 - A lone `!` is sent as a normal message; leading spaces do not trigger local exec.
 
 ## Tool output

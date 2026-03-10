@@ -278,6 +278,7 @@ Security note:
   - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
 - ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.
 - `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process.
+- When ACP client creation is given an agent/session context, the spawned bridge process also receives `OPENCLAW_AGENT_ID` and `OPENCLAW_SESSION_KEY`.
 
 ### `acp client` options
 
