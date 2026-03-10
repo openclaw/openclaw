@@ -729,21 +729,51 @@ export class AcpSessionManager {
             this.activeTurnBySession.delete(actorKey);
           }
           if (meta.mode !== "oneshot") {
-            ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
-              cfg: input.cfg,
-              sessionKey,
-              runtime,
-              handle,
-              meta,
-              failOnStatusError: false,
-            }));
+            const cleanupTimeoutMs = 5000;
+            const reconcileTimeout = new Promise<never>((_, reject) =>
+              setTimeout(
+                () =>
+                  reject(new Error(`acp-manager: reconcile timed out after ${cleanupTimeoutMs}ms`)),
+                cleanupTimeoutMs,
+              ),
+            );
+            try {
+              ({ handle } = await Promise.race([
+                this.reconcileRuntimeSessionIdentifiers({
+                  cfg: input.cfg,
+                  sessionKey,
+                  runtime,
+                  handle,
+                  meta,
+                  failOnStatusError: false,
+                }),
+                reconcileTimeout,
+              ]));
+            } catch (error) {
+              logVerbose(
+                `acp-manager: runTurn cleanup reconcile failed for ${sessionKey}: ${String(error)}`,
+              );
+            }
           }
           if (meta.mode === "oneshot") {
             try {
-              await runtime.close({
-                handle,
-                reason: "oneshot-complete",
-              });
+              const cleanupTimeoutMs = 5000;
+              const closeTimeout = new Promise<never>((_, reject) =>
+                setTimeout(
+                  () =>
+                    reject(
+                      new Error(`acp-manager: runtime.close timed out after ${cleanupTimeoutMs}ms`),
+                    ),
+                  cleanupTimeoutMs,
+                ),
+              );
+              await Promise.race([
+                runtime.close({
+                  handle,
+                  reason: "oneshot-complete",
+                }),
+                closeTimeout,
+              ]);
             } catch (error) {
               logVerbose(
                 `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
