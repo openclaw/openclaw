@@ -52,6 +52,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         to: "chat_1",
         text: file,
         accountId: "main",
+        mediaLocalRoots: [dir],
       });
 
       expect(sendMediaFeishuMock).toHaveBeenCalledWith(
@@ -59,6 +60,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
           to: "chat_1",
           mediaUrl: file,
           accountId: "main",
+          mediaLocalRoots: [dir],
         }),
       );
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
