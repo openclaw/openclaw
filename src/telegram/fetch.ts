@@ -13,10 +13,15 @@ import { getProxyUrlFromFetch } from "./proxy.js";
 const log = createSubsystemLogger("telegram/network");
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
+const TELEGRAM_API_HOSTNAME = "api.telegram.org";
 
 type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: unknown;
 };
+
+type TelegramDispatcher = Agent | EnvHttpProxyAgent | ProxyAgent;
+
+type TelegramDispatcherMode = "direct" | "env-proxy" | "explicit-proxy";
 
 type TelegramDnsResultOrder = "ipv4first" | "verbatim";
 
@@ -132,13 +137,55 @@ function buildTelegramConnectOptions(params: {
   return Object.keys(connect).length > 0 ? connect : null;
 }
 
+function parseNoProxyRule(rawRule: string): string {
+  const trimmed = rawRule.trim().toLowerCase();
+  if (!trimmed || trimmed === "*") {
+    return trimmed;
+  }
+  if (trimmed.startsWith("[")) {
+    const bracketEnd = trimmed.indexOf("]");
+    if (bracketEnd > 0) {
+      return trimmed.slice(1, bracketEnd);
+    }
+  }
+  const portSep = trimmed.lastIndexOf(":");
+  if (portSep > -1 && trimmed.indexOf(":") === portSep) {
+    return trimmed.slice(0, portSep);
+  }
+  return trimmed;
+}
+
+function hostMatchesNoProxyRule(hostname: string, rawRule: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase();
+  const rule = parseNoProxyRule(rawRule);
+  if (!normalizedHostname || !rule) {
+    return false;
+  }
+  if (rule === "*") {
+    return true;
+  }
+  const suffix = rule.startsWith(".") ? rule.slice(1) : rule;
+  if (!suffix) {
+    return false;
+  }
+  return normalizedHostname === suffix || normalizedHostname.endsWith(`.${suffix}`);
+}
+
+function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
+  const noProxy = env.NO_PROXY ?? env.no_proxy;
+  if (typeof noProxy !== "string" || noProxy.trim().length === 0) {
+    return false;
+  }
+  return noProxy.split(",").some((rule) => hostMatchesNoProxyRule(TELEGRAM_API_HOSTNAME, rule));
+}
+
 function createTelegramDispatcher(params: {
   autoSelectFamily: boolean | null;
   dnsResultOrder: TelegramDnsResultOrder | null;
   useEnvProxy: boolean;
   forceIpv4: boolean;
   proxyUrl?: string;
-}): Agent | EnvHttpProxyAgent | ProxyAgent {
+}): { dispatcher: TelegramDispatcher; mode: TelegramDispatcherMode } {
   const connect = buildTelegramConnectOptions({
     autoSelectFamily: params.autoSelectFamily,
     dnsResultOrder: params.dnsResultOrder,
@@ -153,7 +200,10 @@ function createTelegramDispatcher(params: {
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
       : explicitProxyUrl;
     try {
-      return new ProxyAgent(proxyOptions);
+      return {
+        dispatcher: new ProxyAgent(proxyOptions),
+        mode: "explicit-proxy",
+      };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
@@ -166,7 +216,10 @@ function createTelegramDispatcher(params: {
         } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0])
       : undefined;
     try {
-      return new EnvHttpProxyAgent(proxyOptions);
+      return {
+        dispatcher: new EnvHttpProxyAgent(proxyOptions),
+        mode: "env-proxy",
+      };
     } catch (err) {
       log.warn(
         `env proxy dispatcher init failed; falling back to direct dispatcher: ${
@@ -180,12 +233,15 @@ function createTelegramDispatcher(params: {
         connect,
       } satisfies ConstructorParameters<typeof Agent>[0])
     : undefined;
-  return new Agent(agentOptions);
+  return {
+    dispatcher: new Agent(agentOptions),
+    mode: "direct",
+  };
 }
 
 function withDispatcherIfMissing(
   init: RequestInit | undefined,
-  dispatcher: Agent | EnvHttpProxyAgent | ProxyAgent,
+  dispatcher: TelegramDispatcher,
 ): RequestInitWithDispatcher {
   const withDispatcher = init as RequestInitWithDispatcher | undefined;
   if (withDispatcher?.dispatcher) {
@@ -297,26 +353,31 @@ export function resolveTelegramFetch(
 
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   const useEnvProxy = !explicitProxyUrl && hasProxyEnvConfigured();
-  const allowStickyIpv4Fallback = !explicitProxyUrl && !useEnvProxy;
-  const defaultDispatcher = createTelegramDispatcher({
+  const defaultDispatcherResolution = createTelegramDispatcher({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
     useEnvProxy,
     forceIpv4: false,
     proxyUrl: explicitProxyUrl,
   });
+  const defaultDispatcher = defaultDispatcherResolution.dispatcher;
+  const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const allowStickyIpv4Fallback =
+    defaultDispatcherResolution.mode === "direct" ||
+    (defaultDispatcherResolution.mode === "env-proxy" && shouldBypassEnvProxy);
+  const stickyShouldUseEnvProxy = defaultDispatcherResolution.mode === "env-proxy";
 
   let stickyIpv4FallbackEnabled = false;
-  let stickyIpv4Dispatcher: Agent | EnvHttpProxyAgent | ProxyAgent | null = null;
+  let stickyIpv4Dispatcher: TelegramDispatcher | null = null;
   const resolveStickyIpv4Dispatcher = () => {
     if (!stickyIpv4Dispatcher) {
       stickyIpv4Dispatcher = createTelegramDispatcher({
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
-        useEnvProxy,
+        useEnvProxy: stickyShouldUseEnvProxy,
         forceIpv4: true,
         proxyUrl: explicitProxyUrl,
-      });
+      }).dispatcher;
     }
     return stickyIpv4Dispatcher;
   };

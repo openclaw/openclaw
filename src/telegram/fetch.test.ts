@@ -280,6 +280,82 @@ describe("resolveTelegramFetch", () => {
     expect(firstDispatcher?.options?.connect?.family).not.toBe(4);
   });
 
+  it("arms sticky IPv4 fallback when env proxy init falls back to direct Agent", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {
+      throw new Error("invalid proxy config");
+    });
+    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
+    undiciFetch
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(AgentCtor).toHaveBeenCalledTimes(2);
+
+    const firstDispatcher = getDispatcherFromUndiciCall(1);
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+
+    expect(firstDispatcher).not.toBe(secondDispatcher);
+    expect(secondDispatcher).toBe(thirdDispatcher);
+    expect(secondDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+  });
+
+  it("arms sticky IPv4 fallback when NO_PROXY bypasses telegram under env proxy", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "api.telegram.org");
+    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
+    undiciFetch
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
+    expect(AgentCtor).not.toHaveBeenCalled();
+
+    const firstDispatcher = getDispatcherFromUndiciCall(1);
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+
+    expect(firstDispatcher).not.toBe(secondDispatcher);
+    expect(secondDispatcher).toBe(thirdDispatcher);
+    expect(secondDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+  });
+
   it("fails closed when explicit proxy dispatcher initialization fails", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
