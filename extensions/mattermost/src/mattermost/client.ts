@@ -235,11 +235,12 @@ export async function createMattermostDirectChannelWithRetry(
         throw lastError;
       }
 
-      // Calculate exponential backoff delay with jitter
-      const delayMs = Math.min(
-        initialDelayMs * Math.pow(2, attempt) + Math.random() * 1000,
-        maxDelayMs,
-      );
+      // Calculate exponential backoff delay with full-jitter
+      // Jitter is proportional to the exponential delay, not a fixed 1000ms
+      // This ensures backoff behaves correctly for small delay configurations
+      const exponentialDelay = initialDelayMs * Math.pow(2, attempt);
+      const jitter = Math.random() * exponentialDelay;
+      const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
 
       if (onRetry) {
         onRetry(attempt + 1, delayMs, lastError);
@@ -261,6 +262,13 @@ function isRetryableError(error: Error): boolean {
     return true;
   }
 
+  // Retry on 5xx server errors FIRST (before checking 4xx)
+  // This prevents misclassification when a 5xx error detail contains a 4xx substring
+  // e.g., "503 Service Unavailable: upstream returned 404"
+  if (/\b5\d{2}\b/.test(message)) {
+    return true;
+  }
+
   // Check for explicit 4xx status codes - these are client errors and should NOT be retried
   // (except 429 which is handled above)
   const clientErrorMatch = message.match(/\b4\d{2}\b/);
@@ -269,11 +277,6 @@ function isRetryableError(error: Error): boolean {
     if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
       return false;
     }
-  }
-
-  // Retry on 5xx server errors
-  if (/\b5\d{2}\b/.test(message)) {
-    return true;
   }
 
   // Retry on network/transient errors only if no explicit HTTP status code is present
