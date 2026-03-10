@@ -447,6 +447,7 @@ export function createExecTool(
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
+          compactOutput: defaults?.compactOutput,
           warnings,
           notifySessionKey,
           approvalRunningNoticeMs,
@@ -478,7 +479,7 @@ export function createExecTool(
       // Only applies to gateway host, non-elevated commands, when not explicitly disabled.
       if (host === "gateway" && !elevatedRequested && defaults?.compactOutput !== "off") {
         const commandToRewrite = execCommandOverride ?? params.command;
-        const rtkRewrite = await tryRtkRewrite(commandToRewrite);
+        const rtkRewrite = await tryRtkRewrite(commandToRewrite, env);
         if (rtkRewrite) {
           execCommandOverride = rtkRewrite;
         }

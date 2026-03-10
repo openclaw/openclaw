@@ -39,6 +39,7 @@ import {
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { tryRtkRewrite } from "./rtk-rewrite.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -58,6 +59,7 @@ export type ProcessGatewayAllowlistParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   scopeKey?: string;
+  compactOutput?: string;
   warnings: string[];
   notifySessionKey?: string;
   approvalRunningNoticeMs: number;
@@ -267,11 +269,20 @@ export async function processGatewayAllowlist(
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
+      // Apply rtk compact output rewrite (mirrors the sync path in bash-tools.exec.ts)
+      let finalExecCommand: string | undefined = enforcedCommand;
+      if (params.compactOutput !== "off") {
+        const rtkRewritten = await tryRtkRewrite(enforcedCommand ?? params.command, params.env);
+        if (rtkRewritten) {
+          finalExecCommand = rtkRewritten;
+        }
+      }
+
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
         run = await runExecProcess({
           command: params.command,
-          execCommand: enforcedCommand,
+          execCommand: finalExecCommand,
           workdir: params.workdir,
           env: params.env,
           sandbox: undefined,

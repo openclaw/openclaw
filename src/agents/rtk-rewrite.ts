@@ -52,8 +52,14 @@ async function isRtkAvailable(): Promise<boolean> {
  * string if rtk can compress it, or null if no rewrite is needed / rtk unavailable.
  *
  * Must only be called AFTER all security checks have passed.
+ *
+ * @param env - Optional exec env to merge with process.env when invoking rtk.
+ *              Ensures rtk is found even when the exec env overrides PATH.
  */
-export async function tryRtkRewrite(command: string): Promise<string | null> {
+export async function tryRtkRewrite(
+  command: string,
+  env?: Record<string, string>,
+): Promise<string | null> {
   if (!(await isRtkAvailable())) {
     return null;
   }
@@ -61,9 +67,10 @@ export async function tryRtkRewrite(command: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("rtk", ["rewrite", command], {
       timeout: 2000,
+      env: env ? { ...process.env, ...env } : undefined,
     });
     const rewritten = stdout.trim();
-    if (rewritten && rewritten !== command) {
+    if (rewritten && rewritten !== command && rewritten.startsWith("rtk ")) {
       return rewritten;
     }
     return null;

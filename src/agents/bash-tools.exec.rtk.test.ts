@@ -149,7 +149,7 @@ describe("bash-tools.exec rtk integration", () => {
     await tool.execute("call-1", { command: "ls -la" });
 
     expect(tryRtkRewriteMock).toHaveBeenCalledOnce();
-    expect(tryRtkRewriteMock).toHaveBeenCalledWith("ls -la");
+    expect(tryRtkRewriteMock).toHaveBeenCalledWith("ls -la", expect.any(Object));
 
     expect(runExecProcessMock).toHaveBeenCalledOnce();
     expect(runExecProcessMock).toHaveBeenCalledWith(
@@ -168,7 +168,7 @@ describe("bash-tools.exec rtk integration", () => {
     await tool.execute("call-2", { command: "git log --oneline -10" });
 
     expect(tryRtkRewriteMock).toHaveBeenCalledOnce();
-    expect(tryRtkRewriteMock).toHaveBeenCalledWith("git log --oneline -10");
+    expect(tryRtkRewriteMock).toHaveBeenCalledWith("git log --oneline -10", expect.any(Object));
 
     expect(runExecProcessMock).toHaveBeenCalledOnce();
     expect(runExecProcessMock).toHaveBeenCalledWith(
@@ -286,7 +286,7 @@ describe("bash-tools.exec rtk integration", () => {
 
     // tryRtkRewrite must receive the safeBins override, not the original params.command
     expect(tryRtkRewriteMock).toHaveBeenCalledOnce();
-    expect(tryRtkRewriteMock).toHaveBeenCalledWith(safeBinsResolvedCmd);
+    expect(tryRtkRewriteMock).toHaveBeenCalledWith(safeBinsResolvedCmd, expect.any(Object));
 
     // runExecProcess receives the rtk-rewritten command as execCommand
     expect(runExecProcessMock).toHaveBeenCalledOnce();
