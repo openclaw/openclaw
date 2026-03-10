@@ -4,6 +4,7 @@ type OriginCheckResult =
   | {
       ok: true;
       matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
+      wildcardMatched: boolean; // true if allowed via "*" wildcard
     }
   | { ok: false; reason: string };
 
@@ -26,37 +27,84 @@ function parseOrigin(
   }
 }
 
+function normalizeHostToMatchUrlHost(host: string | undefined): string | undefined {
+  const normalized = normalizeHostHeader(host);
+  if (!normalized) {
+    return undefined;
+  }
+  // If it looks like a host:port without scheme, don't use URL parsing
+  // (new URL("gateway.tailnet.ts.net:443") treats hostname as scheme, returning empty host)
+  // Instead, strip default HTTPS port (:443) directly
+  if (!normalized.includes("://") && /^[a-zA-Z0-9.-]+:\d+$/.test(normalized)) {
+    // Strip default ports (:443 for HTTPS, :80 for HTTP) to match URL.host behavior
+    return normalized.replace(/:(443|80)$/, "").toLowerCase();
+  }
+  // Use URL parsing for full URLs with scheme
+  try {
+    const url = new URL(normalized);
+    return url.host.toLowerCase();
+  } catch {
+    // Fallback: just return the normalized value
+    return normalized.toLowerCase();
+  }
+}
+
 export function checkBrowserOrigin(params: {
   requestHost?: string;
+  requestForwardedHost?: string;
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
+  isTrustedProxy?: boolean;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = new Set(
-    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
-  );
-  if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
-    return { ok: true, matchedBy: "allowlist" };
+  const allowlistOrigins = (params.allowedOrigins ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const allowlist = new Set(allowlistOrigins);
+
+  const requestForwardedHost = normalizeHostToMatchUrlHost(params.requestForwardedHost);
+
+  // Security: If forwarded-host is present but proxy is NOT trusted, reject outright.
+  // This prevents attackers from bypassing checks by spoofing X-Forwarded-Host.
+  if (requestForwardedHost && params.isTrustedProxy !== true) {
+    return { ok: false, reason: "origin not allowed" };
   }
 
-  const requestHost = normalizeHostHeader(params.requestHost);
-  if (
-    params.allowHostHeaderOriginFallback === true &&
-    requestHost &&
-    parsedOrigin.host === requestHost
-  ) {
-    return { ok: true, matchedBy: "host-header-fallback" };
+  // Security: Wildcard "*" bypasses all origin checks, disabling CSRF protection.
+  // This is intended only for development/trusted environments.
+  // Consider explicitly listing origins instead when possible.
+  const wildcardMatched = allowlist.has("*");
+  if (wildcardMatched || allowlist.has(parsedOrigin.origin)) {
+    return { ok: true, matchedBy: "allowlist", wildcardMatched };
+  }
+
+  // Security: Only trust X-Forwarded-Host from a verified trusted proxy
+  if (requestForwardedHost && params.isTrustedProxy === true) {
+    // Security: Origin MUST match the forwarded host (cross-validation)
+    if (parsedOrigin.host !== requestForwardedHost) {
+      return { ok: false, reason: "origin does not match forwarded host" };
+    }
+
+    // Legacy fallback for forwarded host with explicit opt-in
+    if (params.allowHostHeaderOriginFallback === true) {
+      return { ok: true, matchedBy: "host-header-fallback", wildcardMatched: false };
+    }
+  }
+
+  const directRequestHost = normalizeHostToMatchUrlHost(params.requestHost);
+  if (params.allowHostHeaderOriginFallback === true && parsedOrigin.host === directRequestHost) {
+    return { ok: true, matchedBy: "host-header-fallback", wildcardMatched: false };
   }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
   if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
-    return { ok: true, matchedBy: "local-loopback" };
+    return { ok: true, matchedBy: "local-loopback", wildcardMatched: false };
   }
 
   return { ok: false, reason: "origin not allowed" };

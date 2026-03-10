@@ -15,10 +15,7 @@ import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
-import {
-  attachGatewayWsMessageHandler,
-  type WsOriginCheckMetrics,
-} from "./ws-connection/message-handler.js";
+import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -58,7 +55,7 @@ const sanitizeLogValue = (value: string | undefined): string | undefined => {
   return truncateUtf16Safe(cleaned, LOG_HEADER_MAX_LEN);
 };
 
-export type GatewayWsSharedHandlerParams = {
+export function attachGatewayWsConnectionHandler(params: {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   port: number;
@@ -72,9 +69,6 @@ export type GatewayWsSharedHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
-};
-
-export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParams & {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -88,9 +82,7 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
     },
   ) => void;
   buildRequestContext: () => GatewayRequestContext;
-};
-
-export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
+}) {
   const {
     wss,
     clients,
@@ -110,7 +102,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     broadcast,
     buildRequestContext,
   } = params;
-  const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
 
   wss.on("connection", (socket, upgradeReq) => {
     let client: GatewayWsClient | null = null;
@@ -122,6 +113,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);
+    const forwardedHost = headerValue(upgradeReq.headers["x-forwarded-host"]);
     const requestOrigin = headerValue(upgradeReq.headers.origin);
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
@@ -284,7 +276,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       remoteAddr,
       forwardedFor,
       realIp,
-      requestHost,
+      requestHost: forwardedHost || requestHost,
       requestOrigin,
       requestUserAgent,
       canvasHostUrl,
@@ -310,7 +302,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       },
       setCloseCause,
       setLastFrameMeta,
-      originCheckMetrics,
       logGateway,
       logHealth,
       logWsControl,
