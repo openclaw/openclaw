@@ -23,9 +23,6 @@ export class GatewayDrainingError extends Error {
   }
 }
 
-// Set while gateway is draining for restart; new enqueues are rejected.
-let gatewayDraining = false;
-
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -49,10 +46,35 @@ type LaneState = {
   generation: number;
 };
 
-const lanes = new Map<string, LaneState>();
-let nextTaskId = 1;
+// ---------------------------------------------------------------------------
+// Process-global singleton state – survives tsdown code-splitting that may
+// duplicate this module into separate chunks (reply-*.js, pi-embedded-*.js,
+// compact-*.js, plugin-sdk/*.js).  Follows the same pattern as
+// internal-hooks.ts and context-engine/registry.ts.
+// ---------------------------------------------------------------------------
+const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
+
+type CommandQueueState = {
+  gatewayDraining: boolean;
+  lanes: Map<string, LaneState>;
+  nextTaskId: number;
+};
+
+// Keep command-queue runtime state process-global so duplicated dist chunks
+// still share one set of lanes and task IDs at runtime.
+function getCommandQueueState(): CommandQueueState {
+  const globalStore = globalThis as typeof globalThis & {
+    [COMMAND_QUEUE_STATE_KEY]?: CommandQueueState;
+  };
+  return (globalStore[COMMAND_QUEUE_STATE_KEY] ??= {
+    gatewayDraining: false,
+    lanes: new Map<string, LaneState>(),
+    nextTaskId: 1,
+  });
+}
 
 function getLaneState(lane: string): LaneState {
+  const { lanes } = getCommandQueueState();
   const existing = lanes.get(lane);
   if (existing) {
     return existing;
@@ -78,6 +100,7 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
 }
 
 function drainLane(lane: string) {
+  const commandQueueState = getCommandQueueState();
   const state = getLaneState(lane);
   if (state.draining) {
     if (state.activeTaskIds.size === 0 && state.queue.length > 0) {
@@ -105,7 +128,7 @@ function drainLane(lane: string) {
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = nextTaskId++;
+        const taskId = commandQueueState.nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
         void (async () => {
@@ -148,7 +171,7 @@ function drainLane(lane: string) {
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
 export function markGatewayDraining(): void {
-  gatewayDraining = true;
+  getCommandQueueState().gatewayDraining = true;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -166,7 +189,8 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
-  if (gatewayDraining) {
+  const commandQueueState = getCommandQueueState();
+  if (commandQueueState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = lane.trim() || CommandLane.Main;
@@ -198,7 +222,7 @@ export function enqueueCommand<T>(
 
 export function getQueueSize(lane: string = CommandLane.Main) {
   const resolved = lane.trim() || CommandLane.Main;
-  const state = lanes.get(resolved);
+  const state = getCommandQueueState().lanes.get(resolved);
   if (!state) {
     return 0;
   }
@@ -207,7 +231,7 @@ export function getQueueSize(lane: string = CommandLane.Main) {
 
 export function getTotalQueueSize() {
   let total = 0;
-  for (const s of lanes.values()) {
+  for (const s of getCommandQueueState().lanes.values()) {
     total += s.queue.length + s.activeTaskIds.size;
   }
   return total;
@@ -215,7 +239,7 @@ export function getTotalQueueSize() {
 
 export function clearCommandLane(lane: string = CommandLane.Main) {
   const cleaned = lane.trim() || CommandLane.Main;
-  const state = lanes.get(cleaned);
+  const state = getCommandQueueState().lanes.get(cleaned);
   if (!state) {
     return 0;
   }
@@ -242,9 +266,10 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
-  gatewayDraining = false;
+  const commandQueueState = getCommandQueueState();
+  commandQueueState.gatewayDraining = false;
   const lanesToDrain: string[] = [];
-  for (const state of lanes.values()) {
+  for (const state of commandQueueState.lanes.values()) {
     state.generation += 1;
     state.activeTaskIds.clear();
     state.draining = false;
@@ -264,7 +289,7 @@ export function resetAllLanes(): void {
  */
 export function getActiveTaskCount(): number {
   let total = 0;
-  for (const s of lanes.values()) {
+  for (const s of getCommandQueueState().lanes.values()) {
     total += s.activeTaskIds.size;
   }
   return total;
@@ -283,7 +308,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
   const POLL_INTERVAL_MS = 50;
   const deadline = Date.now() + timeoutMs;
   const activeAtStart = new Set<number>();
-  for (const state of lanes.values()) {
+  for (const state of getCommandQueueState().lanes.values()) {
     for (const taskId of state.activeTaskIds) {
       activeAtStart.add(taskId);
     }
@@ -297,7 +322,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
       }
 
       let hasPending = false;
-      for (const state of lanes.values()) {
+      for (const state of getCommandQueueState().lanes.values()) {
         for (const taskId of state.activeTaskIds) {
           if (activeAtStart.has(taskId)) {
             hasPending = true;
