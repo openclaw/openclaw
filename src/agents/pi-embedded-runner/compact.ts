@@ -820,8 +820,10 @@ export async function compactEmbeddedPiSessionDirect(
           }
           // Abort the timed-out first compact so it skips replaceMessages() (see comment above).
           session.abortCompaction();
-          // Suppress the "Compaction cancelled" rejection to avoid an unhandled-rejection crash.
-          backgroundCompact?.catch(() => {});
+          // Await the first compact settling before retrying; abortCompaction() signals it to stop
+          // but the promise may not resolve immediately. Swallow the "Compaction cancelled"
+          // rejection to avoid an unhandled-rejection crash.
+          await backgroundCompact?.catch(() => {});
           backgroundCompact = undefined;
           // Timeout: truncate oversized tool results (large DOM responses) to reduce context,
           // then retry with a shorter safety timeout.
