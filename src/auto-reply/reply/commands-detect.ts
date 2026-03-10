@@ -22,7 +22,7 @@ export const handleDetectCommand: CommandHandler = async (params, allowTextComma
   
   if (!url) {
     // Try to fall back to media attachments if no URL is provided in text
-    const mediaUrl = params.payload.mediaUrl || params.payload.mediaUrls?.[0];
+    const mediaUrl = params.ctx.MediaUrl || params.ctx.MediaUrls?.[0];
     if (mediaUrl) {
       url = mediaUrl;
     } else {
