@@ -161,13 +161,14 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
-  it("attempts recovery restart when service is not loaded", async () => {
+  it("attempts recovery restart when launch agent service is not loaded", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
       config: {},
       issues: [],
     });
+    service.label = "LaunchAgent";
     service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runServiceStart({
@@ -187,13 +188,14 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(payload.service?.loaded).toBe(true);
   });
 
-  it("falls back to not-loaded guidance when recovery restart does not load service", async () => {
+  it("falls back to not-loaded guidance when launch agent recovery restart does not load service", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
       config: {},
       issues: [],
     });
+    service.label = "LaunchAgent";
     service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
 
     await runServiceStart({
@@ -222,6 +224,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
       config: {},
       issues: [],
     });
+    service.label = "LaunchAgent";
     service.isLoaded.mockResolvedValue(false);
     service.restart.mockRejectedValue(new Error("launchctl bootstrap failed"));
 
@@ -241,5 +244,34 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(payload.result).toBe("not-loaded");
     expect(payload.message).toContain("not loaded");
     expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
+  });
+
+  it("does not attempt recovery restart for non-launch-agent services", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    service.label = "systemd";
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.message).toContain("not loaded");
+    expect(payload.service?.loaded).toBe(false);
   });
 });

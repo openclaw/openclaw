@@ -215,9 +215,23 @@ export async function runServiceStart(params: {
   }
 
   if (!loaded) {
-    // Attempt an idempotent recovery start first (notably for macOS launchd where
-    // `bootout` leaves the plist installed on disk but unloaded in launchd).
-    // If recovery fails, fall back to not-loaded guidance.
+    // Recovery start is intentionally limited to launchd services on macOS.
+    // Other service managers may report "not loaded" via enablement semantics,
+    // where issuing restart could unexpectedly start disabled services.
+    if (params.service.label !== "LaunchAgent") {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
+
+    // Attempt an idempotent recovery start for launchd where `bootout` can leave
+    // the plist installed on disk but unloaded in launchd.
     try {
       await params.service.restart({ env: process.env, stdout });
     } catch {
