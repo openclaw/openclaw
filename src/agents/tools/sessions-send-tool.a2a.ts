@@ -127,6 +127,7 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            ...(announceTarget.threadId ? { threadId: announceTarget.threadId } : {}),
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,
