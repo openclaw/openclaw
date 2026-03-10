@@ -644,7 +644,9 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
 
-  const isWhitespace = (ch: string) => ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
+  // Use unicode-aware whitespace detection (e.g. includes non-breaking space \u00A0).
+  // This keeps chunk splitting behavior consistent across localized inputs.
+  const isWhitespace = (ch: string) => !!ch && /\s/u.test(ch);
 
   while (cursor < ir.text.length) {
     const end = findMarkdownIRPreservedSplitIndex(ir.text, cursor, normalizedLimit);
