@@ -28,6 +28,7 @@ function createMockContext(overrides?: {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+      deterministicApprovalPromptSent: false,
     },
     log: { debug: vi.fn(), warn: vi.fn() },
     shouldEmitToolResult: vi.fn(() => false),
@@ -78,6 +79,21 @@ async function emitPngMediaToolResult(
   });
 }
 
+async function emitUntrustedToolMediaResult(
+  ctx: EmbeddedPiSubscribeContext,
+  mediaPathOrUrl: string,
+) {
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "plugin_tool",
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+    },
+  });
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -107,15 +123,7 @@ describe("handleToolExecutionEnd media emission", () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "plugin_tool",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "MEDIA:/tmp/secret.png" }],
-      },
-    });
+    await emitUntrustedToolMediaResult(ctx, "/tmp/secret.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
   });
@@ -124,15 +132,7 @@ describe("handleToolExecutionEnd media emission", () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "plugin_tool",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "MEDIA:https://example.com/file.png" }],
-      },
-    });
+    await emitUntrustedToolMediaResult(ctx, "https://example.com/file.png");
 
     expect(onToolResult).toHaveBeenCalledWith({
       mediaUrls: ["https://example.com/file.png"],

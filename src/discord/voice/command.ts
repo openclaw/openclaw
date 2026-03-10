@@ -12,12 +12,13 @@ import {
 } from "discord-api-types/v10";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import type { DiscordAccountConfig } from "../../config/types.js";
+import { formatMention } from "../mentions.js";
 import {
-  allowListMatches,
   isDiscordGroupAllowedByPolicy,
-  normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  resolveDiscordOwnerAccess,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
@@ -139,7 +140,7 @@ async function authorizeVoiceCommand(
     channelConfig?.allowed === false
   ) {
     const channelId = channelOverride?.id ?? channel?.id;
-    const channelLabel = channelId ? `<#${channelId}>` : "This channel";
+    const channelLabel = channelId ? formatMention({ channelId }) : "This channel";
     return {
       ok: false,
       message: `${channelLabel} is not allowlisted for voice commands.`,
@@ -156,19 +157,18 @@ async function authorizeVoiceCommand(
     guildInfo,
     memberRoleIds,
     sender,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
 
-  const ownerAllowList = normalizeDiscordAllowList(
-    params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
-    ["discord:", "user:", "pk:"],
-  );
-  const ownerOk = ownerAllowList
-    ? allowListMatches(ownerAllowList, {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      })
-    : false;
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+  });
 
   const authorizers = params.useAccessGroups
     ? [
@@ -353,7 +353,9 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         await interaction.reply({ content: "No active voice sessions.", ephemeral: true });
         return;
       }
-      const lines = sessions.map((entry) => `• <#${entry.channelId}> (guild ${entry.guildId})`);
+      const lines = sessions.map(
+        (entry) => `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})`,
+      );
       await interaction.reply({ content: lines.join("\n"), ephemeral: true });
     }
   }

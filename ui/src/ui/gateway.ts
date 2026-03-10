@@ -5,7 +5,10 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
-import { readConnectErrorDetailCode } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../../src/gateway/protocol/connect-error-details.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -50,9 +53,36 @@ export function resolveGatewayErrorDetailCode(
   return readConnectErrorDetailCode(error?.details);
 }
 
+/**
+ * Auth errors that won't resolve without user action — don't auto-reconnect.
+ *
+ * NOTE: AUTH_TOKEN_MISMATCH is intentionally NOT included here because the
+ * browser client has a device-token fallback flow: a stale cached device token
+ * triggers a mismatch, sendConnect() clears it, and the next reconnect retries
+ * with opts.token (the shared gateway token). Blocking reconnect on mismatch
+ * would break that fallback. The rate limiter still catches persistent wrong
+ * tokens after N failures → AUTH_RATE_LIMITED stops the loop.
+ */
+export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
+  if (!error) {
+    return false;
+  }
+  const code = resolveGatewayErrorDetailCode(error);
+  return (
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
+    code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED
+  );
+}
+
 export type GatewayHelloOk = {
   type: "hello-ok";
   protocol: number;
+  server?: {
+    version?: string;
+    connId?: string;
+  };
   features?: { methods?: string[]; events?: string[] };
   snapshot?: unknown;
   auth?: {
@@ -131,7 +161,9 @@ export class GatewayBrowserClient {
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
-      this.scheduleReconnect();
+      if (!isNonRecoverableAuthError(connectError)) {
+        this.scheduleReconnect();
+      }
     });
     this.ws.addEventListener("error", () => {
       // ignored; close handler will fire
@@ -173,7 +205,9 @@ export class GatewayBrowserClient {
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
-    let authToken = this.opts.token;
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    let authToken = explicitGatewayToken;
+    let deviceToken: string | undefined;
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
@@ -181,9 +215,12 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
         role,
       })?.token;
-      authToken = storedToken ?? this.opts.token;
-      canFallbackToShared = Boolean(storedToken && this.opts.token);
+      deviceToken = !(explicitGatewayToken || this.opts.password?.trim())
+        ? (storedToken ?? undefined)
+        : undefined;
+      canFallbackToShared = Boolean(deviceToken && explicitGatewayToken);
     }
+    authToken = explicitGatewayToken ?? deviceToken;
     const auth =
       authToken || this.opts.password
         ? {
@@ -229,7 +266,7 @@ export class GatewayBrowserClient {
       maxProtocol: 3,
       client: {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        version: this.opts.clientVersion ?? "dev",
+        version: this.opts.clientVersion ?? "control-ui",
         platform: this.opts.platform ?? navigator.platform ?? "web",
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
         instanceId: this.opts.instanceId,
@@ -237,7 +274,7 @@ export class GatewayBrowserClient {
       role,
       scopes,
       device,
-      caps: [],
+      caps: ["tool-events"],
       auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,

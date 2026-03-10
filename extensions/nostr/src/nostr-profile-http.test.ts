@@ -6,7 +6,10 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
+  getNostrProfileRateLimitStateSizeForTest,
+  isNostrProfileRateLimitedForTest,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
 
@@ -136,6 +139,7 @@ function mockSuccessfulProfileImport() {
 describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNostrProfileRateLimitStateForTest();
   });
 
   describe("route matching", () => {
@@ -204,6 +208,23 @@ describe("nostr-profile-http", () => {
   });
 
   describe("PUT /api/channels/nostr/:accountId/profile", () => {
+    async function expectPrivatePictureRejected(pictureUrl: string) {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
+        name: "hacker",
+        picture: pictureUrl,
+      });
+      const res = createMockResponse();
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(400);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(false);
+      expect(data.error).toContain("private");
+    }
+
     it("validates profile and publishes", async () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
@@ -262,38 +283,42 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(403);
     });
 
-    it("rejects private IP in picture URL (SSRF protection)", async () => {
+    it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
-      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
-        name: "hacker",
-        picture: "https://127.0.0.1/evil.jpg",
-      });
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { "sec-fetch-site": "cross-site" } },
+      );
       const res = createMockResponse();
 
       await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
 
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(false);
-      expect(data.error).toContain("private");
+    it("rejects profile mutation when forwarded client ip is non-loopback", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { "x-forwarded-for": "203.0.113.99, 127.0.0.1" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects private IP in picture URL (SSRF protection)", async () => {
+      await expectPrivatePictureRejected("https://127.0.0.1/evil.jpg");
     });
 
     it("rejects ISATAP-embedded private IPv4 in picture URL", async () => {
-      const ctx = createMockContext();
-      const handler = createNostrProfileHttpHandler(ctx);
-      const req = createMockRequest("PUT", "/api/channels/nostr/default/profile", {
-        name: "hacker",
-        picture: "https://[2001:db8:1234::5efe:127.0.0.1]/evil.jpg",
-      });
-      const res = createMockResponse();
-
-      await handler(req, res);
-
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(false);
-      expect(data.error).toContain("private");
+      await expectPrivatePictureRejected("https://[2001:db8:1234::5efe:127.0.0.1]/evil.jpg");
     });
 
     it("rejects non-https URLs", async () => {
@@ -367,6 +392,25 @@ describe("nostr-profile-http", () => {
         }
       }
     });
+
+    it("caps tracked rate-limit keys to prevent unbounded growth", () => {
+      const now = 1_000_000;
+      for (let i = 0; i < 2_500; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-cap-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBeLessThanOrEqual(2_048);
+    });
+
+    it("prunes stale rate-limit keys after the window elapses", () => {
+      const now = 2_000_000;
+      for (let i = 0; i < 100; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-stale-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(100);
+
+      isNostrProfileRateLimitedForTest("fresh", now + 60_001);
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(1);
+    });
   });
 
   describe("POST /api/channels/nostr/:accountId/profile/import", () => {
@@ -410,6 +454,21 @@ describe("nostr-profile-http", () => {
         "/api/channels/nostr/default/profile/import",
         {},
         { headers: { origin: "https://evil.example" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects import mutation when x-real-ip is non-loopback", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {},
+        { headers: { "x-real-ip": "198.51.100.55" } },
       );
       const res = createMockResponse();
 

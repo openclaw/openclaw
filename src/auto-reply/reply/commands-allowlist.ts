@@ -12,12 +12,18 @@ import {
 import { resolveDiscordAccount } from "../../discord/accounts.js";
 import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
 import { resolveIMessageAccount } from "../../imessage/accounts.js";
+import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   addChannelAllowFromStoreEntry,
   readChannelAllowFromStore,
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSignalAccount } from "../../signal/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
@@ -160,7 +166,7 @@ function normalizeAllowFrom(params: {
       allowFrom: params.values,
     });
   }
-  return params.values.map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(params.values);
 }
 
 function formatEntryList(entries: string[], resolved?: Map<string, string>): string {
@@ -191,6 +197,31 @@ function extractConfigAllowlist(account: {
   };
 }
 
+async function updatePairingStoreAllowlist(params: {
+  action: "add" | "remove";
+  channelId: ChannelId;
+  accountId?: string;
+  entry: string;
+}) {
+  const storeEntry = {
+    channel: params.channelId,
+    entry: params.entry,
+    accountId: params.accountId,
+  };
+  if (params.action === "add") {
+    await addChannelAllowFromStoreEntry(storeEntry);
+    return;
+  }
+
+  await removeChannelAllowFromStoreEntry(storeEntry);
+  if (params.accountId === DEFAULT_ACCOUNT_ID) {
+    await removeChannelAllowFromStoreEntry({
+      channel: params.channelId,
+      entry: params.entry,
+    });
+  }
+}
+
 function resolveAccountTarget(
   parsed: Record<string, unknown>,
   channelId: ChannelId,
@@ -199,13 +230,22 @@ function resolveAccountTarget(
   const channels = (parsed.channels ??= {}) as Record<string, unknown>;
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
+  if (isBlockedObjectKey(normalizedAccountId)) {
+    return { target: channel, pathPrefix: `channels.${channelId}`, accountId: DEFAULT_ACCOUNT_ID };
+  }
   const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
   const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
   if (!useAccount) {
     return { target: channel, pathPrefix: `channels.${channelId}`, accountId: normalizedAccountId };
   }
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
-  const account = (accounts[normalizedAccountId] ??= {}) as Record<string, unknown>;
+  const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
+    ? accounts[normalizedAccountId]
+    : undefined;
+  if (!existingAccount || typeof existingAccount !== "object") {
+    accounts[normalizedAccountId] = {};
+  }
+  const account = accounts[normalizedAccountId] as Record<string, unknown>;
   return {
     target: account,
     pathPrefix: `channels.${channelId}.accounts.${normalizedAccountId}`,
@@ -313,7 +353,7 @@ async function resolveSlackNames(params: {
   entries: string[];
 }) {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const token = account.config.userToken?.trim() || account.botToken?.trim();
+  const token = account.userToken || account.botToken?.trim();
   if (!token) {
     return new Map<string, string>();
   }
@@ -361,6 +401,14 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       reply: { text: "⚠️ Unknown channel. Add channel=<id> to the command." },
     };
   }
+  if (parsed.account?.trim() && !normalizeOptionalAccountId(parsed.account)) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Invalid account id. Reserved keys (__proto__, constructor, prototype) are blocked.",
+      },
+    };
+  }
   const accountId = normalizeAccountId(parsed.account ?? params.ctx.AccountId);
   const scope = parsed.scope;
 
@@ -368,7 +416,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const pairingChannels = listPairingChannels();
     const supportsStore = pairingChannels.includes(channelId);
     const storeAllowFrom = supportsStore
-      ? await readChannelAllowFromStore(channelId).catch(() => [])
+      ? await readChannelAllowFromStore(channelId, process.env, accountId).catch(() => [])
       : [];
 
     let dmAllowFrom: string[] = [];
@@ -673,11 +721,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     if (shouldTouchStore) {
-      if (parsed.action === "add") {
-        await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-      } else if (parsed.action === "remove") {
-        await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-      }
+      await updatePairingStoreAllowlist({
+        action: parsed.action,
+        channelId,
+        accountId,
+        entry: parsed.entry,
+      });
     }
 
     const actionLabel = parsed.action === "add" ? "added" : "removed";
@@ -705,11 +754,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     };
   }
 
-  if (parsed.action === "add") {
-    await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-  } else if (parsed.action === "remove") {
-    await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
-  }
+  await updatePairingStoreAllowlist({
+    action: parsed.action,
+    channelId,
+    accountId,
+    entry: parsed.entry,
+  });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
   const scopeLabel = scope === "dm" ? "DM" : "group";

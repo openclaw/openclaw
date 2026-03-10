@@ -8,6 +8,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { getCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
@@ -103,7 +104,7 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
 
   const cfg = loadConfig();
   const key = getCustomProviderApiKey(cfg, params.providerId);
-  if (key) {
+  if (key && !isNonSecretApiKeyMarker(key)) {
     return key;
   }
 
@@ -122,9 +123,17 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
     return undefined;
   }
   if (cred.type === "api_key") {
-    return normalizeSecretInput(cred.key);
+    const key = normalizeSecretInput(cred.key);
+    if (key && !isNonSecretApiKeyMarker(key)) {
+      return key;
+    }
+    return undefined;
   }
-  return normalizeSecretInput(cred.token);
+  const token = normalizeSecretInput(cred.token);
+  if (token && !isNonSecretApiKeyMarker(token)) {
+    return token;
+  }
+  return undefined;
 }
 
 async function resolveOAuthToken(params: {
@@ -158,7 +167,7 @@ async function resolveOAuthToken(params: {
       });
       if (resolved) {
         let token = resolved.apiKey;
-        if (params.provider === "google-gemini-cli" || params.provider === "google-antigravity") {
+        if (params.provider === "google-gemini-cli") {
           const parsed = parseGoogleToken(resolved.apiKey);
           token = parsed?.token ?? resolved.apiKey;
         }
@@ -188,7 +197,6 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
     "anthropic",
     "github-copilot",
     "google-gemini-cli",
-    "google-antigravity",
     "openai-codex",
   ] satisfies UsageProviderId[];
   const isOAuthLikeCredential = (id: string) => {

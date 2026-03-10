@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -8,6 +9,7 @@ const ROOT_SECTIONS = [
   "wizard",
   "diagnostics",
   "logging",
+  "cli",
   "update",
   "browser",
   "ui",
@@ -101,15 +103,23 @@ const TARGET_KEYS = [
   "models.providers.*.auth",
   "models.providers.*.authHeader",
   "gateway.reload.mode",
+  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
   "cron",
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.retry",
+  "cron.retry.maxAttempts",
+  "cron.retry.backoffMs",
+  "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
+  "cron.runLog",
+  "cron.runLog.maxBytes",
+  "cron.runLog.keepLines",
   "session",
   "session.scope",
   "session.dmScope",
@@ -143,13 +153,17 @@ const TARGET_KEYS = [
   "session.agentToAgent.maxPingPongTurns",
   "session.threadBindings",
   "session.threadBindings.enabled",
-  "session.threadBindings.ttlHours",
+  "session.threadBindings.idleHours",
+  "session.threadBindings.maxAgeHours",
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
   "session.maintenance.rotateBytes",
+  "session.maintenance.resetArchiveRetention",
+  "session.maintenance.maxDiskBytes",
+  "session.maintenance.highWaterBytes",
   "approvals",
   "approvals.exec",
   "approvals.exec.enabled",
@@ -253,6 +267,7 @@ const TARGET_KEYS = [
   "browser.noSandbox",
   "browser.profiles",
   "browser.profiles.*.driver",
+  "browser.profiles.*.attachOnly",
   "tools",
   "tools.allow",
   "tools.deny",
@@ -290,6 +305,7 @@ const TARGET_KEYS = [
   "talk.modelId",
   "talk.outputFormat",
   "talk.interruptOnSpeech",
+  "talk.silenceTimeoutMs",
   "meta",
   "env",
   "env.shellEnv",
@@ -324,6 +340,8 @@ const TARGET_KEYS = [
   "plugins.slots",
   "plugins.entries",
   "plugins.entries.*.enabled",
+  "plugins.entries.*.hooks",
+  "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
@@ -353,6 +371,14 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
   "agents.defaults.compaction.maxHistoryShare",
+  "agents.defaults.compaction.identifierPolicy",
+  "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.recentTurnsPreserve",
+  "agents.defaults.compaction.qualityGuard",
+  "agents.defaults.compaction.qualityGuard.enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.postCompactionSections",
+  "agents.defaults.compaction.model",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -389,7 +415,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"clawd"', '"extension"'],
+  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"extension"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
@@ -405,8 +431,10 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
+  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
 
 const TOOLS_HOOKS_TARGET_KEYS = [
@@ -441,15 +469,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  "tools.media.audio.attachments",
-  "tools.media.audio.enabled",
-  "tools.media.audio.language",
-  "tools.media.audio.maxBytes",
-  "tools.media.audio.maxChars",
-  "tools.media.audio.models",
-  "tools.media.audio.prompt",
-  "tools.media.audio.scope",
-  "tools.media.audio.timeoutSeconds",
+  ...MEDIA_AUDIO_FIELD_KEYS,
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
@@ -502,6 +522,12 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "channels.telegram",
   "channels.telegram.botToken",
   "channels.telegram.capabilities.inlineButtons",
+  "channels.telegram.execApprovals",
+  "channels.telegram.execApprovals.enabled",
+  "channels.telegram.execApprovals.approvers",
+  "channels.telegram.execApprovals.agentFilter",
+  "channels.telegram.execApprovals.sessionFilter",
+  "channels.telegram.execApprovals.target",
   "channels.whatsapp",
 ] as const;
 
@@ -513,6 +539,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
   "browser.ssrfPolicy.allowPrivateNetwork",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
   "diagnostics.enabled",
@@ -536,6 +563,22 @@ const FINAL_BACKLOG_TARGET_KEYS = [
 ] as const;
 
 describe("config help copy quality", () => {
+  function expectOperationalGuidance(
+    keys: readonly string[],
+    guidancePattern: RegExp,
+    minLength = 80,
+  ) {
+    for (const key of keys) {
+      const help = FIELD_HELP[key];
+      expect(help, `missing help for ${key}`).toBeDefined();
+      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
+      expect(
+        guidancePattern.test(help),
+        `help should include operational guidance for ${key}`,
+      ).toBe(true);
+    }
+  }
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
@@ -550,57 +593,31 @@ describe("config help copy quality", () => {
   });
 
   it("covers the target confusing fields with non-trivial explanations", () => {
-    for (const key of TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|selects|sets|defines)/i.test(help),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|selects|sets|defines)/i,
+    );
   });
 
   it("covers tools/hooks help keys with non-trivial operational guidance", () => {
-    for (const key of TOOLS_HOOKS_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      TOOLS_HOOKS_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("covers channels/agents help keys with non-trivial operational guidance", () => {
-    for (const key of CHANNELS_AGENTS_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      CHANNELS_AGENTS_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("covers final backlog help keys with non-trivial operational guidance", () => {
-    for (const key of FINAL_BACKLOG_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      FINAL_BACKLOG_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("documents option behavior for enum-style fields", () => {
@@ -673,6 +690,27 @@ describe("config help copy quality", () => {
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
+
+    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    expect(resetRetention.includes(".reset.")).toBe(true);
+    expect(/false/i.test(resetRetention)).toBe(true);
+
+    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
+    expect(maxDisk.includes("500mb")).toBe(true);
+
+    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
+    expect(highWater.includes("80%")).toBe(true);
+  });
+
+  it("documents cron run-log retention controls", () => {
+    const runLog = FIELD_HELP["cron.runLog"];
+    expect(runLog.includes("cron/runs")).toBe(true);
+
+    const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
+    expect(maxBytes.includes("2mb")).toBe(true);
+
+    const keepLines = FIELD_HELP["cron.runLog.keepLines"];
+    expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {
@@ -735,11 +773,19 @@ describe("config help copy quality", () => {
 
     const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
+
+    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
+    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
+    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
+    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
     const providerKey = FIELD_HELP["models.providers.*.apiKey"];
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
+    const modelsMode = FIELD_HELP["models.mode"];
+    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
+    expect(modelsMode.includes("preserve")).toBe(true);
 
     const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
     expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
@@ -756,6 +802,23 @@ describe("config help copy quality", () => {
 
     const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
+
+    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
+    expect(identifierPolicy.includes('"strict"')).toBe(true);
+    expect(identifierPolicy.includes('"off"')).toBe(true);
+    expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
+    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
+    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+
+    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
+    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

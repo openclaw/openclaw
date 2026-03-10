@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -8,23 +8,9 @@ import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
+import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
-const createRegistry = () =>
-  createTestRegistry([
-    {
-      pluginId: "discord",
-      plugin: createOutboundTestPlugin({ id: "discord", outbound: { deliveryMode: "direct" } }),
-      source: "test",
-    },
-  ]);
-
-beforeEach(() => {
-  setActivePluginRegistry(createRegistry());
-});
-
-afterEach(() => {
-  setActivePluginRegistry(createRegistry());
-});
+installDiscordRegistryHooks();
 
 describe("resolveCommandAuthorization", () => {
   function resolveWhatsAppAuthorization(params: {
@@ -343,6 +329,79 @@ describe("resolveCommandAuthorization", () => {
       expect(auth.isAuthorizedSender).toBe(true);
     });
 
+    it("does not treat conversation ids in From as sender identities", () => {
+      const cfg = {
+        commands: {
+          allowFrom: {
+            discord: ["channel:123456789012345678"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "channel",
+          From: "discord:channel:123456789012345678",
+          SenderId: "999999999999999999",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("still falls back to From for direct messages when sender fields are absent", () => {
+      const cfg = {
+        commands: {
+          allowFrom: {
+            discord: ["123456789012345678"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          From: "discord:123456789012345678",
+          SenderId: " ",
+          SenderE164: " ",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
+    it("does not fall back to conversation-shaped From when chat type is missing", () => {
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["120363411111111111@g.us"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          From: "120363411111111111@g.us",
+          SenderId: " ",
+          SenderE164: " ",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
     it("normalizes Discord commands.allowFrom prefixes and mentions", () => {
       const cfg = {
         commands: {
@@ -384,6 +443,52 @@ describe("resolveCommandAuthorization", () => {
 
       expect(deniedAuth.isAuthorizedSender).toBe(false);
     });
+  });
+
+  it("grants senderIsOwner for internal channel with operator.admin scope", () => {
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.admin"],
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(true);
+  });
+
+  it("does not grant senderIsOwner for internal channel without admin scope", () => {
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.approvals"],
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("does not grant senderIsOwner for external channel even with admin scope", () => {
+    const cfg = {} as OpenClawConfig;
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "telegram:12345",
+      GatewayClientScopes: ["operator.admin"],
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(false);
   });
 });
 

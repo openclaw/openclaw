@@ -83,13 +83,26 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "config",
         description:
-          "Non-interactive config helpers (get/set/unset). Default: starts setup wizard.",
+          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts setup wizard.",
         hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {
       const mod = await import("../config-cli.js");
       mod.registerConfigCli(program);
+    },
+  },
+  {
+    commands: [
+      {
+        name: "backup",
+        description: "Create and verify local backup archives for OpenClaw state",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.backup.js");
+      mod.registerBackupCommand(program);
     },
   },
   {
@@ -181,7 +194,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "sessions",
         description: "List stored conversation sessions",
-        hasSubcommands: false,
+        hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {

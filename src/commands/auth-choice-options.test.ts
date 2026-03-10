@@ -16,40 +16,32 @@ function getOptions(includeSkip = false) {
 }
 
 describe("buildAuthChoiceOptions", () => {
-  it("includes GitHub Copilot", () => {
+  it("includes core and provider-specific auth choices", () => {
     const options = getOptions();
 
-    expect(options.find((opt) => opt.value === "github-copilot")).toBeDefined();
-  });
-
-  it("includes setup-token option for Anthropic", () => {
-    const options = getOptions();
-
-    expect(options.some((opt) => opt.value === "token")).toBe(true);
-  });
-
-  it.each([
-    ["Z.AI (GLM) auth choice", ["zai-api-key"]],
-    ["Xiaomi auth choice", ["xiaomi-api-key"]],
-    ["MiniMax auth choice", ["minimax-api", "minimax-api-key-cn", "minimax-api-lightning"]],
-    [
-      "Moonshot auth choice",
-      ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key", "together-api-key"],
-    ],
-    ["Vercel AI Gateway auth choice", ["ai-gateway-api-key"]],
-    ["Cloudflare AI Gateway auth choice", ["cloudflare-ai-gateway-api-key"]],
-    ["Together AI auth choice", ["together-api-key"]],
-    ["Synthetic auth choice", ["synthetic-api-key"]],
-    ["Chutes OAuth auth choice", ["chutes"]],
-    ["Qwen auth choice", ["qwen-portal"]],
-    ["xAI auth choice", ["xai-api-key"]],
-    ["Volcano Engine auth choice", ["volcengine-api-key"]],
-    ["BytePlus auth choice", ["byteplus-api-key"]],
-    ["vLLM auth choice", ["vllm"]],
-  ])("includes %s", (_label, expectedValues) => {
-    const options = getOptions();
-
-    for (const value of expectedValues) {
+    for (const value of [
+      "github-copilot",
+      "token",
+      "zai-api-key",
+      "xiaomi-api-key",
+      "minimax-api",
+      "minimax-api-key-cn",
+      "minimax-api-lightning",
+      "moonshot-api-key",
+      "moonshot-api-key-cn",
+      "kimi-code-api-key",
+      "together-api-key",
+      "ai-gateway-api-key",
+      "cloudflare-ai-gateway-api-key",
+      "synthetic-api-key",
+      "chutes",
+      "qwen-portal",
+      "xai-api-key",
+      "mistral-api-key",
+      "volcengine-api-key",
+      "byteplus-api-key",
+      "vllm",
+    ]) {
       expect(options.some((opt) => opt.value === value)).toBe(true);
     }
   });

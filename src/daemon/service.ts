@@ -64,51 +64,56 @@ export type GatewayService = {
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
+type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
+
+const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
+  darwin: {
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    install: ignoreInstallResult(installLaunchAgent),
+    uninstall: uninstallLaunchAgent,
+    stop: stopLaunchAgent,
+    restart: restartLaunchAgent,
+    isLoaded: isLaunchAgentLoaded,
+    readCommand: readLaunchAgentProgramArguments,
+    readRuntime: readLaunchAgentRuntime,
+  },
+  linux: {
+    label: "systemd",
+    loadedText: "enabled",
+    notLoadedText: "disabled",
+    install: ignoreInstallResult(installSystemdService),
+    uninstall: uninstallSystemdService,
+    stop: stopSystemdService,
+    restart: restartSystemdService,
+    isLoaded: isSystemdServiceEnabled,
+    readCommand: readSystemdServiceExecStart,
+    readRuntime: readSystemdServiceRuntime,
+  },
+  win32: {
+    label: "Scheduled Task",
+    loadedText: "registered",
+    notLoadedText: "missing",
+    install: ignoreInstallResult(installScheduledTask),
+    uninstall: uninstallScheduledTask,
+    stop: stopScheduledTask,
+    restart: restartScheduledTask,
+    isLoaded: isScheduledTaskInstalled,
+    readCommand: readScheduledTaskCommand,
+    readRuntime: readScheduledTaskRuntime,
+  },
+};
+
+function isSupportedGatewayServicePlatform(
+  platform: NodeJS.Platform,
+): platform is SupportedGatewayServicePlatform {
+  return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
+}
+
 export function resolveGatewayService(): GatewayService {
-  if (process.platform === "darwin") {
-    return {
-      label: "LaunchAgent",
-      loadedText: "loaded",
-      notLoadedText: "not loaded",
-      install: ignoreInstallResult(installLaunchAgent),
-      uninstall: uninstallLaunchAgent,
-      stop: stopLaunchAgent,
-      restart: restartLaunchAgent,
-      isLoaded: isLaunchAgentLoaded,
-      readCommand: readLaunchAgentProgramArguments,
-      readRuntime: readLaunchAgentRuntime,
-    };
+  if (isSupportedGatewayServicePlatform(process.platform)) {
+    return GATEWAY_SERVICE_REGISTRY[process.platform];
   }
-
-  if (process.platform === "linux") {
-    return {
-      label: "systemd",
-      loadedText: "enabled",
-      notLoadedText: "disabled",
-      install: ignoreInstallResult(installSystemdService),
-      uninstall: uninstallSystemdService,
-      stop: stopSystemdService,
-      restart: restartSystemdService,
-      isLoaded: isSystemdServiceEnabled,
-      readCommand: readSystemdServiceExecStart,
-      readRuntime: readSystemdServiceRuntime,
-    };
-  }
-
-  if (process.platform === "win32") {
-    return {
-      label: "Scheduled Task",
-      loadedText: "registered",
-      notLoadedText: "missing",
-      install: ignoreInstallResult(installScheduledTask),
-      uninstall: uninstallScheduledTask,
-      stop: stopScheduledTask,
-      restart: restartScheduledTask,
-      isLoaded: isScheduledTaskInstalled,
-      readCommand: readScheduledTaskCommand,
-      readRuntime: readScheduledTaskRuntime,
-    };
-  }
-
   throw new Error(`Gateway service install not supported on ${process.platform}`);
 }

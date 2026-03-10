@@ -27,6 +27,7 @@ mise.toml
 apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
+apps/android/.kotlin/
 
 # Bun build artifacts
 *.bun-build
@@ -94,13 +95,29 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
-.claude/settings.local.json
+.claude/
 .agents/
 .agents
 .agent/
+skills-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Xcode build directories (xcodebuild output)
+apps/ios/build/
+apps/shared/OpenClawKit/build/
+Swabble/build/
+
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
 .ant-colony/
+
+# Eclipse
+**/.project
+**/.classpath
+**/.settings/
+**/.gradle/
+
+# Synthing
+**/.stfolder/

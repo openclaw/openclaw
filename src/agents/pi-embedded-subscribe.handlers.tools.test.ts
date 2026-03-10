@@ -45,6 +45,7 @@ function createTestContext(): {
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
+      deterministicApprovalPromptSent: false,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -87,6 +88,37 @@ describe("handleToolExecutionStart read path checks", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
+  });
+
+  it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+    let releaseFlush: (() => void) | undefined;
+    onBlockReplyFlush.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-await-flush",
+      args: { command: "echo hi" },
+    };
+
+    const pending = handleToolExecutionStart(ctx, evt);
+    // Let the async function reach the awaited flush Promise.
+    await Promise.resolve();
+
+    // If flush isn't awaited, tool metadata would already be recorded here.
+    expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(false);
+    expect(releaseFlush).toBeTypeOf("function");
+
+    releaseFlush?.();
+    await pending;
+
+    expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(true);
   });
 });
 
@@ -141,6 +173,161 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd exec approval prompts", () => {
+  it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+            warningText: "Warning: heredoc execution requires explicit approval in allowlist mode.",
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("```txt\n/approve 12345678 allow-once\n```"),
+        channelData: {
+          execApproval: {
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
+  it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Discord",
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("chat exec approvals are not enabled on Discord"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("/approve"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("Pending command:"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("Host:"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("CWD:"),
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
+  it("emits the shared approver-DM notice when another approval client received the request", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable-dm-redirect",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Telegram",
+            sentApproverDms: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Approval required. I sent the allowed approvers DMs.",
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
+  it("does not suppress assistant output when deterministic prompt delivery rejects", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.onToolResult = vi.fn(async () => {
+      throw new Error("delivery failed");
+    });
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-reject",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
   });
 });
 

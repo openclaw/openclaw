@@ -1,4 +1,10 @@
-import { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
+import {
+  buildRelayWsUrl,
+  isLastRemainingTab,
+  isMissingTabError,
+  isRetryableReconnectError,
+  reconnectDelayMs,
+} from './background-utils.js'
 
 const DEFAULT_PORT = 18792
 
@@ -13,6 +19,9 @@ const BADGE = {
 let relayWs = null
 /** @type {Promise<void>|null} */
 let relayConnectPromise = null
+let relayGatewayToken = ''
+/** @type {string|null} */
+let relayConnectRequestId = null
 
 let nextSession = 1
 
@@ -30,9 +39,16 @@ const pending = new Map()
 /** @type {Set<number>} */
 const tabOperationLocks = new Set()
 
+// Tabs currently in a detach/re-attach cycle after navigation.
+/** @type {Set<number>} */
+const reattachPending = new Set()
+
 // Reconnect state for exponential backoff.
 let reconnectAttempt = 0
 let reconnectTimer = null
+
+const TAB_VALIDATION_ATTEMPTS = 2
+const TAB_VALIDATION_RETRY_DELAY_MS = 1000
 
 function nowStack() {
   try {
@@ -40,6 +56,37 @@ function nowStack() {
   } catch {
     return ''
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function validateAttachedTab(tabId) {
+  try {
+    await chrome.tabs.get(tabId)
+  } catch {
+    return false
+  }
+
+  for (let attempt = 0; attempt < TAB_VALIDATION_ATTEMPTS; attempt++) {
+    try {
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: '1',
+        returnByValue: true,
+      })
+      return true
+    } catch (err) {
+      if (isMissingTabError(err)) {
+        return false
+      }
+      if (attempt < TAB_VALIDATION_ATTEMPTS - 1) {
+        await sleep(TAB_VALIDATION_RETRY_DELAY_MS)
+      }
+    }
+  }
+
+  return false
 }
 
 async function getRelayPort() {
@@ -101,15 +148,11 @@ async function rehydrateState() {
       tabBySession.set(entry.sessionId, entry.tabId)
       setBadge(entry.tabId, 'on')
     }
-    // Phase 2: validate asynchronously, remove dead tabs.
+    // Retry once so transient busy/navigation states do not permanently drop
+    // a still-attached tab after a service worker restart.
     for (const entry of entries) {
-      try {
-        await chrome.tabs.get(entry.tabId)
-        await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
-          expression: '1',
-          returnByValue: true,
-        })
-      } catch {
+      const valid = await validateAttachedTab(entry.tabId)
+      if (!valid) {
         tabs.delete(entry.tabId)
         tabBySession.delete(entry.sessionId)
         setBadge(entry.tabId, 'off')
@@ -128,7 +171,7 @@ async function ensureRelayConnection() {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = buildRelayWsUrl(port, gatewayToken)
+    const wsUrl = await buildRelayWsUrl(port, gatewayToken)
 
     // Fast preflight: is the relay server up?
     try {
@@ -139,6 +182,13 @@ async function ensureRelayConnection() {
 
     const ws = new WebSocket(wsUrl)
     relayWs = ws
+    relayGatewayToken = gatewayToken
+    // Bind message handler before open so an immediate first frame (for example
+    // gateway connect.challenge) cannot be missed.
+    ws.onmessage = (event) => {
+      if (ws !== relayWs) return
+      void whenReady(() => onRelayMessage(String(event.data || '')))
+    }
 
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('WebSocket connect timeout')), 5000)
@@ -158,10 +208,6 @@ async function ensureRelayConnection() {
 
     // Bind permanent handlers. Guard against stale socket: if this WS was
     // replaced before its close fires, the handler is a no-op.
-    ws.onmessage = (event) => {
-      if (ws !== relayWs) return
-      void whenReady(() => onRelayMessage(String(event.data || '')))
-    }
     ws.onclose = () => {
       if (ws !== relayWs) return
       onRelayClosed('closed')
@@ -184,11 +230,15 @@ async function ensureRelayConnection() {
 // Debugger sessions are kept alive so they survive transient WS drops.
 function onRelayClosed(reason) {
   relayWs = null
+  relayGatewayToken = ''
+  relayConnectRequestId = null
 
   for (const [id, p] of pending.entries()) {
     pending.delete(id)
     p.reject(new Error(`Relay disconnected (${reason})`))
   }
+
+  reattachPending.clear()
 
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') {
@@ -245,13 +295,10 @@ async function reannounceAttachedTabs() {
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state !== 'connected' || !tab.sessionId || !tab.targetId) continue
 
-    // Verify debugger is still attached.
-    try {
-      await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-        expression: '1',
-        returnByValue: true,
-      })
-    } catch {
+    // Retry once here as well; reconnect races can briefly make an otherwise
+    // healthy tab look unavailable.
+    const valid = await validateAttachedTab(tabId)
+    if (!valid) {
       tabs.delete(tabId)
       if (tab.sessionId) tabBySession.delete(tab.sessionId)
       setBadge(tabId, 'off')
@@ -263,12 +310,24 @@ async function reannounceAttachedTabs() {
     }
 
     // Send fresh attach event to relay.
+    // Split into two try-catch blocks so debugger failures and relay send
+    // failures are handled independently. Previously, a relay send failure
+    // would fall into the outer catch and set the badge to 'on' even though
+    // the relay had no record of the tab — causing every subsequent browser
+    // tool call to fail with "no tab connected" until the next reconnect cycle.
+    let targetInfo
     try {
       const info = /** @type {any} */ (
         await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
       )
-      const targetInfo = info?.targetInfo
+      targetInfo = info?.targetInfo
+    } catch {
+      // Target.getTargetInfo failed. Preserve at least targetId from
+      // cached tab state so relay receives a stable identifier.
+      targetInfo = tab.targetId ? { targetId: tab.targetId } : undefined
+    }
 
+    try {
       sendToRelay({
         method: 'forwardCDPEvent',
         params: {
@@ -287,7 +346,15 @@ async function reannounceAttachedTabs() {
         title: 'OpenClaw Browser Relay: attached (click to detach)',
       })
     } catch {
-      setBadge(tabId, 'on')
+      // Relay send failed (e.g. WS closed in the gap between ensureRelayConnection
+      // resolving and this loop executing). The tab is still valid — leave badge
+      // as 'connecting' so the reconnect/keepalive cycle will retry rather than
+      // showing a false-positive 'on' that hides the broken state from the user.
+      setBadge(tabId, 'connecting')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: relay reconnecting…',
+      })
     }
   }
 
@@ -300,6 +367,33 @@ function sendToRelay(payload) {
     throw new Error('Relay not connected')
   }
   ws.send(JSON.stringify(payload))
+}
+
+function ensureGatewayHandshakeStarted(payload) {
+  if (relayConnectRequestId) return
+  const nonce = typeof payload?.nonce === 'string' ? payload.nonce.trim() : ''
+  relayConnectRequestId = `ext-connect-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+  sendToRelay({
+    type: 'req',
+    id: relayConnectRequestId,
+    method: 'connect',
+    params: {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: 'chrome-relay-extension',
+        version: '1.0.0',
+        platform: 'chrome-extension',
+        mode: 'webchat',
+      },
+      role: 'operator',
+      scopes: ['operator.read', 'operator.write'],
+      caps: [],
+      commands: [],
+      nonce: nonce || undefined,
+      auth: relayGatewayToken ? { token: relayGatewayToken } : undefined,
+    },
+  })
 }
 
 async function maybeOpenHelpOnce() {
@@ -340,6 +434,33 @@ async function onRelayMessage(text) {
   try {
     msg = JSON.parse(text)
   } catch {
+    return
+  }
+
+  if (msg && msg.type === 'event' && msg.event === 'connect.challenge') {
+    try {
+      ensureGatewayHandshakeStarted(msg.payload)
+    } catch (err) {
+      console.warn('gateway connect handshake start failed', err instanceof Error ? err.message : String(err))
+      relayConnectRequestId = null
+      const ws = relayWs
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1008, 'gateway connect failed')
+      }
+    }
+    return
+  }
+
+  if (msg && msg.type === 'res' && relayConnectRequestId && msg.id === relayConnectRequestId) {
+    relayConnectRequestId = null
+    if (!msg.ok) {
+      const detail = msg?.error?.message || msg?.error || 'gateway connect failed'
+      console.warn('gateway connect handshake rejected', String(detail))
+      const ws = relayWs
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1008, 'gateway connect failed')
+      }
+    }
     return
   }
 
@@ -493,6 +614,16 @@ async function connectOrToggleForActiveTab() {
   tabOperationLocks.add(tabId)
 
   try {
+    if (reattachPending.has(tabId)) {
+      reattachPending.delete(tabId)
+      setBadge(tabId, 'off')
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay (click to attach/detach)',
+      })
+      return
+    }
+
     const existing = tabs.get(tabId)
     if (existing?.state === 'connected') {
       await detachTab(tabId, 'toggle')
@@ -574,6 +705,11 @@ async function handleForwardCdpCommand(msg) {
     const toClose = target ? getTabByTargetId(target) : tabId
     if (!toClose) return { success: false }
     try {
+      const allTabs = await chrome.tabs.query({})
+      if (isLastRemainingTab(allTabs, toClose)) {
+        console.warn('Refusing to close the last tab: this would kill the browser process')
+        return { success: false, error: 'Cannot close the last tab' }
+      }
       await chrome.tabs.remove(toClose)
     } catch {
       return { success: false }
@@ -632,50 +768,115 @@ function onDebuggerEvent(source, method, params) {
   }
 }
 
-// Navigation/reload fires target_closed but the tab is still alive — Chrome
-// just swaps the renderer process. Suppress the detach event to the relay and
-// seamlessly re-attach after a short grace period.
-function onDebuggerDetach(source, reason) {
+async function onDebuggerDetach(source, reason) {
   const tabId = source.tabId
   if (!tabId) return
   if (!tabs.has(tabId)) return
 
-  if (reason === 'target_closed') {
-    const oldState = tabs.get(tabId)
-    setBadge(tabId, 'connecting')
-    void chrome.action.setTitle({
-      tabId,
-      title: 'OpenClaw Browser Relay: re-attaching after navigation…',
-    })
-
-    setTimeout(async () => {
-      try {
-        // If user manually detached during the grace period, bail out.
-        if (!tabs.has(tabId)) return
-        const tab = await chrome.tabs.get(tabId)
-        if (tab && relayWs?.readyState === WebSocket.OPEN) {
-          console.log(`Re-attaching tab ${tabId} after navigation`)
-          if (oldState?.sessionId) tabBySession.delete(oldState.sessionId)
-          tabs.delete(tabId)
-          await attachTab(tabId, { skipAttachedEvent: false })
-        } else {
-          // Tab gone or relay down — full cleanup.
-          void detachTab(tabId, reason)
-        }
-      } catch (err) {
-        console.warn(`Failed to re-attach tab ${tabId} after navigation:`, err.message)
-        void detachTab(tabId, reason)
-      }
-    }, 500)
+  // User explicitly cancelled or DevTools replaced the connection — respect their intent
+  if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') {
+    void detachTab(tabId, reason)
     return
   }
 
-  // Non-navigation detach (user action, crash, etc.) — full cleanup.
-  void detachTab(tabId, reason)
+  // Check if tab still exists — distinguishes navigation from tab close
+  let tabInfo
+  try {
+    tabInfo = await chrome.tabs.get(tabId)
+  } catch {
+    // Tab is gone (closed) — normal cleanup
+    void detachTab(tabId, reason)
+    return
+  }
+
+  if (tabInfo.url?.startsWith('chrome://') || tabInfo.url?.startsWith('chrome-extension://')) {
+    void detachTab(tabId, reason)
+    return
+  }
+
+  if (reattachPending.has(tabId)) return
+
+  const oldTab = tabs.get(tabId)
+  const oldSessionId = oldTab?.sessionId
+  const oldTargetId = oldTab?.targetId
+
+  if (oldSessionId) tabBySession.delete(oldSessionId)
+  tabs.delete(tabId)
+  for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
+    if (parentTabId === tabId) childSessionToTab.delete(childSessionId)
+  }
+
+  if (oldSessionId && oldTargetId) {
+    try {
+      sendToRelay({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: oldSessionId, targetId: oldTargetId, reason: 'navigation-reattach' },
+        },
+      })
+    } catch {
+      // Relay may be down.
+    }
+  }
+
+  reattachPending.add(tabId)
+  setBadge(tabId, 'connecting')
+  void chrome.action.setTitle({
+    tabId,
+    title: 'OpenClaw Browser Relay: re-attaching after navigation…',
+  })
+
+  // Extend re-attach window from 2.5 s to ~7.7 s (5 attempts).
+  // SPAs and pages with heavy JS can take >2.5 s before the Chrome debugger
+  // is attachable, causing all three original attempts to fail and leaving
+  // the badge permanently off after every navigation.
+  const delays = [200, 500, 1000, 2000, 4000]
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    await new Promise((r) => setTimeout(r, delays[attempt]))
+
+    if (!reattachPending.has(tabId)) return
+
+    try {
+      await chrome.tabs.get(tabId)
+    } catch {
+      reattachPending.delete(tabId)
+      setBadge(tabId, 'off')
+      return
+    }
+
+    const relayUp = relayWs && relayWs.readyState === WebSocket.OPEN
+
+    try {
+      // When relay is down, still attach the debugger but skip sending the
+      // relay event. reannounceAttachedTabs() will notify the relay once it
+      // reconnects, so the tab stays tracked across transient relay drops.
+      await attachTab(tabId, { skipAttachedEvent: !relayUp })
+      reattachPending.delete(tabId)
+      if (!relayUp) {
+        setBadge(tabId, 'connecting')
+        void chrome.action.setTitle({
+          tabId,
+          title: 'OpenClaw Browser Relay: attached, waiting for relay reconnect…',
+        })
+      }
+      return
+    } catch {
+      // continue retries
+    }
+  }
+
+  reattachPending.delete(tabId)
+  setBadge(tabId, 'off')
+  void chrome.action.setTitle({
+    tabId,
+    title: 'OpenClaw Browser Relay: re-attach failed (click to retry)',
+  })
 }
 
 // Tab lifecycle listeners — clean up stale entries.
 chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
+  reattachPending.delete(tabId)
   if (!tabs.has(tabId)) return
   const tab = tabs.get(tabId)
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
@@ -798,3 +999,27 @@ async function whenReady(fn) {
   await initPromise
   return fn()
 }
+
+// Relay check handler for the options page. The service worker has
+// host_permissions and bypasses CORS preflight, so the options page
+// delegates token-validation requests here.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== 'relayCheck') return false
+  const { url, token } = msg
+  const headers = token ? { 'x-openclaw-relay-token': token } : {}
+  fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(2000) })
+    .then(async (res) => {
+      const contentType = String(res.headers.get('content-type') || '')
+      let json = null
+      if (contentType.includes('application/json')) {
+        try {
+          json = await res.json()
+        } catch {
+          json = null
+        }
+      }
+      sendResponse({ status: res.status, ok: res.ok, contentType, json })
+    })
+    .catch((err) => sendResponse({ status: 0, ok: false, error: String(err) }))
+  return true
+})

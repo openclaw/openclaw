@@ -1,15 +1,14 @@
 import AppKit
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 import Testing
-
 @testable import OpenClaw
 
 @Suite(.serialized)
 struct LowCoverageHelperTests {
     private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
-    @Test func anyCodableHelperAccessors() throws {
+    @Test func `any codable helper accessors`() throws {
         let payload: [String: ProtoAnyCodable] = [
             "title": ProtoAnyCodable("Hello"),
             "flag": ProtoAnyCodable(true),
@@ -29,7 +28,7 @@ struct LowCoverageHelperTests {
         #expect((foundation?["title"] as? String) == "Hello")
     }
 
-    @Test func attributedStringStripsForegroundColor() {
+    @Test func `attributed string strips foreground color`() {
         let text = NSMutableAttributedString(string: "Test")
         text.addAttribute(.foregroundColor, value: NSColor.red, range: NSRange(location: 0, length: 4))
         let stripped = text.strippingForegroundColor()
@@ -37,29 +36,29 @@ struct LowCoverageHelperTests {
         #expect(color == nil)
     }
 
-    @Test func viewMetricsReduceWidth() {
+    @Test func `view metrics reduce width`() {
         let value = ViewMetricsTesting.reduceWidth(current: 120, next: 180)
         #expect(value == 180)
     }
 
-    @Test func shellExecutorHandlesEmptyCommand() async {
+    @Test func `shell executor handles empty command`() async {
         let result = await ShellExecutor.runDetailed(command: [], cwd: nil, env: nil, timeout: nil)
         #expect(result.success == false)
         #expect(result.errorMessage != nil)
     }
 
-    @Test func shellExecutorRunsCommand() async {
+    @Test func `shell executor runs command`() async {
         let result = await ShellExecutor.runDetailed(command: ["/bin/echo", "ok"], cwd: nil, env: nil, timeout: 2)
         #expect(result.success == true)
         #expect(result.stdout.contains("ok") || result.stderr.contains("ok"))
     }
 
-    @Test func shellExecutorTimesOut() async {
+    @Test func `shell executor times out`() async {
         let result = await ShellExecutor.runDetailed(command: ["/bin/sleep", "1"], cwd: nil, env: nil, timeout: 0.05)
         #expect(result.timedOut == true)
     }
 
-    @Test func shellExecutorDrainsStdoutAndStderr() async {
+    @Test func `shell executor drains stdout and stderr`() async {
         let script = """
         i=0
         while [ $i -lt 2000 ]; do
@@ -78,7 +77,7 @@ struct LowCoverageHelperTests {
         #expect(result.stderr.contains("stderr-1999"))
     }
 
-    @Test func nodeInfoCodableRoundTrip() throws {
+    @Test func `node info codable round trip`() throws {
         let info = NodeInfo(
             nodeId: "node-1",
             displayName: "Node One",
@@ -101,7 +100,7 @@ struct LowCoverageHelperTests {
         #expect(decoded.isConnected == false)
     }
 
-    @Test @MainActor func presenceReporterHelpers() {
+    @Test @MainActor func `presence reporter helpers`() {
         let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
         #expect(!PresenceReporter._testAppVersionString().isEmpty)
@@ -110,7 +109,7 @@ struct LowCoverageHelperTests {
         _ = PresenceReporter._testPrimaryIPv4Address()
     }
 
-    @Test func portGuardianParsesListenersAndBuildsReports() {
+    @Test func `port guardian parses listeners and builds reports`() {
         let output = """
         p123
         cnode
@@ -140,7 +139,7 @@ struct LowCoverageHelperTests {
         #expect(emptyReport.summary.contains("Nothing is listening"))
     }
 
-    @Test @MainActor func canvasSchemeHandlerResolvesFilesAndErrors() throws {
+    @Test @MainActor func `canvas scheme handler resolves files and errors`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
@@ -157,7 +156,7 @@ struct LowCoverageHelperTests {
         #expect(response.mime == "text/html")
         #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
 
-        let invalid = URL(string: "https://example.com")!
+        let invalid = try #require(URL(string: "https://example.com"))
         let invalidResponse = handler._testResponse(for: invalid)
         #expect(invalidResponse.mime == "text/html")
 
@@ -169,7 +168,7 @@ struct LowCoverageHelperTests {
         #expect(handler._testTextEncodingName(for: "application/octet-stream") == nil)
     }
 
-    @Test @MainActor func menuContextCardInjectorInsertsAndFindsIndex() {
+    @Test @MainActor func `menu context card injector inserts and finds index`() {
         let injector = MenuContextCardInjector()
         let menu = NSMenu()
         menu.minimumWidth = 280
@@ -191,7 +190,7 @@ struct LowCoverageHelperTests {
         #expect(injector._testFindInsertIndex(in: fallbackMenu) == 1)
     }
 
-    @Test @MainActor func canvasWindowHelperFunctions() {
+    @Test @MainActor func `canvas window helper functions`() throws {
         #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
         #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")
         #expect(CanvasWindowController._testJSOptionalStringLiteral(nil) == "null")
@@ -208,7 +207,7 @@ struct LowCoverageHelperTests {
             #expect(CanvasWindowController._testIsLocalNetworkIPv4(parsed))
         }
 
-        let url = URL(string: "http://192.168.1.2")!
+        let url = try #require(URL(string: "http://192.168.1.2"))
         #expect(CanvasWindowController._testIsLocalNetworkCanvasURL(url))
         #expect(CanvasWindowController._testParseIPv4("not-an-ip") == nil)
     }

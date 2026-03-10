@@ -2,7 +2,13 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 type BackgroundUtilsModule = {
-  buildRelayWsUrl: (port: number, gatewayToken: string) => string;
+  buildRelayWsUrl: (port: number, gatewayToken: string) => Promise<string>;
+  deriveRelayToken: (gatewayToken: string, port: number) => Promise<string>;
+  isLastRemainingTab: (
+    allTabs: Array<{ id?: number | undefined } | null | undefined>,
+    tabIdToClose: number,
+  ) => boolean;
+  isMissingTabError: (err: unknown) => boolean;
   isRetryableReconnectError: (err: unknown) => boolean;
   reconnectDelayMs: (
     attempt: number,
@@ -25,18 +31,33 @@ async function loadBackgroundUtils(): Promise<BackgroundUtilsModule> {
   }
 }
 
-const { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } =
-  await loadBackgroundUtils();
+const {
+  buildRelayWsUrl,
+  deriveRelayToken,
+  isLastRemainingTab,
+  isMissingTabError,
+  isRetryableReconnectError,
+  reconnectDelayMs,
+} = await loadBackgroundUtils();
 
 describe("chrome extension background utils", () => {
-  it("builds websocket url with encoded gateway token", () => {
-    const url = buildRelayWsUrl(18792, "abc/+= token");
-    expect(url).toBe("ws://127.0.0.1:18792/extension?token=abc%2F%2B%3D%20token");
+  it("derives relay token as HMAC-SHA256 of gateway token and port", async () => {
+    const relayToken = await deriveRelayToken("test-gateway-token", 18792);
+    expect(relayToken).toMatch(/^[0-9a-f]{64}$/);
+    const relayToken2 = await deriveRelayToken("test-gateway-token", 18792);
+    expect(relayToken).toBe(relayToken2);
+    const differentPort = await deriveRelayToken("test-gateway-token", 9999);
+    expect(relayToken).not.toBe(differentPort);
   });
 
-  it("throws when gateway token is missing", () => {
-    expect(() => buildRelayWsUrl(18792, "")).toThrow(/Missing gatewayToken/);
-    expect(() => buildRelayWsUrl(18792, "   ")).toThrow(/Missing gatewayToken/);
+  it("builds websocket url with derived relay token", async () => {
+    const url = await buildRelayWsUrl(18792, "test-token");
+    expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:18792\/extension\?token=[0-9a-f]{64}$/);
+  });
+
+  it("throws when gateway token is missing", async () => {
+    await expect(buildRelayWsUrl(18792, "")).rejects.toThrow(/Missing gatewayToken/);
+    await expect(buildRelayWsUrl(18792, "   ")).rejects.toThrow(/Missing gatewayToken/);
   });
 
   it("uses exponential backoff from attempt index", () => {
@@ -96,5 +117,17 @@ describe("chrome extension background utils", () => {
   it("keeps transient network errors retryable", () => {
     expect(isRetryableReconnectError(new Error("WebSocket connect timeout"))).toBe(true);
     expect(isRetryableReconnectError(new Error("Relay server not reachable"))).toBe(true);
+  });
+
+  it("recognizes missing-tab debugger errors", () => {
+    expect(isMissingTabError(new Error("No tab with given id"))).toBe(true);
+    expect(isMissingTabError(new Error("tab not found"))).toBe(true);
+    expect(isMissingTabError(new Error("Cannot access a chrome:// URL"))).toBe(false);
+  });
+
+  it("blocks closing the final remaining tab only", () => {
+    expect(isLastRemainingTab([{ id: 7 }], 7)).toBe(true);
+    expect(isLastRemainingTab([{ id: 7 }, { id: 8 }], 7)).toBe(false);
+    expect(isLastRemainingTab([{ id: 7 }, { id: 8 }], 8)).toBe(false);
   });
 });

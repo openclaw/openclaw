@@ -12,7 +12,7 @@ let InputFileContentPartSchema: typeof import("./open-responses.schema.js").Inpu
 let ToolDefinitionSchema: typeof import("./open-responses.schema.js").ToolDefinitionSchema;
 let CreateResponseBodySchema: typeof import("./open-responses.schema.js").CreateResponseBodySchema;
 let OutputItemSchema: typeof import("./open-responses.schema.js").OutputItemSchema;
-let buildAgentPrompt: typeof import("./openresponses-http.js").buildAgentPrompt;
+let buildAgentPrompt: typeof import("./openresponses-prompt.js").buildAgentPrompt;
 
 describe("OpenResponses Feature Parity", () => {
   beforeAll(async () => {
@@ -23,7 +23,7 @@ describe("OpenResponses Feature Parity", () => {
       CreateResponseBodySchema,
       OutputItemSchema,
     } = await import("./open-responses.schema.js"));
-    ({ buildAgentPrompt } = await import("./openresponses-http.js"));
+    ({ buildAgentPrompt } = await import("./openresponses-prompt.js"));
   });
 
   describe("Schema Validation", () => {
@@ -47,6 +47,20 @@ describe("OpenResponses Feature Parity", () => {
           type: "base64" as const,
           media_type: "image/png" as const,
           data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        },
+      };
+
+      const result = InputImageContentPartSchema.safeParse(validImage);
+      expect(result.success).toBe(true);
+    });
+
+    it("should validate input_image with HEIC base64 source", async () => {
+      const validImage = {
+        type: "input_image" as const,
+        source: {
+          type: "base64" as const,
+          media_type: "image/heic" as const,
+          data: "aGVpYy1pbWFnZQ==",
         },
       };
 

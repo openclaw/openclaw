@@ -6,7 +6,7 @@ import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
-  largeTokens: 1250,
+  largeTokens: 4000,
   smallTokens: 200,
   createCfg: ({ workspaceDir, indexPath, tokens }) => ({
     agents: {
@@ -50,6 +50,10 @@ describe("memory embedding batches", () => {
     );
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
+    const inputs: string[] = embedBatch.mock.calls.flatMap(
+      (call: unknown[]) => (call[0] as string[] | undefined) ?? [],
+    );
+    expect(inputs.every((text) => Buffer.byteLength(text, "utf8") <= 8000)).toBe(true);
     expect(updates.length).toBeGreaterThan(0);
     expect(updates.some((update) => update.label?.includes("/"))).toBe(true);
     const last = updates[updates.length - 1];
@@ -97,6 +101,32 @@ describe("memory embedding batches", () => {
     }
 
     expect(calls).toBe(3);
+  }, 10000);
+
+  it("retries embeddings on too-many-tokens-per-day rate limits", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "e".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-08.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("AWS Bedrock embeddings failed: Too many tokens per day");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await managerSmall.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+
+    expect(calls).toBe(2);
   }, 10000);
 
   it("skips empty chunks so embeddings input stays valid", async () => {
