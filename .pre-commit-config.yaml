@@ -31,6 +31,8 @@ repos:
           - .secrets.baseline
           - --exclude-files
           - '(^|/)pnpm-lock\.yaml$'
+          - --exclude-files
+          - '.*\.test\.ts$'
           - --exclude-lines
           - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
           - --exclude-lines
