@@ -4,9 +4,24 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
+vi.mock("../../infra/net/fetch-guard.js", () => {
+  const GUARDED_FETCH_MODE = {
+    STRICT: "strict",
+    TRUSTED_ENV_PROXY: "trusted_env_proxy",
+  } as const;
+  return {
+    GUARDED_FETCH_MODE,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+    withStrictGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: GUARDED_FETCH_MODE.STRICT,
+    }),
+    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    }),
+  };
+});
 
 import { __testing } from "./web-search.js";
 
