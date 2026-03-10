@@ -300,6 +300,7 @@ export function resolveTelegramFetch(
 
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   const useEnvProxy = !explicitProxyUrl && hasProxyEnvConfigured();
+  const allowStickyIpv4Fallback = !explicitProxyUrl;
   const defaultDispatcher = createTelegramDispatcher({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
@@ -335,19 +336,22 @@ export function resolveTelegramFetch(
       return await sourceFetch(input, initialInit);
     } catch (err) {
       if (shouldRetryWithIpv4Fallback(err)) {
-        if (!callerProvidedDispatcher && !stickyIpv4FallbackEnabled) {
+        // Preserve caller-owned dispatchers on retry.
+        if (callerProvidedDispatcher) {
+          return sourceFetch(input, init ?? {});
+        }
+        // Explicit proxy routes should not arm sticky IPv4 mode; `family=4` would
+        // constrain proxy-connect behavior instead of Telegram endpoint selection.
+        if (!allowStickyIpv4Fallback) {
+          return sourceFetch(input, withDispatcherIfMissing(init, defaultDispatcher));
+        }
+        if (!stickyIpv4FallbackEnabled) {
           stickyIpv4FallbackEnabled = true;
           log.warn(
             `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
           );
         }
-        return sourceFetch(
-          input,
-          withDispatcherIfMissing(
-            init,
-            callerProvidedDispatcher ? defaultDispatcher : resolveStickyIpv4Dispatcher(),
-          ),
-        );
+        return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
       }
       throw err;
     }

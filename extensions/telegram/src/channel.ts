@@ -467,6 +467,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         botId,
         groupIds,
         proxyUrl: account.config.proxy,
+        network: account.config.network,
         timeoutMs,
       });
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
