@@ -16,6 +16,7 @@ import {
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
@@ -397,7 +398,7 @@ function resolveIssuePathObject(
 }
 
 function formatUnknownKeysWarning(issue: UnknownKeyIssue): ConfigValidationIssue {
-  const keyList = issue.keys.map((key) => `"${key}"`).join(", ");
+  const keyList = issue.keys.map((key) => `"${sanitizeTerminalText(key)}"`).join(", ");
   return {
     path: issue.path,
     message:

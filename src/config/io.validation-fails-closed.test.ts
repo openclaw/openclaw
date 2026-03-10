@@ -49,6 +49,22 @@ describe("config validation fail-closed behavior", () => {
     );
   });
 
+  it("sanitizes unknown key names in startup warnings", async () => {
+    await withTempHomeConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        "bad\u001b[31mkey": true,
+      },
+      async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        loadConfig();
+        const warnedText = warnSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+        expect(warnedText).not.toContain("\u001b");
+        expect(warnedText).toContain('"badkey"');
+      },
+    );
+  });
+
   it("ignores unknown keys nested under union-backed object config values", async () => {
     await withTempHomeConfig(
       {
