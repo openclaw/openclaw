@@ -470,6 +470,28 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow(/could not be resolved to a numeric chat ID/i);
   });
 
+  it("sends bare group-prefixed numeric delivery targets without lookup", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const getChat = vi.fn();
+    const api = { sendMessage, getChat } as unknown as {
+      sendMessage: typeof sendMessage;
+      getChat: typeof getChat;
+    };
+
+    await sendMessageTelegram("group:-100123", "hi", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("includes thread params in media messages", async () => {
     const chatId = "-1001234567890";
     const sendPhoto = vi.fn().mockResolvedValue({

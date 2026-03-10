@@ -93,6 +93,11 @@ describe("normalizeTelegramChatId", () => {
     expect(normalizeTelegramChatId("123456789")).toBe("123456789");
   });
 
+  it("normalizes bare delivery-only group prefixes for numeric chat ids", () => {
+    expect(normalizeTelegramChatId("group:-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramChatId("group:123456789")).toBe("123456789");
+  });
+
   it("returns undefined for empty input", () => {
     expect(normalizeTelegramChatId("  ")).toBeUndefined();
   });
@@ -109,6 +114,11 @@ describe("normalizeTelegramLookupTarget", () => {
   it("keeps numeric chat ids unchanged", () => {
     expect(normalizeTelegramLookupTarget("-1001234567890")).toBe("-1001234567890");
     expect(normalizeTelegramLookupTarget("123456789")).toBe("123456789");
+  });
+
+  it("normalizes bare delivery-only group prefixes for numeric chat ids", () => {
+    expect(normalizeTelegramLookupTarget("group:-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramLookupTarget("group:123456789")).toBe("123456789");
   });
 
   it("rejects invalid username forms", () => {

@@ -7,6 +7,12 @@ export type TelegramTarget = {
 const TELEGRAM_NUMERIC_CHAT_ID_REGEX = /^-?\d+$/;
 const TELEGRAM_USERNAME_REGEX = /^[A-Za-z0-9_]{5,}$/i;
 
+function normalizeTelegramDeliveryGroupChatId(raw: string): string {
+  const trimmed = raw.trim();
+  const match = /^group:\s*(-?\d+)$/i.exec(trimmed);
+  return match?.[1] ?? trimmed;
+}
+
 export function stripTelegramInternalPrefixes(to: string): string {
   let trimmed = to.trim();
   let strippedTelegramPrefix = false;
@@ -30,7 +36,7 @@ export function stripTelegramInternalPrefixes(to: string): string {
 }
 
 export function normalizeTelegramChatId(raw: string): string | undefined {
-  const stripped = stripTelegramInternalPrefixes(raw);
+  const stripped = normalizeTelegramDeliveryGroupChatId(stripTelegramInternalPrefixes(raw));
   if (!stripped) {
     return undefined;
   }
@@ -45,7 +51,7 @@ export function isNumericTelegramChatId(raw: string): boolean {
 }
 
 export function normalizeTelegramLookupTarget(raw: string): string | undefined {
-  const stripped = stripTelegramInternalPrefixes(raw);
+  const stripped = normalizeTelegramDeliveryGroupChatId(stripTelegramInternalPrefixes(raw));
   if (!stripped) {
     return undefined;
   }
