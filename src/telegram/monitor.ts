@@ -11,7 +11,7 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingSession } from "./polling-session.js";
-import { makeProxyFetch } from "./proxy.js";
+import { resolveTelegramProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
@@ -110,8 +110,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       );
     }
 
-    const proxyFetch =
-      opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+    const proxyFetch = opts.proxyFetch ?? resolveTelegramProxyFetch(account.config.proxy);
 
     execApprovalsHandler = new TelegramExecApprovalHandler({
       token,

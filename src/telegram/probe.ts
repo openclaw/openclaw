@@ -1,6 +1,6 @@
 import type { BaseProbeResult } from "../channels/plugins/types.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
-import { makeProxyFetch } from "./proxy.js";
+import { resolveTelegramProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 
@@ -23,7 +23,7 @@ export async function probeTelegram(
   proxyUrl?: string,
 ): Promise<TelegramProbe> {
   const started = Date.now();
-  const fetcher = proxyUrl ? makeProxyFetch(proxyUrl) : fetch;
+  const fetcher = resolveTelegramProxyFetch(proxyUrl) ?? fetch;
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, timeoutMs));
 
