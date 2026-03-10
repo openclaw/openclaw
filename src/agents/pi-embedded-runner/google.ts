@@ -23,7 +23,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
@@ -157,7 +157,7 @@ function coerceOpenAICompletionsAssistantText(messages: AgentMessage[]): AgentMe
     }
     const contentText = extractTextFromChatContent(assistant.content, {
       joinWith: "\n",
-      normalizeText: (text) => text.trim(),
+      normalizeText: (text: string) => text.trim(),
     });
     if (contentText === null) {
       out.push(msg);
