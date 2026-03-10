@@ -187,7 +187,8 @@ export function filterToolResultMediaUrls(
  *
  * Strategy (first match wins):
  * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
- * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
+ * 2. Extract `path` from image content blocks (read tool image results).
+ * 3. Fall back to `details.path` when image content exists (OpenClaw imageResult).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
  * returns base64 image data but no file path; those need a different delivery
@@ -207,6 +208,8 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   // directive matching and validation stay in sync with outbound reply parsing.
   const paths: string[] = [];
   let hasImageContent = false;
+  let imagePathFromBlock: string | undefined;
+  
   for (const item of content) {
     if (!item || typeof item !== "object") {
       continue;
@@ -214,6 +217,11 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     const entry = item as Record<string, unknown>;
     if (entry.type === "image") {
       hasImageContent = true;
+      // Try to extract path directly from image block (read tool includes it)
+      const pathVal = entry.path as string | undefined;
+      if (pathVal && typeof pathVal === "string" && pathVal.trim()) {
+        imagePathFromBlock = pathVal.trim();
+      }
       continue;
     }
     if (entry.type === "text" && typeof entry.text === "string") {
@@ -228,8 +236,15 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     return paths;
   }
 
-  // Fall back to details.path when image content exists but no MEDIA: text.
+  // When image content exists, try multiple fallbacks to extract the path:
+  // 1. Path from image block itself
+  // 2. details.path from the result record
   if (hasImageContent) {
+    // First try path from image block
+    if (imagePathFromBlock) {
+      return [imagePathFromBlock];
+    }
+    // Fall back to details.path
     const details = record.details as Record<string, unknown> | undefined;
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
