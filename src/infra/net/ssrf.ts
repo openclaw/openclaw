@@ -180,19 +180,6 @@ function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy)
   }
 }
 
-function assertAllowedResolvedAddressesOrThrow(
-  results: readonly LookupAddress[],
-  policy?: SsrFPolicy,
-): void {
-  // Reject only when every DNS answer is blocked. In dual-stack environments,
-  // polluted/special-use AAAA records can co-exist with valid public A records.
-  // The connection path will still use pinned + ordered addresses downstream.
-  const hasAllowedAddress = results.some((entry) => !isBlockedHostnameOrIp(entry.address, policy));
-  if (!hasAllowedAddress) {
-    throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
-  }
-}
-
 export function createPinnedLookup(params: {
   hostname: string;
   addresses: string[];
@@ -324,9 +311,9 @@ export async function resolvePinnedHostnameWithPolicy(
     ? results
     : results.filter((entry) => !isBlockedHostnameOrIp(entry.address, params.policy));
 
-  if (!skipPrivateNetworkChecks) {
-    // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
-    assertAllowedResolvedAddressesOrThrow(results, params.policy);
+  if (!skipPrivateNetworkChecks && allowedResults.length === 0) {
+    // Phase 2: ensure public hostnames cannot pivot to private/special-use targets.
+    throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
