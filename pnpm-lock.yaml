@@ -254,8 +254,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: 0.1.15
-        version: 0.1.15(zod@4.3.6)
+        specifier: 0.1.16
+        version: 0.1.16(zod@4.3.6)
 
   extensions/bluebubbles:
     dependencies:
@@ -575,11 +575,6 @@ importers:
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.5)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:
-
-  '@agentclientprotocol/sdk@0.14.1':
-    resolution: {integrity: sha512-b6r3PS3Nly+Wyw9U+0nOr47bV8tfS476EgyEMhoKvJCZLbgqoDFN7DJwkxL88RR0aiOqOYV1ZnESHqb+RmdH8w==}
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
 
   '@agentclientprotocol/sdk@0.15.0':
     resolution: {integrity: sha512-TH4utu23Ix8ec34srBHmDD4p3HI0cYleS1jN9lghRczPfhFlMBNrQgZWeBBe12DWy27L11eIrtciY2MXFSEiDg==}
@@ -3523,9 +3518,9 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.1.15:
-    resolution: {integrity: sha512-1r+tmPT9Oe2Ulv5b4r7O2hCCq5CHVru/H2tcPeTpZek9jR1zBQoBfZ/RcK+9sC9/mnDvWYO5R7Iae64v2LMO+A==}
-    engines: {node: '>=18'}
+  acpx@0.1.16:
+    resolution: {integrity: sha512-CxHkUIP9dPSjh+RyoZkQg0AXjSiSus/dF4xKEeG9c+7JboZp5bZuWie/n4V7sBeKTMheMoEYGrMUslrdUadrqg==}
+    engines: {node: '>=22.12.0'}
     hasBin: true
 
   agent-base@6.0.2:
@@ -3911,10 +3906,6 @@ packages:
   commander@10.0.1:
     resolution: {integrity: sha512-y4Mg2tXshplEbSGzx7amzPwKKOCGuoSRP/CjEdwwk0FOGlUbq6lKuoyDZTNZkmxHdJtp54hdfY/JUrdL7Xfdug==}
     engines: {node: '>=14'}
-
-  commander@13.1.0:
-    resolution: {integrity: sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==}
-    engines: {node: '>=18'}
 
   commander@14.0.3:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
@@ -6587,10 +6578,6 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
-
-  '@agentclientprotocol/sdk@0.14.1(zod@4.3.6)':
-    dependencies:
-      zod: 4.3.6
 
   '@agentclientprotocol/sdk@0.15.0(zod@4.3.6)':
     dependencies:
@@ -10379,10 +10366,10 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.1.15(zod@4.3.6):
+  acpx@0.1.16(zod@4.3.6):
     dependencies:
-      '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
-      commander: 13.1.0
+      '@agentclientprotocol/sdk': 0.15.0(zod@4.3.6)
+      commander: 14.0.3
       skillflag: 0.1.4
     transitivePeerDependencies:
       - bare-abort-controller
@@ -10775,8 +10762,6 @@ snapshots:
       typical: 7.3.0
 
   commander@10.0.1: {}
-
-  commander@13.1.0: {}
 
   commander@14.0.3: {}
 
