@@ -7,7 +7,9 @@ export type {
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  precheckSessionLookupAccess,
   resolveEffectiveSessionToolsVisibility,
+  resolveOwnedAcpSessionToolsEnabled,
   resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,

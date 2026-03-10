@@ -11,6 +11,7 @@ import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
+  resolveOwnedAcpSessionToolsEnabled,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
@@ -223,6 +224,7 @@ export function createSessionsHistoryTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
+        ownedAcpEnabled: resolveOwnedAcpSessionToolsEnabled(cfg),
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {

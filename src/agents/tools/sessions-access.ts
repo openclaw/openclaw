@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -16,9 +20,20 @@ export type AgentToAgentPolicy = {
 
 export type SessionAccessAction = "history" | "send" | "list";
 
-export type SessionAccessResult =
-  | { allowed: true }
-  | { allowed: false; error: string; status: "forbidden" };
+export type SessionAccessDeniedResult = {
+  allowed: false;
+  error: string;
+  status: "forbidden";
+};
+
+export type SessionAccessResult = { allowed: true } | SessionAccessDeniedResult;
+
+export type SessionLookupAccessResult =
+  | {
+      allowed: true;
+      spawnedByConstraint?: string;
+    }
+  | SessionAccessDeniedResult;
 
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
@@ -28,6 +43,13 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
     return value;
   }
   return "tree";
+}
+
+export function resolveOwnedAcpSessionToolsEnabled(cfg: OpenClawConfig): boolean {
+  return (
+    (cfg.tools as { sessions?: { ownedAcp?: { enabled?: unknown } } } | undefined)?.sessions
+      ?.ownedAcp?.enabled === true
+  );
 }
 
 export function resolveEffectiveSessionToolsVisibility(params: {
@@ -171,11 +193,71 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
 }
 
+function canUseOwnedAcpException(params: {
+  visibility: SessionToolsVisibility;
+  ownedAcpEnabled: boolean;
+  targetSessionKey: string;
+  spawnedKeys: Set<string> | null;
+}): boolean {
+  return (
+    params.visibility === "tree" &&
+    params.ownedAcpEnabled &&
+    isAcpSessionKey(params.targetSessionKey) &&
+    Boolean(params.spawnedKeys?.has(params.targetSessionKey))
+  );
+}
+
+export function precheckSessionLookupAccess(params: {
+  action: SessionAccessAction;
+  requesterSessionKey: string;
+  targetAgentId: string;
+  visibility: SessionToolsVisibility;
+  ownedAcpEnabled: boolean;
+  a2aPolicy: AgentToAgentPolicy;
+}): SessionLookupAccessResult {
+  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const isCrossAgent = params.targetAgentId !== requesterAgentId;
+  if (!isCrossAgent) {
+    return { allowed: true };
+  }
+
+  if (params.visibility === "tree" && params.ownedAcpEnabled) {
+    return {
+      allowed: true,
+      spawnedByConstraint: params.requesterSessionKey,
+    };
+  }
+
+  if (params.visibility !== "all") {
+    return {
+      allowed: false,
+      status: "forbidden",
+      error: crossVisibilityMessage(params.action),
+    };
+  }
+  if (!params.a2aPolicy.enabled) {
+    return {
+      allowed: false,
+      status: "forbidden",
+      error: a2aDisabledMessage(params.action),
+    };
+  }
+  if (!params.a2aPolicy.isAllowed(requesterAgentId, params.targetAgentId)) {
+    return {
+      allowed: false,
+      status: "forbidden",
+      error: a2aDeniedMessage(params.action),
+    };
+  }
+  return { allowed: true };
+}
+
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
+  ownedAcpEnabled: boolean;
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
@@ -189,6 +271,16 @@ export async function createSessionVisibilityGuard(params: {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
+      if (
+        canUseOwnedAcpException({
+          visibility: params.visibility,
+          ownedAcpEnabled: params.ownedAcpEnabled,
+          targetSessionKey,
+          spawnedKeys,
+        })
+      ) {
+        return { allowed: true };
+      }
       if (params.visibility !== "all") {
         return {
           allowed: false,
