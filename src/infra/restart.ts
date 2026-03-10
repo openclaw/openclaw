@@ -19,8 +19,12 @@ export type RestartAttempt = {
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-// Cover slow in-flight embedded compaction work before forcing restart.
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 90_000;
+// 0 = wait indefinitely for drain (used by gateway tool — user has force for break-glass).
+const DEFAULT_DEFERRAL_MAX_WAIT_MS = 0;
+// Finite timeout for non-interactive restart paths (config watcher, /restart, RPCs)
+// where the user has no force escape hatch. 5 minutes is generous for most agent turns.
+export const SCHEDULED_RESTART_MAX_WAIT_MS = 300_000;
+const DEFERRAL_WARN_INTERVAL_MS = 30_000;
 const RESTART_COOLDOWN_MS = 30_000;
 
 const restartLog = createSubsystemLogger("restart");
@@ -38,6 +42,7 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingRestartForce = false;
 
 function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
@@ -50,6 +55,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+  pendingRestartForce = false;
 }
 
 export type RestartAuditInfo = {
@@ -198,11 +204,17 @@ export function deferGatewayRestartUntilIdle(opts: {
   hooks?: RestartDeferralHooks;
   pollMs?: number;
   maxWaitMs?: number;
+  force?: boolean;
 }): void {
+  if (opts.force) {
+    emitGatewayRestart();
+    return;
+  }
+
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
   const maxWaitMsRaw = opts.maxWaitMs ?? DEFAULT_DEFERRAL_MAX_WAIT_MS;
-  const maxWaitMs = Math.max(pollMs, Math.floor(maxWaitMsRaw));
+  const maxWaitMs = maxWaitMsRaw > 0 ? Math.max(pollMs, Math.floor(maxWaitMsRaw)) : 0;
 
   let pending: number;
   try {
@@ -220,6 +232,7 @@ export function deferGatewayRestartUntilIdle(opts: {
 
   opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
+  let lastWarnAt = startedAt;
   const poll = setInterval(() => {
     let current: number;
     try {
@@ -236,11 +249,17 @@ export function deferGatewayRestartUntilIdle(opts: {
       emitGatewayRestart();
       return;
     }
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= maxWaitMs) {
+    const now = Date.now();
+    const elapsedMs = now - startedAt;
+    if (maxWaitMs > 0 && elapsedMs >= maxWaitMs) {
       clearInterval(poll);
       opts.hooks?.onTimeout?.(current, elapsedMs);
       emitGatewayRestart();
+      return;
+    }
+    if (now - lastWarnAt >= DEFERRAL_WARN_INTERVAL_MS) {
+      lastWarnAt = now;
+      restartLog.warn(`restart deferred: ${current} items still active (${elapsedMs}ms elapsed)`);
     }
   }, pollMs);
 }
@@ -407,6 +426,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  force?: boolean;
+  maxWaitMs?: number;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -440,10 +461,11 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   if (pendingRestartTimer) {
     const remainingMs = Math.max(0, pendingRestartDueAt - nowMs);
+    const shouldUpgradeToForce = opts?.force && !pendingRestartForce;
     const shouldPullEarlier = requestedDueAt < pendingRestartDueAt;
-    if (shouldPullEarlier) {
+    if (shouldUpgradeToForce || shouldPullEarlier) {
       restartLog.warn(
-        `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
+        `restart request rescheduled${shouldUpgradeToForce ? " (upgraded to force)" : " earlier"} reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );
       clearPendingScheduledRestart();
     } else {
@@ -463,19 +485,30 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     }
   }
 
+  const force = opts?.force === true;
+  const maxWaitMs = opts?.maxWaitMs ?? SCHEDULED_RESTART_MAX_WAIT_MS;
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
+  pendingRestartForce = force;
   pendingRestartTimer = setTimeout(
     () => {
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
+      pendingRestartForce = false;
+      if (force) {
+        emitGatewayRestart();
+        return;
+      }
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
         emitGatewayRestart();
         return;
       }
-      deferGatewayRestartUntilIdle({ getPendingCount: pendingCheck });
+      deferGatewayRestartUntilIdle({
+        getPendingCount: pendingCheck,
+        maxWaitMs,
+      });
     },
     Math.max(0, requestedDueAt - nowMs),
   );

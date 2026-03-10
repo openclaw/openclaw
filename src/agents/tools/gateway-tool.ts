@@ -48,6 +48,7 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  force: Type.Optional(Type.Boolean()),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -99,6 +100,7 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const force = params.force === true;
         // Extract channel + threadId for routing after restart
         // Supports both :thread: (most channels) and :topic: (Telegram)
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -122,11 +124,12 @@ export function createGatewayTool(opts?: {
           // ignore: sentinel is best-effort
         }
         log.info(
-          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
+          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"}, force=${force})`,
         );
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          force,
         });
         return jsonResult(scheduled);
       }
