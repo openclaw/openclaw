@@ -754,4 +754,19 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies Codex streaming server_error as timeout (#35220, #35160)", () => {
+    // OpenAI Codex Responses API returns streaming error events with server_error type.
+    // The provider wraps these as: Codex error: {json}
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+      ),
+    ).toBe("timeout");
+    // Also match the raw JSON without the "Codex error:" prefix
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."}}',
+      ),
+    ).toBe("timeout");
+  });
 });
