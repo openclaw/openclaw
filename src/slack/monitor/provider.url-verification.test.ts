@@ -22,8 +22,9 @@ function createMockRequest(params: {
   }) as MockIncomingMessage["destroy"];
 
   if (typeof params.body === "string") {
+    const body = params.body;
     void Promise.resolve().then(() => {
-      req.emit("data", Buffer.from(params.body, "utf-8"));
+      req.emit("data", Buffer.from(body, "utf-8"));
       req.emit("end");
     });
   }
