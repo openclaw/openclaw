@@ -28,6 +28,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: false
             needs_autobuild: false
+            config_file: ./.github/codeql/codeql-javascript-typescript.yml
           - language: actions
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
@@ -36,6 +37,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: false
             needs_autobuild: false
+            config_file: ""
           - language: python
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
@@ -44,6 +46,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: false
             needs_autobuild: false
+            config_file: ""
           - language: java-kotlin
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
@@ -52,6 +55,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: true
             needs_autobuild: false
+            config_file: ""
           - language: swift
             runs_on: macos-latest
             needs_node: false
@@ -60,6 +64,7 @@ jobs:
             needs_swift_tools: true
             needs_manual_build: true
             needs_autobuild: false
+            config_file: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,6 +100,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+          config-file: ${{ matrix.config_file || '' }}
 
       - name: Autobuild
         if: matrix.needs_autobuild

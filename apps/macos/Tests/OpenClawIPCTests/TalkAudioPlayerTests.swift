@@ -4,7 +4,7 @@ import Testing
 
 @Suite(.serialized) struct TalkAudioPlayerTests {
     @MainActor
-    @Test func playDoesNotHangWhenPlaybackEndsOrFails() async throws {
+    @Test func `play does not hang when playback ends or fails`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 80)
         defer { _ = TalkAudioPlayer.shared.stop() }
 
@@ -16,7 +16,7 @@ import Testing
     }
 
     @MainActor
-    @Test func playDoesNotHangWhenPlayIsCalledTwice() async throws {
+    @Test func `play does not hang when play is called twice`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 800)
         defer { _ = TalkAudioPlayer.shared.stop() }
 

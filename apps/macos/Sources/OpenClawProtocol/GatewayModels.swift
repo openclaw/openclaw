@@ -836,6 +836,20 @@ public struct NodeRenameParams: Codable, Sendable {
 
 public struct NodeListParams: Codable, Sendable {}
 
+public struct NodePendingAckParams: Codable, Sendable {
+    public let ids: [String]
+
+    public init(
+        ids: [String])
+    {
+        self.ids = ids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ids
+    }
+}
+
 public struct NodeDescribeParams: Codable, Sendable {
     public let nodeid: String
 
@@ -933,6 +947,102 @@ public struct NodeEventParams: Codable, Sendable {
         case event
         case payload
         case payloadjson = "payloadJSON"
+    }
+}
+
+public struct NodePendingDrainParams: Codable, Sendable {
+    public let maxitems: Int?
+
+    public init(
+        maxitems: Int?)
+    {
+        self.maxitems = maxitems
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case maxitems = "maxItems"
+    }
+}
+
+public struct NodePendingDrainResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let items: [[String: AnyCodable]]
+    public let hasmore: Bool
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        items: [[String: AnyCodable]],
+        hasmore: Bool)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.items = items
+        self.hasmore = hasmore
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case items
+        case hasmore = "hasMore"
+    }
+}
+
+public struct NodePendingEnqueueParams: Codable, Sendable {
+    public let nodeid: String
+    public let type: String
+    public let priority: String?
+    public let expiresinms: Int?
+    public let wake: Bool?
+
+    public init(
+        nodeid: String,
+        type: String,
+        priority: String?,
+        expiresinms: Int?,
+        wake: Bool?)
+    {
+        self.nodeid = nodeid
+        self.type = type
+        self.priority = priority
+        self.expiresinms = expiresinms
+        self.wake = wake
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case type
+        case priority
+        case expiresinms = "expiresInMs"
+        case wake
+    }
+}
+
+public struct NodePendingEnqueueResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let queued: [String: AnyCodable]
+    public let waketriggered: Bool
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        queued: [String: AnyCodable],
+        waketriggered: Bool)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.queued = queued
+        self.waketriggered = waketriggered
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case queued
+        case waketriggered = "wakeTriggered"
     }
 }
 
@@ -3243,6 +3353,8 @@ public struct ChatSendParams: Codable, Sendable {
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
     public let timeoutms: Int?
+    public let systeminputprovenance: [String: AnyCodable]?
+    public let systemprovenancereceipt: String?
     public let idempotencykey: String
 
     public init(
@@ -3252,6 +3364,8 @@ public struct ChatSendParams: Codable, Sendable {
         deliver: Bool?,
         attachments: [AnyCodable]?,
         timeoutms: Int?,
+        systeminputprovenance: [String: AnyCodable]?,
+        systemprovenancereceipt: String?,
         idempotencykey: String)
     {
         self.sessionkey = sessionkey
@@ -3260,6 +3374,8 @@ public struct ChatSendParams: Codable, Sendable {
         self.deliver = deliver
         self.attachments = attachments
         self.timeoutms = timeoutms
+        self.systeminputprovenance = systeminputprovenance
+        self.systemprovenancereceipt = systemprovenancereceipt
         self.idempotencykey = idempotencykey
     }
 
@@ -3270,6 +3386,8 @@ public struct ChatSendParams: Codable, Sendable {
         case deliver
         case attachments
         case timeoutms = "timeoutMs"
+        case systeminputprovenance = "systemInputProvenance"
+        case systemprovenancereceipt = "systemProvenanceReceipt"
         case idempotencykey = "idempotencyKey"
     }
 }
