@@ -18,15 +18,6 @@ const { getOAuthApiKeyMock, withEnvProxyGlobalDispatcherMock } = vi.hoisted(() =
   withEnvProxyGlobalDispatcherMock: vi.fn(async (run: () => Promise<unknown>) => await run()),
 }));
 
-<<<<<<< HEAD
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: getOAuthApiKeyMock,
-  getOAuthProviders: () => [
-    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
-  ],
-}));
-=======
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
     "@mariozechner/pi-ai/oauth",
@@ -40,7 +31,6 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     ],
   };
 });
->>>>>>> 445f5fc (Auth: honor proxy env for OpenAI Codex OAuth)
 
 vi.mock("../../infra/net/env-proxy-global-dispatcher.js", () => ({
   withEnvProxyGlobalDispatcher: withEnvProxyGlobalDispatcherMock,
