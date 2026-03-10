@@ -335,6 +335,7 @@ export class AcpGatewayAgent implements Agent {
   private sessionStore: AcpSessionStore;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private sessionKeyToPendingId = new Map<string, string>();
 
   constructor(
     connection: AgentSideConnection,
@@ -373,6 +374,7 @@ export class AcpGatewayAgent implements Agent {
       this.sessionStore.clearActiveRun(pending.sessionId);
     }
     this.pendingPrompts.clear();
+    this.sessionKeyToPendingId.clear();
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
@@ -603,6 +605,7 @@ export class AcpGatewayAgent implements Agent {
         resolve,
         reject,
       });
+      this.sessionKeyToPendingId.set(session.sessionKey, params.sessionId);
 
       this.gateway
         .request(
@@ -622,6 +625,7 @@ export class AcpGatewayAgent implements Agent {
         )
         .catch((err) => {
           this.pendingPrompts.delete(params.sessionId);
+          this.sessionKeyToPendingId.delete(session.sessionKey);
           this.sessionStore.clearActiveRun(params.sessionId);
           reject(err instanceof Error ? err : new Error(String(err)));
         });
@@ -643,6 +647,7 @@ export class AcpGatewayAgent implements Agent {
     const pending = this.pendingPrompts.get(params.sessionId);
     if (pending) {
       this.pendingPrompts.delete(params.sessionId);
+      this.sessionKeyToPendingId.delete(pending.sessionKey);
       pending.resolve({ stopReason: "cancelled" });
     }
   }
@@ -841,6 +846,7 @@ export class AcpGatewayAgent implements Agent {
     stopReason: StopReason,
   ): Promise<void> {
     this.pendingPrompts.delete(sessionId);
+    this.sessionKeyToPendingId.delete(pending.sessionKey);
     this.sessionStore.clearActiveRun(sessionId);
     const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
     try {
@@ -854,12 +860,8 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private findPendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
-    for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey === sessionKey) {
-        return pending;
-      }
-    }
-    return undefined;
+    const sessionId = this.sessionKeyToPendingId.get(sessionKey);
+    return sessionId ? this.pendingPrompts.get(sessionId) : undefined;
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {

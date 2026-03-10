@@ -1,5 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -236,6 +238,27 @@ export function resolveModelWithRegistry(params: {
   return undefined;
 }
 
+type ModelResolutionCacheEntry = {
+  result: ReturnType<typeof resolveModel>;
+  cachedAt: number;
+  agentDirMtimeMs: number;
+};
+
+const MODEL_RESOLUTION_CACHE = new Map<string, ModelResolutionCacheEntry>();
+const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getAgentDirMtime(agentDir: string): number {
+  try {
+    return fs.statSync(agentDir).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+export function clearModelResolutionCache(): void {
+  MODEL_RESOLUTION_CACHE.clear();
+}
+
 export function resolveModel(
   provider: string,
   modelId: string,
@@ -248,18 +271,33 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const cfgHash = cfg
+    ? createHash("md5").update(JSON.stringify(cfg)).digest("hex").slice(0, 8)
+    : "default";
+  const cacheKey = `${resolvedAgentDir}:${provider}:${modelId}:${cfgHash}`;
+
+  const now = Date.now();
+  const agentDirMtime = getAgentDirMtime(resolvedAgentDir);
+  const cached = MODEL_RESOLUTION_CACHE.get(cacheKey);
+
+  if (
+    cached &&
+    now - cached.cachedAt < MODEL_CACHE_TTL_MS &&
+    cached.agentDirMtimeMs === agentDirMtime
+  ) {
+    return cached.result;
+  }
+
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
-  if (model) {
-    return { model, authStorage, modelRegistry };
-  }
 
-  return {
-    error: buildUnknownModelError(provider, modelId),
-    authStorage,
-    modelRegistry,
-  };
+  const result = model
+    ? { model, authStorage, modelRegistry }
+    : { error: buildUnknownModelError(provider, modelId), authStorage, modelRegistry };
+
+  MODEL_RESOLUTION_CACHE.set(cacheKey, { result, cachedAt: now, agentDirMtimeMs: agentDirMtime });
+  return result;
 }
 
 /**

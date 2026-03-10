@@ -6,7 +6,7 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildInlineProviderModels, resolveModel } from "./model.js";
+import { buildInlineProviderModels, clearModelResolutionCache, resolveModel } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -17,6 +17,7 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels();
+  clearModelResolutionCache();
 });
 
 function buildForwardCompatTemplate(params: {

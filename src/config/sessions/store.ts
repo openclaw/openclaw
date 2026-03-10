@@ -173,6 +173,8 @@ export function clearSessionStoreCacheForTest(): void {
     }
   }
   LOCK_QUEUES.clear();
+  LOCKED_STORE_CACHE.clear();
+  LAST_MAINTENANCE.clear();
 }
 
 /** Expose lock queue size for tests. */
@@ -344,7 +346,11 @@ async function saveSessionStoreUnlocked(
 ): Promise<void> {
   normalizeSessionStore(store);
 
-  if (!opts?.skipMaintenance) {
+  const now = Date.now();
+  const lastMaintenance = LAST_MAINTENANCE.get(storePath) ?? 0;
+  const maintenanceThrottled = now - lastMaintenance < MAINTENANCE_THROTTLE_MS;
+
+  if (!opts?.skipMaintenance && !maintenanceThrottled) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).
     const maintenance = { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
     const shouldWarnOnly = maintenance.mode === "warn";
@@ -452,6 +458,7 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     }
+    LAST_MAINTENANCE.set(storePath, now);
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
@@ -524,10 +531,13 @@ export async function updateSessionStore<T>(
   opts?: SaveSessionStoreOptions,
 ): Promise<T> {
   return await withSessionStoreLock(storePath, async () => {
-    // Always re-read inside the lock to avoid clobbering concurrent writers.
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const locked = LOCKED_STORE_CACHE.get(storePath);
+    const store = locked
+      ? structuredClone(locked.store)
+      : loadSessionStore(storePath, { skipCache: true });
     const result = await mutator(store);
     await saveSessionStoreUnlocked(storePath, store, opts);
+    LOCKED_STORE_CACHE.set(storePath, { store: structuredClone(store) });
     return result;
   });
 }
@@ -552,6 +562,15 @@ type SessionStoreLockQueue = {
 };
 
 const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
+
+type LockedStoreCache = {
+  store: Record<string, SessionEntry>;
+};
+
+const LOCKED_STORE_CACHE = new Map<string, LockedStoreCache>();
+
+const LAST_MAINTENANCE = new Map<string, number>();
+const MAINTENANCE_THROTTLE_MS = 5 * 60 * 1000;
 
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
@@ -684,6 +703,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
     queue.running = false;
     if (queue.pending.length === 0) {
       LOCK_QUEUES.delete(storePath);
+      LOCKED_STORE_CACHE.delete(storePath);
     } else {
       queueMicrotask(() => {
         void drainSessionStoreLockQueue(storePath);
