@@ -61,6 +61,29 @@ describe("createTypingCallbacks", () => {
     expect(onStartError).not.toHaveBeenCalled();
   });
 
+  it("deduplicates concurrent reply starts", async () => {
+    let resolveStart: (() => void) | undefined;
+    const start = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const onStartError = vi.fn();
+    const callbacks = createTypingCallbacks({ start, onStartError });
+
+    const firstStart = callbacks.onReplyStart();
+    const secondStart = callbacks.onReplyStart();
+
+    expect(start).toHaveBeenCalledTimes(1);
+
+    resolveStart?.();
+    await Promise.all([firstStart, secondStart]);
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(onStartError).not.toHaveBeenCalled();
+  });
+
   it("reports start errors", async () => {
     const { onStartError, callbacks } = createTypingHarness({
       start: vi.fn().mockRejectedValue(new Error("fail")),

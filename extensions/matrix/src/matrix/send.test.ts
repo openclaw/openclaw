@@ -67,6 +67,7 @@ const runtimeStub = {
 
 let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
 let resolveMediaMaxBytes: typeof import("./send/client.js").resolveMediaMaxBytes;
+let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
 
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
@@ -83,6 +84,7 @@ beforeAll(async () => {
   setMatrixRuntime(runtimeStub);
   ({ sendMessageMatrix } = await import("./send.js"));
   ({ resolveMediaMaxBytes } = await import("./send/client.js"));
+  ({ sendTypingMatrix } = await import("./send.js"));
 });
 
 describe("sendMessageMatrix media", () => {
@@ -322,5 +324,46 @@ describe("resolveMediaMaxBytes cfg threading", () => {
 
     expect(maxBytes).toBe(9 * 1024 * 1024);
     expect(runtimeLoadConfigMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sendTypingMatrix", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("sends default timeout for typing start", async () => {
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      setTyping,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await sendTypingMatrix("!room:example.org", true, undefined, client);
+
+    expect(setTyping).toHaveBeenCalledTimes(1);
+    expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 30_000);
+  });
+
+  it("omits timeout for typing stop", async () => {
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    const doRequest = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      setTyping,
+      doRequest,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await sendTypingMatrix("!room:example.org", false, undefined, client);
+
+    expect(setTyping).not.toHaveBeenCalled();
+    expect(doRequest).toHaveBeenCalledTimes(1);
+    expect(doRequest).toHaveBeenCalledWith(
+      "PUT",
+      "/_matrix/client/v3/rooms/!room%3Aexample.org/typing/%40bot%3Aexample.org",
+      null,
+      { typing: false },
+    );
   });
 });

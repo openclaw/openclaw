@@ -207,8 +207,14 @@ export async function sendTypingMatrix(
     timeoutMs,
   });
   try {
-    const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 30_000;
-    await resolved.setTyping(roomId, typing, resolvedTimeoutMs);
+    if (typing) {
+      const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 30_000;
+      await resolved.setTyping(roomId, true, resolvedTimeoutMs);
+      return;
+    }
+    const userId = await resolved.getUserId();
+    const endpoint = `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/typing/${encodeURIComponent(userId)}`;
+    await resolved.doRequest("PUT", endpoint, null, { typing: false });
   } finally {
     if (stopOnDone) {
       resolved.stop();
