@@ -33,6 +33,8 @@ const hoisted = vi.hoisted(() => {
   const sessionBindingListBySessionMock = vi.fn();
   const closeSessionMock = vi.fn();
   const initializeSessionMock = vi.fn();
+  const updateSessionRuntimeOptionsMock = vi.fn();
+  const setSessionConfigOptionMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
@@ -51,6 +53,8 @@ const hoisted = vi.hoisted(() => {
     sessionBindingListBySessionMock,
     closeSessionMock,
     initializeSessionMock,
+    updateSessionRuntimeOptionsMock,
+    setSessionConfigOptionMock,
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
@@ -116,6 +120,9 @@ vi.mock("../acp/control-plane/manager.js", () => {
   return {
     getAcpSessionManager: () => ({
       initializeSession: (params: unknown) => hoisted.initializeSessionMock(params),
+      updateSessionRuntimeOptions: (params: unknown) =>
+        hoisted.updateSessionRuntimeOptionsMock(params),
+      setSessionConfigOption: (params: unknown) => hoisted.setSessionConfigOptionMock(params),
       closeSession: (params: unknown) => hoisted.closeSessionMock(params),
     }),
   };
@@ -205,8 +212,29 @@ describe("spawnAcpDirect", () => {
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
 
     hoisted.callGatewayMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as { method?: string };
+      const args = argsUnknown as {
+        method?: string;
+        params?: { model?: string };
+      };
       if (args.method === "sessions.patch") {
+        if (args.params?.model === "gpt-5.4") {
+          return {
+            ok: true,
+            resolved: {
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          };
+        }
+        if (args.params?.model === "openai/gpt-5.4") {
+          return {
+            ok: true,
+            resolved: {
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          };
+        }
         return { ok: true };
       }
       if (args.method === "agent") {
@@ -222,6 +250,18 @@ describe("spawnAcpDirect", () => {
       runtimeClosed: true,
       metaCleared: false,
     });
+    hoisted.updateSessionRuntimeOptionsMock
+      .mockReset()
+      .mockImplementation(async (argsUnknown: unknown) => {
+        const args = argsUnknown as { patch?: Record<string, unknown> };
+        return args.patch ?? {};
+      });
+    hoisted.setSessionConfigOptionMock
+      .mockReset()
+      .mockImplementation(async (argsUnknown: unknown) => {
+        const args = argsUnknown as { key?: string; value?: string };
+        return args.key && args.value ? { [args.key]: args.value } : {};
+      });
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as {
         sessionKey: string;
@@ -384,6 +424,128 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("applies ACP model and thinking before dispatch in the correct order", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "gpt-5.4",
+        thinking: "high",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.setSessionConfigOptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: result.childSessionKey,
+        key: "model",
+        value: "openai/gpt-5.4",
+      }),
+    );
+    const gatewayCalls = hoisted.callGatewayMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> },
+    );
+    const modelPatchIndex = gatewayCalls.findIndex(
+      (request) => request.method === "sessions.patch" && request.params?.model === "gpt-5.4",
+    );
+    const thinkingPatchIndex = gatewayCalls.findIndex(
+      (request) => request.method === "sessions.patch" && request.params?.thinkingLevel === "high",
+    );
+    const agentCallIndex = gatewayCalls.findIndex((request) => request.method === "agent");
+    expect(modelPatchIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingPatchIndex).toBeGreaterThanOrEqual(0);
+    expect(agentCallIndex).toBeGreaterThanOrEqual(0);
+    expect(modelPatchIndex).toBeLessThan(thinkingPatchIndex);
+    expect(thinkingPatchIndex).toBeLessThan(agentCallIndex);
+  });
+
+  it("accepts model-dependent ACP thinking levels after model override is applied", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "gpt-5.4",
+        thinking: "xhigh",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const gatewayCalls = hoisted.callGatewayMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> },
+    );
+    expect(hoisted.setSessionConfigOptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "model",
+        value: "openai/gpt-5.4",
+      }),
+    );
+    expect(gatewayCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "sessions.patch",
+          params: expect.objectContaining({ model: "gpt-5.4" }),
+        }),
+        expect.objectContaining({
+          method: "sessions.patch",
+          params: expect.objectContaining({ thinkingLevel: "xhigh" }),
+        }),
+      ]),
+    );
+  });
+
+  it("persists explicit ACP thinking=off (does not clear)", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        thinking: "off",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const patchCalls = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .filter((request) => request.method === "sessions.patch");
+    expect(patchCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({ thinkingLevel: "off" }),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects invalid ACP thinking overrides", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "openai/gpt-5.4",
+        thinking: "banana",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('Invalid thinking level "banana"');
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {

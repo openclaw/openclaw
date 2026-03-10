@@ -11,6 +11,7 @@ import {
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
+import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -65,6 +66,8 @@ export type SpawnAcpParams = {
   label?: string;
   agentId?: string;
   resumeSessionId?: string;
+  model?: string;
+  thinking?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -514,6 +517,22 @@ export async function spawnAcpDirect(
     };
   }
 
+  const modelOverride = params.model?.trim() || undefined;
+  let thinkingOverride: string | undefined;
+  if (params.thinking?.trim()) {
+    const normalized = normalizeThinkLevel(params.thinking);
+    if (!normalized) {
+      const [modelProviderHint, ...modelRest] = (modelOverride || "").split("/");
+      const explicitModelHint = modelRest.length > 0 ? modelRest.join("/") : modelProviderHint;
+      const explicitProviderHint = modelRest.length > 0 ? modelProviderHint : undefined;
+      return {
+        status: "error",
+        error: `Invalid thinking level "${params.thinking}". Use one of: ${formatThinkingLevels(explicitProviderHint, explicitModelHint || undefined, "|")}.`,
+      };
+    }
+    thinkingOverride = normalized;
+  }
+
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
 
@@ -578,6 +597,39 @@ export async function spawnAcpDirect(
       runtime: initialized.runtime,
       handle: initialized.handle,
     };
+
+    if (modelOverride) {
+      const modelPatchResult = await callGateway<{
+        resolved?: { modelProvider?: string; model?: string };
+      }>({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          model: modelOverride,
+        },
+        timeoutMs: 10_000,
+      });
+      const resolvedProvider = modelPatchResult?.resolved?.modelProvider?.trim();
+      const resolvedModel = modelPatchResult?.resolved?.model?.trim();
+      const effectiveModel =
+        resolvedProvider && resolvedModel ? `${resolvedProvider}/${resolvedModel}` : modelOverride;
+      await acpManager.setSessionConfigOption({
+        cfg,
+        sessionKey,
+        key: "model",
+        value: effectiveModel,
+      });
+    }
+    if (thinkingOverride !== undefined) {
+      await callGateway({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          thinkingLevel: thinkingOverride,
+        },
+        timeoutMs: 10_000,
+      });
+    }
 
     if (preparedBinding) {
       binding = await bindingService.bind({
