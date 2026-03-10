@@ -203,10 +203,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
+    const resumeSessionId = asTrimmedString(input.resumeSessionId);
+    const ensureSubcommand = resumeSessionId
+      ? ["sessions", "new", "--name", sessionName, "--resume-session", resumeSessionId]
+      : ["sessions", "ensure", "--name", sessionName];
     const ensureCommand = await this.buildVerbArgs({
       agent,
       cwd,
-      command: ["sessions", "ensure", "--name", sessionName],
+      command: ensureSubcommand,
     });
 
     let events = await this.runControlCommand({
@@ -221,7 +225,7 @@ export class AcpxRuntime implements AcpRuntime {
         asOptionalString(event.acpxRecordId),
     );
 
-    if (!ensuredEvent) {
+    if (!ensuredEvent && !resumeSessionId) {
       const newCommand = await this.buildVerbArgs({
         agent,
         cwd,
@@ -238,12 +242,14 @@ export class AcpxRuntime implements AcpRuntime {
           asOptionalString(event.acpxSessionId) ||
           asOptionalString(event.acpxRecordId),
       );
-      if (!ensuredEvent) {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
-        );
-      }
+    }
+    if (!ensuredEvent) {
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        resumeSessionId
+          ? `ACP session init failed: 'sessions new --resume-session' returned no session identifiers for ${sessionName}.`
+          : `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
+      );
     }
 
     const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
@@ -310,7 +316,20 @@ export class AcpxRuntime implements AcpRuntime {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
 
-    child.stdin.end(input.text);
+    if (input.attachments && input.attachments.length > 0) {
+      const blocks: unknown[] = [];
+      if (input.text) {
+        blocks.push({ type: "text", text: input.text });
+      }
+      for (const attachment of input.attachments) {
+        if (attachment.mediaType.startsWith("image/")) {
+          blocks.push({ type: "image", mimeType: attachment.mediaType, data: attachment.data });
+        }
+      }
+      child.stdin.end(blocks.length > 0 ? JSON.stringify(blocks) : input.text);
+    } else {
+      child.stdin.end(input.text);
+    }
 
     let stderr = "";
     child.stderr.on("data", (chunk) => {
