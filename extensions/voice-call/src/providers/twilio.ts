@@ -686,6 +686,7 @@ export class TwilioProvider implements VoiceCallProvider {
               handler.sendMark(streamSid, `tts-${Date.now()}`);
             }
           } finally {
+            if (signal.aborted) aborted = true;
             signal.removeEventListener("abort", onAbort);
             streamResult.cleanup();
           }
