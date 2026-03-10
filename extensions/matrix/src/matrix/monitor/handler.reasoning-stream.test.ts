@@ -3,8 +3,25 @@ import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-s
 import type { ReplyPayload } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+}));
+
+const dispatchReplyFromConfigWithSettledDispatcherMock = vi.hoisted(() => vi.fn());
 const sendMessageMatrixMock = vi.hoisted(() => vi.fn());
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/matrix", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/matrix")>(
+    "openclaw/plugin-sdk/matrix",
+  );
+  return {
+    ...actual,
+    dispatchReplyFromConfigWithSettledDispatcher: (...args: unknown[]) =>
+      dispatchReplyFromConfigWithSettledDispatcherMock(...args),
+  };
+});
 
 vi.mock("../send.js", () => ({
   sendMessageMatrix: (...args: unknown[]) => sendMessageMatrixMock(...args),
@@ -21,8 +38,27 @@ import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler reasoning stream", () => {
+  let finalDeliveryPromise: Promise<void> | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    finalDeliveryPromise = undefined;
+    dispatchReplyFromConfigWithSettledDispatcherMock.mockImplementation(
+      async (params: {
+        dispatcher: { sendFinalReply: (payload: ReplyPayload) => boolean };
+        onSettled?: () => void | Promise<void>;
+        replyOptions?: {
+          onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
+        };
+      }) => {
+        await params.replyOptions?.onReasoningStream?.({ text: "Reasoning:\nstep 1" });
+        await params.replyOptions?.onReasoningStream?.({ text: "Reasoning:\nstep 2" });
+        params.dispatcher.sendFinalReply({ text: "Final answer" });
+        await finalDeliveryPromise;
+        await params.onSettled?.();
+        return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+      },
+    );
     sendMessageMatrixMock.mockResolvedValue({ messageId: "$reason-root", roomId: "!room:example" });
     deliverMatrixRepliesMock.mockResolvedValue(undefined);
   });
@@ -72,39 +108,20 @@ describe("createMatrixRoomMessageHandler reasoning stream", () => {
             deliverFromDispatcher = typed.deliver;
             return {
               dispatcher: {
+                getQueuedCounts: vi.fn(() => ({ final: 0, block: 0, tool: 0 })),
+                markComplete: vi.fn(),
                 sendToolResult: vi.fn(),
                 sendBlockReply: vi.fn(),
-                sendFinalReply: vi.fn(),
+                sendFinalReply: vi.fn((payload: ReplyPayload) => {
+                  finalDeliveryPromise = deliverFromDispatcher?.(payload, { kind: "final" });
+                  return true;
+                }),
+                waitForIdle: vi.fn().mockResolvedValue(undefined),
               },
               replyOptions: {},
               markDispatchIdle,
             };
           }),
-          withReplyDispatcher: vi.fn().mockImplementation(
-            async (params: {
-              run: () => Promise<{
-                queuedFinal: boolean;
-                counts: { final: number; block: number; tool: number };
-              }>;
-              onSettled?: () => void | Promise<void>;
-            }) => {
-              const result = await params.run();
-              await params.onSettled?.();
-              return result;
-            },
-          ),
-          dispatchReplyFromConfig: vi.fn().mockImplementation(
-            async (params: {
-              replyOptions?: {
-                onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
-              };
-            }) => {
-              await params.replyOptions?.onReasoningStream?.({ text: "Reasoning:\nstep 1" });
-              await params.replyOptions?.onReasoningStream?.({ text: "Reasoning:\nstep 2" });
-              await deliverFromDispatcher?.({ text: "Final answer" }, { kind: "final" });
-              return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
-            },
-          ),
         },
         commands: {
           shouldHandleTextCommands: vi.fn().mockReturnValue(true),
