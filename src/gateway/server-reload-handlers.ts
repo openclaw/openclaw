@@ -135,18 +135,9 @@ export function createGatewayReloadHandlers(params: {
       try {
         const { resetSessionModelsForAllAgents } = await import("../config/sessions/store.js");
         await resetSessionModelsForAllAgents(nextConfig);
-        params.logReload.info(`reset session models completed`);
-      } catch (err) {
-        params.logReload.error(`reset session models failed: ${String(err)}`);
-      }
-    }
-
-    if (plan.resetSessionModels) {
-      try {
-        await resetSessionModelsForAllAgents(nextConfig);
         params.logReload.info("reset session models completed");
       } catch (err) {
-        params.logReload.error(`reset session models failed: ${String(err)}`);
+        params.logReload.warn(`reset session models failed: ${String(err)}`);
       }
     }
 
