@@ -80,16 +80,28 @@ export function normalizeMention(text: string, mention: string | undefined): str
     return text.trim();
   }
   const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`@${escaped}\\b`, "gi");
-  // Replace the mention itself, then clean up without destroying Markdown structure.
-  // 1. Remove the mention (replace with empty to avoid injecting spaces into indentation)
-  // 2. Collapse only runs of multiple spaces/tabs within a line (preserving leading indent)
-  // 3. Trim blank lines left by mention removal
-  return text
-    .replace(re, "")
-    .split("\n")
-    .map((line) => line.replace(/(\S) {2,}/g, "$1 "))
-    .join("\n")
-    .replace(/^\s*\n/, "")
-    .trim();
+  const hasMentionRe = new RegExp(`@${escaped}\\b`, "i");
+  const leadingMentionRe = new RegExp(`^([\\t ]*)@${escaped}\\b[\\t ]*`, "i");
+  const trailingMentionRe = new RegExp(`[\\t ]*@${escaped}\\b[\\t ]*$`, "i");
+  const normalizedLines = text.split("\n").map((line) => {
+    const hadMention = hasMentionRe.test(line);
+    const normalizedLine = line
+      .replace(leadingMentionRe, "$1")
+      .replace(trailingMentionRe, "")
+      .replace(new RegExp(`@${escaped}\\b`, "gi"), "")
+      .replace(/(\S)[ \t]{2,}/g, "$1 ");
+    return {
+      text: normalizedLine,
+      mentionOnlyBlank: hadMention && normalizedLine.trim() === "",
+    };
+  });
+
+  while (normalizedLines[0]?.mentionOnlyBlank) {
+    normalizedLines.shift();
+  }
+  while (normalizedLines.at(-1)?.text.trim() === "") {
+    normalizedLines.pop();
+  }
+
+  return normalizedLines.map((line) => line.text).join("\n");
 }

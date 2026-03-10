@@ -61,10 +61,22 @@ describe("normalizeMention", () => {
     expect(result).toContain("    - deep");
   });
 
+  it("preserves first-line indentation for nested list items", () => {
+    const input = "@echobot\n  - nested\n    - deep";
+    const result = normalizeMention(input, "echobot");
+    expect(result).toBe("  - nested\n    - deep");
+  });
+
   it("preserves indented code blocks", () => {
     const input = "@echobot\ntext\n    code line 1\n    code line 2";
     const result = normalizeMention(input, "echobot");
     expect(result).toContain("    code line 1");
     expect(result).toContain("    code line 2");
+  });
+
+  it("preserves first-line indentation for indented code blocks", () => {
+    const input = "@echobot\n    code line 1\n    code line 2";
+    const result = normalizeMention(input, "echobot");
+    expect(result).toBe("    code line 1\n    code line 2");
   });
 });
