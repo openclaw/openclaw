@@ -223,8 +223,32 @@ describe("isLikelySSEParseError", () => {
       expect(isLikelySSEParseError("quota exceeded, malformed SSE")).toBe(false);
     });
 
-    it("rejects upstream errors", () => {
-      expect(isLikelySSEParseError("upstream server error, SSE parse error")).toBe(false);
+    it("detects SSE parse errors even when upstream is mentioned", () => {
+      expect(isLikelySSEParseError("upstream server error, SSE parse error")).toBe(true);
+    });
+
+    it("detects SSE parse errors triggered by upstream proxy disconnects", () => {
+      expect(
+        isLikelySSEParseError("Could not parse SSE event: upstream connect error", {
+          streamingContext: true,
+        }),
+      ).toBe(true);
+    });
+
+    it("does NOT detect 'failed to parse' without JSON context", () => {
+      expect(
+        isLikelySSEParseError("Failed to parse tool response", {
+          streamingContext: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("does NOT detect 'failed to parse configuration'", () => {
+      expect(
+        isLikelySSEParseError("Failed to parse configuration", {
+          streamingContext: true,
+        }),
+      ).toBe(false);
     });
 
     it("rejects context length errors", () => {

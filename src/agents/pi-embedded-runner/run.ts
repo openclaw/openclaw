@@ -1128,6 +1128,7 @@ export async function runEmbeddedPiAgent(
               }
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
+                sseParseRetries = 0;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
@@ -1340,6 +1341,7 @@ export async function runEmbeddedPiAgent(
               (await advanceAuthProfile())
             ) {
               logPromptFailoverDecision("rotate_profile");
+              sseParseRetries = 0;
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
             }
@@ -1352,6 +1354,7 @@ export async function runEmbeddedPiAgent(
                 `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
               );
               thinkLevel = fallbackThinking;
+              sseParseRetries = 0;
               continue;
             }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
@@ -1387,6 +1390,7 @@ export async function runEmbeddedPiAgent(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            sseParseRetries = 0;
             continue;
           }
 
@@ -1488,6 +1492,7 @@ export async function runEmbeddedPiAgent(
             const rotated = await advanceAuthProfile();
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
+              sseParseRetries = 0;
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
