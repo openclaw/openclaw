@@ -19,20 +19,21 @@ vi.mock("../channels/plugins/helpers.js", () => ({
 
 import { __testing } from "./server.impl.js";
 
-describe("delivery recovery target resolution", () => {
-  beforeEach(() => {
-    hoisted.normalizeChannelId.mockReset();
-    hoisted.getChannelPlugin.mockReset();
-    hoisted.resolveChannelDefaultAccountId.mockReset();
+beforeEach(() => {
+  hoisted.normalizeChannelId.mockReset();
+  hoisted.getChannelPlugin.mockReset();
+  hoisted.resolveChannelDefaultAccountId.mockReset();
 
-    hoisted.normalizeChannelId.mockImplementation((raw?: string | null) => {
-      if (typeof raw !== "string") {
-        return null;
-      }
-      const trimmed = raw.trim();
-      return trimmed ? trimmed : null;
-    });
+  hoisted.normalizeChannelId.mockImplementation((raw?: string | null) => {
+    if (typeof raw !== "string") {
+      return null;
+    }
+    const trimmed = raw.trim();
+    return trimmed ? trimmed : null;
   });
+});
+
+describe("delivery recovery target resolution", () => {
 
   it("skips legacy entries without accountId when channel has no configured accounts", () => {
     hoisted.getChannelPlugin.mockReturnValue({
@@ -82,5 +83,28 @@ describe("delivery recovery target resolution", () => {
     });
 
     expect(targets).toEqual([]);
+  });
+});
+
+describe("delivery recovery preflight skip mode", () => {
+  it("skips readiness preflight when OPENCLAW_SKIP_CHANNELS is enabled", () => {
+    expect(
+      __testing.shouldSkipDeliveryRecoveryReadinessPreflight({ OPENCLAW_SKIP_CHANNELS: "1" }),
+    ).toBe(true);
+  });
+
+  it("skips readiness preflight when OPENCLAW_SKIP_PROVIDERS is enabled", () => {
+    expect(
+      __testing.shouldSkipDeliveryRecoveryReadinessPreflight({ OPENCLAW_SKIP_PROVIDERS: "true" }),
+    ).toBe(true);
+  });
+
+  it("does not skip readiness preflight when both flags are disabled", () => {
+    expect(
+      __testing.shouldSkipDeliveryRecoveryReadinessPreflight({
+        OPENCLAW_SKIP_CHANNELS: "0",
+        OPENCLAW_SKIP_PROVIDERS: "false",
+      }),
+    ).toBe(false);
   });
 });
