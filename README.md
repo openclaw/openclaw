@@ -559,4 +559,4 @@ Thanks to all clawtributors:
 </p>
 
 ## Telegram Troubleshooting
-If you receive an 'access not configured' error when pairing Telegram, run 'openclaw pairing approve telegram <CODE>' to authorize the bot.
+If you receive an `access not configured` error when pairing Telegram, run `openclaw pairing approve telegram <CODE>` to authorize the bot.
