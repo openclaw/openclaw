@@ -30,7 +30,6 @@ import type { sendMessageIMessage } from "../../imessage/send.js";
 import { resolveReplyFormattingMode } from "../../lionroot/config/reply-formatting.js";
 import { formatReplyForChannel } from "../../lionroot/infra/format-reply.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -40,6 +39,7 @@ import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
+import { resolveDeliveryMediaLocalRoots } from "./media-roots.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
@@ -532,10 +532,13 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+  const mediaLocalRoots = resolveDeliveryMediaLocalRoots({
     cfg,
-    params.session?.agentId ?? params.mirror?.agentId,
-  );
+    channel,
+    payloads,
+    accountId,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+  });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,

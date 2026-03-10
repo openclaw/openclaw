@@ -403,6 +403,28 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("adds a concrete iMessage attachment root for local attachment retries", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i2", chatId: "chat-1" });
+    const mediaUrl = "/Users/test/Library/Messages/Attachments/e0/00/file.heic";
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "imessage:+15551234567",
+      payloads: [{ text: "hi", mediaUrl }],
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "imessage:+15551234567",
+      "hi",
+      expect.objectContaining({
+        mediaUrl,
+        mediaLocalRoots: expect.arrayContaining(["/Users/test/Library/Messages/Attachments"]),
+      }),
+    );
+  });
+
   it("uses signal media maxBytes from config", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = { channels: { signal: { mediaMaxMb: 2 } } };

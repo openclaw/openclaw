@@ -2,6 +2,7 @@ import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { resolveDeliveryMediaLocalRoots } from "../../infra/outbound/media-roots.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
@@ -29,6 +30,12 @@ export async function deliverReplies(params: {
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
+  const mediaLocalRoots = resolveDeliveryMediaLocalRoots({
+    cfg,
+    channel: "imessage",
+    payloads: replies,
+    accountId,
+  });
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = sanitizeOutboundText(payload.text ?? "");
@@ -54,6 +61,7 @@ export async function deliverReplies(params: {
         first = false;
         const sent = await sendMessageIMessage(target, caption, {
           mediaUrl: url,
+          mediaLocalRoots,
           maxBytes,
           client,
           accountId,

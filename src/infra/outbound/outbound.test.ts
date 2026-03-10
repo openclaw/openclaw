@@ -26,6 +26,7 @@ import {
   formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "./format.js";
+import { resolveDeliveryMediaLocalRoots } from "./media-roots.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -415,6 +416,42 @@ describe("delivery-queue", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0].retryCount).toBe(1);
       expect(entries[0].lastError).toBe("network down");
+    });
+
+    it("recovers stale iMessage attachment deliveries by reconstructing a concrete trusted root", async () => {
+      const mediaUrl = "/Users/test/Library/Messages/Attachments/e0/00/file.heic";
+      await enqueueDelivery(
+        {
+          channel: "imessage",
+          to: "imessage:+15551234567",
+          payloads: [{ text: "hi", mediaUrl }],
+        },
+        tmpDir,
+      );
+
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        const roots = resolveDeliveryMediaLocalRoots({
+          cfg: params.cfg,
+          channel: params.channel,
+          payloads: params.payloads,
+          accountId: params.accountId,
+        });
+        expect(roots).toEqual(expect.arrayContaining(["/Users/test/Library/Messages/Attachments"]));
+        return [];
+      });
+
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.recovered).toBe(1);
+      expect(result.failed).toBe(0);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "imessage",
+          to: "imessage:+15551234567",
+          payloads: [{ text: "hi", mediaUrl }],
+          skipQueue: true,
+        }),
+      );
     });
 
     it("moves entries to failed/ immediately on permanent delivery errors", async () => {
