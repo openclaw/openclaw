@@ -470,17 +470,18 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
     ) => {
       const record =
         params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-      if (record?.append === true) {
+      // Reject any truthy append value (boolean true, string "true", number 1, etc.)
+      // in sandbox mode — the bridge has no appendFile support.
+      if (record?.append) {
+        const msg =
+          typeof record.append !== "boolean"
+            ? `Error: append must be a boolean (true/false), got ${typeof record.append}: ${JSON.stringify(record.append)}. ` +
+              "Additionally, append mode is not supported in sandboxed sessions."
+            : "Error: append mode is not supported in sandboxed sessions. " +
+              "The sandbox bridge does not expose appendFile. " +
+              "Use the default overwrite mode or run outside the sandbox.";
         return {
-          content: [
-            {
-              type: "text",
-              text:
-                "Error: append mode is not supported in sandboxed sessions. " +
-                "The sandbox bridge does not expose appendFile. " +
-                "Use the default overwrite mode or run outside the sandbox.",
-            },
-          ],
+          content: [{ type: "text", text: msg }],
         } as AgentToolResult;
       }
       return normalized.execute(toolCallId, params, signal, onUpdate);
