@@ -113,11 +113,13 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
   });
 }
 
-function installPerplexityChatFetch() {
-  return installMockFetch({
-    choices: [{ message: { content: "ok" } }],
-    citations: ["https://example.com"],
-  });
+function installPerplexityChatFetch(payload?: Record<string, unknown>) {
+  return installMockFetch(
+    payload ?? {
+      choices: [{ message: { content: "ok" } }],
+      citations: ["https://example.com"],
+    },
+  );
 }
 
 function createProviderSuccessPayload(
@@ -507,6 +509,42 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(mockFetch).toHaveBeenCalled();
     const body = parseFirstRequestBody(mockFetch);
     expect(body.search_recency_filter).toBe("week");
+  });
+
+  it("falls back to message annotations when top-level citations are missing", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch({
+      choices: [
+        {
+          message: {
+            content: "ok",
+            annotations: [
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/a" },
+              },
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/b" },
+              },
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/a" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      provider: "perplexity",
+      citations: ["https://example.com/a", "https://example.com/b"],
+      content: expect.stringContaining("ok"),
+    });
   });
 
   it("fails loud for Search API-only filters on the compatibility path", async () => {

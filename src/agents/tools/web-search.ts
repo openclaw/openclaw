@@ -397,10 +397,15 @@ type PerplexitySearchResponse = {
   choices?: Array<{
     message?: {
       content?: string;
-      // Straico wraps Perplexity citations as OpenAI-style annotations
       annotations?: Array<{
         type?: string;
-        url_citation?: { url?: string; title?: string };
+        url?: string;
+        url_citation?: {
+          url?: string;
+          title?: string;
+          start_index?: number;
+          end_index?: number;
+        };
       }>;
     };
   }>;
@@ -419,6 +424,38 @@ type PerplexitySearchApiResponse = {
   results?: PerplexitySearchApiResult[];
   id?: string;
 };
+
+function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
+  const normalizeUrl = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  };
+
+  const topLevel = (data.citations ?? [])
+    .map(normalizeUrl)
+    .filter((url): url is string => Boolean(url));
+  if (topLevel.length > 0) {
+    return [...new Set(topLevel)];
+  }
+
+  const citations: string[] = [];
+  for (const choice of data.choices ?? []) {
+    for (const annotation of choice.message?.annotations ?? []) {
+      if (annotation.type !== "url_citation") {
+        continue;
+      }
+      const url = normalizeUrl(annotation.url_citation?.url ?? annotation.url);
+      if (url) {
+        citations.push(url);
+      }
+    }
+  }
+
+  return [...new Set(citations)];
+}
 
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
@@ -1259,22 +1296,8 @@ async function runPerplexitySearch(params: {
       const data = (await res.json()) as PerplexitySearchResponse;
       const content = data.choices?.[0]?.message?.content ?? "No response";
 
-      // Direct Perplexity / OpenRouter return top-level `citations`.
-      // Straico wraps them as `annotations` on the message instead.
-      let citations = data.citations ?? [];
-      if (citations.length === 0) {
-        const annotations = data.choices?.[0]?.message?.annotations;
-        if (annotations?.length) {
-          const seen = new Set<string>();
-          for (const a of annotations) {
-            const url = a.url_citation?.url?.trim();
-            if (url && !seen.has(url)) {
-              seen.add(url);
-              citations.push(url);
-            }
-          }
-        }
-      }
+      // Prefer top-level citations; fall back to OpenRouter-style message annotations.
+      const citations = extractPerplexityCitations(data);
 
       return { content, citations };
     },
