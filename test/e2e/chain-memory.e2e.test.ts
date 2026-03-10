@@ -20,10 +20,13 @@ function createMockConfig(backend: "builtin" | "chain" = "chain"): Partial<OpenC
       memory: {
         backend: "chain",
         chain: {
-          primary: {
-            name: "primary",
-            backend: "builtin",
-          },
+          providers: [
+            {
+              name: "primary",
+              priority: "primary" as const,
+              backend: "builtin",
+            },
+          ],
         },
       },
     } as Partial<OpenClawConfig>;
@@ -231,13 +234,15 @@ describe("Chain Memory Backend - E2E Integration", () => {
         memory: {
           backend: "chain",
           chain: {
-            primary: {
-              name: "primary",
-              backend: "builtin",
-            },
-            secondary: [
+            providers: [
+              {
+                name: "primary",
+                priority: "primary",
+                backend: "builtin",
+              },
               {
                 name: "secondary",
+                priority: "secondary",
                 backend: "builtin",
               },
             ],
@@ -268,14 +273,18 @@ describe("Chain Memory Backend - E2E Integration", () => {
         memory: {
           backend: "chain",
           chain: {
-            primary: {
-              name: "primary",
-              backend: "builtin",
-            },
-            fallback: {
-              name: "fallback",
-              backend: "builtin",
-            },
+            providers: [
+              {
+                name: "primary",
+                priority: "primary",
+                backend: "builtin",
+              },
+              {
+                name: "fallback",
+                priority: "fallback",
+                backend: "builtin",
+              },
+            ],
           },
         },
       } as Partial<OpenClawConfig>;
@@ -304,10 +313,10 @@ describe("Chain Memory Backend - E2E Integration", () => {
         memory: {
           backend: "chain",
           chain: {
-            // Missing required 'primary' field
+            // Missing required 'providers' field
           },
         },
-      } as OpenClawConfig;
+      } as Partial<OpenClawConfig>;
 
       const result = await getMemorySearchManager({
         cfg,
@@ -322,18 +331,20 @@ describe("Chain Memory Backend - E2E Integration", () => {
     it("should handle unknown backend gracefully", async () => {
       const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
 
-      const cfg: OpenClawConfig = {
+      const cfg: Partial<OpenClawConfig> = {
         memory: {
           backend: "chain",
           chain: {
-            primary: {
-              name: "primary",
-              priority: "primary",
-              backend: "unknown-backend" as unknown as BackendType,
-            },
+            providers: [
+              {
+                name: "primary",
+                priority: "primary",
+                backend: "unknown-backend" as unknown as BackendType,
+              },
+            ],
           },
         },
-      } as OpenClawConfig;
+      } as Partial<OpenClawConfig>;
 
       const result = await getMemorySearchManager({
         cfg,
