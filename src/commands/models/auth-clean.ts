@@ -117,11 +117,16 @@ export async function modelsAuthCleanCommand(
     configuredProfiles.add(id);
   }
 
-  // Load the store read-only for inspection: this probe read collects storeProfileIds
-  // and storeOrder only.  The write-enabled load happens inside updateAuthProfileStoreWithLock
-  // (which only runs when cleanup actually proceeds) — so readOnly:true is correct here
-  // regardless of whether this is a dry-run or not.
-  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: true };
+  // Load the store for inspection (collect storeProfileIds and storeOrder).
+  // During dry-run: readOnly:true — no writes of any kind, including legacy migration.
+  // During actual cleanup: readOnly:false — allows the one-time legacy auth.json →
+  // auth-profiles.json migration to persist before updateAuthProfileStoreWithLock's
+  // ensureAuthStoreFile can create an empty placeholder (which would cause the
+  // write-enabled load inside the lock to find an empty store and skip all removals).
+  // The write-enabled load for profile mutations is still deferred to
+  // updateAuthProfileStoreWithLock; this probe only triggers migration when needed.
+  // (#2914491523, #2914711181)
+  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: opts.dryRun === true };
   const store = isMainAgentDir
     ? ensureAuthProfileStore(agentDir, storeLoadOpts)
     : loadAgentLocalAuthProfileStore(agentDir, storeLoadOpts);
