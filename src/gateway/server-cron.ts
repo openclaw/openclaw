@@ -292,10 +292,7 @@ export function buildGatewayCronService(params: {
         abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
-        // FIX #41266: Use subagent lane to avoid deadlock with cron lane
-        // The outer enqueueRun already holds CommandLane.Cron; using "cron"
-        // here would cause deadlock since cron lane has concurrency=1.
-        lane: "subagent",
+        lane: "cron",
       });
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {

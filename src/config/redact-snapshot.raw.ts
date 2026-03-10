@@ -5,9 +5,8 @@ import JSON5 from "json5";
  * Redacts sensitive values from a raw config string.
  * Filters out empty/null/undefined values to prevent RangeError (#41247).
  *
- * Note: When `params.raw` is not a string (e.g., null, number), it is
- * converted to a string via `String(params.raw ?? "")` and returned
- * without redaction. This is a silent fallback for invalid input.
+ * Note: When `params.raw` is not a string, this returns an empty string
+ * defensively instead of returning a stringified unredacted value.
  */
 export function replaceSensitiveValuesInRaw(params: {
   raw: string;
@@ -16,7 +15,7 @@ export function replaceSensitiveValuesInRaw(params: {
 }): string {
   // Defensive: validate input types
   if (typeof params.raw !== "string") {
-    return String(params.raw ?? "");
+    return "";
   }
 
   // Defensive: normalize and filter sensitive values

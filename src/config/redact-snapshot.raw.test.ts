@@ -67,13 +67,19 @@ describe("replaceSensitiveValuesInRaw", () => {
   });
 
   it("handles non-string raw input gracefully", () => {
-    const result = replaceSensitiveValuesInRaw({
+    const nullResult = replaceSensitiveValuesInRaw({
       raw: null as unknown as string,
       sensitiveValues: ["test"],
       redactedSentinel: "***",
     });
-    // String(null) returns "null", but our defensive code returns empty string
-    expect(result).toBe("");
+    const objectResult = replaceSensitiveValuesInRaw({
+      raw: { secret: "test" } as unknown as string,
+      sensitiveValues: ["test"],
+      redactedSentinel: "***",
+    });
+
+    expect(nullResult).toBe("");
+    expect(objectResult).toBe("");
   });
 
   it("handles unicode strings", () => {
