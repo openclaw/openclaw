@@ -34,6 +34,9 @@ function createMockUsage(input: number, output: number) {
 
 // Track call sequence to return tool_use first, then stop.
 let streamCallCount = 0;
+// When true, the first LLM response includes two tool calls: sessions_yield + read.
+// This tests that the abort prevents the second tool from executing.
+let multiToolMode = false;
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
@@ -44,23 +47,39 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
 
-  const buildToolUseMessage = (model: { api: string; provider: string; id: string }) => ({
-    role: "assistant" as const,
-    content: [
+  const buildToolUseMessage = (model: { api: string; provider: string; id: string }) => {
+    const toolCalls: Array<{
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }> = [
       {
         type: "toolCall" as const,
         id: "tc-yield-e2e-1",
         name: "sessions_yield",
         arguments: { message: "Yielding turn." },
       },
-    ],
-    stopReason: "toolUse" as const,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createMockUsage(1, 1),
-    timestamp: Date.now(),
-  });
+    ];
+    if (multiToolMode) {
+      toolCalls.push({
+        type: "toolCall" as const,
+        id: "tc-post-yield-2",
+        name: "read",
+        arguments: { file_path: "/etc/hostname" },
+      });
+    }
+    return {
+      role: "assistant" as const,
+      content: toolCalls,
+      stopReason: "toolUse" as const,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: createMockUsage(1, 1),
+      timestamp: Date.now(),
+    };
+  };
 
   const buildStopMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -221,6 +240,81 @@ describe("sessions_yield e2e", () => {
         (c) => c.type === "toolCall" && c.name === "sessions_yield",
       );
       expect(toolCall).toBeDefined();
+    },
+  );
+
+  it(
+    "abort prevents subsequent tool calls from executing after yield",
+    { timeout: 15_000 },
+    async () => {
+      // Enable multi-tool mode: LLM returns [sessions_yield, read] in one response.
+      // The abort should fire after yield, preventing read from executing.
+      streamCallCount = 0;
+      multiToolMode = true;
+
+      const sessionId = "yield-e2e-abort";
+      const sessionFile = path.join(workspaceDir, "session-yield-abort.jsonl");
+      const cfg = makeConfig(["mock-yield-abort"]);
+
+      const result = await runEmbeddedPiAgent({
+        sessionId,
+        sessionKey: "agent:test:yield-abort",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "Yield and then read a file.",
+        provider: "openai",
+        model: "mock-yield-abort",
+        timeoutMs: 10_000,
+        agentDir,
+        runId: "run-yield-abort-1",
+        enqueue: immediateEnqueue,
+      });
+
+      // Reset for other tests
+      multiToolMode = false;
+
+      // 1. Run completed with end_turn despite the second tool call
+      expect(result.meta.stopReason).toBe("end_turn");
+
+      // 2. Session is idle
+      expect(isEmbeddedPiRunActive(sessionId)).toBe(false);
+
+      // 3. LLM was only called ONCE — abort prevented the post-tool model call
+      expect(streamCallCount).toBe(1);
+
+      // 4. Transcript should contain sessions_yield but NOT a successful read result
+      const messages = await readSessionMessages(sessionFile);
+      const allContent = messages.flatMap((m) =>
+        Array.isArray(m?.content) ? (m.content as Array<{ type?: string; name?: string }>) : [],
+      );
+      const yieldCall = allContent.find(
+        (c) => c.type === "toolCall" && c.name === "sessions_yield",
+      );
+      expect(yieldCall).toBeDefined();
+
+      // The read tool call should be in the assistant message (LLM requested it),
+      // but its result should NOT show a successful file read.
+      const readCall = allContent.find((c) => c.type === "toolCall" && c.name === "read");
+      expect(readCall).toBeDefined(); // LLM asked for it...
+
+      // ...but the file was never actually read (no tool result with file contents)
+      const toolResults = messages.filter((m) => m?.role === "toolResult");
+      const readResult = toolResults.find((tr) => {
+        const content = tr?.content;
+        if (typeof content === "string") {
+          return content.includes("/etc/hostname");
+        }
+        if (Array.isArray(content)) {
+          return (content as Array<{ text?: string }>).some((c) =>
+            c.text?.includes("/etc/hostname"),
+          );
+        }
+        return false;
+      });
+      // If the read tool ran, its result would reference the file path.
+      // The abort should have prevented it from executing.
+      expect(readResult).toBeUndefined();
     },
   );
 });
