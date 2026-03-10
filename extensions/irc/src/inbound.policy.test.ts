@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { __testing } from "./inbound.js";
 
 describe("irc inbound policy", () => {
+  it("disables block streaming by default to preserve full final replies", () => {
+    expect(
+      __testing.resolveIrcDisableBlockStreaming({
+        config: {},
+      } as never),
+    ).toBe(true);
+  });
+
+  it("allows explicitly enabled IRC block streaming", () => {
+    expect(
+      __testing.resolveIrcDisableBlockStreaming({
+        config: { blockStreaming: true },
+      } as never),
+    ).toBe(false);
+  });
+
   it("keeps DM allowlist merged with pairing-store entries", () => {
     const resolved = __testing.resolveIrcEffectiveAllowlists({
       configAllowFrom: ["owner"],

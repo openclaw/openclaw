@@ -80,6 +80,10 @@ async function deliverIrcReply(params: {
   params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
+function resolveIrcDisableBlockStreaming(account: ResolvedIrcAccount): boolean {
+  return account.config.blockStreaming === true ? false : true;
+}
+
 export async function handleIrcInbound(params: {
   message: IrcInboundMessage;
   account: ResolvedIrcAccount;
@@ -354,14 +358,12 @@ export async function handleIrcInbound(params: {
     },
     replyOptions: {
       skillFilter: groupMatch.groupConfig?.skills,
-      disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+      disableBlockStreaming: resolveIrcDisableBlockStreaming(account),
     },
   });
 }
 
 export const __testing = {
   resolveIrcEffectiveAllowlists,
+  resolveIrcDisableBlockStreaming,
 };
