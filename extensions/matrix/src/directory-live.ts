@@ -49,16 +49,19 @@ async function fetchMatrixJson<T>(params: {
       body: params.body ? JSON.stringify(params.body) : undefined,
       signal: AbortSignal.timeout(30_000),
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`);
+    }
+    return (await res.json()) as T;
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith("Matrix API")) {
+      throw err;
+    }
     throw new Error(
       `Matrix API ${params.path} failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`);
-  }
-  return (await res.json()) as T;
 }
 
 function normalizeQuery(value?: string | null): string {
