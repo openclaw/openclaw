@@ -49,6 +49,7 @@ import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/acco
 import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor-allowlist-store-recovery.js";
+import { hasAllowFromEntries } from "./doctor-allowlist-utils.js";
 import {
   formatConfigPath,
   noteIncludeConfinementWarning,
@@ -1017,12 +1018,6 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     return { config: cfg, changes: [] };
   }
   return { config: next, changes };
-}
-
-function hasAllowFromEntries(list?: Array<string | number>) {
-  return (
-    Array.isArray(list) && list.map((value) => String(value).trim()).filter(Boolean).length > 0
-  );
 }
 
 /**

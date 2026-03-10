@@ -3,14 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import { hasAllowFromEntries } from "./doctor-allowlist-utils.js";
 
 type AllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
-
-function hasAllowFromEntries(list?: Array<string | number>) {
-  return (
-    Array.isArray(list) && list.map((value) => String(value).trim()).filter(Boolean).length > 0
-  );
-}
 
 function resolveAllowFromMode(channelName: string): AllowFromMode {
   if (channelName === "googlechat") {
