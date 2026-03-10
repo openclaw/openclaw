@@ -23,9 +23,10 @@ describe("ensureSkillsWatcher", () => {
       watchMock.mock.calls as unknown as Array<[string[], { ignored?: unknown }]>
     )[0];
     const targets = firstCall?.[0] ?? [];
-    const opts = firstCall?.[1] ?? {};
+    const opts = (firstCall?.[1] ?? {}) as { ignored?: unknown; depth?: number };
 
     expect(opts.ignored).toBe(mod.DEFAULT_SKILLS_WATCH_IGNORED);
+    expect(opts.depth).toBe(2);
     const posix = (p: string) => p.replaceAll("\\", "/");
     expect(targets).toEqual(
       expect.arrayContaining([
