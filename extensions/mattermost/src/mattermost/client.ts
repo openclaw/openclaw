@@ -257,16 +257,17 @@ export async function createMattermostDirectChannelWithRetry(
 function isRetryableError(error: Error): boolean {
   const message = error.message.toLowerCase();
 
-  // Retry on rate limiting (429)
-  if (message.includes("429") || message.includes("too many requests")) {
-    return true;
-  }
-
   // Retry on 5xx server errors FIRST (before checking 4xx)
   // Use "mattermost api" prefix to avoid matching port numbers (e.g., :443) or IP octets
   // This prevents misclassification when a 5xx error detail contains a 4xx substring
   // e.g., "Mattermost API 503: upstream returned 404"
   if (/mattermost api 5\d{2}\b/.test(message)) {
+    return true;
+  }
+
+  // Check for explicit 429 rate limiting FIRST (before generic "429" text match)
+  // This avoids retrying when error detail contains "429" but it's not the status code
+  if (/mattermost api 429\b/.test(message) || message.includes("too many requests")) {
     return true;
   }
 
@@ -276,7 +277,7 @@ function isRetryableError(error: Error): boolean {
   const clientErrorMatch = message.match(/mattermost api (4\d{2})\b/);
   if (clientErrorMatch) {
     const statusCode = parseInt(clientErrorMatch[1], 10);
-    if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
+    if (statusCode >= 400 && statusCode < 500) {
       return false;
     }
   }

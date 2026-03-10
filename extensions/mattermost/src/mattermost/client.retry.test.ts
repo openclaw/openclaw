@@ -98,6 +98,30 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(result.id).toBe("dm-channel-port");
   });
 
+  it("does not retry on 400 even if error message contains '429' text", async () => {
+    // This tests that "429" in error detail doesn't trigger false rate-limit retry
+    // e.g., "Invalid user ID: 4294967295" should NOT be retried
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ message: "Invalid user ID: 4294967295" }),
+      text: async () => "Invalid user ID: 4294967295",
+    } as Response);
+
+    const client = createMockClient();
+
+    await expect(
+      createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 10,
+      }),
+    ).rejects.toThrow();
+
+    // Should not retry - only called once (400 is a client error, even though message contains "429")
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("retries on 5xx server errors", async () => {
     mockFetch
       .mockResolvedValueOnce({
