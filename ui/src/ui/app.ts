@@ -464,6 +464,10 @@ export class OpenClawApp extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    // Retry tab-label sync when gateway connects (connectedCallback runs before handshake).
+    if (changed.has("connected") && this.connected) {
+      this.syncConversationTabLabelsToGateway();
+    }
   }
 
   connect() {
