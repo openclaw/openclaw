@@ -413,6 +413,9 @@ describe("tryDispatchAcpReply", () => {
       expect(onReplyStart).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes an abort signal to runTurn for timeout protection", async () => {
     setReadyAcpResolution();
     let receivedSignal: AbortSignal | undefined;
@@ -456,7 +459,6 @@ describe("tryDispatchAcpReply", () => {
       expect(receivedSignal!.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
-
     }
   });
 

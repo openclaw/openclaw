@@ -138,6 +138,12 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     mutate: (current, entry) => {
+      // Re-check abort *inside* the mutator so that if the signal fires while
+      // waiting on the updateSessionStore lock, we still no-op instead of
+      // overwriting newer session state with stale reconcile data.
+      if (params.signal?.aborted) {
+        return null;
+      }
       if (!entry) {
         return null;
       }
