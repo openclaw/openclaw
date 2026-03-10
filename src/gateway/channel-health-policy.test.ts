@@ -255,6 +255,7 @@ describe("evaluateChannelHealth", () => {
         lastEventAt: null,
       },
       {
+        channelId: "line",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
@@ -272,6 +273,7 @@ describe("evaluateChannelHealth", () => {
         configured: true,
       },
       {
+        channelId: "line",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
