@@ -97,4 +97,18 @@ describe("resolveAgentTimeoutMs", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_147_000_000);
     expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_147_000_000);
   });
+
+  it("uses agents.defaults.timeoutSeconds when no explicit override is provided", () => {
+    expect(
+      resolveAgentTimeoutMs({
+        cfg: {
+          agents: {
+            defaults: {
+              timeoutSeconds: 900,
+            },
+          },
+        } as never,
+      }),
+    ).toBe(900_000);
+  });
 });

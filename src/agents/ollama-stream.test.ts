@@ -449,6 +449,30 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("does not synthesize Authorization when apiKey is only a marker", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: {
+            apiKey: "OLLAMA_API_KEY",
+          },
+        });
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(requestInit.headers).toMatchObject({
+          "Content-Type": "application/json",
+        });
+        expect(requestInit.headers).not.toHaveProperty("Authorization");
+      },
+    );
+  });
+
   it("allows a real apiKey to override an explicit Authorization header", async () => {
     await withMockNdjsonFetch(
       [
@@ -634,5 +658,47 @@ describe("createConfiguredOllamaStreamFn", () => {
         });
       },
     );
+  });
+});
+
+describe("ollama timeout normalization", () => {
+  it("converts timeout aborts into TimeoutError-style stream errors", async () => {
+    const timeoutReason = Object.assign(new Error("The operation timed out"), {
+      name: "TimeoutError",
+    });
+    const abortedSignal = AbortSignal.abort(timeoutReason);
+    const fetchMock = vi.fn(async () => {
+      const abortError = new Error("This operation was aborted");
+      abortError.name = "AbortError";
+      throw abortError;
+    });
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const streamFn = createOllamaStreamFn("http://127.0.0.1:11434");
+      const stream = streamFn(
+        {
+          id: "qwen3.5:9b",
+          api: "ollama",
+          provider: "ollama",
+          contextWindow: 262144,
+        } as never,
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as never,
+        {
+          signal: abortedSignal,
+        } as never,
+      );
+      const events = await collectStreamEvents(stream);
+      const errorEvent = events.at(-1);
+      if (!errorEvent || errorEvent.type !== "error") {
+        throw new Error("Expected error event");
+      }
+      expect(errorEvent.error.errorMessage).toContain("Ollama request timed out");
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
   });
 });

@@ -41,6 +41,7 @@
           "ollama/qwen3:4b-thinking-2507-q4_K_M"
         ]
       },
+      "timeoutSeconds": 900,
       "compaction": {
         "mode": "safeguard"
       },
@@ -60,6 +61,16 @@
     "ownerDisplay": "raw"
   },
   "channels": {
+    "line": {
+      "enabled": true,
+      "channelAccessToken": "${LINE_CHANNEL_ACCESS_TOKEN}",
+      "channelSecret": "${LINE_CHANNEL_SECRET}",
+      "webhookPath": "${LINE_WEBHOOK_PATH}",
+      "webhookServerUrl": "${LINE_WEBHOOK_URL}",
+      "dmPolicy": "${LINE_DM_POLICY}",
+      "groupPolicy": "${LINE_GROUP_POLICY}",
+      "allowFrom": ["*"]
+    },
     "telegram": {
       "enabled": true,
       "dmPolicy": "pairing",

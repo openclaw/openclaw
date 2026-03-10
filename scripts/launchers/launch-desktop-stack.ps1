@@ -197,6 +197,8 @@ if (-not $SkipNgrok) {
     ) -WorkingDirectory $ProjectDir -WindowStyle Minimized | Out-Null
 }
 
+$envMap = Get-EnvMap -EnvFile $envFile
+
 $processEnv = @{
     OPENCLAW_GATEWAY_PORT  = [string]$GatewayPort
     CLAWDBOT_GATEWAY_PORT  = [string]$GatewayPort
@@ -209,6 +211,22 @@ $processEnv = @{
     OPENCLAW_STATE_DIR     = $desktopStateDir
     OPENCLAW_CONFIG_PATH   = $desktopConfigPath
 }
+
+foreach ($lineKey in @(
+    "OLLAMA_API_KEY",
+    "LINE_CHANNEL_ACCESS_TOKEN",
+    "LINE_CHANNEL_SECRET",
+    "LINE_WEBHOOK_PATH",
+    "LINE_WEBHOOK_URL",
+    "LINE_DM_POLICY",
+    "LINE_GROUP_POLICY"
+)) {
+    $lineValue = [string]$envMap[$lineKey]
+    if ($lineValue) {
+        $processEnv[$lineKey] = $lineValue
+    }
+}
+
 foreach ($entry in $processEnv.GetEnumerator()) {
     Set-Item -Path ("Env:" + $entry.Key) -Value ([string]$entry.Value)
 }

@@ -20,6 +20,63 @@ const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
 
+function shouldAttachOllamaAuthorizationHeader(apiKey: unknown): apiKey is string {
+  return typeof apiKey === "string" && apiKey.trim().length > 0 && !isNonSecretApiKeyMarker(apiKey);
+}
+
+function errorMessageIncludesTimeoutHint(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  return (
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    lower.includes("deadline exceeded") ||
+    lower.includes("context deadline exceeded")
+  );
+}
+
+function isTimeoutAbortError(
+  err: unknown,
+  signal?: AbortSignal,
+): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+
+  const errorName = "name" in err ? String(err.name) : "";
+  const errorMessage = err instanceof Error ? err.message : "";
+  if (errorName === "TimeoutError" || errorMessageIncludesTimeoutHint(errorMessage)) {
+    return true;
+  }
+
+  if (errorName !== "AbortError") {
+    return false;
+  }
+
+  const reason = signal?.reason;
+  if (reason && typeof reason === "object") {
+    const reasonName = "name" in reason ? String(reason.name) : "";
+    const reasonMessage = reason instanceof Error ? reason.message : String(reason);
+    return reasonName === "TimeoutError" || errorMessageIncludesTimeoutHint(reasonMessage);
+  }
+
+  return false;
+}
+
+function normalizeOllamaStreamError(err: unknown, signal?: AbortSignal): Error {
+  if (isTimeoutAbortError(err, signal)) {
+    const timeoutError = new Error("Ollama request timed out");
+    timeoutError.name = "TimeoutError";
+    return timeoutError;
+  }
+  if (err instanceof Error) {
+    return err;
+  }
+  return new Error(String(err));
+}
+
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
   providerBaseUrl?: string;
@@ -472,10 +529,7 @@ export function createOllamaStreamFn(
           ...defaultHeaders,
           ...options?.headers,
         };
-        if (
-          options?.apiKey &&
-          (!headers.Authorization || !isNonSecretApiKeyMarker(options.apiKey))
-        ) {
+        if (shouldAttachOllamaAuthorizationHeader(options?.apiKey)) {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
@@ -549,7 +603,8 @@ export function createOllamaStreamFn(
           message: assistantMessage,
         });
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const normalizedError = normalizeOllamaStreamError(err, options?.signal);
+        const errorMessage = normalizedError.message;
         stream.push({
           type: "error",
           reason: "error",
