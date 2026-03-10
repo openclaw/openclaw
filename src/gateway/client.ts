@@ -11,7 +11,6 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { clearDevicePairing } from "../infra/device-pairing.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -187,7 +186,9 @@ export class GatewayClient {
       this.ws = null;
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
-      // not erase a valid cached device token.
+      // not erase a valid cached device token. When device-token auth was active,
+      // clear only the local cached token and preserve the paired device entry so
+      // the gateway can issue a fresh device token on the next connect.
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
@@ -199,9 +200,9 @@ export class GatewayClient {
         const role = this.opts.role ?? "operator";
         try {
           clearDeviceAuthToken({ deviceId, role });
-          void clearDevicePairing(deviceId).catch((err) => {
-            logDebug(`failed clearing stale device pairing for device ${deviceId}: ${String(err)}`);
-          });
+          logDebug(
+            `preserving paired device entry for device ${deviceId} after token mismatch; clearing local device-auth token only`,
+          );
           logDebug(`cleared stale device-auth token for device ${deviceId}`);
         } catch (err) {
           logDebug(
