@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **mindkeeper** — Time Machine for Your AI's Brain. Version control for agent context files (AGENTS.md, SOUL.md, MEMORY.md). Auto-snapshots, diffs, rollback, named checkpoints. LLM-powered commit messages.
+- **mindkeeper** — Version control for agent context files with auto-snapshots, diffs, rollback, and LLM-powered commit messages.
   npm: `mindkeeper-openclaw`
   repo: `https://github.com/seekcontext/mindkeeper`
   install: `openclaw plugins install mindkeeper-openclaw`
