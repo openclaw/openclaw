@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureSharpLoaded, SharpUnavailableError } from "../media/image-ops.js";
+import { ensureSharpLoaded, prefersSips, SharpUnavailableError } from "../media/image-ops.js";
 import { note } from "../terminal/note.js";
 
 export function noteSourceInstallIssues(root: string | null) {
@@ -46,8 +46,9 @@ export function noteSourceInstallIssues(root: string | null) {
  * causing all image optimization to fail even for images that are already small.
  */
 export async function noteSharpAvailability(): Promise<void> {
-  // sips handles image ops on macOS without sharp.
-  if (process.platform === "darwin") {
+  // sips handles image ops on Bun/macOS without sharp; skip the warning only
+  // when sips is actually the active backend, not for all Darwin hosts.
+  if (prefersSips()) {
     return;
   }
 

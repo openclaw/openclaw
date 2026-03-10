@@ -11,6 +11,8 @@ import {
   convertHeicToJpeg,
   hasAlphaChannel,
   optimizeImageToPng,
+  readJpegDimensionsFromHeader,
+  readPngDimensionsFromHeader,
   resizeToJpeg,
 } from "../media/image-ops.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
@@ -312,9 +314,19 @@ async function loadWebMediaInternal(
           })),
         };
       } catch (err) {
-        // If sharp is unavailable and the image already fits within the cap, pass it through
-        // without re-encoding rather than failing completely.
+        // If sharp is unavailable and the image already fits within the byte cap, pass it
+        // through without re-encoding. Also verify pixel dimensions for PNG/JPEG so that
+        // small-byte but large-dimension images don't silently slip through.
         if (err instanceof SharpUnavailableError && params.buffer.length <= cap) {
+          const dims =
+            readPngDimensionsFromHeader(params.buffer) ??
+            readJpegDimensionsFromHeader(params.buffer);
+          if (dims && (dims.width > 4000 || dims.height > 4000)) {
+            throw new Error(
+              `Image dimensions (${dims.width}×${dims.height}px) exceed limits and cannot be resized: image processing backend is unavailable.`,
+              { cause: err },
+            );
+          }
           return {
             buffer: params.buffer,
             contentType: params.contentType,
