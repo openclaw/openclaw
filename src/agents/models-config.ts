@@ -267,11 +267,28 @@ export async function ensureOpenClawModelsJson(
 
   const mode = cfg.models?.mode ?? DEFAULT_MODE;
   const targetPath = path.join(agentDir, "models.json");
-  const mergedProviders = await resolveProvidersForMode({
+  let mergedProviders = await resolveProvidersForMode({
     mode,
     targetPath,
     providers,
   });
+
+  // When explicit providers are configured, the merge-with-existing step
+  // above may re-introduce implicit providers that were previously written
+  // to models.json from earlier zero-config runs. Strip them again so the
+  // explicit-provider filter from resolveProvidersForModelsJson is honored.
+  // See #33327.
+  const explicitProviders = cfg.models?.providers ?? {};
+  if (Object.keys(explicitProviders).length > 0) {
+    const explicitKeys = new Set(Object.keys(explicitProviders).map((k) => k.trim()));
+    const filtered: Record<string, ProviderConfig> = {};
+    for (const [key, value] of Object.entries(mergedProviders)) {
+      if (explicitKeys.has(key)) {
+        filtered[key] = value;
+      }
+    }
+    mergedProviders = filtered;
+  }
 
   const normalizedProviders = normalizeProviders({
     providers: mergedProviders,

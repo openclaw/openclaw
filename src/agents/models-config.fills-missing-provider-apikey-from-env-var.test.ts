@@ -172,7 +172,7 @@ describe("models-config", () => {
       });
     });
   });
-  it("merges providers by default", async () => {
+  it("merges providers by default — explicit providers strip non-explicit entries from models.json", async () => {
     await withTempHome(async () => {
       await writeAgentModelsJson({
         providers: {
@@ -202,7 +202,10 @@ describe("models-config", () => {
         providers: Record<string, { baseUrl?: string }>;
       }>();
 
-      expect(parsed.providers.existing?.baseUrl).toBe("http://localhost:1234/v1");
+      // When explicit providers are configured (custom-proxy), previously-
+      // discovered providers in models.json that are NOT in the explicit list
+      // are stripped during the merge step so they don't re-appear. See #33327.
+      expect(parsed.providers.existing).toBeUndefined();
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
     });
   });
