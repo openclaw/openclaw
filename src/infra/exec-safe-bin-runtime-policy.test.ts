@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,11 +10,29 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "./exec-safe-bin-runtime-policy.js";
 
-// On case-insensitive filesystems, trusted dirs are stored lowercased.
+// Mirror the runtime FS probe so test expectations match actual behavior.
+function isCaseInsensitiveFs(): boolean {
+  try {
+    const tmpDir = os.tmpdir();
+    const original = fsSync.statSync(tmpDir);
+    const flipped = (() => {
+      try {
+        return fsSync.statSync(tmpDir.toUpperCase());
+      } catch {
+        return null;
+      }
+    })();
+    if (!flipped) {
+      return false;
+    }
+    return original.ino === flipped.ino && original.dev === flipped.dev;
+  } catch {
+    return false;
+  }
+}
+
 const resolveTrusted = (p: string) =>
-  process.platform === "darwin" || process.platform === "win32"
-    ? path.resolve(p).toLowerCase()
-    : path.resolve(p);
+  isCaseInsensitiveFs() ? path.resolve(p).toLowerCase() : path.resolve(p);
 
 describe("exec safe-bin runtime policy", () => {
   const interpreterCases: Array<{ bin: string; expected: boolean }> = [

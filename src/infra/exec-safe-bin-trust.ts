@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Keep defaults to OS-managed immutable bins only.
@@ -28,10 +29,35 @@ export type WritableTrustedSafeBinDir = {
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
-// macOS (APFS) and Windows (NTFS) use case-insensitive filesystems.
+// Detect whether the filesystem is case-insensitive by probing the OS
+// temp directory. This handles case-sensitive APFS on macOS and
+// case-sensitive volumes on Windows without false assumptions.
 // normalizeConfiguredSafeBins() lowercases bin paths, so trusted dirs
 // must also be lowercased for the Set membership check to match.
-const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+function detectCaseInsensitiveFs(): boolean {
+  try {
+    const tmpDir = os.tmpdir();
+    // If the uppercased path resolves to the same inode as the original,
+    // the filesystem is case-insensitive.
+    const original = fs.statSync(tmpDir);
+    const flipped = (() => {
+      try {
+        return fs.statSync(tmpDir.toUpperCase());
+      } catch {
+        return null;
+      }
+    })();
+    if (!flipped) {
+      return false;
+    }
+    return original.ino === flipped.ino && original.dev === flipped.dev;
+  } catch {
+    // Fall back to platform heuristic if the probe fails.
+    return process.platform === "darwin" || process.platform === "win32";
+  }
+}
+
+const CASE_INSENSITIVE_FS = detectCaseInsensitiveFs();
 
 function normalizeTrustedDir(value: string): string | null {
   const trimmed = value.trim();
