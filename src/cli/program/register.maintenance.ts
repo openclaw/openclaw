@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { runDaemonRestart } from "../daemon-cli/runners.js";
 
 export function registerMaintenanceCommands(program: Command) {
   program
@@ -109,5 +110,13 @@ export function registerMaintenanceCommands(program: Command) {
           dryRun: Boolean(opts.dryRun),
         });
       });
+    });
+
+  program
+    .command("restart")
+    .description("Restart the Gateway service (shortcut for gateway restart)")
+    .option("--json", "Output JSON", false)
+    .action(async (cmdOpts) => {
+      await runDaemonRestart(cmdOpts);
     });
 }

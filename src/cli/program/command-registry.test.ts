@@ -24,6 +24,7 @@ vi.mock("./register.maintenance.js", () => ({
     program.command("dashboard");
     program.command("reset");
     program.command("uninstall");
+    program.command("restart");
   },
 }));
 
@@ -106,6 +107,13 @@ describe("command-registry", () => {
     expect(namesOf(program)).toEqual(["doctor"]);
   });
 
+  it("registers restart placeholder for restart primary command", () => {
+    const program = createProgram();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "restart"]);
+
+    expect(namesOf(program)).toEqual(["restart"]);
+  });
+
   it("does not narrow to the primary command when help is requested", () => {
     const program = createProgram();
     registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
@@ -126,6 +134,7 @@ describe("command-registry", () => {
     expect(names).toContain("dashboard");
     expect(names).toContain("reset");
     expect(names).toContain("uninstall");
+    expect(names).toContain("restart");
     expect(names).not.toContain("maintenance");
   });
 
@@ -150,6 +159,6 @@ describe("command-registry", () => {
 
     const found = await registerCoreCliByName(program, testProgramContext, "dashboard");
     expect(found).toBe(true);
-    expect(namesOf(program)).toEqual(["doctor", "dashboard", "reset", "uninstall"]);
+    expect(namesOf(program)).toEqual(["doctor", "dashboard", "reset", "uninstall", "restart"]);
   });
 });

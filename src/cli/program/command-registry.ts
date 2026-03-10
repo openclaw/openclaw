@@ -127,6 +127,11 @@ const coreEntries: CoreCliEntry[] = [
         description: "Uninstall the gateway service + local data (CLI remains)",
         hasSubcommands: false,
       },
+      {
+        name: "restart",
+        description: "Restart the Gateway service (shortcut for gateway restart)",
+        hasSubcommands: false,
+      },
     ],
     register: async ({ program }) => {
       const mod = await import("./register.maintenance.js");
