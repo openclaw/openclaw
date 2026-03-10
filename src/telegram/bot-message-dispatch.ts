@@ -258,6 +258,7 @@ export const dispatchTelegramMessage = async ({
   let answerLaneNeedsBoundaryReset = false;
   let clearAnswerPreviewOnBoundaryReset = false;
   let skipNextAnswerMessageStartRotation = false;
+  let pendingAnswerFinalDelivery: Promise<void> | undefined;
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
@@ -529,6 +530,33 @@ export const dispatchTelegramMessage = async ({
     clearAnswerPreviewOnBoundaryReset =
       answerLane.hasStreamedMessage && activePreviewLifecycleByLane.answer === "transient";
   };
+  const waitForPendingAnswerFinalDelivery = async () => {
+    await pendingAnswerFinalDelivery;
+  };
+  const deliverFinalAnswerLaneText = async (params: {
+    text: string;
+    payload: ReplyPayload;
+    previewButtons?: TelegramInlineButtons;
+  }) => {
+    let resolvePendingAnswerFinalDelivery: (() => void) | undefined;
+    pendingAnswerFinalDelivery = new Promise<void>((resolve) => {
+      resolvePendingAnswerFinalDelivery = resolve;
+    });
+    try {
+      const result = await deliverLaneText({
+        laneName: "answer",
+        text: params.text,
+        payload: params.payload,
+        infoKind: "final",
+        previewButtons: params.previewButtons,
+      });
+      noteAnswerFinalWithoutPreview(result);
+      return result;
+    } finally {
+      resolvePendingAnswerFinalDelivery?.();
+      pendingAnswerFinalDelivery = undefined;
+    }
+  };
 
   let queuedFinal = false;
 
@@ -589,14 +617,11 @@ export const dispatchTelegramMessage = async ({
                 | { buttons?: TelegramInlineButtons }
                 | undefined
             )?.buttons;
-            const result = await deliverLaneText({
-              laneName: "answer",
+            await deliverFinalAnswerLaneText({
               text: buffered.text,
               payload: buffered.payload,
-              infoKind: "final",
               previewButtons: bufferedButtons,
             });
-            noteAnswerFinalWithoutPreview(result);
             reasoningStepState.resetForNextStep();
           };
 
@@ -615,14 +640,21 @@ export const dispatchTelegramMessage = async ({
             if (segment.lane === "reasoning") {
               reasoningStepState.noteReasoningHint();
             }
-            const result = await deliverLaneText({
-              laneName: segment.lane,
-              text: segment.text,
-              payload,
-              infoKind: info.kind,
-              previewButtons,
-              allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
-            });
+            const result =
+              segment.lane === "answer" && info.kind === "final"
+                ? await deliverFinalAnswerLaneText({
+                    text: segment.text,
+                    payload,
+                    previewButtons,
+                  })
+                : await deliverLaneText({
+                    laneName: segment.lane,
+                    text: segment.text,
+                    payload,
+                    infoKind: info.kind,
+                    previewButtons,
+                    allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
+                  });
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
@@ -631,7 +663,6 @@ export const dispatchTelegramMessage = async ({
               continue;
             }
             if (info.kind === "final") {
-              noteAnswerFinalWithoutPreview(result);
               if (reasoningLane.hasStreamedMessage) {
                 activePreviewLifecycleByLane.reasoning = "complete";
                 retainPreviewOnCleanupByLane.reasoning = true;
@@ -689,12 +720,14 @@ export const dispatchTelegramMessage = async ({
           answerLane.stream || reasoningLane.stream
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
+                  await waitForPendingAnswerFinalDelivery();
                   await ingestDraftLaneSegments(payload.text);
                 })
             : undefined,
         onReasoningStream: reasoningLane.stream
           ? (payload) =>
               enqueueDraftLaneEvent(async () => {
+                await waitForPendingAnswerFinalDelivery();
                 // Split between reasoning blocks only when the next reasoning
                 // stream starts. Splitting at reasoning-end can orphan the active
                 // preview and cause duplicate reasoning sends on reasoning final.
@@ -709,6 +742,7 @@ export const dispatchTelegramMessage = async ({
         onAssistantMessageStart: answerLane.stream
           ? () =>
               enqueueDraftLaneEvent(async () => {
+                await waitForPendingAnswerFinalDelivery();
                 reasoningStepState.resetForNextStep();
                 if (skipNextAnswerMessageStartRotation) {
                   skipNextAnswerMessageStartRotation = false;

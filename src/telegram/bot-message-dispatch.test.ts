@@ -690,6 +690,76 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("pre-rotates late partials that arrive while a final-only send is still in flight", async () => {
+    let messageId: number | undefined;
+    let finalized = false;
+    const answerDraftStream = {
+      update: vi.fn().mockImplementation(() => {
+        if (finalized) {
+          return;
+        }
+        if (messageId == null) {
+          messageId = 1001;
+        }
+      }),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => messageId),
+      previewMode: vi.fn().mockReturnValue("message"),
+      previewRevision: vi.fn().mockReturnValue(0),
+      lastDeliveredText: vi.fn().mockReturnValue(""),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        finalized = true;
+      }),
+      materialize: vi.fn().mockImplementation(async () => messageId),
+      forceNewMessage: vi.fn().mockImplementation(() => {
+        finalized = false;
+        messageId = undefined;
+      }),
+    };
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    let resolveSendStarted: (() => void) | undefined;
+    const sendStarted = new Promise<void>((resolve) => {
+      resolveSendStarted = resolve;
+    });
+    let resolveFirstSend: ((value: { delivered: boolean }) => void) | undefined;
+    deliverReplies.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstSend = resolve;
+          resolveSendStarted?.();
+        }),
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const firstFinalPromise = dispatcherOptions.deliver(
+          { text: "Message A final" },
+          { kind: "final" },
+        );
+        await sendStarted;
+        const earlyPartialPromise = replyOptions?.onPartialReply?.({
+          text: "Message B early",
+        });
+
+        resolveFirstSend?.({ delivered: true });
+
+        await firstFinalPromise;
+        await earlyPartialPromise;
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    const boundaryRotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const earlyUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
+    expect(boundaryRotationOrder).toBeLessThan(earlyUpdateOrder);
+  });
+
   it("rotates on message start after preview finalization falls back to a normal send", async () => {
     const { createTelegramDraftStream: createRealTelegramDraftStream } =
       await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
