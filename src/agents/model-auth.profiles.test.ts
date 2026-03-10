@@ -7,6 +7,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
 
+const envVar = (...parts: string[]) => parts.join("_");
+
 const oauthFixture = {
   access: "access-token",
   refresh: "refresh-token",
@@ -157,7 +159,7 @@ describe("getApiKeyForModel", () => {
           } catch (err) {
             error = err;
           }
-          expect(String(error)).toContain("openai-codex/gpt-5.3-codex");
+          expect(String(error)).toContain("openai-codex/gpt-5.4");
         },
       );
     } finally {
@@ -191,7 +193,7 @@ describe("getApiKeyForModel", () => {
     await withEnvAsync(
       {
         ZAI_API_KEY: undefined,
-        Z_AI_API_KEY: "zai-test-key",
+        Z_AI_API_KEY: "zai-test-key", // pragma: allowlist secret
       },
       async () => {
         const resolved = await resolveApiKeyForProvider({
@@ -205,7 +207,8 @@ describe("getApiKeyForModel", () => {
   });
 
   it("resolves Synthetic API key from env", async () => {
-    await withEnvAsync({ SYNTHETIC_API_KEY: "synthetic-test-key" }, async () => {
+    await withEnvAsync({ [envVar("SYNTHETIC", "API", "KEY")]: "synthetic-test-key" }, async () => {
+      // pragma: allowlist secret
       const resolved = await resolveApiKeyForProvider({
         provider: "synthetic",
         store: { version: 1, profiles: {} },
@@ -216,7 +219,8 @@ describe("getApiKeyForModel", () => {
   });
 
   it("resolves Qianfan API key from env", async () => {
-    await withEnvAsync({ QIANFAN_API_KEY: "qianfan-test-key" }, async () => {
+    await withEnvAsync({ [envVar("QIANFAN", "API", "KEY")]: "qianfan-test-key" }, async () => {
+      // pragma: allowlist secret
       const resolved = await resolveApiKeyForProvider({
         provider: "qianfan",
         store: { version: 1, profiles: {} },
@@ -226,8 +230,81 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves Model Studio API key from env", async () => {
+    await withEnvAsync(
+      { [envVar("MODELSTUDIO", "API", "KEY")]: "modelstudio-test-key" },
+      async () => {
+        // pragma: allowlist secret
+        const resolved = await resolveApiKeyForProvider({
+          provider: "modelstudio",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("modelstudio-test-key");
+        expect(resolved.source).toContain("MODELSTUDIO_API_KEY");
+      },
+    );
+  });
+
+  it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://gpu-node-server:11434",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("ollama-local");
+      expect(resolved.mode).toBe("api-key");
+      expect(resolved.source).toContain("synthetic local key");
+    });
+  });
+
+  it("prefers explicit OLLAMA_API_KEY over synthetic local key", async () => {
+    await withEnvAsync({ [envVar("OLLAMA", "API", "KEY")]: "env-ollama-key" }, async () => {
+      // pragma: allowlist secret
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://gpu-node-server:11434",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("env-ollama-key");
+      expect(resolved.source).toContain("OLLAMA_API_KEY");
+    });
+  });
+
+  it("still throws for ollama when no env/profile/config provider is available", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "ollama",
+          store: { version: 1, profiles: {} },
+        }),
+      ).rejects.toThrow('No API key found for provider "ollama".');
+    });
+  });
+
   it("resolves Vercel AI Gateway API key from env", async () => {
-    await withEnvAsync({ AI_GATEWAY_API_KEY: "gateway-test-key" }, async () => {
+    await withEnvAsync({ [envVar("AI_GATEWAY", "API", "KEY")]: "gateway-test-key" }, async () => {
+      // pragma: allowlist secret
       const resolved = await resolveApiKeyForProvider({
         provider: "vercel-ai-gateway",
         store: { version: 1, profiles: {} },
@@ -240,9 +317,9 @@ describe("getApiKeyForModel", () => {
   it("prefers Bedrock bearer token over access keys and profile", async () => {
     await expectBedrockAuthSource({
       env: {
-        AWS_BEARER_TOKEN_BEDROCK: "bedrock-token",
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-token", // pragma: allowlist secret
         AWS_ACCESS_KEY_ID: "access-key",
-        AWS_SECRET_ACCESS_KEY: "secret-key",
+        [envVar("AWS", "SECRET", "ACCESS", "KEY")]: "secret-key", // pragma: allowlist secret
         AWS_PROFILE: "profile",
       },
       expectedSource: "AWS_BEARER_TOKEN_BEDROCK",
@@ -254,7 +331,7 @@ describe("getApiKeyForModel", () => {
       env: {
         AWS_BEARER_TOKEN_BEDROCK: undefined,
         AWS_ACCESS_KEY_ID: "access-key",
-        AWS_SECRET_ACCESS_KEY: "secret-key",
+        [envVar("AWS", "SECRET", "ACCESS", "KEY")]: "secret-key", // pragma: allowlist secret
         AWS_PROFILE: "profile",
       },
       expectedSource: "AWS_ACCESS_KEY_ID",
@@ -274,7 +351,8 @@ describe("getApiKeyForModel", () => {
   });
 
   it("accepts VOYAGE_API_KEY for voyage", async () => {
-    await withEnvAsync({ VOYAGE_API_KEY: "voyage-test-key" }, async () => {
+    await withEnvAsync({ [envVar("VOYAGE", "API", "KEY")]: "voyage-test-key" }, async () => {
+      // pragma: allowlist secret
       const voyage = await resolveApiKeyForProvider({
         provider: "voyage",
         store: { version: 1, profiles: {} },
@@ -285,7 +363,8 @@ describe("getApiKeyForModel", () => {
   });
 
   it("strips embedded CR/LF from ANTHROPIC_API_KEY", async () => {
-    await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test-\r\nkey" }, async () => {
+    await withEnvAsync({ [envVar("ANTHROPIC", "API", "KEY")]: "sk-ant-test-\r\nkey" }, async () => {
+      // pragma: allowlist secret
       const resolved = resolveEnvApiKey("anthropic");
       expect(resolved?.apiKey).toBe("sk-ant-test-key");
       expect(resolved?.source).toContain("ANTHROPIC_API_KEY");

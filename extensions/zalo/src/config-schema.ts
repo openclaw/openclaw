@@ -1,8 +1,10 @@
+import {
+  AllowFromEntrySchema,
+  buildCatchallMultiAccountChannelSchema,
+} from "openclaw/plugin-sdk/compat";
 import { MarkdownConfigSchema } from "openclaw/plugin-sdk/zalo";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
 
 const zaloAccountSchema = z.object({
   name: z.string().optional(),
@@ -14,15 +16,12 @@ const zaloAccountSchema = z.object({
   webhookSecret: buildSecretInputSchema().optional(),
   webhookPath: z.string().optional(),
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-  allowFrom: z.array(allowFromEntry).optional(),
+  allowFrom: z.array(AllowFromEntrySchema).optional(),
   groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
-  groupAllowFrom: z.array(allowFromEntry).optional(),
+  groupAllowFrom: z.array(AllowFromEntrySchema).optional(),
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),
   responsePrefix: z.string().optional(),
 });
 
-export const ZaloConfigSchema = zaloAccountSchema.extend({
-  accounts: z.object({}).catchall(zaloAccountSchema).optional(),
-  defaultAccount: z.string().optional(),
-});
+export const ZaloConfigSchema = buildCatchallMultiAccountChannelSchema(zaloAccountSchema);

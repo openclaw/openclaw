@@ -193,6 +193,44 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
   });
 
+  it("accepts chat events when session key is an alias of the active canonical key", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: {
+        currentSessionKey: "agent:main:main",
+        activeChatRunId: null,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-alias",
+      sessionKey: "main",
+      state: "delta",
+      message: { content: "hello" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-alias");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("hello", "run-alias");
+  });
+
+  it("does not cross-match canonical session keys from different agents", () => {
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      state: {
+        currentAgentId: "alpha",
+        currentSessionKey: "agent:alpha:main",
+        activeChatRunId: null,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-other-agent",
+      sessionKey: "agent:beta:main",
+      state: "delta",
+      message: { content: "should be ignored" },
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
   it("clears run mapping when the session changes", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -445,5 +483,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-silent");
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
+
+  it("reloads history when a local run ends without a displayable final message", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-local-silent" },
+    });
+
+    noteLocalRunId("run-local-silent");
+
+    handleChatEvent({
+      runId: "run-local-silent",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 });

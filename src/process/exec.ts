@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
+import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
@@ -58,7 +59,13 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   const nodeDir = path.dirname(process.execPath);
   const cliPath = path.join(nodeDir, "node_modules", "npm", "bin", cliName);
   if (!fs.existsSync(cliPath)) {
-    return null;
+    // Bun-based runs don't ship npm-cli.js next to process.execPath.
+    // Fall back to npm.cmd/npx.cmd so we still route through cmd wrapper
+    // (avoids direct .cmd spawn EINVAL on patched Node).
+    const command = argv[0] ?? "";
+    const ext = path.extname(command).toLowerCase();
+    const shimmedCommand = ext ? command : `${command}.cmd`;
+    return [shimmedCommand, ...argv.slice(1)];
   }
   return [process.execPath, cliPath, ...argv.slice(1)];
 }
@@ -207,7 +214,7 @@ export function resolveCommandEnv(params: {
       resolvedEnv.npm_config_fund = "false";
     }
   }
-  return resolvedEnv;
+  return markOpenClawExecEnv(resolvedEnv);
 }
 
 export async function runCommandWithTimeout(

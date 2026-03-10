@@ -5,10 +5,11 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
-import { normalizeModelCompat } from "../model-compat.js";
+import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -19,8 +20,32 @@ type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
-  headers?: Record<string, string>;
+  headers?: unknown;
 };
+
+function sanitizeModelHeaders(
+  headers: unknown,
+  opts?: { stripSecretRefMarkers?: boolean },
+): Record<string, string> | undefined {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (typeof headerValue !== "string") {
+      continue;
+    }
+    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+      continue;
+    }
+    next[headerName] = headerValue;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function normalizeResolvedModel(params: { provider: string; model: Model<Api> }): Model<Api> {
+  return normalizeResolvedProviderModel(params);
+}
 
 export { buildModelAliasLines };
 
@@ -46,16 +71,23 @@ function applyConfiguredProviderOverrides(params: {
 }): Model<Api> {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
-    return discoveredModel;
+    return {
+      ...discoveredModel,
+      // Discovered models originate from models.json and may contain persistence markers.
+      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
+    };
   }
   const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
-  if (
-    !configuredModel &&
-    !providerConfig.baseUrl &&
-    !providerConfig.api &&
-    !providerConfig.headers
-  ) {
-    return discoveredModel;
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
+    return {
+      ...discoveredModel,
+      headers: discoveredHeaders,
+    };
   }
   return {
     ...discoveredModel,
@@ -67,13 +99,13 @@ function applyConfiguredProviderOverrides(params: {
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
     headers:
-      providerConfig.headers || configuredModel?.headers
+      discoveredHeaders || providerHeaders || configuredHeaders
         ? {
-            ...discoveredModel.headers,
-            ...providerConfig.headers,
-            ...configuredModel?.headers,
+            ...discoveredHeaders,
+            ...providerHeaders,
+            ...configuredHeaders,
           }
-        : discoveredModel.headers,
+        : undefined,
     compat: configuredModel?.compat ?? discoveredModel.compat,
   };
 }
@@ -86,17 +118,122 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
+    const providerHeaders = sanitizeModelHeaders(entry?.headers);
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
-      headers:
-        entry?.headers || (model as InlineModelEntry).headers
-          ? { ...entry?.headers, ...(model as InlineModelEntry).headers }
-          : undefined,
+      headers: (() => {
+        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers);
+        if (!providerHeaders && !modelHeaders) {
+          return undefined;
+        }
+        return {
+          ...providerHeaders,
+          ...modelHeaders,
+        };
+      })(),
     }));
   });
+}
+
+export function resolveModelWithRegistry(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  cfg?: OpenClawConfig;
+}): Model<Api> | undefined {
+  const { provider, modelId, modelRegistry, cfg } = params;
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
+  if (model) {
+    return normalizeResolvedModel({
+      provider,
+      model: applyConfiguredProviderOverrides({
+        discoveredModel: model,
+        providerConfig,
+        modelId,
+      }),
+    });
+  }
+
+  const providers = cfg?.models?.providers ?? {};
+  const inlineModels = buildInlineProviderModels(providers);
+  const normalizedProvider = normalizeProviderId(provider);
+  const inlineMatch = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (inlineMatch?.api) {
+    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
+  }
+
+  // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
+  // Otherwise, configured providers can default to a generic API and break specific transports.
+  const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+  if (forwardCompat) {
+    return normalizeResolvedModel({
+      provider,
+      model: applyConfiguredProviderOverrides({
+        discoveredModel: forwardCompat,
+        providerConfig,
+        modelId,
+      }),
+    });
+  }
+
+  // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
+  // should work without being pre-registered in the local catalog.
+  if (normalizedProvider === "openrouter") {
+    return normalizeResolvedModel({
+      provider,
+      model: {
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider,
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+        maxTokens: 8192,
+      } as Model<Api>,
+    });
+  }
+
+  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  if (providerConfig || modelId.startsWith("mock-")) {
+    return normalizeResolvedModel({
+      provider,
+      model: {
+        id: modelId,
+        name: modelId,
+        api: providerConfig?.api ?? "openai-responses",
+        provider,
+        baseUrl: providerConfig?.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers:
+          providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      } as Model<Api>,
+    });
+  }
+
+  return undefined;
 }
 
 export function resolveModel(
@@ -113,89 +250,13 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
-
-  if (!model) {
-    const providers = cfg?.models?.providers ?? {};
-    const inlineModels = buildInlineProviderModels(providers);
-    const normalizedProvider = normalizeProviderId(provider);
-    const inlineMatch = inlineModels.find(
-      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-    );
-    if (inlineMatch) {
-      const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
-      return {
-        model: normalized,
-        authStorage,
-        modelRegistry,
-      };
-    }
-    // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
-    // Otherwise, configured providers can default to a generic API and break specific transports.
-    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
-    if (forwardCompat) {
-      return { model: forwardCompat, authStorage, modelRegistry };
-    }
-    // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
-    // should work without being pre-registered in the local catalog.
-    if (normalizedProvider === "openrouter") {
-      const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
-        api: "openai-completions",
-        provider,
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
-        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
-      } as Model<Api>);
-      return { model: fallbackModel, authStorage, modelRegistry };
-    }
-    const providerCfg = providerConfig;
-    if (providerCfg || modelId.startsWith("mock-")) {
-      const configuredModel = providerCfg?.models?.find((candidate) => candidate.id === modelId);
-      const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
-        provider,
-        baseUrl: providerCfg?.baseUrl,
-        reasoning: configuredModel?.reasoning ?? false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow:
-          configuredModel?.contextWindow ??
-          providerCfg?.models?.[0]?.contextWindow ??
-          DEFAULT_CONTEXT_TOKENS,
-        maxTokens:
-          configuredModel?.maxTokens ??
-          providerCfg?.models?.[0]?.maxTokens ??
-          DEFAULT_CONTEXT_TOKENS,
-        headers:
-          providerCfg?.headers || configuredModel?.headers
-            ? { ...providerCfg?.headers, ...configuredModel?.headers }
-            : undefined,
-      } as Model<Api>);
-      return { model: fallbackModel, authStorage, modelRegistry };
-    }
-    return {
-      error: buildUnknownModelError(provider, modelId),
-      authStorage,
-      modelRegistry,
-    };
+  const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  if (model) {
+    return { model, authStorage, modelRegistry };
   }
+
   return {
-    model: normalizeModelCompat(
-      applyConfiguredProviderOverrides({
-        discoveredModel: model,
-        providerConfig,
-        modelId,
-      }),
-    ),
+    error: buildUnknownModelError(provider, modelId),
     authStorage,
     modelRegistry,
   };

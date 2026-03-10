@@ -1,13 +1,13 @@
 import Testing
 @testable import OpenClaw
 
-@Suite struct GatewayAgentChannelTests {
-    @Test func shouldDeliverBlocksWebChat() {
+struct GatewayAgentChannelTests {
+    @Test func `should deliver blocks web chat`() {
         #expect(GatewayAgentChannel.webchat.shouldDeliver(true) == false)
         #expect(GatewayAgentChannel.webchat.shouldDeliver(false) == false)
     }
 
-    @Test func shouldDeliverAllowsLastAndProviderChannels() {
+    @Test func `should deliver allows last and provider channels`() {
         #expect(GatewayAgentChannel.last.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.whatsapp.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.telegram.shouldDeliver(true) == true)
@@ -16,7 +16,7 @@ import Testing
         #expect(GatewayAgentChannel.last.shouldDeliver(false) == false)
     }
 
-    @Test func initRawNormalizesAndFallsBackToLast() {
+    @Test func `init raw normalizes and falls back to last`() {
         #expect(GatewayAgentChannel(raw: nil) == .last)
         #expect(GatewayAgentChannel(raw: "  ") == .last)
         #expect(GatewayAgentChannel(raw: "WEBCHAT") == .webchat)
