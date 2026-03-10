@@ -59,21 +59,33 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for non-native
-  // endpoints for safety.
+  // User can explicitly override supportsUsageInStreaming for backends that support it.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+  
+  // Respect user's explicit override for supportsUsageInStreaming
+  // Many OpenAI-compatible servers (llama.cpp, vLLM, etc.) support stream usage
+  const userOverrideUsageInStreaming = compat?.supportsUsageInStreaming === true;
+  
+  if (
+    compat?.supportsDeveloperRole === false &&
+    (compat?.supportsUsageInStreaming === false || userOverrideUsageInStreaming)
+  ) {
     return model;
   }
 
   // Return a new object — do not mutate the caller's model reference.
+  // Preserve user's supportsUsageInStreaming override if explicitly set to true
   return {
     ...model,
     compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
+      ? {
+          ...compat,
+          supportsDeveloperRole: false,
+          supportsUsageInStreaming: userOverrideUsageInStreaming ? true : false,
+        }
       : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
   } as typeof model;
 }
