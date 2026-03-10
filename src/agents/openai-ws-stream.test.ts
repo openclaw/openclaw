@@ -610,6 +610,49 @@ describe("convertMessagesToInputItems", () => {
     expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
   });
 
+  it("preserves assistant commentary phase when replaying assistant messages", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Step 1/3: checking status.",
+          phase: "commentary" as const,
+          textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+        },
+        {
+          type: "text" as const,
+          text: "Final answer.",
+          phase: "final_answer" as const,
+          textSignature: JSON.stringify({ id: "sig-2", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+      content: "Step 1/3: checking status.",
+    });
+    expect(items[1]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      phase: "final_answer",
+      content: "Final answer.",
+    });
+  });
+
   it("returns empty array for empty messages", () => {
     expect(convertMessagesToInputItems([])).toEqual([]);
   });
@@ -627,6 +670,17 @@ describe("buildAssistantMessageFromResponse", () => {
     const textBlock = msg.content[0] as { type: string; text: string };
     expect(textBlock.type).toBe("text");
     expect(textBlock.text).toBe("Hello from assistant");
+  });
+
+  it("preserves phase in assistant text blocks", () => {
+    const response = makeResponseObject("resp_phase", "Checking status", undefined, "commentary");
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.content).toHaveLength(1);
+    expect(msg.content[0]).toMatchObject({
+      type: "text",
+      text: "Checking status",
+      phase: "commentary",
+    });
   });
 
   it("sets stopReason to 'stop' for text-only responses", () => {

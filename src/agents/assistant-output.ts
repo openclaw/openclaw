@@ -1,0 +1,206 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import {
+  extractAssistantText,
+  stripDowngradedToolCallText,
+  stripMinimaxToolCallXml,
+  stripThinkingTagsFromText,
+} from "./pi-embedded-utils.js";
+
+export type AssistantMessagePhase = "commentary" | "final_answer";
+
+export type AssistantOutputEntry = {
+  segmentId: string;
+  text: string;
+  phase?: AssistantMessagePhase | null;
+};
+
+type AssistantOutputCandidate = AssistantOutputEntry & {
+  isTerminal: boolean;
+};
+
+export function normalizeAssistantMessagePhase(value: unknown): AssistantMessagePhase | null {
+  return value === "commentary" || value === "final_answer" ? value : null;
+}
+
+function sanitizeAssistantSegmentText(text: string, errorContext: boolean) {
+  return sanitizeUserFacingText(
+    stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text))).trim(),
+    { errorContext },
+  );
+}
+
+function resolveAssistantTextBlockPhase(
+  block: Record<string, unknown>,
+  defaultPhase?: AssistantMessagePhase | null,
+) {
+  const directPhase = normalizeAssistantMessagePhase(block.phase);
+  if (directPhase) {
+    return directPhase;
+  }
+  const signature = block.textSignature;
+  if (typeof signature === "string" && signature.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(signature) as { phase?: unknown };
+      const signaturePhase = normalizeAssistantMessagePhase(parsed.phase);
+      if (signaturePhase) {
+        return signaturePhase;
+      }
+    } catch {
+      // Ignore malformed signatures and fall back to the message-level phase.
+    }
+  }
+  return defaultPhase ?? null;
+}
+
+function resolveAssistantTextBlockSignatureId(block: Record<string, unknown>) {
+  const signature = block.textSignature;
+  if (typeof signature !== "string" || signature.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(signature) as { id?: unknown };
+    return typeof parsed.id === "string" && parsed.id.trim().length > 0 ? parsed.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveAssistantMessageStableId(messageRecord?: Record<string, unknown>) {
+  const id = messageRecord?.id;
+  return typeof id === "string" && id.trim().length > 0 ? id : "message";
+}
+
+function extractAssistantOutputCandidates(msg: AgentMessage): AssistantOutputCandidate[] {
+  const messageRecord =
+    msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
+  const messageStableId = resolveAssistantMessageStableId(messageRecord);
+  const defaultPhase = normalizeAssistantMessagePhase(messageRecord?.phase);
+  const errorContext =
+    messageRecord?.stopReason === "error" ||
+    (typeof messageRecord?.errorMessage === "string" &&
+      messageRecord.errorMessage.trim().length > 0);
+  const content = Array.isArray(messageRecord?.content)
+    ? (messageRecord.content as Array<Record<string, unknown>>)
+    : null;
+
+  if (!content) {
+    const text = extractAssistantText(msg as AssistantMessage);
+    return text
+      ? [
+          {
+            segmentId: `assistant:${messageStableId}:segment:0`,
+            text,
+            isTerminal: true,
+            ...(defaultPhase ? { phase: defaultPhase } : {}),
+          },
+        ]
+      : [];
+  }
+
+  const groupedSegments: Array<AssistantOutputCandidate & { signatureIds?: string[] }> = [];
+  for (const [index, block] of content.entries()) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      continue;
+    }
+    const phase = resolveAssistantTextBlockPhase(block, defaultPhase);
+    const signatureId = resolveAssistantTextBlockSignatureId(block);
+    const lastGroup = groupedSegments.at(-1);
+    if (!lastGroup || (lastGroup.phase ?? null) !== (phase ?? null)) {
+      groupedSegments.push({
+        segmentId: signatureId ?? `assistant:${messageStableId}:segment:${groupedSegments.length}`,
+        text: block.text,
+        isTerminal: index === content.length - 1,
+        ...(phase ? { phase } : {}),
+        ...(signatureId ? { signatureIds: [signatureId] } : {}),
+      });
+      continue;
+    }
+    lastGroup.text += block.text;
+    lastGroup.isTerminal = index === content.length - 1;
+    if (signatureId) {
+      lastGroup.signatureIds = [...(lastGroup.signatureIds ?? []), signatureId];
+      lastGroup.segmentId = lastGroup.signatureIds.join(",");
+    } else if (!lastGroup.segmentId) {
+      lastGroup.segmentId = `assistant:${messageStableId}:segment:${index}`;
+    }
+  }
+
+  return groupedSegments
+    .map<AssistantOutputCandidate | null>((segment) => {
+      const text = sanitizeAssistantSegmentText(segment.text, errorContext).trim();
+      return text
+        ? {
+            segmentId: segment.segmentId,
+            text,
+            isTerminal: segment.isTerminal,
+            ...(segment.phase ? { phase: segment.phase } : {}),
+          }
+        : null;
+    })
+    .filter((segment): segment is AssistantOutputCandidate => Boolean(segment));
+}
+
+export function extractAssistantOutputSegments(msg: AgentMessage): AssistantOutputEntry[] {
+  return extractAssistantOutputCandidates(msg).map(({ isTerminal: _isTerminal, ...segment }) => {
+    return segment;
+  });
+}
+
+export async function reconcileLiveAssistantCommentary(params: {
+  message: AgentMessage | null | undefined;
+  seenSegmentIds: Set<string>;
+  onCommentary?: (segment: AssistantOutputEntry) => void | Promise<void>;
+}) {
+  if (!params.message || params.message.role !== "assistant") {
+    return { newOutputs: [] as AssistantOutputEntry[] };
+  }
+
+  const newOutputs: AssistantOutputEntry[] = [];
+  for (const segment of extractAssistantOutputCandidates(params.message)) {
+    if (
+      segment.phase !== "commentary" ||
+      segment.isTerminal ||
+      params.seenSegmentIds.has(segment.segmentId)
+    ) {
+      continue;
+    }
+    params.seenSegmentIds.add(segment.segmentId);
+    const { isTerminal: _isTerminal, ...resolvedSegment } = segment;
+    newOutputs.push(resolvedSegment);
+    await params.onCommentary?.(resolvedSegment);
+  }
+
+  return { newOutputs };
+}
+
+export async function reconcileAssistantOutputs(params: {
+  messages: AgentMessage[];
+  startIndex: number;
+  seenSegmentIds: Set<string>;
+}) {
+  const newOutputs: AssistantOutputEntry[] = [];
+  let nextStartIndex = params.messages.length;
+
+  for (const [index, msg] of params.messages.slice(params.startIndex).entries()) {
+    if (msg?.role !== "assistant") {
+      continue;
+    }
+    const messageRecord =
+      msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
+    if (typeof messageRecord?.stopReason !== "string" || messageRecord.stopReason.trim() === "") {
+      nextStartIndex = Math.min(nextStartIndex, params.startIndex + index);
+      continue;
+    }
+    for (const segment of extractAssistantOutputSegments(msg)) {
+      if (params.seenSegmentIds.has(segment.segmentId)) {
+        continue;
+      }
+      params.seenSegmentIds.add(segment.segmentId);
+      newOutputs.push(segment);
+    }
+  }
+
+  return { newOutputs, nextStartIndex };
+}

@@ -100,6 +100,7 @@ export type RunEmbeddedPiAgentParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onCommentaryReply?: (payload: ReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;

@@ -116,6 +116,14 @@ function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase 
   return value === "commentary" || value === "final_answer" ? value : undefined;
 }
 
+function readAssistantTextPhase(block: unknown): OpenAIResponsesAssistantPhase | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as { phase?: unknown; textSignature?: unknown };
+  return normalizeAssistantPhase(record.phase) ?? parseAssistantTextSignature(record.textSignature)?.phase;
+}
+
 function encodeAssistantTextSignature(params: {
   id: string;
   phase?: OpenAIResponsesAssistantPhase;
@@ -150,6 +158,25 @@ function parseAssistantTextSignature(
   } catch {
     return null;
   }
+}
+
+function buildAssistantTextBlock(params: {
+  itemId: string;
+  text: string;
+  phase?: OpenAIResponsesAssistantPhase;
+  contentIndex?: number;
+}): TextContent {
+  const signatureId =
+    (params.contentIndex ?? 0) === 0 ? params.itemId : `${params.itemId}:${params.contentIndex}`;
+  return {
+    type: "text",
+    text: params.text,
+    textSignature: encodeAssistantTextSignature({
+      id: signatureId,
+      ...(params.phase ? { phase: params.phase } : {}),
+    }),
+    ...(params.phase ? { phase: params.phase } : {}),
+  } as TextContent;
 }
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
@@ -320,23 +347,26 @@ export function convertMessagesToInputItems(
       const content = m.content;
       let assistantPhase = normalizeAssistantPhase(m.phase);
       if (Array.isArray(content)) {
-        const textParts: string[] = [];
-        const pushAssistantText = () => {
-          if (textParts.length === 0) {
-            return;
+        const textGroups: Array<{ phase?: OpenAIResponsesAssistantPhase; parts: string[] }> = [];
+        const flushTextGroups = () => {
+          for (const group of textGroups) {
+            if (group.parts.length === 0) {
+              continue;
+            }
+            items.push({
+              type: "message",
+              role: "assistant",
+              content: group.parts.join(""),
+              ...(group.phase ? { phase: group.phase } : {}),
+            });
           }
-          items.push({
-            type: "message",
-            role: "assistant",
-            content: textParts.join(""),
-            ...(assistantPhase ? { phase: assistantPhase } : {}),
-          });
-          textParts.length = 0;
+          textGroups.length = 0;
         };
 
         for (const block of content as Array<{
           type?: string;
           text?: string;
+          phase?: unknown;
           textSignature?: unknown;
           id?: unknown;
           name?: unknown;
@@ -344,16 +374,21 @@ export function convertMessagesToInputItems(
           thinkingSignature?: unknown;
         }>) {
           if (block.type === "text" && typeof block.text === "string") {
-            const parsedSignature = parseAssistantTextSignature(block.textSignature);
-            if (!assistantPhase) {
-              assistantPhase = parsedSignature?.phase;
+            const phase = readAssistantTextPhase(block) ?? assistantPhase;
+            if (!assistantPhase && phase) {
+              assistantPhase = phase;
             }
-            textParts.push(block.text);
+            const lastGroup = textGroups.at(-1);
+            if (!lastGroup || lastGroup.phase !== phase) {
+              textGroups.push({ phase, parts: [block.text] });
+            } else {
+              lastGroup.parts.push(block.text);
+            }
             continue;
           }
 
           if (block.type === "thinking") {
-            pushAssistantText();
+            flushTextGroups();
             const reasoningItem = parseThinkingSignature(block.thinkingSignature);
             if (reasoningItem) {
               items.push(reasoningItem);
@@ -365,7 +400,7 @@ export function convertMessagesToInputItems(
             continue;
           }
 
-          pushAssistantText();
+          flushTextGroups();
           const callIdRaw = toNonEmptyString(block.id);
           const toolName = toNonEmptyString(block.name);
           if (!callIdRaw || !toolName) {
@@ -384,7 +419,7 @@ export function convertMessagesToInputItems(
           });
         }
 
-        pushAssistantText();
+        flushTextGroups();
         continue;
       }
 
@@ -450,16 +485,16 @@ export function buildAssistantMessageFromResponse(
       if (itemPhase) {
         assistantPhase = itemPhase;
       }
-      for (const part of item.content ?? []) {
+      for (const [contentIndex, part] of (item.content ?? []).entries()) {
         if (part.type === "output_text" && part.text) {
-          content.push({
-            type: "text",
-            text: part.text,
-            textSignature: encodeAssistantTextSignature({
-              id: item.id,
-              ...(itemPhase ? { phase: itemPhase } : {}),
+          content.push(
+            buildAssistantTextBlock({
+              itemId: item.id,
+              text: part.text,
+              phase: itemPhase,
+              contentIndex,
             }),
-          });
+          );
         }
       }
     } else if (item.type === "function_call") {

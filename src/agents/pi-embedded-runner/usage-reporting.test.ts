@@ -79,6 +79,36 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     );
   });
 
+  it("forwards live commentary callbacks into embedded attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const onCommentaryReply = vi.fn();
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-commentary-forwarding",
+      onCommentaryReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onCommentaryReply,
+      }),
+    );
+  });
+
   it("forwards memory flush write paths into memory-triggered attempts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce({
       aborted: false,

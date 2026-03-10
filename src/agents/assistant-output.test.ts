@@ -1,0 +1,244 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  extractAssistantOutputSegments,
+  reconcileAssistantOutputs,
+  reconcileLiveAssistantCommentary,
+} from "./assistant-output.js";
+
+describe("assistant output extraction", () => {
+  it("reads phase and signature ids from textSignature", () => {
+    const message = {
+      id: "msg-1",
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "Step 1/3: checking status.",
+          textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: " Final summary.",
+          textSignature: JSON.stringify({ id: "sig-2", phase: "final_answer" }),
+        },
+      ],
+    };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const segments = extractAssistantOutputSegments(message as any);
+
+    expect(segments).toEqual([
+      {
+        segmentId: "sig-1",
+        text: "Step 1/3: checking status.",
+        phase: "commentary",
+      },
+      {
+        segmentId: "sig-2",
+        text: "Final summary.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+});
+
+describe("assistant output reconciliation", () => {
+  it("delivers live commentary from a partial assistant stream message once", async () => {
+    const onCommentary = vi.fn();
+    const seenSegmentIds = new Set<string>();
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Step 1/3: checking status.",
+          textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: " Final answer later.",
+          textSignature: JSON.stringify({ id: "sig-2", phase: "final_answer" }),
+        },
+      ],
+    };
+
+    const firstPass = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: message as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    expect(firstPass.newOutputs).toEqual([
+      {
+        segmentId: "sig-1",
+        text: "Step 1/3: checking status.",
+        phase: "commentary",
+      },
+    ]);
+    expect(onCommentary).toHaveBeenCalledTimes(1);
+
+    const secondPass = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: message as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    expect(secondPass.newOutputs).toEqual([]);
+    expect(onCommentary).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a cumulative commentary segment to stop growing before delivering it", async () => {
+    const onCommentary = vi.fn();
+    const seenSegmentIds = new Set<string>();
+    const firstPartial = {
+      id: "assistant-stream",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Step 2/3:",
+          textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+        },
+      ],
+    };
+    const secondPartial = {
+      ...firstPartial,
+      content: [
+        {
+          type: "text",
+          text: "Step 2/3: running lint.",
+          textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+        },
+      ],
+    };
+    const completedPartial = {
+      ...firstPartial,
+      content: [
+        {
+          type: "text",
+          text: "Step 2/3: running lint.",
+          textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const firstPass = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: firstPartial as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    expect(firstPass.newOutputs).toEqual([]);
+
+    const secondPass = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: secondPartial as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    expect(secondPass.newOutputs).toEqual([]);
+
+    const thirdPass = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: completedPartial as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    expect(thirdPass.newOutputs).toEqual([
+      {
+        segmentId: "sig-stream",
+        text: "Step 2/3: running lint.",
+        phase: "commentary",
+      },
+    ]);
+    expect(onCommentary).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks finalized assistant outputs separately and revisits incomplete messages", async () => {
+    const seenSegmentIds = new Set<string>();
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Step 1/3: checking status.",
+            textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+          },
+        ],
+      },
+    ];
+
+    const firstPass = await reconcileAssistantOutputs({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: messages as any,
+      startIndex: 0,
+      seenSegmentIds,
+    });
+    expect(firstPass.newOutputs).toEqual([]);
+    expect(firstPass.nextStartIndex).toBe(0);
+
+    Object.assign(messages[0], { stopReason: "toolUse" });
+
+    const secondPass = await reconcileAssistantOutputs({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: messages as any,
+      startIndex: firstPass.nextStartIndex,
+      seenSegmentIds,
+    });
+    expect(secondPass.newOutputs).toEqual([
+      {
+        segmentId: "sig-1",
+        text: "Step 1/3: checking status.",
+        phase: "commentary",
+      },
+    ]);
+    expect(secondPass.nextStartIndex).toBe(1);
+  });
+
+  it("falls back to assistant message id and segment ordinal when no signature id exists", async () => {
+    const onCommentary = vi.fn();
+    const seenSegmentIds = new Set<string>();
+    const message = {
+      id: "assistant-2",
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Step 1/3: checking status.",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const result = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: message as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+
+    expect(result.newOutputs).toEqual([
+      {
+        segmentId: "assistant:assistant-2:segment:0",
+        text: "Step 1/3: checking status.",
+        phase: "commentary",
+      },
+    ]);
+    expect(onCommentary).toHaveBeenCalledTimes(1);
+  });
+});
