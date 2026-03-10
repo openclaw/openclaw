@@ -157,20 +157,27 @@ class MemoryDB {
       };
     });
 
-    return mapped
-      .filter((r) => r.score >= minScore)
-      // Namespace filter: include rows matching agentId, OR legacy rows with no agentId
-      .filter((r) => !agentId || !r.entry.agentId || r.entry.agentId === agentId)
-      .slice(0, limit);
+    return (
+      mapped
+        .filter((r) => r.score >= minScore)
+        // Namespace filter: include rows matching agentId, OR legacy rows with no agentId
+        .filter((r) => !agentId || !r.entry.agentId || r.entry.agentId === agentId)
+        .slice(0, limit)
+    );
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, agentId?: string): Promise<boolean> {
     await this.ensureInitialized();
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(id)) {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
-    await this.table!.delete(`id = '${id}'`);
+    // Enforce namespace ownership: only delete rows that belong to the caller's
+    // namespace (or legacy untagged rows when agentId is provided).
+    const filter = agentId
+      ? `id = '${id}' AND (agentId = '${agentId}' OR agentId IS NULL)`
+      : `id = '${id}'`;
+    await this.table!.delete(filter);
     return true;
   }
 
@@ -325,9 +332,7 @@ const memoryPlugin = {
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
 
     // Explicit namespace override in config; falls back to per-agent ID at call time
-    const configNamespace: string | undefined = (cfg as Record<string, unknown>).namespace as
-      | string
-      | undefined;
+    const configNamespace: string | undefined = cfg.namespace;
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -347,7 +352,8 @@ const memoryPlugin = {
         }),
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
-          const agentId = configNamespace ?? toolCtx.agentId;
+          const agentId =
+            (configNamespace === "global" ? undefined : configNamespace) ?? toolCtx.agentId;
 
           const vector = await embeddings.embed(query);
           const results = await db.search(vector, limit, 0.1, agentId);
@@ -391,9 +397,7 @@ const memoryPlugin = {
           "Save important information in long-term memory. Use for preferences, facts, decisions.",
         parameters: Type.Object({
           text: Type.String({ description: "Information to remember" }),
-          importance: Type.Optional(
-            Type.Number({ description: "Importance 0-1 (default: 0.7)" }),
-          ),
+          importance: Type.Optional(Type.Number({ description: "Importance 0-1 (default: 0.7)" })),
           category: Type.Optional(
             Type.Unsafe<MemoryCategory>({
               type: "string",
@@ -412,7 +416,8 @@ const memoryPlugin = {
             category?: MemoryEntry["category"];
           };
 
-          const agentId = configNamespace ?? toolCtx.agentId;
+          const agentId =
+            (configNamespace === "global" ? undefined : configNamespace) ?? toolCtx.agentId;
           const vector = await embeddings.embed(text);
 
           // Check for duplicates within same namespace
@@ -433,10 +438,7 @@ const memoryPlugin = {
             };
           }
 
-          const entry = await db.store(
-            { text, vector, importance, category },
-            agentId,
-          );
+          const entry = await db.store({ text, vector, importance, category }, agentId);
 
           return {
             content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
@@ -458,10 +460,11 @@ const memoryPlugin = {
         }),
         async execute(_toolCallId, params) {
           const { query, memoryId } = params as { query?: string; memoryId?: string };
-          const agentId = configNamespace ?? toolCtx.agentId;
+          const agentId =
+            (configNamespace === "global" ? undefined : configNamespace) ?? toolCtx.agentId;
 
           if (memoryId) {
-            await db.delete(memoryId);
+            await db.delete(memoryId, agentId);
             return {
               content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
               details: { action: "deleted", id: memoryId },
@@ -582,7 +585,7 @@ const memoryPlugin = {
         }
 
         // Resolve namespace: explicit config > agent's own ID from hook context
-        const agentId = configNamespace ?? ctx.agentId;
+        const agentId = (configNamespace === "global" ? undefined : configNamespace) ?? ctx.agentId;
 
         try {
           const vector = await embeddings.embed(event.prompt);
@@ -615,7 +618,7 @@ const memoryPlugin = {
         }
 
         // Resolve namespace: explicit config > agent's own ID from hook context
-        const agentId = configNamespace ?? ctx.agentId;
+        const agentId = (configNamespace === "global" ? undefined : configNamespace) ?? ctx.agentId;
 
         try {
           const texts: string[] = [];

@@ -216,7 +216,9 @@ describe("memory plugin e2e", () => {
         registerTool: (toolOrFactory: any, opts: any) => {
           // Support both factory and static tool forms
           const tool =
-            typeof toolOrFactory === "function" ? toolOrFactory({ agentId: undefined }) : toolOrFactory;
+            typeof toolOrFactory === "function"
+              ? toolOrFactory({ agentId: undefined })
+              : toolOrFactory;
           registeredTools.push({ tool, opts });
         },
         // oxlint-disable-next-line typescript/no-explicit-any
@@ -345,7 +347,14 @@ describe("memory plugin — namespace isolation", () => {
     autoRecall?: boolean;
     autoCapture?: boolean;
     // Rows the vector search should "find" (pre-existing DB state)
-    searchResults?: Array<{ id: string; text: string; agentId?: string | null; category?: string; importance?: number; _distance?: number }>;
+    searchResults?: Array<{
+      id: string;
+      text: string;
+      agentId?: string | null;
+      category?: string;
+      importance?: number;
+      _distance?: number;
+    }>;
   }) {
     // oxlint-disable-next-line typescript/no-explicit-any
     const hooks: Record<string, Array<(event: any, ctx: any) => any>> = {};
@@ -424,11 +433,16 @@ describe("memory plugin — namespace isolation", () => {
     return { mockApi, hooks, tools };
   }
 
-  function resolveTools(tools: Array<{ factory: unknown; opts: { name: string } }>, agentId?: string) {
+  function resolveTools(
+    tools: Array<{ factory: unknown; opts: { name: string } }>,
+    agentId?: string,
+  ) {
     return Object.fromEntries(
       tools.map(({ factory, opts }) => {
         const tool =
-          typeof factory === "function" ? (factory as (ctx: { agentId?: string }) => unknown)({ agentId }) : factory;
+          typeof factory === "function"
+            ? (factory as (ctx: { agentId?: string }) => unknown)({ agentId })
+            : factory;
         return [opts.name, tool];
       }),
     );
@@ -442,7 +456,10 @@ describe("memory plugin — namespace isolation", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     memoryPlugin.register(mockApi as any);
 
-    const resolved = resolveTools(tools as Array<{ factory: unknown; opts: { name: string } }>, "finn");
+    const resolved = resolveTools(
+      tools as Array<{ factory: unknown; opts: { name: string } }>,
+      "finn",
+    );
     // oxlint-disable-next-line typescript/no-explicit-any
     const storeTool = resolved["memory_store"] as any;
 
@@ -464,7 +481,10 @@ describe("memory plugin — namespace isolation", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     memoryPlugin.register(mockApi as any);
 
-    const resolved = resolveTools(tools as Array<{ factory: unknown; opts: { name: string } }>, "finn");
+    const resolved = resolveTools(
+      tools as Array<{ factory: unknown; opts: { name: string } }>,
+      "finn",
+    );
     // oxlint-disable-next-line typescript/no-explicit-any
     const storeTool = resolved["memory_store"] as any;
 
@@ -488,7 +508,10 @@ describe("memory plugin — namespace isolation", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     memoryPlugin.register(mockApi as any);
 
-    const resolved = resolveTools(tools as Array<{ factory: unknown; opts: { name: string } }>, "sofi");
+    const resolved = resolveTools(
+      tools as Array<{ factory: unknown; opts: { name: string } }>,
+      "sofi",
+    );
     // oxlint-disable-next-line typescript/no-explicit-any
     const recallTool = resolved["memory_recall"] as any;
 
@@ -516,7 +539,10 @@ describe("memory plugin — namespace isolation", () => {
     memoryPlugin.register(mockApi as any);
 
     // Resolve tools without an agentId (anonymous / global context)
-    const resolved = resolveTools(tools as Array<{ factory: unknown; opts: { name: string } }>, undefined);
+    const resolved = resolveTools(
+      tools as Array<{ factory: unknown; opts: { name: string } }>,
+      undefined,
+    );
     // oxlint-disable-next-line typescript/no-explicit-any
     const recallTool = resolved["memory_recall"] as any;
 
@@ -549,10 +575,7 @@ describe("memory plugin — namespace isolation", () => {
     const handler = beforeAgentStartHandlers[0];
 
     // Fire hook as "finn" agent
-    const result = await handler(
-      { prompt: "What deposits are pending?" },
-      { agentId: "finn" },
-    );
+    const result = await handler({ prompt: "What deposits are pending?" }, { agentId: "finn" });
 
     // Result should inject context; only finn's rows + legacy should be included
     expect(result?.prependContext).toBeDefined();
@@ -579,9 +602,7 @@ describe("memory plugin — namespace isolation", () => {
     await agentEndHandler(
       {
         success: true,
-        messages: [
-          { role: "user", content: "I always prefer dark mode. Remember this." },
-        ],
+        messages: [{ role: "user", content: "I always prefer dark mode. Remember this." }],
       },
       { agentId: "lock" },
     );
@@ -604,37 +625,31 @@ describe("memory plugin — namespace isolation", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     memoryPlugin.register(mockApi as any);
 
-    const resolved = resolveTools(tools as Array<{ factory: unknown; opts: { name: string } }>, "finn");
+    const resolved = resolveTools(
+      tools as Array<{ factory: unknown; opts: { name: string } }>,
+      "finn",
+    );
     // oxlint-disable-next-line typescript/no-explicit-any
     const recallTool = resolved["memory_recall"] as any;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const storeTool = resolved["memory_store"] as any;
 
-    const result = await recallTool.execute("call-global", { query: "anything" });
-
-    // namespace=global → agentId passed to search is "global" string (not undefined)
-    // Our filter: !agentId → false (agentId IS "global"), row.agentId="sofi" → "sofi" !== "global" AND !null
-    // Actually, "global" as namespace means: we want no scoping.
-    // The implementation should treat "global" specially OR simply pass it as-is
-    // causing rows tagged with other agents to be filtered out.
-    //
-    // Per the PR description, namespace="global" opts into OLD behavior (all visible).
-    // The implementation achieves this by: when namespace="global", pass agentId=undefined to search.
-    //
-    // This test verifies stores are tagged "global" and recall sees all rows.
-    await resolved["memory_store"]?.execute?.("store-global", {
+    // When namespace="global", store should NOT tag rows with "global" — it should
+    // use agentId=undefined so rows are unscoped (legacy behavior).
+    await storeTool.execute("store-global", {
       text: "I prefer verbose output",
       category: "preference",
     });
+    expect(storedRows.length).toBeGreaterThan(0);
+    expect(storedRows[storedRows.length - 1].agentId).toBeUndefined();
 
-    if (storedRows.length > 0) {
-      expect(storedRows[0].agentId).toBe("global");
-    }
-    // Recall with namespace=global should return both sofi and finn rows
-    const texts = result.details.memories?.map((m: { text: string }) => m.text) ?? [];
-    // With namespace="global", search is called with agentId="global" →
-    // filter: row.agentId="sofi" !== "global" AND row.agentId is truthy → filtered OUT
-    // This is acceptable documented behavior: explicit namespace scopes to that namespace.
-    // Verify the recall ran without error at minimum.
+    // Recall with namespace=global: search is called with agentId=undefined →
+    // filter !agentId → true → all rows returned, including sofi and finn rows.
+    const result = await recallTool.execute("call-global", { query: "anything" });
     expect(result.details).toBeDefined();
+    const texts = result.details.memories?.map((m: { text: string }) => m.text) ?? [];
+    expect(texts).toContain("Customer support note");
+    expect(texts).toContain("Payment note");
   });
 
   test("tools registered with factory pattern (not static objects)", async () => {
@@ -712,7 +727,9 @@ describeLive("memory plugin live tests", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
       registerTool: (toolOrFactory: any, opts: any) => {
         const tool =
-          typeof toolOrFactory === "function" ? toolOrFactory({ agentId: "live-test-agent" }) : toolOrFactory;
+          typeof toolOrFactory === "function"
+            ? toolOrFactory({ agentId: "live-test-agent" })
+            : toolOrFactory;
         registeredTools.push({ tool, opts });
       },
       // oxlint-disable-next-line typescript/no-explicit-any
