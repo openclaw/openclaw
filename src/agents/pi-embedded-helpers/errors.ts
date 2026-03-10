@@ -845,6 +845,17 @@ function isJsonApiInternalServerError(raw: string): boolean {
   return value.includes('"type":"api_error"') && value.includes("internal server error");
 }
 
+function isStreamingProviderServerError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.toLowerCase();
+  if (value.includes('"type":"server_error"') || value.includes('"code":"server_error"')) {
+    return true;
+  }
+  return /\bserver_error\b/.test(value);
+}
+
 export function parseImageDimensionError(raw: string): {
   maxDimensionPx?: number;
   messageIndex?: number;
@@ -996,6 +1007,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isStreamingProviderServerError(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {

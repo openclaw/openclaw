@@ -821,4 +821,16 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies streaming server_error payloads as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'OpenAI WebSocket response failed: {"type":"server_error","message":"Internal error"}',
+      ),
+    ).toBe("timeout");
+  });
 });

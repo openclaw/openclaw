@@ -307,6 +307,32 @@ describe("failover-error", () => {
     );
   });
 
+  it("infers timeout from streaming server_error in Codex Responses API format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}',
+      }),
+    ).toBe("timeout");
+  });
+
+  it("infers timeout from server_error keyword in error messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "LLM error server_error: something went wrong",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("infers timeout from OpenAI WebSocket response.failed server_error payloads", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          'OpenAI WebSocket response failed: {"type":"server_error","message":"Internal error"}',
+      }),
+    ).toBe("timeout");
+  });
+
   it("treats AbortError reason=abort as timeout", () => {
     const err = Object.assign(new Error("aborted"), {
       name: "AbortError",
