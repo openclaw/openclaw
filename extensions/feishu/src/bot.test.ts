@@ -1740,6 +1740,48 @@ describe("handleFeishuMessage command authorization", () => {
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
+
+  it("replaces raw image_key JSON with placeholder in body for image messages", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-image-placeholder",
+        },
+      },
+      message: {
+        message_id: "msg-image-placeholder",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img_placeholder_payload",
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("<media:image>"),
+        RawBody: "<media:image>",
+      }),
+    );
+    // Ensure raw image_key JSON does not leak into the body
+    const ctx = mockFinalizeInboundContext.mock.calls[0][0] as Record<string, string>;
+    expect(ctx.BodyForAgent).not.toContain("image_key");
+    expect(ctx.RawBody).not.toContain("image_key");
+  });
 });
 
 describe("toMessageResourceType", () => {
