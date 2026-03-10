@@ -20,6 +20,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  signal?: AbortSignal;
   setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
@@ -87,7 +88,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
           : {}),
       }
     : params.handle;
-  if (handleChanged) {
+  if (handleChanged && !params.signal?.aborted) {
     params.setCachedHandle(params.sessionKey, nextHandle);
   }
 
@@ -125,6 +126,13 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         `acpxSessionId ${currentAcpxSessionId} -> ${nextAcpxSessionId}, ` +
         `acpxRecordId ${currentAcpxRecordId} -> ${nextAcpxRecordId})`,
     );
+  }
+  if (params.signal?.aborted) {
+    return {
+      handle: nextHandle,
+      meta: params.meta,
+      runtimeStatus,
+    };
   }
   await params.writeSessionMeta({
     cfg: params.cfg,
