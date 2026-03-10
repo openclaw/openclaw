@@ -1639,11 +1639,9 @@ extension NodeAppModel {
     }
 
     var chatSessionKey: String {
-        let base = "ios"
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
-        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
+        // Keep chat aligned with the gateway's resolved main session key.
+        // A hardcoded "ios" base creates synthetic placeholder sessions in the chat UI.
+        self.mainSessionKey
     }
 
     var activeAgentName: String {
