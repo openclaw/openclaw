@@ -2,6 +2,7 @@ import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/googlechat";
 import {
   applySetupAccountConfigPatch,
   addWildcardAllowFrom,
+  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
   resolveAccountIdForConfigure,
