@@ -95,7 +95,7 @@ export async function transcribeAssemblyAIAudio(
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
-    const remainingMs = Math.max(10_000, deadline - Date.now());
+    const remainingMs = Math.min(10_000, Math.max(1_000, deadline - Date.now()));
     const { response: pollRes, release: releasePoll } = await fetchWithTimeoutGuarded(
       `${baseUrl}/transcript/${createData.id}`,
       { method: "GET", headers: authHeaders },
