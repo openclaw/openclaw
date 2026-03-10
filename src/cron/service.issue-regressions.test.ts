@@ -1713,14 +1713,6 @@ describe("Cron issue regressions", () => {
     const job = createDueIsolatedJob({ id: "stale-skip", nowMs: dueAt, nextRunAtMs: dueAt });
     await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
 
-    let runCount = 0;
-    const blocked = createDeferred<void>();
-    const runIsolatedAgentJob = vi.fn(async () => {
-      await blocked.promise;
-      runCount += 1;
-      return { status: "ok" as const, summary: "ok" };
-    });
-
     const log = createNoopLogger();
     const state = createCronServiceState({
       cronEnabled: true,
@@ -1729,7 +1721,7 @@ describe("Cron issue regressions", () => {
       nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
 
     const ack = await enqueueRun(state, job.id, "force");
@@ -1743,9 +1735,6 @@ describe("Cron issue regressions", () => {
       stored.state.runningAtMs = undefined;
     }
 
-    // Unblock: the queued callback should detect reservation was cleared and skip.
-    blocked.resolve();
-
     await vi.waitFor(
       () => {
         expect(log.warn).toHaveBeenCalledWith(
@@ -1757,7 +1746,75 @@ describe("Cron issue regressions", () => {
     );
 
     // No duplicate execution — runIsolatedAgentJob was never reached.
-    expect(runCount).toBe(0);
+    expect(state.store?.jobs.find((j) => j.id === job.id)?.state.lastStatus).toBeUndefined();
+
+    resetAllLanes();
+  });
+
+  it("enqueueRun refreshes runningAtMs at execution start to prevent STUCK_RUN_MS expiry mid-run", async () => {
+    vi.useRealTimers();
+    resetAllLanes();
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = makeStorePath();
+    // Simulate queue entry at T=0 and execution start well after T=0.
+    const enqueueAt = Date.parse("2026-02-06T10:05:07.000Z");
+    // Execution starts 90 minutes later — close to STUCK_RUN_MS (2h).
+    const executionStartAt = enqueueAt + 90 * 60 * 1000;
+    let nowMs = enqueueAt;
+
+    const job = createDueIsolatedJob({
+      id: "refresh-running-at",
+      nowMs: enqueueAt,
+      nextRunAtMs: enqueueAt,
+    });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
+
+    // Block the agent job so we can observe runningAtMs before it completes.
+    const runStarted = createDeferred<void>();
+    const runUnblock = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async () => {
+      runStarted.resolve();
+      await runUnblock.promise;
+      return { status: "ok" as const, summary: "ok" };
+    });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: createNoopLogger(),
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expect(ack).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+    // The reservation was stamped at enqueueAt.
+    expect(state.store?.jobs.find((j) => j.id === job.id)?.state.runningAtMs).toBe(enqueueAt);
+
+    // Advance clock to simulate queue wait before the callback begins.
+    nowMs = executionStartAt;
+
+    // Wait until runIsolatedAgentJob is called (execution started).
+    await runStarted.promise;
+
+    // runningAtMs must have been refreshed to executionStartAt so that
+    // STUCK_RUN_MS is measured from actual execution, not queue-entry time.
+    // Reload from disk to verify the persisted value.
+    await fs.readFile(store.storePath, "utf-8").then((raw) => {
+      const persisted = JSON.parse(raw) as { jobs: { id: string; state: { runningAtMs?: number } }[] };
+      const persistedJob = persisted.jobs.find((j) => j.id === job.id);
+      expect(persistedJob?.state.runningAtMs).toBe(executionStartAt);
+    });
+
+    runUnblock.resolve();
+    await vi.waitFor(
+      () => expect(state.store?.jobs.find((j) => j.id === job.id)?.state.lastStatus).toBe("ok"),
+      { timeout: 2_000 },
+    );
 
     resetAllLanes();
   });

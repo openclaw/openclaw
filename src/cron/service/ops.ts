@@ -541,23 +541,36 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      // Verify the reservation is still ours before executing. If the Cron
-      // lane was backed up past STUCK_RUN_MS, stale-marker maintenance may
-      // have cleared runningAtMs and the timer path may have already run the
-      // job. Skipping here prevents a duplicate execution.
-      const isStillReserved = await locked(state, async () => {
+      // At execution start: verify the reservation is still ours, then
+      // refresh runningAtMs to now so the STUCK_RUN_MS clock starts from
+      // actual execution rather than queue-entry time. This prevents two
+      // failure modes:
+      //   (a) Stale-marker clears runningAtMs while the task is still in the
+      //       queue (queue wait > STUCK_RUN_MS), allowing the timer to pick
+      //       up the job before this callback runs → duplicate execution.
+      //   (b) Stale-marker clears runningAtMs mid-execution (queue wait +
+      //       run time > STUCK_RUN_MS), allowing the timer to fire a second
+      //       concurrent run while finishPreparedManualRun is still running.
+      const refreshedPrepared = await locked(state, async () => {
         await ensureLoaded(state, { skipRecompute: true });
         const current = state.store?.jobs.find((j) => j.id === id);
-        return current?.state.runningAtMs === prepared.startedAt;
+        if (current?.state.runningAtMs !== prepared.startedAt) {
+          return null;
+        }
+        // Re-stamp so STUCK_RUN_MS is measured from actual execution start.
+        const executionStartedAt = state.deps.nowMs();
+        current.state.runningAtMs = executionStartedAt;
+        await persist(state);
+        return { ...prepared, startedAt: executionStartedAt } as const;
       });
-      if (!isStillReserved) {
+      if (!refreshedPrepared) {
         state.deps.log.warn(
           { jobId: id, runId },
           "cron: queued manual run skipped — reservation was cleared before execution (stale-marker or concurrent run)",
         );
         return;
       }
-      await finishPreparedManualRun(state, prepared, mode);
+      await finishPreparedManualRun(state, refreshedPrepared, mode);
     },
     {
       warnAfterMs: 5_000,
