@@ -458,5 +458,58 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return originalStop(...args);
   }) as typeof bot.stop;
 
+  // Wrap bot.init() to apply configured topic icons after bot info is fetched.
+  const originalInit = bot.init.bind(bot);
+  bot.init = async function (...args: Parameters<typeof originalInit>) {
+    await originalInit(...args);
+    await applyConfiguredTopicIcons(bot, telegramCfg, logger);
+  } as typeof bot.init;
+
   return bot;
+}
+
+/**
+ * Iterates all configured groups and their topics; for each topic with
+ * `iconCustomEmojiId` set, calls editForumTopic to restore the icon.
+ * Per-topic errors are caught and logged so one failure cannot abort the rest.
+ */
+async function applyConfiguredTopicIcons(
+  bot: Bot,
+  telegramCfg: {
+    groups?: Record<string, { topics?: Record<string, { iconCustomEmojiId?: string }> }>;
+  },
+  logger: ReturnType<typeof getChildLogger> | undefined,
+): Promise<void> {
+  const groups = telegramCfg.groups;
+  if (!groups) {
+    return;
+  }
+  for (const [chatIdStr, groupCfg] of Object.entries(groups)) {
+    const topics = groupCfg.topics;
+    if (!topics) {
+      continue;
+    }
+    for (const [threadIdStr, topicCfg] of Object.entries(topics)) {
+      if (!topicCfg.iconCustomEmojiId) {
+        continue;
+      }
+      const chatId = Number(chatIdStr);
+      const threadId = Number(threadIdStr);
+      if (!Number.isFinite(chatId) || !Number.isFinite(threadId)) {
+        continue;
+      }
+      try {
+        await bot.api.editForumTopic(chatId, threadId, {
+          icon_custom_emoji_id: topicCfg.iconCustomEmojiId,
+        });
+        logger?.info(
+          `telegram: applied topic icon (chat=${chatIdStr} thread=${threadIdStr} emoji=${topicCfg.iconCustomEmojiId})`,
+        );
+      } catch (err) {
+        logger?.warn(
+          `telegram: failed to apply topic icon (chat=${chatIdStr} thread=${threadIdStr}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
 }

@@ -212,6 +212,8 @@ export type TelegramTopicConfig = {
   disableAudioPreflight?: boolean;
   /** Route this topic to a specific agent (overrides group-level and binding routing). */
   agentId?: string;
+  /** Custom emoji ID for the topic icon. Use getForumTopicIconStickers to get valid IDs. Icon is applied on gateway start. */
+  iconCustomEmojiId?: string;
 };
 
 export type TelegramGroupConfig = {
