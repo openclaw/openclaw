@@ -565,6 +565,71 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("assistant");
   });
 
+  it("drops empty assistant error stubs from Anthropic session history", async () => {
+    setNonGoogleModelApi();
+
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage(
+        [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: "sig",
+          },
+          { type: "text", text: "ok" },
+        ],
+        { stopReason: "stop" },
+      ),
+      makeUserMessage("retry after failure"),
+      makeAssistantMessage([{ type: "text", text: "" }], {
+        stopReason: "error",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((message) => message.role)).toEqual(["user", "assistant", "user", "user"]);
+    expect(
+      result.some((message) => message.role === "assistant" && message.stopReason === "error"),
+    ).toBe(false);
+  });
+
+  it("keeps non-empty assistant error messages in session history", async () => {
+    setNonGoogleModelApi();
+
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage([{ type: "text", text: "partial streamed response" }], {
+        stopReason: "error",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(result[1]?.role).toBe("assistant");
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: "partial streamed response" },
+    ]);
+  });
+
   it("synthesizes missing tool results for openai-responses after repair", async () => {
     const messages: AgentMessage[] = [
       makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {

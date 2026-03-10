@@ -1,12 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+  type: "text" | "toolCall" | "toolUse" | "toolResult";
   text?: string;
   id?: string;
   name?: string;
   toolUseId?: string;
 };
+
+function isAnthropicToolUseBlock(block: AnthropicContentBlock): boolean {
+  return block.type === "toolCall" || block.type === "toolUse";
+}
 
 /**
  * Strips dangling tool_use blocks from assistant messages when the immediately
@@ -59,16 +63,18 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       }
     }
 
-    // Filter out tool_use blocks that don't have matching tool_result
+    // Filter out assistant tool call blocks that don't have matching tool_result.
+    // pi-agent-core stores them as "toolCall" internally, but older sanitized
+    // transcripts may still contain "toolUse".
     const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
       }
-      if (block.type !== "toolUse") {
+      if (!isAnthropicToolUseBlock(block)) {
         return true;
       }
-      // Keep tool_use if its id is in the valid set
+      // Keep tool blocks whose ids are present in the next user tool_result turn.
       return validToolUseIds.has(block.id || "");
     });
 

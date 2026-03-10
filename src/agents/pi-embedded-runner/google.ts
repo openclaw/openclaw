@@ -13,6 +13,7 @@ import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
+  isEmptyAssistantMessageContent,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -552,7 +553,18 @@ export async function sanitizeSessionHistory(params: {
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  // pi-agent-core persists a synthetic empty assistant error message when a
+  // request fails before yielding usable content. Anthropic drops empty
+  // assistant turns during payload conversion, which can turn
+  // user -> assistant(error) -> user into consecutive user turns.
+  const withoutEmptyAssistantErrors = droppedThinking.filter((msg) => {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+      return true;
+    }
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    return assistant.stopReason !== "error" || !isEmptyAssistantMessageContent(assistant);
+  });
+  const sanitizedToolCalls = sanitizeToolCallInputs(withoutEmptyAssistantErrors, {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing
