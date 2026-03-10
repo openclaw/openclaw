@@ -126,6 +126,11 @@ async function downloadAndSaveTelegramFile(params: {
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    // Disable DNS pinning for Telegram media downloads to allow the custom
+    // fetchImpl (which may have its own proxy/dispatcher) to handle networking.
+    // SSRF protection is still provided by TELEGRAM_MEDIA_SSRF_POLICY which
+    // restricts downloads to api.telegram.org.
+    pinDns: false,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
