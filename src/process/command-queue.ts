@@ -269,16 +269,16 @@ export function resetLane(lane: string, opts?: ResetLaneOptions): ResetLaneResul
   const activeBefore = state.activeTaskIds.size;
   let droppedQueued = 0;
 
+  if (opts?.skipIfActive && activeBefore > 0) {
+    return { lane: cleaned, reset: false, activeBefore, droppedQueued };
+  }
+
   if (opts?.dropQueued && state.queue.length > 0) {
     const pending = state.queue.splice(0);
     droppedQueued = pending.length;
     for (const entry of pending) {
       entry.reject(new CommandLaneClearedError(cleaned));
     }
-  }
-
-  if (opts?.skipIfActive && activeBefore > 0) {
-    return { lane: cleaned, reset: false, activeBefore, droppedQueued };
   }
 
   state.generation += 1;

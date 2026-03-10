@@ -294,7 +294,7 @@ describe("command queue", () => {
     await expect(first).resolves.toBe("first");
   });
 
-  it("resetLane can drop queued tasks without clearing active bookkeeping", async () => {
+  it("resetLane preserves queued tasks when skipIfActive blocks the reset", async () => {
     const lane = `reset-safe-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
 
@@ -316,12 +316,11 @@ describe("command queue", () => {
     const result = resetLane(lane, { dropQueued: true, skipIfActive: true });
     expect(result.reset).toBe(false);
     expect(result.activeBefore).toBe(1);
-    expect(result.droppedQueued).toBe(1);
-
-    await expect(second).rejects.toBeInstanceOf(CommandLaneClearedError);
+    expect(result.droppedQueued).toBe(0);
 
     releaseFirst();
     await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
   });
 
   it("resetLane drops queued tasks and resets when lane is idle", () => {

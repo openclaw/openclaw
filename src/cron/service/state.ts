@@ -108,7 +108,7 @@ export type CronServiceDeps = {
    * when isolated cron execution appears degraded (e.g. stuck requests-in-flight
    * after network interruptions). Implementations should be idempotent.
    */
-  resetCommandLanes?: () => void;
+  resetCommandLanes?: (params: { job: CronJob }) => void;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;

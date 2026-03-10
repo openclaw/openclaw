@@ -1070,6 +1070,11 @@ describe("Cron issue regressions", () => {
     await onTimer(state);
 
     expect(resetCommandLanes).toHaveBeenCalledTimes(1);
+    expect(resetCommandLanes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: cronJob.id }),
+      }),
+    );
     const job = state.store?.jobs.find((entry) => entry.id === cronJob.id);
     expect(job?.state.lastError).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",

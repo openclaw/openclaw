@@ -167,7 +167,7 @@ function maybeRecoverIsolatedRunnerDegradedState(params: {
 
   let resetSucceeded = false;
   try {
-    state.deps.resetCommandLanes?.();
+    state.deps.resetCommandLanes?.({ job });
     resetSucceeded = true;
   } catch (err) {
     state.deps.log.warn(

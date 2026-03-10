@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { resolveCronAgentSessionKey } from "../cron/isolated-agent/session-key.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -297,29 +298,41 @@ export function buildGatewayCronService(params: {
         lane: "cron",
       });
     },
-    resetCommandLanes: () => {
-      const result = resetLane(CommandLane.Cron, {
-        dropQueued: true,
-        skipIfActive: true,
+    resetCommandLanes: ({ job }) => {
+      const runLaneReset = (lane: string) => {
+        const result = resetLane(lane, {
+          dropQueued: true,
+          skipIfActive: true,
+        });
+        if (result.droppedQueued > 0) {
+          cronLogger.warn(
+            {
+              lane: result.lane,
+              droppedQueued: result.droppedQueued,
+            },
+            "cron: dropped queued lane tasks during degraded runner recovery",
+          );
+        }
+        if (!result.reset && result.activeBefore > 0) {
+          cronLogger.warn(
+            {
+              lane: result.lane,
+              activeTasks: result.activeBefore,
+            },
+            "cron: skipped lane reset during degraded runner recovery; active tasks still running",
+          );
+        }
+      };
+
+      runLaneReset(CommandLane.Cron);
+
+      const jobAgentId =
+        typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
+      const sessionKey = resolveCronAgentSessionKey({
+        sessionKey: `cron:${job.id}`,
+        agentId: jobAgentId,
       });
-      if (result.droppedQueued > 0) {
-        cronLogger.warn(
-          {
-            lane: result.lane,
-            droppedQueued: result.droppedQueued,
-          },
-          "cron: dropped queued cron lane tasks during degraded runner recovery",
-        );
-      }
-      if (!result.reset && result.activeBefore > 0) {
-        cronLogger.warn(
-          {
-            lane: result.lane,
-            activeTasks: result.activeBefore,
-          },
-          "cron: skipped cron lane reset during degraded runner recovery; active tasks still running",
-        );
-      }
+      runLaneReset(`session:${sessionKey}`);
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
