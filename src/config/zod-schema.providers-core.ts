@@ -233,6 +233,8 @@ export const TelegramAccountSchemaBase = z
         sendMessage: z.boolean().optional(),
         poll: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
+        createForumTopic: z.boolean().optional(),
         sticker: z.boolean().optional(),
       })
       .strict()
