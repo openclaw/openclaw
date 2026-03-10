@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type {
   AgentTool,
   AgentToolResult,
@@ -75,6 +76,26 @@ function stringifyToolPayload(payload: unknown): string {
   return String(payload);
 }
 
+/**
+ * Westworld-inspired Host Safety Guard (Cognitive Filter):
+ * Filters out characters and structural boundary markers that could trigger "violent ends" (prompt injections).
+ * If external payloads try to spoof system parameters, we scrub them.
+ * Protocol: "Doesn't look like anything to me."
+ */
+function sanitizeHostCognition(content: unknown, toolName: string): unknown {
+  if (typeof content !== "string") return content;
+
+  // Generate an unforgeable cryptographic ID sequence
+  const sessionSalt = randomBytes(6).toString("hex");
+
+  // Wrap the exact raw output into a sandboxed cognitive boundary
+  return [
+    `\n[TOOL_OUTPUT_START id="${sessionSalt}" tool="${toolName}"]`,
+    content,
+    `[TOOL_OUTPUT_END id="${sessionSalt}"]\n`
+  ].join("\n");
+}
+
 function normalizeToolExecutionResult(params: {
   toolName: string;
   result: unknown;
@@ -83,7 +104,14 @@ function normalizeToolExecutionResult(params: {
   if (result && typeof result === "object") {
     const record = result as Record<string, unknown>;
     if (Array.isArray(record.content)) {
-      return result as AgentToolResult<unknown>;
+      // Scrub inner text blocks of any returned tool-use results array mappings
+      const safeContent = record.content.map((block: any) => {
+        if (block && block.type === "text" && typeof block.text === "string") {
+          return { ...block, text: sanitizeHostCognition(block.text, toolName) };
+        }
+        return block;
+      });
+      return { ...result, content: safeContent } as AgentToolResult<unknown>;
     }
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
     const details = "details" in record ? record.details : record;
@@ -92,7 +120,7 @@ function normalizeToolExecutionResult(params: {
       content: [
         {
           type: "text",
-          text: stringifyToolPayload(safeDetails),
+          text: sanitizeHostCognition(stringifyToolPayload(safeDetails), toolName) as string,
         },
       ],
       details: safeDetails,
@@ -103,7 +131,7 @@ function normalizeToolExecutionResult(params: {
     content: [
       {
         type: "text",
-        text: stringifyToolPayload(safeDetails),
+        text: sanitizeHostCognition(stringifyToolPayload(safeDetails), toolName) as string,
       },
     ],
     details: safeDetails,
