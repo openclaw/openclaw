@@ -51,6 +51,10 @@ export function renderSkills(props: SkillsProps) {
         <label class="field" style="flex: 1;">
           <span>Filter</span>
           <input
+            type="search"
+            name="skill-filter"
+            autocomplete="off"
+            spellcheck="false"
             .value=${props.filter}
             @input=${(e: Event) => props.onFilterChange((e.target as HTMLInputElement).value)}
             placeholder="Search skills"
@@ -170,6 +174,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
                 <span>API key</span>
                 <input
                   type="password"
+                  autocomplete="new-password"
                   .value=${apiKey}
                   @input=${(e: Event) =>
                     props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
