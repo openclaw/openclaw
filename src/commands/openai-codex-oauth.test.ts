@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   withTemporaryEnvProxyDispatcher: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
   loginOpenAICodex: mocks.loginOpenAICodex,
 }));
 
@@ -65,7 +65,9 @@ describe("loginOpenAICodexOAuth", () => {
     vi.clearAllMocks();
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
-    mocks.withTemporaryEnvProxyDispatcher.mockImplementation(async (fn: () => unknown) => await fn());
+    mocks.withTemporaryEnvProxyDispatcher.mockImplementation(
+      async (fn: () => unknown) => await fn(),
+    );
   });
 
   it("returns credentials on successful oauth login", async () => {
