@@ -310,11 +310,17 @@ export async function ensureSandboxBrowser(params: {
     useNamespaceJoin && params.sandboxContainerName ? params.sandboxContainerName : containerName;
   const fallbackContainer =
     portSourceContainer !== containerName ? containerName : (params.sandboxContainerName ?? null);
+  const cdpFromPrimary = await readDockerPort(portSourceContainer, params.cfg.browser.cdpPort);
   const mappedCdp =
-    (await readDockerPort(portSourceContainer, params.cfg.browser.cdpPort)) ??
+    cdpFromPrimary ??
     (fallbackContainer
       ? await readDockerPort(fallbackContainer, params.cfg.browser.cdpPort)
       : null);
+  // Only relax SSRF when the port actually came from the sandbox container
+  // (i.e. namespace join is effective). When falling back to the old browser
+  // container, the browser has its own network namespace and the SSRF guard
+  // must stay active to block cloud metadata endpoints.
+  const actuallyNamespaceJoined = useNamespaceJoin && cdpFromPrimary !== null;
   if (!mappedCdp) {
     const tried = fallbackContainer
       ? `${portSourceContainer} (and fallback ${fallbackContainer})`
@@ -401,7 +407,7 @@ export async function ensureSandboxBrowser(params: {
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
-        shareNetworkNamespace: useNamespaceJoin,
+        shareNetworkNamespace: actuallyNamespaceJoined,
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
