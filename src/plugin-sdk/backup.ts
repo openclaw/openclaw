@@ -14,7 +14,4 @@ export type {
   BackupSkipReason,
   SkippedBackupAsset,
 } from "../commands/backup-shared.js";
-export type {
-  BackupCreateOptions,
-  BackupCreateResult,
-} from "../commands/backup.js";
+export type { BackupCreateOptions, BackupCreateResult } from "../commands/backup.js";
