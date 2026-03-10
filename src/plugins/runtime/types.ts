@@ -82,6 +82,7 @@ type IsVoiceCompatibleAudio = typeof import("../../media/audio.js").isVoiceCompa
 type GetImageMetadata = typeof import("../../media/image-ops.js").getImageMetadata;
 type ResizeToJpeg = typeof import("../../media/image-ops.js").resizeToJpeg;
 type CreateMemoryGetTool = typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
+type CreateMemorySaveTool = typeof import("../../agents/tools/memory-tool.js").createMemorySaveTool;
 type CreateMemorySearchTool =
   typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
 type RegisterMemoryCli = typeof import("../../cli/memory-cli.js").registerMemoryCli;
@@ -199,6 +200,7 @@ export type PluginRuntime = {
   };
   tools: {
     createMemoryGetTool: CreateMemoryGetTool;
+    createMemorySaveTool: CreateMemorySaveTool;
     createMemorySearchTool: CreateMemorySearchTool;
     registerMemoryCli: RegisterMemoryCli;
   };

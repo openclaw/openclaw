@@ -1,0 +1,13 @@
+{
+  "id": "nian-cui",
+  "name": "念·萃",
+  "description": "Post-conversation memory extraction",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": { "type": "boolean", "default": true }
+    }
+  },
+  "extensions": ["nian-cui.ts"]
+}

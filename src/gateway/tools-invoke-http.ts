@@ -34,7 +34,7 @@ import {
 import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
-const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get", "memory_save"]);
 
 /**
  * Tools denied via HTTP /tools/invoke regardless of session policy.
@@ -53,18 +53,15 @@ const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 ];
 
 type ToolsInvokeBody = {
-  tool?: unknown;
-  action?: unknown;
-  args?: unknown;
-  sessionKey?: unknown;
-  dryRun?: unknown;
+  tool?: string;
+  action?: string;
+  args?: Record<string, unknown>;
+  sessionKey?: string;
 };
 
 function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
-  if (typeof body.sessionKey === "string" && body.sessionKey.trim()) {
-    return body.sessionKey.trim();
-  }
-  return undefined;
+  const key = body.sessionKey?.trim();
+  return key || undefined;
 }
 
 function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
@@ -179,7 +176,7 @@ export async function handleToolsInvokeHttpRequest(
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeBody;
 
-  const toolName = typeof body.tool === "string" ? body.tool.trim() : "";
+  const toolName = body.tool?.trim() ?? "";
   if (!toolName) {
     sendInvalidRequest(res, "tools.invoke requires body.tool");
     return true;
@@ -202,13 +199,8 @@ export async function handleToolsInvokeHttpRequest(
     }
   }
 
-  const action = typeof body.action === "string" ? body.action.trim() : undefined;
-
-  const argsRaw = body.args;
-  const args =
-    argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
-      ? (argsRaw as Record<string, unknown>)
-      : {};
+  const action = body.action?.trim() || undefined;
+  const args: Record<string, unknown> = body.args ?? {};
 
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
@@ -276,15 +268,13 @@ export async function handleToolsInvokeHttpRequest(
 
   const coreToolNames = new Set(
     allTools
-      // oxlint-disable-next-line typescript/no-explicit-any
-      .filter((tool) => !getPluginToolMeta(tool as any))
+      .filter((tool) => !getPluginToolMeta(tool))
       .map((tool) => normalizeToolName(tool.name))
       .filter(Boolean),
   );
   const pluginGroups = buildPluginToolGroups({
     tools: allTools,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
+    toolMeta: (tool) => getPluginToolMeta(tool),
   });
   const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
     const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
@@ -362,13 +352,11 @@ export async function handleToolsInvokeHttpRequest(
 
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: tool.parameters,
       action,
       args,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const result = await tool.execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     if (isToolInputError(err)) {

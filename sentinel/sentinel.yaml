@@ -4,11 +4,18 @@ tasks:
   morning_brief: { schedule: "07:00", enabled: true, ai_model: "claude-haiku-4-5-20251001" }
   anomaly_scan: { schedule: "every 4h", enabled: true, ai_threshold: 3 }
   weekly_review: { schedule: "sunday 10:00", enabled: true, ai_model: "claude-sonnet-4-5-20250514" }
-  conversation_sync: { schedule: "every 4h", enabled: true }
+  conversation_sync: { schedule: "every 30m", enabled: true }
   conversation_pulse: { schedule: "every 15m", enabled: true }
   agent_health: { schedule: "every 1h", enabled: true }
+  gateway_watchdog: { schedule: "every 5m", enabled: true }
+  db_sync: { schedule: "03:00", enabled: true }
+  db_archive: { schedule: "sunday 04:00", enabled: true }
+  vivi_learning: { schedule: "every 1h", enabled: true }
+  hr_payroll: { schedule: "09:00", enabled: true }
+  river_digest: { schedule: "every 4h", enabled: true }
+  memory_consolidation: { schedule: "02:30", enabled: true }
 notifications:
-  telegram_bridge: "http://localhost:18790"
+  telegram_bridge: "http://localhost:18796"
   cruz_chat_id: "448345880"
   quiet_hours: ["00:00", "06:00"]
 claude:
@@ -41,8 +48,8 @@ desired_state:
 
     bridge-dufu:
       label: com.clawd.telegram-bridge
-      port: 18790
-      health: { type: http, url: "http://localhost:18790/health", timeout: 5 }
+      port: 18796
+      health: { type: http, url: "http://localhost:18796/health", timeout: 5 }
       repair: { risk: low, method: kickstart, backoff: 15, cap: 300, max_retries: 10 }
 
     bridge-andrew:
@@ -85,5 +92,5 @@ desired_state:
   system:
     disk_warn_pct: 80
     disk_crit_pct: 90
-    swap_crit_mb: 1000
+    swap_crit_mb: 2000
     cpu_hog_pct: 95

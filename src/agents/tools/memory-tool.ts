@@ -22,6 +22,16 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
+const MemorySaveSchema = Type.Object({
+  category: Type.Union([Type.Literal("fact"), Type.Literal("episode"), Type.Literal("procedure")], {
+    description:
+      "Where to save: 'fact' for reference data (names, rules, preferences), 'episode' for session learnings (what happened, lessons), 'procedure' for SOPs and proven workflows",
+  }),
+  content: Type.String({
+    description: "The memory content to save. Be concise and specific.",
+  }),
+});
+
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
@@ -129,6 +139,72 @@ export function createMemoryGetTool(options: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+      }
+    },
+  };
+}
+
+export function createMemorySaveTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  agentDir?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg || !options.agentDir) {
+    return null;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  if (!agentId) {
+    return null;
+  }
+  return {
+    label: "Memory Save",
+    name: "memory_save",
+    description:
+      "Save a fact, episode, or procedure to your persistent memory. Facts are reference data (names, rules, preferences). Episodes are session learnings (what happened, lessons learned). Procedures are proven workflows and SOPs. Use this proactively when you learn something worth remembering.",
+    parameters: MemorySaveSchema,
+    execute: async (_toolCallId, params) => {
+      const category = readStringParam(params, "category", { required: true });
+      const content = readStringParam(params, "content", { required: true });
+
+      if (!["fact", "episode", "procedure"].includes(category)) {
+        return jsonResult({ saved: false, error: "category must be fact, episode, or procedure" });
+      }
+
+      try {
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+
+        const memoryDir = path.join(options.agentDir!, "memory");
+        if (!fs.existsSync(memoryDir)) {
+          fs.mkdirSync(memoryDir, { recursive: true });
+        }
+
+        const fileMap: Record<string, string> = {
+          fact: "facts.md",
+          episode: "episodes.md",
+          procedure: "procedures.md",
+        };
+        const filePath = path.join(memoryDir, fileMap[category]);
+
+        const now = new Date();
+        const timestamp = now.toISOString().slice(0, 16).replace("T", " ");
+        const entry = `\n- [${timestamp}] ${content}\n`;
+
+        fs.appendFileSync(filePath, entry, "utf-8");
+
+        return jsonResult({
+          saved: true,
+          category,
+          file: fileMap[category],
+          timestamp,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({ saved: false, error: message });
       }
     },
   };
