@@ -36,9 +36,9 @@ import type { CronServiceState } from "./state.js";
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const MIN_BACKUP_CREATE_INTERVAL_MS = 60 * 60_000;
-const CRON_GAP_LOOKBACK_MS = 183 * 24 * 60 * 60_000;
-const CRON_GAP_HORIZON_MS = 400 * 24 * 60 * 60_000;
-const CRON_GAP_MAX_SAMPLES = 10_000;
+const CRON_GAP_LOOKBACK_MS = 366 * 24 * 60 * 60_000;
+const CRON_GAP_HORIZON_MS = 8 * 366 * 24 * 60 * 60_000;
+const CRON_GAP_MAX_SAMPLES = 100_000;
 const staggerOffsetCache = new Map<string, number>();
 
 function isFiniteTimestamp(value: unknown): value is number {

@@ -639,6 +639,14 @@ describe("backupCreate scheduling guardrails", () => {
     ).toThrow("cron backupCreate jobs must not run more frequently than once per hour");
   });
 
+  it("rejects backupCreate cron schedules whose short gap only occurs on leap day", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+
+    expect(() =>
+      createJob(state, backupJobInput({ kind: "cron", expr: "0,10 0 29 2 *", tz: "UTC" })),
+    ).toThrow("cron backupCreate jobs must not run more frequently than once per hour");
+  });
+
   it("allows hourly backupCreate schedules", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
 

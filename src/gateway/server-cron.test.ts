@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -11,6 +11,10 @@ const requestHeartbeatNowMock = vi.fn();
 const loadConfigMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.fn();
 const backupCreateCommandMock = vi.fn();
+const cronLoggerDebugMock = vi.fn();
+const cronLoggerErrorMock = vi.fn();
+const cronLoggerInfoMock = vi.fn();
+const cronLoggerWarnMock = vi.fn();
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -36,21 +40,51 @@ vi.mock("../commands/backup.js", () => ({
   backupCreateCommand: (...args: unknown[]) => backupCreateCommandMock(...args),
 }));
 
+vi.mock("../logging.js", () => ({
+  getChildLogger: () => ({
+    debug: (...args: unknown[]) => cronLoggerDebugMock(...args),
+    info: (...args: unknown[]) => cronLoggerInfoMock(...args),
+    warn: (...args: unknown[]) => cronLoggerWarnMock(...args),
+    error: (...args: unknown[]) => cronLoggerErrorMock(...args),
+  }),
+}));
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 describe("buildGatewayCronService", () => {
+  const deps = {
+    log: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+  } as unknown as CliDeps;
+
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     backupCreateCommandMock.mockClear();
+    cronLoggerDebugMock.mockClear();
+    cronLoggerErrorMock.mockClear();
+    cronLoggerInfoMock.mockClear();
+    cronLoggerWarnMock.mockClear();
+    deps.log.debug.mockClear();
+    deps.log.info.mockClear();
+    deps.log.warn.mockClear();
+    deps.log.error.mockClear();
     backupCreateCommandMock.mockResolvedValue({
       archivePath: "/tmp/openclaw-backup.tar.gz",
       includeWorkspace: true,
       onlyConfig: false,
       verified: false,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -67,7 +101,7 @@ describe("buildGatewayCronService", () => {
 
     const state = buildGatewayCronService({
       cfg,
-      deps: {} as CliDeps,
+      deps,
       broadcast: () => {},
     });
     try {
@@ -117,7 +151,7 @@ describe("buildGatewayCronService", () => {
 
     const state = buildGatewayCronService({
       cfg,
-      deps: {} as CliDeps,
+      deps,
       broadcast: () => {},
     });
     try {
@@ -155,6 +189,10 @@ describe("buildGatewayCronService", () => {
 
   it("runs scheduled backup jobs through backupCreateCommand", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-backup-${Date.now()}`);
+    const homeDir = path.join(tmpDir, "home");
+    await fs.mkdir(homeDir, { recursive: true });
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
     const cfg = {
       session: {
         mainKey: "main",
@@ -167,7 +205,7 @@ describe("buildGatewayCronService", () => {
 
     const state = buildGatewayCronService({
       cfg,
-      deps: {} as CliDeps,
+      deps,
       broadcast: () => {},
     });
     try {
@@ -200,6 +238,20 @@ describe("buildGatewayCronService", () => {
           signal: expect.any(AbortSignal),
         }),
       );
+      const runtime = backupCreateCommandMock.mock.calls[0]?.[0] as {
+        log: (message: string) => void;
+        error: (message: string) => void;
+      };
+      runtime.log("archive created");
+      runtime.error("non-fatal warning");
+      expect(cronLoggerInfoMock).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: job.id, message: "archive created" }),
+        "cron: backup log",
+      );
+      expect(cronLoggerWarnMock).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: job.id, message: "non-fatal warning" }),
+        "cron: backup warning",
+      );
       expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
@@ -208,6 +260,10 @@ describe("buildGatewayCronService", () => {
 
   it("rejects scheduled backup outputs outside the backups directory", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-backup-output-${Date.now()}`);
+    const homeDir = path.join(tmpDir, "home");
+    await fs.mkdir(homeDir, { recursive: true });
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
     const cfg = {
       session: {
         mainKey: "main",
@@ -220,7 +276,7 @@ describe("buildGatewayCronService", () => {
 
     const state = buildGatewayCronService({
       cfg,
-      deps: {} as CliDeps,
+      deps,
       broadcast: () => {},
     });
     try {
@@ -250,8 +306,9 @@ describe("buildGatewayCronService", () => {
     }
 
     const tmpDir = path.join(os.tmpdir(), `server-cron-backup-symlink-${Date.now()}`);
+    const homeDir = path.join(tmpDir, "home");
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "server-cron-backup-outside-"));
-    const backupsDir = path.join(os.homedir(), "Backups");
+    const backupsDir = path.join(homeDir, "Backups");
     const symlinkPath = path.join(backupsDir, `escaped-${Date.now()}`);
     const cfg = {
       session: {
@@ -263,12 +320,15 @@ describe("buildGatewayCronService", () => {
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
 
+    await fs.mkdir(homeDir, { recursive: true });
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
     await fs.mkdir(backupsDir, { recursive: true });
     await fs.symlink(outsideDir, symlinkPath);
 
     const state = buildGatewayCronService({
       cfg,
-      deps: {} as CliDeps,
+      deps,
       broadcast: () => {},
     });
     try {
@@ -280,13 +340,14 @@ describe("buildGatewayCronService", () => {
         wakeMode: "now",
         payload: {
           kind: "backupCreate",
-          output: `${path.basename(symlinkPath)}/target.tar.gz`,
+          output: `${path.basename(symlinkPath)}/subdir/target.tar.gz`,
         },
       });
 
       await state.cron.run(job.id, "force");
 
       expect(backupCreateCommandMock).not.toHaveBeenCalled();
+      expect(await fs.stat(path.join(outsideDir, "subdir")).catch(() => undefined)).toBeUndefined();
     } finally {
       state.cron.stop();
       await fs.rm(symlinkPath, { force: true }).catch(() => undefined);
