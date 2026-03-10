@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -327,7 +328,11 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
+import {
+  __testing,
+  compactEmbeddedPiSession,
+  compactEmbeddedPiSessionDirect,
+} from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
@@ -762,7 +767,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     sessionMessages.splice(
       0,
       sessionMessages.length,
-      { role: "user", content: "HEARTBEAT_OK", timestamp: 1 },
+      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
       {
         role: "toolResult",
         toolCallId: "t1",
@@ -789,31 +794,46 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(sessionCompactImpl).not.toHaveBeenCalled();
   });
 
-  it("keeps compaction enabled when tool output follows a meaningful user request", async () => {
-    sessionMessages.splice(
-      0,
-      sessionMessages.length,
-      { role: "user", content: "please inspect the failing PR", timestamp: 1 },
+  it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("counts tool output as real only when a meaningful user ask exists in the lookback window", () => {
+    const heartbeatToolResultWindow = [
+      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
       {
         role: "toolResult",
         toolCallId: "t1",
         toolName: "exec",
         content: [{ type: "text", text: "checked" }],
-        isError: false,
-        timestamp: 2,
       },
-    );
+    ] as AgentMessage[];
+    expect(
+      __testing.hasRealConversationContent(
+        heartbeatToolResultWindow[1],
+        heartbeatToolResultWindow,
+        1,
+      ),
+    ).toBe(false);
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(sessionCompactImpl).toHaveBeenCalled();
+    const realAskToolResultWindow = [
+      { role: "assistant", content: "NO_REPLY" },
+      { role: "user", content: "please inspect the failing PR" },
+      {
+        role: "toolResult",
+        toolCallId: "t2",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+    expect(
+      __testing.hasRealConversationContent(realAskToolResultWindow[2], realAskToolResultWindow, 2),
+    ).toBe(true);
   });
 
   it("registers the Ollama api provider before compaction", async () => {

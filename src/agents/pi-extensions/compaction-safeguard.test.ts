@@ -1556,7 +1556,7 @@ describe("compaction-safeguard double-compaction guard", () => {
           content: [{ type: "text", text: "done" }],
         } as AgentMessage,
         [
-          { role: "user", content: "HEARTBEAT_OK" } as AgentMessage,
+          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
           {
             role: "toolResult",
             toolCallId: "t1",
@@ -1588,6 +1588,24 @@ describe("compaction-safeguard double-compaction guard", () => {
         1,
       ),
     ).toBe(true);
+  });
+
+  it("does not treat assistant-only tool calls as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: "<b>HEARTBEAT_OK</b>",
+      } as AgentMessage),
+    ).toBe(false);
   });
 });
 
