@@ -14,14 +14,20 @@ import type { SessionEntry } from "../../config/sessions.js";
  * prompt because systemSent=true was already on disk.
  */
 
-// Disable fast-test bypass so we exercise the real code path
-delete process.env.OPENCLAW_TEST_FAST;
-
 let tmpDir = "";
+let originalTestFast: string | undefined;
+
 beforeAll(async () => {
+  // Disable fast-test bypass so we exercise the real code path
+  originalTestFast = process.env.OPENCLAW_TEST_FAST;
+  delete process.env.OPENCLAW_TEST_FAST;
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemsent-"));
 });
 afterAll(async () => {
+  // Restore original env value for test isolation
+  if (originalTestFast !== undefined) {
+    process.env.OPENCLAW_TEST_FAST = originalTestFast;
+  }
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
