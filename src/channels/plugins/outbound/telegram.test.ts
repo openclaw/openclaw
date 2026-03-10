@@ -140,14 +140,13 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "123" });
   });
 
-  it("delegates long sendPayload text chunking to sendMessageTelegram without textMode html", async () => {
+  it("preserves textMode html for sendPayload channelData text sends", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-c1", chatId: "123" });
     const sendPayload = telegramOutbound.sendPayload;
     expect(sendPayload).toBeDefined();
 
-    const longText = "A".repeat(5000);
     const payload: ReplyPayload = {
-      text: longText,
+      text: "<b>hello</b>",
       channelData: {
         telegram: {
           buttons: [[{ text: "OK", callback_data: "ok" }]],
@@ -165,14 +164,14 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram },
     });
 
-    // sendPayload delegates chunking to sendMessageTelegram (single call
-    // with the full text). textMode must NOT be "html" so the markdown path
-    // handles conversion + chunking internally, avoiding double encoding.
+    // sendPayload is only invoked when channelData is present. The delivery
+    // pipeline preserves raw HTML for Telegram channelData payloads, so
+    // textMode must be "html" to pass the text through unchanged.
     expect(sendTelegram).toHaveBeenCalledTimes(1);
     const opts = sendTelegram.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(opts?.textMode).toBeUndefined();
+    expect(opts?.textMode).toBe("html");
     expect(opts?.buttons).toEqual([[{ text: "OK", callback_data: "ok" }]]);
-    expect(sendTelegram.mock.calls[0]?.[1]).toBe(longText);
+    expect(sendTelegram.mock.calls[0]?.[1]).toBe("<b>hello</b>");
     expect(result).toEqual({ channel: "telegram", messageId: "tg-c1", chatId: "123" });
   });
 
