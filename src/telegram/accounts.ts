@@ -10,6 +10,7 @@ import {
 } from "../plugin-sdk/account-resolution.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
+import { formatSetExplicitDefaultInstruction } from "../routing/default-account-warnings.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -63,6 +64,13 @@ export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
+let emittedMissingDefaultWarn = false;
+
+/** @internal Reset the once-per-process warning flag. Exported for tests only. */
+export function resetMissingDefaultWarnFlag(): void {
+  emittedMissingDefaultWarn = false;
+}
+
 export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "telegram");
   if (boundDefault) {
@@ -79,10 +87,17 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }
+  if (ids.length > 1 && !emittedMissingDefaultWarn) {
+    emittedMissingDefaultWarn = true;
+    log.warn(
+      `channels.telegram: accounts.default is missing; falling back to "${ids[0]}". ` +
+        `${formatSetExplicitDefaultInstruction("telegram")} to avoid routing surprises in multi-account setups.`,
+    );
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-function resolveAccountConfig(
+export function resolveTelegramAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): TelegramAccountConfig | undefined {
@@ -90,7 +105,10 @@ function resolveAccountConfig(
   return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
 }
 
-function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
+export function mergeTelegramAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): TelegramAccountConfig {
   const {
     accounts: _ignored,
     defaultAccount: _ignoredDefaultAccount,
@@ -100,7 +118,7 @@ function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): Tel
     accounts?: unknown;
     defaultAccount?: unknown;
   };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
 
   // In multi-account setups, channel-level `groups` must NOT be inherited by
   // accounts that don't have their own `groups` config.  A bot that is not a
@@ -123,8 +141,26 @@ export function createTelegramActionGate(params: {
   const accountId = normalizeAccountId(params.accountId);
   return createAccountActionGate({
     baseActions: params.cfg.channels?.telegram?.actions,
-    accountActions: resolveAccountConfig(params.cfg, accountId)?.actions,
+    accountActions: resolveTelegramAccountConfig(params.cfg, accountId)?.actions,
   });
+}
+
+export type TelegramPollActionGateState = {
+  sendMessageEnabled: boolean;
+  pollEnabled: boolean;
+  enabled: boolean;
+};
+
+export function resolveTelegramPollActionGateState(
+  isActionEnabled: (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean,
+): TelegramPollActionGateState {
+  const sendMessageEnabled = isActionEnabled("sendMessage");
+  const pollEnabled = isActionEnabled("poll");
+  return {
+    sendMessageEnabled,
+    pollEnabled,
+    enabled: sendMessageEnabled && pollEnabled,
+  };
 }
 
 export function resolveTelegramAccount(params: {

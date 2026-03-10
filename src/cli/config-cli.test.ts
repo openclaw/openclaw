@@ -60,6 +60,52 @@ function setSnapshotOnce(snapshot: ConfigFileSnapshot) {
   mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
 }
 
+function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
+  return {
+    ...resolved,
+    agents: {
+      ...resolved.agents,
+      defaults: {
+        model: "gpt-5.2",
+      } as never,
+    } as never,
+  };
+}
+
+function makeInvalidSnapshot(params: {
+  issues: ConfigFileSnapshot["issues"];
+  path?: string;
+}): ConfigFileSnapshot {
+  return {
+    path: params.path ?? "/tmp/custom-openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    resolved: {},
+    valid: false,
+    config: {},
+    issues: params.issues,
+    warnings: [],
+    legacyIssues: [],
+  };
+}
+
+async function runValidateJsonAndGetPayload() {
+  await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow("__exit__:1");
+  const raw = mockLog.mock.calls.at(0)?.[0];
+  expect(typeof raw).toBe("string");
+  return JSON.parse(String(raw)) as {
+    valid: boolean;
+    path: string;
+    issues: Array<{
+      path: string;
+      message: string;
+      allowedValues?: string[];
+      allowedValuesHiddenCount?: number;
+    }>;
+  };
+}
+
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
 let sharedProgram: Command;
 
@@ -90,13 +136,7 @@ describe("config cli", () => {
         logging: { level: "debug" },
       };
       const runtimeMerged: OpenClawConfig = {
-        ...resolved,
-        agents: {
-          ...resolved.agents,
-          defaults: {
-            model: "gpt-5.2",
-          } as never,
-        } as never,
+        ...withRuntimeDefaults(resolved),
       };
       setSnapshot(resolved, runtimeMerged);
 
@@ -157,7 +197,7 @@ describe("config cli", () => {
         baseUrl: "http://127.0.0.1:11434",
         api: "ollama",
         models: [],
-        apiKey: "ollama-local",
+        apiKey: "ollama-local", // pragma: allowlist secret
       });
     });
   });
@@ -194,23 +234,16 @@ describe("config cli", () => {
     });
 
     it("prints issues and exits 1 when config is invalid", async () => {
-      setSnapshotOnce({
-        path: "/tmp/custom-openclaw.json",
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        resolved: {},
-        valid: false,
-        config: {},
-        issues: [
-          {
-            path: "agents.defaults.suppressToolErrorWarnings",
-            message: "Unrecognized key(s) in object",
-          },
-        ],
-        warnings: [],
-        legacyIssues: [],
-      });
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [
+            {
+              path: "agents.defaults.suppressToolErrorWarnings",
+              message: "Unrecognized key(s) in object",
+            },
+          ],
+        }),
+      );
 
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
 
@@ -222,33 +255,43 @@ describe("config cli", () => {
     });
 
     it("returns machine-readable JSON with --json for invalid config", async () => {
-      setSnapshotOnce({
-        path: "/tmp/custom-openclaw.json",
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        resolved: {},
-        valid: false,
-        config: {},
-        issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
-        warnings: [],
-        legacyIssues: [],
-      });
-
-      await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(
-        "__exit__:1",
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+        }),
       );
 
-      const raw = mockLog.mock.calls.at(0)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
-        valid: boolean;
-        path: string;
-        issues: Array<{ path: string; message: string }>;
-      };
+      const payload = await runValidateJsonAndGetPayload();
       expect(payload.valid).toBe(false);
       expect(payload.path).toBe("/tmp/custom-openclaw.json");
       expect(payload.issues).toEqual([{ path: "gateway.bind", message: "Invalid enum value" }]);
+      expect(mockError).not.toHaveBeenCalled();
+    });
+
+    it("preserves allowed-values metadata in --json output", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [
+            {
+              path: "update.channel",
+              message: 'Invalid input (allowed: "stable", "beta", "dev")',
+              allowedValues: ["stable", "beta", "dev"],
+              allowedValuesHiddenCount: 0,
+            },
+          ],
+        }),
+      );
+
+      const payload = await runValidateJsonAndGetPayload();
+      expect(payload.valid).toBe(false);
+      expect(payload.path).toBe("/tmp/custom-openclaw.json");
+      expect(payload.issues).toEqual([
+        {
+          path: "update.channel",
+          message: 'Invalid input (allowed: "stable", "beta", "dev")',
+          allowedValues: ["stable", "beta", "dev"],
+        },
+      ]);
       expect(mockError).not.toHaveBeenCalled();
     });
 
@@ -357,13 +400,7 @@ describe("config cli", () => {
         logging: { level: "debug" },
       };
       const runtimeMerged: OpenClawConfig = {
-        ...resolved,
-        agents: {
-          ...resolved.agents,
-          defaults: {
-            model: "gpt-5.2",
-          },
-        } as never,
+        ...withRuntimeDefaults(resolved),
       };
       setSnapshot(resolved, runtimeMerged);
 

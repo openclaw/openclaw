@@ -10,6 +10,12 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
+
+function loadManagerRuntime() {
+  managerRuntimePromise ??= import("./manager-runtime.js");
+  return managerRuntimePromise;
+}
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -48,7 +54,7 @@ export async function getMemorySearchManager(params: {
           {
             primary,
             fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
+              const { MemoryIndexManager } = await loadManagerRuntime();
               return await MemoryIndexManager.get(params);
             },
           },
@@ -70,12 +76,28 @@ export async function getMemorySearchManager(params: {
   }
 
   try {
-    const { MemoryIndexManager } = await import("./manager.js");
+    const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
+  }
+}
+
+export async function closeAllMemorySearchManagers(): Promise<void> {
+  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  QMD_MANAGER_CACHE.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+  if (managerRuntimePromise !== null) {
+    const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
+    await closeAllMemoryIndexManagers();
   }
 }
 

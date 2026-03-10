@@ -321,7 +321,21 @@ Resolution order:
 Notes:
 
 - Slack expects shortcodes (for example `"eyes"`).
-- Use `""` to disable the reaction for a channel or account.
+- Use `""` to disable the reaction for the Slack account or globally.
+
+## Typing reaction fallback
+
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is a useful fallback when Slack native assistant typing is unavailable, especially in DMs.
+
+Resolution order:
+
+- `channels.slack.accounts.<accountId>.typingReaction`
+- `channels.slack.typingReaction`
+
+Notes:
+
+- Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
+- The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
 ## Manifest and scope checklist
 

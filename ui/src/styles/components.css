@@ -1425,6 +1425,7 @@
 
 .table {
   display: grid;
+  container-type: inline-size;
   gap: 6px;
 }
 
@@ -1453,6 +1454,20 @@
 
 .table-row:hover {
   border-color: var(--border-strong);
+}
+
+@media (max-width: 1100px) {
+  .table-head,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 1100px) {
+  .table-head,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .session-link {
@@ -1923,7 +1938,10 @@
   margin-top: 0.75em;
   border-collapse: collapse;
   width: 100%;
+  max-width: 100%;
   font-size: 13px;
+  display: block;
+  overflow-x: auto;
 }
 
 .chat-text :where(th, td) {

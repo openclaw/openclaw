@@ -14,7 +14,7 @@ import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     source: "test",
     mode: "api-key",
   })),
@@ -243,7 +243,7 @@ describe("applyMediaUnderstanding", () => {
   beforeEach(() => {
     mockedResolveApiKey.mockReset();
     mockedResolveApiKey.mockResolvedValue({
-      apiKey: "test-key",
+      apiKey: "test-key", // pragma: allowlist secret
       source: "test",
       mode: "api-key",
     });
@@ -307,6 +307,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx = await createAudioCtx({
       body: "<media:audio> /capture status",
     });
+    ctx.CommandAuthorized = false;
     const result = await applyMediaUnderstanding({
       ctx,
       cfg: createGroqAudioConfig(),
@@ -320,6 +321,7 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
       commandBody: "/capture status",
     });
+    expect(ctx.CommandAuthorized).toBe(false);
   });
 
   it("handles URL-only attachments for audio transcription", async () => {

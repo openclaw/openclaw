@@ -1,3 +1,4 @@
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -17,6 +18,7 @@ import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
+import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
@@ -86,6 +88,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...systemHandlers,
   ...updateHandlers,
   ...nodeHandlers,
+  ...nodePendingHandlers,
   ...pushHandlers,
   ...sendHandlers,
   ...usageHandlers,
@@ -138,12 +141,17 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  await handler({
-    req,
-    params: (req.params ?? {}) as Record<string, unknown>,
-    client,
-    isWebchatConnect,
-    respond,
-    context,
-  });
+  const invokeHandler = () =>
+    handler({
+      req,
+      params: (req.params ?? {}) as Record<string, unknown>,
+      client,
+      isWebchatConnect,
+      respond,
+      context,
+    });
+  // All handlers run inside a request scope so that plugin runtime
+  // subagent methods (e.g. context engine tools spawning sub-agents
+  // during tool execution) can dispatch back into the gateway.
+  await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect }, invokeHandler);
 }

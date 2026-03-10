@@ -994,6 +994,7 @@
                   "brave-search",
                   "perplexity",
                   "tools/diffs",
+                  "tools/pdf",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
@@ -1012,7 +1013,8 @@
                   "tools/browser",
                   "tools/browser-login",
                   "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting"
+                  "tools/browser-linux-troubleshooting",
+                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                 ]
               },
               {
@@ -1181,6 +1183,7 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "auth-credential-semantics",
                       "gateway/secrets",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
@@ -1321,6 +1324,7 @@
                 "pages": [
                   "reference/wizard",
                   "reference/token-use",
+                  "reference/secretref-credential-surface",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",

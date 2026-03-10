@@ -9,5 +9,4 @@ final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
             queueLabel: "ai.openclaw.canvaswatcher",
             onChange: onChange))
     }
-
 }

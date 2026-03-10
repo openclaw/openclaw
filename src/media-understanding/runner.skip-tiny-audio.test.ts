@@ -52,7 +52,7 @@ const AUDIO_CAPABILITY_CFG = {
   models: {
     providers: {
       openai: {
-        apiKey: "test-key",
+        apiKey: "test-key", // pragma: allowlist secret
         models: [],
       },
     },
@@ -98,7 +98,7 @@ describe("runCapability skips tiny audio files", () => {
           cache,
           transcribeAudio: async (req) => {
             transcribeCalled = true;
-            return { text: "should not happen", model: req.model };
+            return { text: "should not happen", model: req.model ?? "whisper-1" };
           },
         });
 
@@ -154,7 +154,7 @@ describe("runCapability skips tiny audio files", () => {
           cache,
           transcribeAudio: async (req) => {
             transcribeCalled = true;
-            return { text: "hello world", model: req.model };
+            return { text: "hello world", model: req.model ?? "whisper-1" };
           },
         });
 

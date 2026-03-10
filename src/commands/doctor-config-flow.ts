@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ZodIssue } from "zod";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import {
   isNumericTelegramUserId,
@@ -8,12 +7,15 @@ import {
 } from "../channels/telegram/allow-from.js";
 import { fetchTelegramChatId } from "../channels/telegram/api.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
-import { OpenClawSchema } from "../config/zod-schema.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
@@ -25,7 +27,16 @@ import {
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  formatChannelAccountsDefaultPath,
+  formatSetExplicitDefaultInstruction,
+  formatSetExplicitDefaultToConfiguredInstruction,
+} from "../routing/default-account-warnings.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../routing/session-key.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -34,162 +45,20 @@ import {
   isMattermostMutableAllowEntry,
   isSlackMutableAllowEntry,
 } from "../security/mutable-allowlist-detectors.js";
+import { inspectTelegramAccount } from "../telegram/account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
-import { isRecord, resolveHomeDir } from "../utils.js";
+import { resolveHomeDir } from "../utils.js";
+import {
+  formatConfigPath,
+  noteIncludeConfinementWarning,
+  noteOpencodeProviderOverrides,
+  resolveConfigPathTarget,
+  stripUnknownConfigKeys,
+} from "./doctor-config-analysis.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
-
-type UnrecognizedKeysIssue = ZodIssue & {
-  code: "unrecognized_keys";
-  keys: PropertyKey[];
-};
-
-function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
-  return path.filter((part): part is string | number => typeof part !== "symbol");
-}
-
-function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
-  return issue.code === "unrecognized_keys";
-}
-
-function formatPath(parts: Array<string | number>): string {
-  if (parts.length === 0) {
-    return "<root>";
-  }
-  let out = "";
-  for (const part of parts) {
-    if (typeof part === "number") {
-      out += `[${part}]`;
-      continue;
-    }
-    out = out ? `${out}.${part}` : part;
-  }
-  return out || "<root>";
-}
-
-function resolvePathTarget(root: unknown, path: Array<string | number>): unknown {
-  let current: unknown = root;
-  for (const part of path) {
-    if (typeof part === "number") {
-      if (!Array.isArray(current)) {
-        return null;
-      }
-      if (part < 0 || part >= current.length) {
-        return null;
-      }
-      current = current[part];
-      continue;
-    }
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return null;
-    }
-    const record = current as Record<string, unknown>;
-    if (!(part in record)) {
-      return null;
-    }
-    current = record[part];
-  }
-  return current;
-}
-
-function stripUnknownConfigKeys(config: OpenClawConfig): {
-  config: OpenClawConfig;
-  removed: string[];
-} {
-  const parsed = OpenClawSchema.safeParse(config);
-  if (parsed.success) {
-    return { config, removed: [] };
-  }
-
-  const next = structuredClone(config);
-  const removed: string[] = [];
-  for (const issue of parsed.error.issues) {
-    if (!isUnrecognizedKeysIssue(issue)) {
-      continue;
-    }
-    const path = normalizeIssuePath(issue.path);
-    const target = resolvePathTarget(next, path);
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
-      continue;
-    }
-    const record = target as Record<string, unknown>;
-    for (const key of issue.keys) {
-      if (typeof key !== "string") {
-        continue;
-      }
-      if (!(key in record)) {
-        continue;
-      }
-      delete record[key];
-      removed.push(formatPath([...path, key]));
-    }
-  }
-
-  return { config: next, removed };
-}
-
-function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
-  const providers = cfg.models?.providers;
-  if (!providers) {
-    return;
-  }
-
-  // 2026-01-10: warn when OpenCode Zen overrides mask built-in routing/costs (8a194b4abc360c6098f157956bb9322576b44d51, 2d105d16f8a099276114173836d46b46cdfbdbae).
-  const overrides: string[] = [];
-  if (providers.opencode) {
-    overrides.push("opencode");
-  }
-  if (providers["opencode-zen"]) {
-    overrides.push("opencode-zen");
-  }
-  if (overrides.length === 0) {
-    return;
-  }
-
-  const lines = overrides.flatMap((id) => {
-    const providerEntry = providers[id];
-    const api =
-      isRecord(providerEntry) && typeof providerEntry.api === "string"
-        ? providerEntry.api
-        : undefined;
-    return [
-      `- models.providers.${id} is set; this overrides the built-in OpenCode Zen catalog.`,
-      api ? `- models.providers.${id}.api=${api}` : null,
-    ].filter((line): line is string => Boolean(line));
-  });
-
-  lines.push(
-    "- Remove these entries to restore per-model API routing + costs (then re-run onboarding if needed).",
-  );
-
-  note(lines.join("\n"), "OpenCode Zen");
-}
-
-function noteIncludeConfinementWarning(snapshot: {
-  path?: string | null;
-  issues?: Array<{ message: string }>;
-}): void {
-  const issues = snapshot.issues ?? [];
-  const includeIssue = issues.find(
-    (issue) =>
-      issue.message.includes("Include path escapes config directory") ||
-      issue.message.includes("Include path resolves outside config directory"),
-  );
-  if (!includeIssue) {
-    return;
-  }
-  const configRoot = path.dirname(snapshot.path ?? CONFIG_PATH);
-  note(
-    [
-      `- $include paths must stay under: ${configRoot}`,
-      '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
-      `- Error: ${includeIssue.message}`,
-    ].join("\n"),
-    "Doctor warnings",
-  );
-}
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
@@ -214,15 +83,21 @@ function normalizeBindingChannelKey(raw?: string | null): string {
   return (raw ?? "").trim().toLowerCase();
 }
 
-export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
+type ChannelMissingDefaultAccountContext = {
+  channelKey: string;
+  channel: Record<string, unknown>;
+  normalizedAccountIds: string[];
+};
+
+function collectChannelsMissingDefaultAccount(
+  cfg: OpenClawConfig,
+): ChannelMissingDefaultAccountContext[] {
   const channels = asObjectRecord(cfg.channels);
   if (!channels) {
     return [];
   }
 
-  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
-  const warnings: string[] = [];
-
+  const contexts: ChannelMissingDefaultAccountContext[] = [];
   for (const [channelKey, rawChannel] of Object.entries(channels)) {
     const channel = asObjectRecord(rawChannel);
     if (!channel) {
@@ -239,10 +114,20 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
           .map((accountId) => normalizeAccountId(accountId))
           .filter(Boolean),
       ),
-    );
+    ).toSorted((a, b) => a.localeCompare(b));
     if (normalizedAccountIds.length === 0 || normalizedAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
       continue;
     }
+    contexts.push({ channelKey, channel, normalizedAccountIds });
+  }
+  return contexts;
+}
+
+export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
+  const bindings = listRouteBindings(cfg);
+  const warnings: string[] = [];
+
+  for (const { channelKey, normalizedAccountIds } of collectChannelsMissingDefaultAccount(cfg)) {
     const accountIdSet = new Set(normalizedAccountIds);
     const channelPattern = normalizeBindingChannelKey(channelKey);
 
@@ -290,13 +175,43 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
     }
     if (coveredAccountIds.size > 0) {
       warnings.push(
-        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
       );
       continue;
     }
 
     warnings.push(
-      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
+    );
+  }
+
+  return warnings;
+}
+
+export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(
+    cfg,
+  )) {
+    if (normalizedAccountIds.length < 2) {
+      continue;
+    }
+
+    const preferredDefault = normalizeOptionalAccountId(
+      typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
+    );
+    if (preferredDefault) {
+      if (normalizedAccountIds.includes(preferredDefault)) {
+        continue;
+      }
+      warnings.push(
+        `- channels.${channelKey}: defaultAccount is set to "${preferredDefault}" but does not match configured accounts (${normalizedAccountIds.join(", ")}). ${formatSetExplicitDefaultToConfiguredInstruction({ channelKey })} to avoid fallback routing.`,
+      );
+      continue;
+    }
+
+    warnings.push(
+      `- channels.${channelKey}: multiple accounts are configured but no explicit default is set. ${formatSetExplicitDefaultInstruction(channelKey)} to avoid fallback routing.`,
     );
   }
 
@@ -407,10 +322,20 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     return { config: cfg, changes: [] };
   }
 
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: cfg,
+    commandName: "doctor --fix",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    mode: "summary",
+  });
+  const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
+    const inspected = inspectTelegramAccount({ cfg, accountId });
+    return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
+  });
   const tokens = Array.from(
     new Set(
-      listTelegramAccountIds(cfg)
-        .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
+      listTelegramAccountIds(resolvedConfig)
+        .map((accountId) => resolveTelegramAccount({ cfg: resolvedConfig, accountId }))
         .map((account) => (account.tokenSource === "none" ? "" : account.token))
         .map((token) => token.trim())
         .filter(Boolean),
@@ -421,7 +346,9 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     return {
       config: cfg,
       changes: [
-        `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run onboarding or replace with numeric sender IDs).`,
+        hasConfiguredUnavailableToken
+          ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
+          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run onboarding or replace with numeric sender IDs).`,
       ],
     };
   }
@@ -1587,7 +1514,7 @@ function collectLegacyToolsBySenderKeyHits(
   const toolsBySender = asObjectRecord(record.toolsBySender);
   if (toolsBySender) {
     const path = [...pathParts, "toolsBySender"];
-    const pathLabel = formatPath(path);
+    const pathLabel = formatConfigPath(path);
     for (const rawKey of Object.keys(toolsBySender)) {
       const trimmed = rawKey.trim();
       if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {
@@ -1630,7 +1557,7 @@ function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   let changed = false;
 
   for (const hit of hits) {
-    const toolsBySender = asObjectRecord(resolvePathTarget(next, hit.toolsBySenderPath));
+    const toolsBySender = asObjectRecord(resolveConfigPathTarget(next, hit.toolsBySenderPath));
     if (!toolsBySender || !(hit.key in toolsBySender)) {
       continue;
     }
@@ -1753,13 +1680,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   const warnings = snapshot.warnings ?? [];
   if (warnings.length > 0) {
-    const lines = warnings.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
+    const lines = formatConfigIssueLines(warnings, "-").join("\n");
     note(lines, "Config warnings");
   }
 
   if (snapshot.legacyIssues.length > 0) {
     note(
-      snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n"),
+      formatConfigIssueLines(snapshot.legacyIssues, "-").join("\n"),
       "Compatibility config keys detected",
     );
     const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
@@ -1810,6 +1737,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     collectMissingDefaultAccountBindingWarnings(candidate);
   if (missingDefaultAccountBindingWarnings.length > 0) {
     note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
+  }
+  const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
+  if (missingExplicitDefaultWarnings.length > 0) {
+    note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
   }
 
   if (shouldRepair) {

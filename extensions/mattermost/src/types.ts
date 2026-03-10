@@ -1,4 +1,9 @@
-import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type {
+  BlockStreamingCoalesceConfig,
+  DmPolicy,
+  GroupPolicy,
+  SecretInput,
+} from "openclaw/plugin-sdk/mattermost";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
@@ -17,7 +22,7 @@ export type MattermostAccountConfig = {
   /** If false, do not start this Mattermost account. Default: true. */
   enabled?: boolean;
   /** Bot token for Mattermost. */
-  botToken?: string;
+  botToken?: SecretInput;
   /** Base URL for the Mattermost server (e.g., https://chat.example.com). */
   baseUrl?: string;
   /**
@@ -53,6 +58,26 @@ export type MattermostAccountConfig = {
   actions?: {
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
+  };
+  /** Native slash command configuration. */
+  commands?: {
+    /** Enable native slash commands. "auto" resolves to false (opt-in). */
+    native?: boolean | "auto";
+    /** Also register skill-based commands. */
+    nativeSkills?: boolean | "auto";
+    /** Path for the callback endpoint on the gateway HTTP server. */
+    callbackPath?: string;
+    /** Explicit callback URL (e.g. behind reverse proxy). */
+    callbackUrl?: string;
+  };
+  interactions?: {
+    /** External base URL used for Mattermost interaction callbacks. */
+    callbackBaseUrl?: string;
+    /**
+     * IP/CIDR allowlist for callback request sources when Mattermost reaches the gateway
+     * over a non-loopback path. Keep this narrow to the Mattermost server or trusted ingress.
+     */
+    allowedSourceIps?: string[];
   };
 };
 

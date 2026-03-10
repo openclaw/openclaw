@@ -13,6 +13,7 @@ import {
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type MistralEmbeddingClient,
+  type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
@@ -41,6 +42,22 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
+export async function closeAllMemoryIndexManagers(): Promise<void> {
+  const pending = Array.from(INDEX_CACHE_PENDING.values());
+  if (pending.length > 0) {
+    await Promise.allSettled(pending);
+  }
+  const managers = Array.from(INDEX_CACHE.values());
+  INDEX_CACHE.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close();
+    } catch (err) {
+      log.warn(`failed to close memory index manager: ${String(err)}`);
+    }
+  }
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
@@ -48,14 +65,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral";
+  private readonly requestedProvider:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "auto";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
+  protected ollama?: OllamaEmbeddingClient;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -185,6 +210,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
     this.mistral = params.providerResult.mistral;
+    this.ollama = params.providerResult.ollama;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
@@ -289,9 +315,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return merged;
     }
 
-    const keywordResults = hybrid.enabled
-      ? await this.searchKeyword(cleaned, candidates).catch(() => [])
-      : [];
+    // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
+    const keywordResults =
+      hybrid.enabled && this.fts.enabled && this.fts.available
+        ? await this.searchKeyword(cleaned, candidates).catch(() => [])
+        : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
@@ -299,7 +327,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? await this.searchVector(queryVec, candidates).catch(() => [])
       : [];
 
-    if (!hybrid.enabled) {
+    if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 

@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+  hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
@@ -202,6 +203,10 @@ describe("memory flush settings", () => {
     expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("respects disable flag", () => {
@@ -229,6 +234,10 @@ describe("memory flush settings", () => {
     });
     expect(settings?.prompt).toContain("NO_REPLY");
     expect(settings?.systemPrompt).toContain("NO_REPLY");
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("falls back to defaults when numeric values are invalid", () => {
@@ -347,6 +356,42 @@ describe("shouldRunMemoryFlush", () => {
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
+  });
+});
+
+describe("hasAlreadyFlushedForCurrentCompaction", () => {
+  it("returns true when memoryFlushCompactionCount matches compactionCount", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 3,
+        memoryFlushCompactionCount: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when memoryFlushCompactionCount differs", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 3,
+        memoryFlushCompactionCount: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when memoryFlushCompactionCount is undefined", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats missing compactionCount as 0", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(true);
   });
 });
 

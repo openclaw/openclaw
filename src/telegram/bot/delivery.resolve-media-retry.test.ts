@@ -31,7 +31,7 @@ const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
 
 function makeCtx(
-  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation",
+  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation" | "sticker",
   getFile: TelegramContext["getFile"],
   opts?: { file_name?: string },
 ): TelegramContext {
@@ -77,6 +77,17 @@ function makeCtx(
       width: 200,
       height: 200,
       ...(opts?.file_name && { file_name: opts.file_name }),
+    };
+  }
+  if (mediaField === "sticker") {
+    msg.sticker = {
+      file_id: "stk1",
+      file_unique_id: "ustk1",
+      type: "regular",
+      width: 512,
+      height: 512,
+      is_animated: false,
+      is_video: false,
     };
   }
   return {
@@ -242,6 +253,101 @@ describe("resolveMedia getFile retry", () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
     expect(result).not.toBeNull();
+  });
+
+  it("retries getFile for stickers on transient failure", async () => {
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
+      .mockResolvedValueOnce({ file_path: "stickers/file_0.webp" });
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker-data"),
+      contentType: "image/webp",
+      fileName: "file_0.webp",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.webp",
+      contentType: "image/webp",
+    });
+
+    const ctx = makeCtx("sticker", getFile);
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.webp", placeholder: "<media:sticker>" }),
+    );
+  });
+
+  it("returns null for sticker when getFile exhausts retries", async () => {
+    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+
+    const ctx = makeCtx("sticker", getFile);
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(3);
+    expect(result).toBeNull();
+  });
+
+  it("uses caller-provided fetch impl for file downloads", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    const callerFetch = vi.fn() as unknown as typeof fetch;
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      contentType: "application/pdf",
+      fileName: "file_42.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      callerFetch,
+    );
+
+    expect(result).not.toBeNull();
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchImpl: callerFetch,
+      }),
+    );
+  });
+
+  it("uses caller-provided fetch impl for sticker downloads", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
+    const callerFetch = vi.fn() as unknown as typeof fetch;
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker-data"),
+      contentType: "image/webp",
+      fileName: "file_0.webp",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.webp",
+      contentType: "image/webp",
+    });
+
+    const result = await resolveMedia(
+      makeCtx("sticker", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      callerFetch,
+    );
+
+    expect(result).not.toBeNull();
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchImpl: callerFetch,
+      }),
+    );
   });
 });
 

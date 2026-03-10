@@ -30,7 +30,10 @@ function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   listAccountIds?: (cfg: OpenClawConfig) => string[];
+  isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
+  isEnabled?: (account: unknown, cfg: OpenClawConfig) => boolean;
 }): ChannelPlugin {
   return {
     id: params.id,
@@ -54,9 +57,10 @@ function stubChannelPlugin(params: {
           );
           return enabled ? ["default"] : [];
         }),
+      inspectAccount: params.inspectAccount,
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
-      isEnabled: () => true,
-      isConfigured: () => true,
+      isEnabled: (account, cfg) => params.isEnabled?.(account, cfg) ?? true,
+      isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
     },
   };
 }
@@ -150,6 +154,7 @@ describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let channelSecurityRoot = "";
+  let sharedChannelSecurityStateDir = "";
   let sharedCodeSafetyStateDir = "";
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
@@ -161,12 +166,24 @@ describe("security audit", () => {
     return dir;
   };
 
+  const createFilesystemAuditFixture = async (label: string) => {
+    const tmp = await makeTmpDir(label);
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    if (!isWindows) {
+      await fs.chmod(configPath, 0o600);
+    }
+    return { tmp, stateDir, configPath };
+  };
+
   const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
-    const channelSecurityStateDir = path.join(channelSecurityRoot, `state-${caseId++}`);
-    const credentialsDir = path.join(channelSecurityStateDir, "credentials");
+    const credentialsDir = path.join(sharedChannelSecurityStateDir, "credentials");
+    await fs.rm(credentialsDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: channelSecurityStateDir }, () =>
-      fn(channelSecurityStateDir),
+    await withEnvAsync({ OPENCLAW_STATE_DIR: sharedChannelSecurityStateDir }, () =>
+      fn(sharedChannelSecurityStateDir),
     );
   };
 
@@ -214,6 +231,11 @@ description: test skill
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
     channelSecurityRoot = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
+    sharedChannelSecurityStateDir = path.join(channelSecurityRoot, "state-shared");
+    await fs.mkdir(path.join(sharedChannelSecurityStateDir, "credentials"), {
+      recursive: true,
+      mode: 0o700,
+    });
     const codeSafetyFixture = await createSharedCodeSafetyFixture();
     sharedCodeSafetyStateDir = codeSafetyFixture.stateDir;
     sharedCodeSafetyWorkspaceDir = codeSafetyFixture.workspaceDir;
@@ -283,6 +305,24 @@ description: test skill
         process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
       }
     }
+  });
+
+  it("does not flag non-loopback bind without auth when gateway password uses SecretRef", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          password: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "gateway.bind_no_auth");
   });
 
   it("evaluates gateway auth rate-limit warning based on configuration", async () => {
@@ -682,12 +722,7 @@ description: test skill
   });
 
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
-    const tmp = await makeTmpDir("browser-hash-labels");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture("browser-hash-labels");
 
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
@@ -736,12 +771,7 @@ description: test skill
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
-    const tmp = await makeTmpDir("browser-hash-labels-skip");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture("browser-hash-labels-skip");
 
     const execDockerRawFn = (async () => {
       throw new Error("spawn docker ENOENT");
@@ -761,12 +791,9 @@ description: test skill
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {
-    const tmp = await makeTmpDir("browser-non-loopback-publish");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture(
+      "browser-non-loopback-publish",
+    );
 
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
@@ -1133,6 +1160,45 @@ description: test skill
     expect(finding?.severity).toBe("warn");
     expect(finding?.detail).toContain("system.*");
     expect(finding?.detail).toContain("system.runx");
+    expect(finding?.detail).toContain("did you mean");
+    expect(finding?.detail).toContain("system.run");
+  });
+
+  it("suggests prefix-matching commands for unknown denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["system.run.prep"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("system.run.prep");
+    expect(finding?.detail).toContain("did you mean");
+    expect(finding?.detail).toContain("system.run.prepare");
+  });
+
+  it("keeps unknown denyCommands entries without suggestions when no close command exists", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["zzzzzzzzzzzzzz"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("zzzzzzzzzzzzzz");
+    expect(finding?.detail).not.toContain("did you mean");
   });
 
   it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
@@ -1253,6 +1319,27 @@ description: test skill
 
     const res = await audit(cfg, { env: {} });
 
+    expectNoFinding(res, "browser.control_no_auth");
+  });
+
+  it("does not flag browser control auth when gateway password uses SecretRef", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        controlUi: { enabled: false },
+        auth: {
+          password: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+
+    const res = await audit(cfg, { env: {} });
     expectNoFinding(res, "browser.control_no_auth");
   });
 
@@ -1403,7 +1490,25 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "channels.feishu.doc_owner_open_id", "warn");
+  });
+
+  it("treats Feishu SecretRef appSecret as configured for doc tool risk detection", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: {
+            source: "env",
+            provider: "default",
+            id: "FEISHU_APP_SECRET",
+          },
         },
       },
     };
@@ -1417,7 +1522,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
           tools: { doc: false },
         },
       },
@@ -1736,6 +1841,247 @@ description: test skill
     });
   });
 
+  it("keeps channel security findings when SecretRef credentials are configured but unavailable", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const sourceConfig: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
+              },
+            },
+          },
+        },
+      };
+      const resolvedConfig: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const inspectableDiscordPlugin = stubChannelPlugin({
+        id: "discord",
+        label: "Discord",
+        inspectAccount: (cfg) => {
+          const channel = cfg.channels?.discord ?? {};
+          const token = channel.token;
+          return {
+            accountId: "default",
+            enabled: true,
+            configured:
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token,
+            token: "",
+            tokenSource:
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token
+                ? "config"
+                : "none",
+            tokenStatus:
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token
+                ? "configured_unavailable"
+                : "missing",
+            config: channel,
+          };
+        },
+        resolveAccount: (cfg) => ({ config: cfg.channels?.discord ?? {} }),
+        isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      });
+
+      const res = await runSecurityAudit({
+        config: resolvedConfig,
+        sourceConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [inspectableDiscordPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.commands.native.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("keeps Slack HTTP slash-command findings when resolved inspection only exposes signingSecret status", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const sourceConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+      const resolvedConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+
+      const inspectableSlackPlugin = stubChannelPlugin({
+        id: "slack",
+        label: "Slack",
+        inspectAccount: (cfg) => {
+          const channel = cfg.channels?.slack ?? {};
+          if (cfg === sourceConfig) {
+            return {
+              accountId: "default",
+              enabled: false,
+              configured: true,
+              mode: "http",
+              botTokenSource: "config",
+              botTokenStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+              config: channel,
+            };
+          }
+          return {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            mode: "http",
+            botTokenSource: "config",
+            botTokenStatus: "available",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "available", // pragma: allowlist secret
+            config: channel,
+          };
+        },
+        resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+        isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      });
+
+      const res = await runSecurityAudit({
+        config: resolvedConfig,
+        sourceConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [inspectableSlackPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("keeps source-configured Slack HTTP findings when resolved inspection is unconfigured", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const sourceConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+      const resolvedConfig: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "http",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+
+      const inspectableSlackPlugin = stubChannelPlugin({
+        id: "slack",
+        label: "Slack",
+        inspectAccount: (cfg) => {
+          const channel = cfg.channels?.slack ?? {};
+          if (cfg === sourceConfig) {
+            return {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              mode: "http",
+              botTokenSource: "config",
+              botTokenStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+              config: channel,
+            };
+          }
+          return {
+            accountId: "default",
+            enabled: true,
+            configured: false,
+            mode: "http",
+            botTokenSource: "config",
+            botTokenStatus: "available",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "missing", // pragma: allowlist secret
+            config: channel,
+          };
+        },
+        resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+        isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      });
+
+      const res = await runSecurityAudit({
+        config: resolvedConfig,
+        sourceConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [inspectableSlackPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    });
+  });
+
   it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
     await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
@@ -1894,6 +2240,51 @@ description: test skill
           }),
         ]),
       );
+    });
+  });
+
+  it("does not treat prototype properties as explicit Discord account config paths", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            dangerouslyAllowNameMatching: true,
+            allowFrom: ["Alice#1234"],
+            accounts: {},
+          },
+        },
+      };
+
+      const pluginWithProtoDefaultAccount: ChannelPlugin = {
+        ...discordPlugin,
+        config: {
+          ...discordPlugin.config,
+          listAccountIds: () => [],
+          defaultAccountId: () => "toString",
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [pluginWithProtoDefaultAccount],
+      });
+
+      const dangerousMatchingFinding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
+      );
+      expect(dangerousMatchingFinding).toBeDefined();
+      expect(dangerousMatchingFinding?.title).not.toContain("(account: toString)");
+
+      const nameBasedFinding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(nameBasedFinding).toBeDefined();
+      expect(nameBasedFinding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
+      expect(nameBasedFinding?.detail).not.toContain("channels.discord.accounts.toString");
     });
   });
 
@@ -2723,6 +3114,50 @@ description: test skill
     }
   });
 
+  it("treats SecretRef channel credentials as configured for extension allowlist severity", async () => {
+    const prevDiscordToken = process.env.DISCORD_BOT_TOKEN;
+    delete process.env.DISCORD_BOT_TOKEN;
+    const stateDir = sharedExtensionsStateDir;
+
+    try {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: {
+              source: "env",
+              provider: "default",
+              id: "DISCORD_BOT_TOKEN",
+            } as unknown as string,
+          },
+        },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+        execDockerRawFn: execDockerRawUnavailable,
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "plugins.extensions_no_allowlist",
+            severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevDiscordToken == null) {
+        delete process.env.DISCORD_BOT_TOKEN;
+      } else {
+        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      }
+    }
+  });
+
   it("does not scan plugin code safety findings when deep audit is disabled", async () => {
     const cfg: OpenClawConfig = {};
     const nonDeepRes = await runSecurityAudit({
@@ -3065,6 +3500,36 @@ description: test skill
           expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
         }),
       );
+    });
+
+    it("adds warning finding when probe auth SecretRef is unavailable", async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      };
+
+      const res = await audit(cfg, {
+        deep: true,
+        deepTimeoutMs: 50,
+        probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
+        env: {},
+      });
+
+      const warning = res.findings.find(
+        (finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable",
+      );
+      expect(warning?.severity).toBe("warn");
+      expect(warning?.detail).toContain("gateway.auth.token");
     });
   });
 });

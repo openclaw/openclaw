@@ -13,6 +13,10 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
     .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
 }));
 
+vi.mock("../../infra/outbound/target-resolver.js", () => ({
+  maybeResolveIdLikeTarget: vi.fn(),
+}));
+
 vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
@@ -23,6 +27,7 @@ vi.mock("../../web/accounts.js", () => ({
 
 import { loadSessionStore } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -152,6 +157,30 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBeUndefined();
   });
 
+  it("applies id-like target normalization before returning delivery targets", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(maybeResolveIdLikeTarget).mockClear();
+    vi.mocked(maybeResolveIdLikeTarget).mockResolvedValueOnce({
+      to: "user:123456789",
+      kind: "user",
+      source: "directory",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "123456789",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("user:123456789");
+    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        input: "123456789",
+      }),
+    );
+  });
+
   it("selects correct binding when multiple agents have bindings", async () => {
     setMainSessionEntry(undefined);
 
@@ -228,7 +257,9 @@ describe("resolveDeliveryTarget", () => {
     if (result.ok) {
       throw new Error("expected unresolved delivery target");
     }
-    expect(result.error.message).toContain('No delivery target resolved for channel "telegram"');
+    // resolveOutboundTarget provides the standard missing-target error when
+    // no explicit target, no session lastTo, and no plugin resolveDefaultTo.
+    expect(result.error.message).toContain("requires target");
   });
 
   it("returns an error when channel selection is ambiguous", async () => {
