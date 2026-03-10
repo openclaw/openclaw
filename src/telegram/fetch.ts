@@ -300,7 +300,7 @@ export function resolveTelegramFetch(
 
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   const useEnvProxy = !explicitProxyUrl && hasProxyEnvConfigured();
-  const allowStickyIpv4Fallback = !explicitProxyUrl;
+  const allowStickyIpv4Fallback = !explicitProxyUrl && !useEnvProxy;
   const defaultDispatcher = createTelegramDispatcher({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
@@ -340,8 +340,8 @@ export function resolveTelegramFetch(
         if (callerProvidedDispatcher) {
           return sourceFetch(input, init ?? {});
         }
-        // Explicit proxy routes should not arm sticky IPv4 mode; `family=4` would
-        // constrain proxy-connect behavior instead of Telegram endpoint selection.
+        // Proxy routes should not arm sticky IPv4 mode; `family=4` would constrain
+        // proxy-connect behavior instead of Telegram endpoint selection.
         if (!allowStickyIpv4Fallback) {
           return sourceFetch(input, withDispatcherIfMissing(init, defaultDispatcher));
         }
