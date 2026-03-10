@@ -23,6 +23,7 @@ import {
   resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveMentionGatingWithBypass,
+  resolveNeverReply,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
@@ -380,6 +381,14 @@ async function processMessage(
         `Blocked zalouser sender ${senderId} (not in groupAllowFrom/allowFrom)`,
       );
     }
+    return;
+  }
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "zalouser", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "zalouser: group message stored for context (neverReply: true)");
     return;
   }
 

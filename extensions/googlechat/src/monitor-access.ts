@@ -8,6 +8,7 @@ import {
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
   resolveMentionGatingWithBypass,
+  resolveNeverReply,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/googlechat";
@@ -225,6 +226,14 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         return { ok: false };
       }
     }
+  }
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "googlechat", accountId: account.accountId })
+  ) {
+    logVerbose("googlechat: group message stored for context (neverReply: true)");
+    return { ok: false };
   }
 
   const dmPolicy = account.config.dm?.policy ?? "pairing";

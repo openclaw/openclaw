@@ -11,6 +11,7 @@ import {
   logTypingFailure,
   resolveInboundSessionEnvelopeContext,
   resolveControlCommandGate,
+  resolveNeverReply,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -364,6 +365,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       if (isRoom) {
         logVerboseMessage(`matrix: allow room ${roomId} (${roomMatchMeta})`);
+      }
+
+      if (isRoom && resolveNeverReply({ cfg, channel: "matrix", accountId })) {
+        logVerboseMessage("matrix: group message stored for context (neverReply: true)");
+        return;
       }
 
       const rawBody =

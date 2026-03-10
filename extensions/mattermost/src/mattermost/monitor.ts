@@ -26,6 +26,7 @@ import {
   resolveDmGroupAccessWithLists,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveNeverReply,
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
   listSkillCommandsForAgents,
@@ -1361,6 +1362,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage(
         `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.reason})`,
       );
+      return;
+    }
+
+    if (
+      kind !== "direct" &&
+      resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
+    ) {
+      logVerboseMessage("mattermost: group message stored for context (neverReply: true)");
       return;
     }
 

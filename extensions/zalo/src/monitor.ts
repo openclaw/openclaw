@@ -14,6 +14,7 @@ import {
   resolveSenderCommandAuthorizationWithRuntime,
   resolveOutboundMediaUrls,
   resolveDefaultGroupPolicy,
+  resolveNeverReply,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   sendMediaWithLeadingCaption,
   resolveWebhookPath,
@@ -413,6 +414,14 @@ async function processMessageWithPipeline(params: {
       }
       return;
     }
+  }
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "zalo", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "zalo: group message stored for context (neverReply: true)");
+    return;
   }
 
   const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");

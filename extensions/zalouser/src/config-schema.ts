@@ -22,6 +22,7 @@ const zalouserAccountSchema = z.object({
   historyLimit: z.number().int().min(0).optional(),
   groupAllowFrom: z.array(AllowFromEntrySchema).optional(),
   groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
+  neverReply: z.boolean().optional(),
   groups: z.object({}).catchall(groupConfigSchema).optional(),
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),

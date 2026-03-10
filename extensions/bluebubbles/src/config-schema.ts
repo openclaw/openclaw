@@ -39,6 +39,7 @@ const bluebubblesAccountSchema = z
     allowFrom: z.array(AllowFromEntrySchema).optional(),
     groupAllowFrom: z.array(AllowFromEntrySchema).optional(),
     groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
+    neverReply: z.boolean().optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     textChunkLimit: z.number().int().positive().optional(),

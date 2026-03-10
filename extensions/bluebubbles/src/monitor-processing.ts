@@ -14,6 +14,7 @@ import {
   resolveAckReaction,
   resolveDmGroupAccessWithLists,
   resolveControlCommandGate,
+  resolveNeverReply,
   stripMarkdown,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/bluebubbles";
@@ -638,6 +639,14 @@ export async function processMessage(
       runtime,
       `drop: dm sender not allowed sender=${message.senderId} allowFrom=${effectiveAllowFrom.join(",")}`,
     );
+    return;
+  }
+
+  if (
+    isGroup &&
+    resolveNeverReply({ cfg: config, channel: "bluebubbles", accountId: account.accountId })
+  ) {
+    logVerbose(core, runtime, "bluebubbles: group message stored for context (neverReply: true)");
     return;
   }
 
