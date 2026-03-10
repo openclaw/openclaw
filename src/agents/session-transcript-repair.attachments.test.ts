@@ -1,9 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, it, expect } from "vitest";
 import { sanitizeToolCallInputs } from "./session-transcript-repair.js";
+import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
 function mkSessionsSpawnToolCall(content: string): AgentMessage {
-  return {
+  return castAgentMessage({
     role: "assistant",
     content: [
       {
@@ -23,12 +24,12 @@ function mkSessionsSpawnToolCall(content: string): AgentMessage {
       },
     ],
     timestamp: Date.now(),
-  } as unknown as AgentMessage;
+  });
 }
 
 describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
   it("replaces attachments[].content with __OPENCLAW_REDACTED__", () => {
-    const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST";
+    const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
     const input = [mkSessionsSpawnToolCall(secret)];
     const out = sanitizeToolCallInputs(input);
     expect(out).toHaveLength(1);
@@ -43,8 +44,8 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
   });
 
   it("redacts attachments content from tool input payloads too", () => {
-    const secret = "INPUT_SECRET_SHOULD_NOT_PERSIST";
-    const input = [
+    const secret = "INPUT_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
@@ -59,7 +60,7 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
           },
         ],
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = sanitizeToolCallInputs(input);
     const msg = out[0] as { content?: unknown[] };

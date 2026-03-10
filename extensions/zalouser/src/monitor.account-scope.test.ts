@@ -1,14 +1,10 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
+import "./monitor.send-mocks.js";
 import { __testing } from "./monitor.js";
+import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-
-const sendMessageZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
-
-vi.mock("./send.js", () => ({
-  sendMessageZalouser: sendMessageZalouserMock,
-}));
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {

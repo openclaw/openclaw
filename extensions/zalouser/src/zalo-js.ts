@@ -3,7 +3,21 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/zalouser";
+import { normalizeZaloReactionIcon } from "./reaction.js";
+import { getZalouserRuntime } from "./runtime.js";
+import type {
+  ZaloAuthStatus,
+  ZaloEventMessage,
+  ZaloGroupContext,
+  ZaloGroup,
+  ZaloGroupMember,
+  ZaloInboundMessage,
+  ZaloSendOptions,
+  ZaloSendResult,
+  ZcaFriend,
+  ZcaUserInfo,
+} from "./types.js";
 import {
   LoginQRCallbackEventType,
   ThreadType,
@@ -14,24 +28,17 @@ import {
   type LoginQRCallbackEvent,
   type Message,
   type User,
-} from "zca-js";
-import { getZalouserRuntime } from "./runtime.js";
-import type {
-  ZaloAuthStatus,
-  ZaloGroup,
-  ZaloGroupMember,
-  ZaloInboundMessage,
-  ZaloSendOptions,
-  ZaloSendResult,
-  ZcaFriend,
-  ZcaUserInfo,
-} from "./types.js";
+} from "./zca-client.js";
 
 const API_LOGIN_TIMEOUT_MS = 20_000;
 const QR_LOGIN_TTL_MS = 3 * 60_000;
 const DEFAULT_QR_START_TIMEOUT_MS = 30_000;
 const DEFAULT_QR_WAIT_TIMEOUT_MS = 120_000;
 const GROUP_INFO_CHUNK_SIZE = 80;
+const GROUP_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
+const GROUP_CONTEXT_CACHE_MAX_ENTRIES = 500;
+const LISTENER_WATCHDOG_INTERVAL_MS = 30_000;
+const LISTENER_WATCHDOG_MAX_GAP_MS = 35_000;
 
 const apiByProfile = new Map<string, API>();
 const apiInitByProfile = new Map<string, Promise<API>>();
@@ -56,6 +63,16 @@ type ActiveZaloListener = {
 };
 
 const activeListeners = new Map<string, ActiveZaloListener>();
+const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
+
+type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
+
+type ApiTypingCapability = {
+  sendTypingEvent: (
+    threadId: string,
+    type?: (typeof ThreadType)[keyof typeof ThreadType],
+  ) => Promise<unknown>;
+};
 
 type StoredZaloCredentials = {
   imei: string;
@@ -132,6 +149,41 @@ function toNumberId(value: unknown): string {
   return "";
 }
 
+function toStringValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+  return "";
+}
+
+function normalizeAccountInfoUser(info: AccountInfoResponse): User | null {
+  if (!info || typeof info !== "object") {
+    return null;
+  }
+  if ("profile" in info) {
+    const profile = (info as { profile?: unknown }).profile;
+    if (profile && typeof profile === "object") {
+      return profile as User;
+    }
+    return null;
+  }
+  return info as User;
+}
+
+function toInteger(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.trunc(parsed);
+}
+
 function normalizeMessageContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -165,14 +217,175 @@ function resolveInboundTimestamp(rawTs: unknown): number {
   return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
 }
 
+function extractMentionIds(rawMentions: unknown): string[] {
+  if (!Array.isArray(rawMentions)) {
+    return [];
+  }
+  const sink = new Set<string>();
+  for (const entry of rawMentions) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as { uid?: unknown };
+    const id = toNumberId(record.uid);
+    if (id) {
+      sink.add(id);
+    }
+  }
+  return Array.from(sink);
+}
+
+type MentionSpan = {
+  start: number;
+  end: number;
+};
+
+function toNonNegativeInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = Math.trunc(value);
+    return normalized >= 0 ? normalized : null;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return parsed >= 0 ? parsed : null;
+    }
+  }
+  return null;
+}
+
+function extractOwnMentionSpans(
+  rawMentions: unknown,
+  ownUserId: string,
+  contentLength: number,
+): MentionSpan[] {
+  if (!Array.isArray(rawMentions) || !ownUserId || contentLength <= 0) {
+    return [];
+  }
+  const spans: MentionSpan[] = [];
+  for (const entry of rawMentions) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as {
+      uid?: unknown;
+      pos?: unknown;
+      start?: unknown;
+      offset?: unknown;
+      len?: unknown;
+      length?: unknown;
+    };
+    const uid = toNumberId(record.uid);
+    if (!uid || uid !== ownUserId) {
+      continue;
+    }
+    const startRaw = toNonNegativeInteger(record.pos ?? record.start ?? record.offset);
+    const lengthRaw = toNonNegativeInteger(record.len ?? record.length);
+    if (startRaw === null || lengthRaw === null || lengthRaw <= 0) {
+      continue;
+    }
+    const start = Math.min(startRaw, contentLength);
+    const end = Math.min(start + lengthRaw, contentLength);
+    if (end <= start) {
+      continue;
+    }
+    spans.push({ start, end });
+  }
+  if (spans.length <= 1) {
+    return spans;
+  }
+  spans.sort((a, b) => a.start - b.start);
+  const merged: MentionSpan[] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (!last || span.start > last.end) {
+      merged.push({ ...span });
+      continue;
+    }
+    last.end = Math.max(last.end, span.end);
+  }
+  return merged;
+}
+
+function stripOwnMentionsForCommandBody(
+  content: string,
+  rawMentions: unknown,
+  ownUserId: string,
+): string {
+  if (!content || !ownUserId) {
+    return content;
+  }
+  const spans = extractOwnMentionSpans(rawMentions, ownUserId, content.length);
+  if (spans.length === 0) {
+    return stripLeadingAtMentionForCommand(content);
+  }
+  let cursor = 0;
+  let output = "";
+  for (const span of spans) {
+    if (span.start > cursor) {
+      output += content.slice(cursor, span.start);
+    }
+    cursor = Math.max(cursor, span.end);
+  }
+  if (cursor < content.length) {
+    output += content.slice(cursor);
+  }
+  return output.replace(/\s+/g, " ").trim();
+}
+
+function stripLeadingAtMentionForCommand(content: string): string {
+  const fallbackMatch = content.match(/^\s*@[^\s]+(?:\s+|[:,-]\s*)([/!][\s\S]*)$/);
+  if (!fallbackMatch) {
+    return content;
+  }
+  return fallbackMatch[1].trim();
+}
+
+function resolveGroupNameFromMessageData(data: Record<string, unknown>): string | undefined {
+  const candidates = [data.groupName, data.gName, data.idToName, data.threadName, data.roomName];
+  for (const candidate of candidates) {
+    const value = toStringValue(candidate);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function buildEventMessage(data: Record<string, unknown>): ZaloEventMessage | undefined {
+  const msgId = toStringValue(data.msgId);
+  const cliMsgId = toStringValue(data.cliMsgId);
+  const uidFrom = toStringValue(data.uidFrom);
+  const idTo = toStringValue(data.idTo);
+  if (!msgId || !cliMsgId || !uidFrom || !idTo) {
+    return undefined;
+  }
+  return {
+    msgId,
+    cliMsgId,
+    uidFrom,
+    idTo,
+    msgType: toStringValue(data.msgType) || "webchat",
+    st: toInteger(data.st, 0),
+    at: toInteger(data.at, 0),
+    cmd: toInteger(data.cmd, 0),
+    ts: toStringValue(data.ts) || Date.now(),
+  };
+}
+
 function extractSendMessageId(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
   const payload = result as {
+    msgId?: string | number;
     message?: { msgId?: string | number } | null;
     attachment?: Array<{ msgId?: string | number }>;
   };
+  const direct = payload.msgId;
+  if (direct !== undefined && direct !== null) {
+    return String(direct);
+  }
   const primary = payload.message?.msgId;
   if (primary !== undefined && primary !== null) {
     return String(primary);
@@ -229,6 +442,35 @@ function resolveMediaFileName(params: {
                         : "bin";
 
   return `upload.${ext}`;
+}
+
+function resolveUploadedVoiceAsset(
+  uploaded: Array<{
+    fileType?: string;
+    fileUrl?: string;
+    fileName?: string;
+  }>,
+): { fileUrl: string; fileName?: string } | undefined {
+  for (const item of uploaded) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const fileType = item.fileType?.toLowerCase();
+    const fileUrl = item.fileUrl?.trim();
+    if (!fileUrl) {
+      continue;
+    }
+    if (fileType === "others" || fileType === "video") {
+      return { fileUrl, fileName: item.fileName?.trim() || undefined };
+    }
+  }
+  return undefined;
+}
+
+function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }): string {
+  // zca-js uses uploadAttachment(...).fileUrl directly for sendVoice.
+  // Appending filename can produce URLs that play only in the local session.
+  return asset.fileUrl.trim();
 }
 
 function mapFriend(friend: User): ZcaFriend {
@@ -422,7 +664,85 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
   return result;
 }
 
-function toInboundMessage(message: Message): ZaloInboundMessage | null {
+function makeGroupContextCacheKey(profile: string, groupId: string): string {
+  return `${profile}:${groupId}`;
+}
+
+function readCachedGroupContext(profile: string, groupId: string): ZaloGroupContext | null {
+  const key = makeGroupContextCacheKey(profile, groupId);
+  const cached = groupContextCache.get(key);
+  if (!cached) {
+    return null;
+  }
+  if (cached.expiresAt <= Date.now()) {
+    groupContextCache.delete(key);
+    return null;
+  }
+  // Bump recency so hot groups stay in cache when enforcing max entries.
+  groupContextCache.delete(key);
+  groupContextCache.set(key, cached);
+  return cached.value;
+}
+
+function trimGroupContextCache(now: number): void {
+  for (const [key, value] of groupContextCache) {
+    if (value.expiresAt > now) {
+      continue;
+    }
+    groupContextCache.delete(key);
+  }
+  while (groupContextCache.size > GROUP_CONTEXT_CACHE_MAX_ENTRIES) {
+    const oldestKey = groupContextCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    groupContextCache.delete(oldestKey);
+  }
+}
+
+function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {
+  const now = Date.now();
+  const key = makeGroupContextCacheKey(profile, context.groupId);
+  if (groupContextCache.has(key)) {
+    groupContextCache.delete(key);
+  }
+  groupContextCache.set(key, {
+    value: context,
+    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
+  });
+  trimGroupContextCache(now);
+}
+
+function clearCachedGroupContext(profile: string): void {
+  for (const key of groupContextCache.keys()) {
+    if (key.startsWith(`${profile}:`)) {
+      groupContextCache.delete(key);
+    }
+  }
+}
+
+function extractGroupMembersFromInfo(
+  groupInfo: (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] }) | undefined,
+): string[] | undefined {
+  if (!groupInfo || !Array.isArray(groupInfo.currentMems)) {
+    return undefined;
+  }
+  const members = groupInfo.currentMems
+    .map((member) => {
+      if (!member || typeof member !== "object") {
+        return "";
+      }
+      const record = member as { dName?: unknown; zaloName?: unknown };
+      return toStringValue(record.dName) || toStringValue(record.zaloName);
+    })
+    .filter(Boolean);
+  if (members.length === 0) {
+    return undefined;
+  }
+  return members;
+}
+
+function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMessage | null {
   const data = message.data as Record<string, unknown>;
   const isGroup = message.type === ThreadType.Group;
   const senderId = toNumberId(data.uidFrom);
@@ -433,15 +753,42 @@ function toInboundMessage(message: Message): ZaloInboundMessage | null {
     return null;
   }
   const content = normalizeMessageContent(data.content);
+  const normalizedOwnUserId = toNumberId(ownUserId);
+  const mentionIds = extractMentionIds(data.mentions);
+  const quoteOwnerId =
+    data.quote && typeof data.quote === "object"
+      ? toNumberId((data.quote as { ownerId?: unknown }).ownerId)
+      : "";
+  const hasAnyMention = mentionIds.length > 0;
+  const canResolveExplicitMention = Boolean(normalizedOwnUserId);
+  const wasExplicitlyMentioned = Boolean(
+    normalizedOwnUserId && mentionIds.some((id) => id === normalizedOwnUserId),
+  );
+  const commandContent = wasExplicitlyMentioned
+    ? stripOwnMentionsForCommandBody(content, data.mentions, normalizedOwnUserId)
+    : hasAnyMention && !canResolveExplicitMention
+      ? stripLeadingAtMentionForCommand(content)
+      : content;
+  const implicitMention = Boolean(
+    normalizedOwnUserId && quoteOwnerId && quoteOwnerId === normalizedOwnUserId,
+  );
+  const eventMessage = buildEventMessage(data);
   return {
     threadId,
     isGroup,
     senderId,
     senderName: typeof data.dName === "string" ? data.dName.trim() || undefined : undefined,
+    groupName: isGroup ? resolveGroupNameFromMessageData(data) : undefined,
     content,
+    commandContent,
     timestampMs: resolveInboundTimestamp(data.ts),
     msgId: typeof data.msgId === "string" ? data.msgId : undefined,
     cliMsgId: typeof data.cliMsgId === "string" ? data.cliMsgId : undefined,
+    hasAnyMention,
+    canResolveExplicitMention,
+    wasExplicitlyMentioned,
+    implicitMention,
+    eventMessage,
     raw: message,
   };
 }
@@ -470,8 +817,7 @@ export async function getZaloUserInfo(profileInput?: string | null): Promise<Zca
   const profile = normalizeProfile(profileInput);
   const api = await ensureApi(profile);
   const info = await api.fetchAccountInfo();
-  const user =
-    info && typeof info === "object" && "profile" in info ? (info.profile as User) : (info as User);
+  const user = normalizeAccountInfoUser(info);
   if (!user?.userId) {
     return null;
   }
@@ -618,6 +964,34 @@ export async function listZaloGroupMembers(
   }));
 }
 
+export async function resolveZaloGroupContext(
+  profileInput: string | null | undefined,
+  groupId: string,
+): Promise<ZaloGroupContext> {
+  const profile = normalizeProfile(profileInput);
+  const normalizedGroupId = toNumberId(groupId) || groupId.trim();
+  if (!normalizedGroupId) {
+    throw new Error("groupId is required");
+  }
+  const cached = readCachedGroupContext(profile, normalizedGroupId);
+  if (cached) {
+    return cached;
+  }
+
+  const api = await ensureApi(profile);
+  const response = await api.getGroupInfo(normalizedGroupId);
+  const groupInfo = response.gridInfoMap?.[normalizedGroupId] as
+    | (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] })
+    | undefined;
+  const context: ZaloGroupContext = {
+    groupId: normalizedGroupId,
+    name: groupInfo?.name?.trim() || undefined,
+    members: extractGroupMembersFromInfo(groupInfo),
+  };
+  writeCachedGroupContext(profile, context);
+  return context;
+}
+
 export async function sendZaloTextMessage(
   threadId: string,
   text: string,
@@ -644,6 +1018,40 @@ export async function sendZaloTextMessage(
         kind: media.kind,
       });
       const payloadText = (text || options.caption || "").slice(0, 2000);
+
+      if (media.kind === "audio") {
+        let textMessageId: string | undefined;
+        if (payloadText) {
+          const textResponse = await api.sendMessage(payloadText, trimmedThreadId, type);
+          textMessageId = extractSendMessageId(textResponse);
+        }
+
+        const attachmentFileName = fileName.includes(".") ? fileName : `${fileName}.bin`;
+        const uploaded = await api.uploadAttachment(
+          [
+            {
+              data: media.buffer,
+              filename: attachmentFileName as `${string}.${string}`,
+              metadata: {
+                totalSize: media.buffer.length,
+              },
+            },
+          ],
+          trimmedThreadId,
+          type,
+        );
+        const voiceAsset = resolveUploadedVoiceAsset(uploaded);
+        if (!voiceAsset) {
+          throw new Error("Failed to resolve uploaded audio URL for voice message");
+        }
+        const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
+        const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
+        return {
+          ok: true,
+          messageId: extractSendMessageId(response) ?? textMessageId,
+        };
+      }
+
       const response = await api.sendMessage(
         {
           msg: payloadText,
@@ -668,6 +1076,103 @@ export async function sendZaloTextMessage(
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }
+}
+
+export async function sendZaloTypingEvent(
+  threadId: string,
+  options: Pick<ZaloSendOptions, "profile" | "isGroup"> = {},
+): Promise<void> {
+  const profile = normalizeProfile(options.profile);
+  const trimmedThreadId = threadId.trim();
+  if (!trimmedThreadId) {
+    throw new Error("No threadId provided");
+  }
+  const api = await ensureApi(profile);
+  const type = options.isGroup ? ThreadType.Group : ThreadType.User;
+  if ("sendTypingEvent" in api && typeof api.sendTypingEvent === "function") {
+    await (api as API & ApiTypingCapability).sendTypingEvent(trimmedThreadId, type);
+    return;
+  }
+  throw new Error("Zalo typing indicator is not supported by current API session");
+}
+
+async function resolveOwnUserId(api: API): Promise<string> {
+  try {
+    const info = await api.fetchAccountInfo();
+    const resolved = toNumberId(normalizeAccountInfoUser(info)?.userId);
+    if (resolved) {
+      return resolved;
+    }
+  } catch {
+    // Fall back to getOwnId when account info shape changes.
+  }
+
+  try {
+    const ownId = toNumberId(api.getOwnId());
+    if (ownId) {
+      return ownId;
+    }
+  } catch {
+    // Ignore fallback probe failures and keep mention detection conservative.
+  }
+
+  return "";
+}
+
+export async function sendZaloReaction(params: {
+  profile?: string | null;
+  threadId: string;
+  isGroup?: boolean;
+  msgId: string;
+  cliMsgId: string;
+  emoji: string;
+  remove?: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const profile = normalizeProfile(params.profile);
+  const threadId = params.threadId.trim();
+  const msgId = toStringValue(params.msgId);
+  const cliMsgId = toStringValue(params.cliMsgId);
+  if (!threadId || !msgId || !cliMsgId) {
+    return { ok: false, error: "threadId, msgId, and cliMsgId are required" };
+  }
+  try {
+    const api = await ensureApi(profile);
+    const type = params.isGroup ? ThreadType.Group : ThreadType.User;
+    const icon = params.remove
+      ? { rType: -1, source: 6, icon: "" }
+      : normalizeZaloReactionIcon(params.emoji);
+    await api.addReaction(icon, {
+      data: { msgId, cliMsgId },
+      threadId,
+      type,
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
+}
+
+export async function sendZaloDeliveredEvent(params: {
+  profile?: string | null;
+  isGroup?: boolean;
+  message: ZaloEventMessage;
+  isSeen?: boolean;
+}): Promise<void> {
+  const profile = normalizeProfile(params.profile);
+  const api = await ensureApi(profile);
+  const type = params.isGroup ? ThreadType.Group : ThreadType.User;
+  await api.sendDeliveredEvent(params.isSeen === true, params.message, type);
+}
+
+export async function sendZaloSeenEvent(params: {
+  profile?: string | null;
+  isGroup?: boolean;
+  message: ZaloEventMessage;
+}): Promise<void> {
+  const profile = normalizeProfile(params.profile);
+  const api = await ensureApi(profile);
+  const type = params.isGroup ? ThreadType.Group : ThreadType.User;
+  await api.sendSeenEvent(params.message, type);
 }
 
 export async function sendZaloLink(
@@ -918,6 +1423,7 @@ export async function logoutZaloProfile(profileInput?: string | null): Promise<{
 }> {
   const profile = normalizeProfile(profileInput);
   resetQrLogin(profile);
+  clearCachedGroupContext(profile);
 
   const listener = activeListeners.get(profile);
   if (listener) {
@@ -956,13 +1462,20 @@ export async function startZaloListener(params: {
   }
 
   const api = await ensureApi(profile);
+  const ownUserId = await resolveOwnUserId(api);
   let stopped = false;
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  let lastWatchdogTickAt = Date.now();
 
   const cleanup = () => {
     if (stopped) {
       return;
     }
     stopped = true;
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
     try {
       api.listener.off("message", onMessage);
       api.listener.off("error", onError);
@@ -982,26 +1495,29 @@ export async function startZaloListener(params: {
     if (incoming.isSelf) {
       return;
     }
-    const normalized = toInboundMessage(incoming);
+    const normalized = toInboundMessage(incoming, ownUserId);
     if (!normalized) {
       return;
     }
     params.onMessage(normalized);
   };
 
-  const onError = (error: unknown) => {
+  const failListener = (error: Error) => {
     if (stopped || params.abortSignal.aborted) {
       return;
     }
+    cleanup();
+    invalidateApi(profile);
+    params.onError(error);
+  };
+
+  const onError = (error: unknown) => {
     const wrapped = error instanceof Error ? error : new Error(String(error));
-    params.onError(wrapped);
+    failListener(wrapped);
   };
 
   const onClosed = (code: number, reason: string) => {
-    if (stopped || params.abortSignal.aborted) {
-      return;
-    }
-    params.onError(new Error(`Zalo listener closed (${code}): ${reason || "no reason"}`));
+    failListener(new Error(`Zalo listener closed (${code}): ${reason || "no reason"}`));
   };
 
   api.listener.on("message", onMessage);
@@ -1009,11 +1525,29 @@ export async function startZaloListener(params: {
   api.listener.on("closed", onClosed);
 
   try {
-    api.listener.start({ retryOnClose: true });
+    api.listener.start({ retryOnClose: false });
   } catch (error) {
     cleanup();
     throw error;
   }
+
+  watchdogTimer = setInterval(() => {
+    if (stopped || params.abortSignal.aborted) {
+      return;
+    }
+    const now = Date.now();
+    const gapMs = now - lastWatchdogTickAt;
+    lastWatchdogTickAt = now;
+    if (gapMs <= LISTENER_WATCHDOG_MAX_GAP_MS) {
+      return;
+    }
+    failListener(
+      new Error(
+        `Zalo listener watchdog gap detected (${Math.round(gapMs / 1000)}s): forcing reconnect`,
+      ),
+    );
+  }, LISTENER_WATCHDOG_INTERVAL_MS);
+  watchdogTimer.unref?.();
 
   params.abortSignal.addEventListener(
     "abort",
@@ -1103,6 +1637,7 @@ export async function resolveZaloAllowFromEntries(params: {
 export async function clearProfileRuntimeArtifacts(profileInput?: string | null): Promise<void> {
   const profile = normalizeProfile(profileInput);
   resetQrLogin(profile);
+  clearCachedGroupContext(profile);
   const listener = activeListeners.get(profile);
   if (listener) {
     listener.stop();

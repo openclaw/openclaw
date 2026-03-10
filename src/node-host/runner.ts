@@ -1,6 +1,7 @@
 import { resolveBrowserConfig } from "../browser/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
+import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -108,6 +109,38 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
+export async function resolveNodeHostGatewayCredentials(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
+  const configForResolution =
+    mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
+  return await resolveGatewayConnectionAuth({
+    config: configForResolution,
+    env: params.env,
+    includeLegacyEnv: false,
+    localTokenPrecedence: "env-first",
+    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    remoteTokenPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
+  });
+}
+
+function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
+  if (!config.gateway?.remote?.token && !config.gateway?.remote?.password) {
+    return config;
+  }
+  const nextConfig = structuredClone(config);
+  if (nextConfig.gateway?.remote) {
+    // Local node-host must not inherit gateway.remote.* auth material, which can
+    // suppress GatewayClient device-token fallback and cause local token mismatches.
+    nextConfig.gateway.remote.token = undefined;
+    nextConfig.gateway.remote.password = undefined;
+  }
+  return nextConfig;
+}
+
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
   const nodeId = opts.nodeId?.trim() || config.nodeId;
@@ -131,13 +164,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+  const { token, password } = await resolveNodeHostGatewayCredentials({
+    config: cfg,
+    env: process.env,
+  });
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
@@ -149,8 +179,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const client = new GatewayClient({
     url,
-    token: token?.trim() || undefined,
-    password: password?.trim() || undefined,
+    token: token || undefined,
+    password: password || undefined,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,

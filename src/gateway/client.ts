@@ -21,6 +21,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { isSecureWebSocketUrl } from "./net.js";
 import {
@@ -253,9 +254,12 @@ export class GatewayClient {
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
     // Keep shared gateway credentials explicit. Persisted per-device tokens only
-    // participate when no explicit shared token is provided.
+    // participate when no explicit shared token/password is provided.
     const resolvedDeviceToken =
-      explicitDeviceToken ?? (!explicitGatewayToken ? (storedToken ?? undefined) : undefined);
+      explicitDeviceToken ??
+      (!(explicitGatewayToken || this.opts.password?.trim())
+        ? (storedToken ?? undefined)
+        : undefined);
     // Legacy compatibility: keep `auth.token` populated for device-token auth when
     // no explicit shared token is present.
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
@@ -302,7 +306,7 @@ export class GatewayClient {
       client: {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         displayName: this.opts.clientDisplayName,
-        version: this.opts.clientVersion ?? "dev",
+        version: this.opts.clientVersion ?? VERSION,
         platform,
         deviceFamily: this.opts.deviceFamily,
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,

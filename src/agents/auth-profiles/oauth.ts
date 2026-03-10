@@ -1,16 +1,14 @@
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import { getOAuthApiKey, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { normalizeProviderId } from "../model-selection.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
+import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -86,9 +84,24 @@ function buildOAuthProfileResult(params: {
   });
 }
 
-function isExpiredCredential(expires: number | undefined): boolean {
+function extractErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function shouldUseOpenaiCodexRefreshFallback(params: {
+  provider: string;
+  credentials: OAuthCredentials;
+  error: unknown;
+}): boolean {
+  if (normalizeProviderId(params.provider) !== "openai-codex") {
+    return false;
+  }
+  const message = extractErrorMessage(params.error);
+  if (!/extract\s+accountid\s+from\s+token/i.test(message)) {
+    return false;
+  }
   return (
-    typeof expires === "number" && Number.isFinite(expires) && expires > 0 && Date.now() >= expires
+    typeof params.credentials.access === "string" && params.credentials.access.trim().length > 0
   );
 }
 
@@ -332,6 +345,10 @@ export async function resolveApiKeyForProfile(
     return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
   }
   if (cred.type === "token") {
+    const expiryState = resolveTokenExpiryState(cred.expires);
+    if (expiryState === "expired" || expiryState === "invalid_expires") {
+      return null;
+    }
     const token = await resolveProfileSecretString({
       profileId,
       provider: cred.provider,
@@ -344,9 +361,6 @@ export async function resolveApiKeyForProfile(
       refFailureMessage: "failed to resolve auth profile token ref",
     });
     if (!token) {
-      return null;
-    }
-    if (isExpiredCredential(cred.expires)) {
       return null;
     }
     return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
@@ -438,7 +452,25 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = error instanceof Error ? error.message : String(error);
+    if (
+      shouldUseOpenaiCodexRefreshFallback({
+        provider: cred.provider,
+        credentials: cred,
+        error,
+      })
+    ) {
+      log.warn("openai-codex oauth refresh failed; using cached access token fallback", {
+        profileId,
+        provider: cred.provider,
+      });
+      return buildApiKeyProfileResult({
+        apiKey: cred.access,
+        provider: cred.provider,
+        email: cred.email,
+      });
+    }
+
+    const message = extractErrorMessage(error);
     const hint = formatAuthDoctorHint({
       cfg,
       store: refreshedStore,

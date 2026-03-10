@@ -4,8 +4,7 @@ import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key
 import {
   normalizeSecretInputModeInput,
   createAuthChoiceAgentModelNoter,
-  createAuthChoiceDefaultModelApplier,
-  createAuthChoiceModelStateBridge,
+  createAuthChoiceDefaultModelApplierForMutableState,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
@@ -77,6 +76,12 @@ import {
   setXiaomiApiKey,
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
+  applyModelStudioConfig,
+  applyModelStudioConfigCn,
+  applyModelStudioProviderConfig,
+  applyModelStudioProviderConfigCn,
+  setModelStudioApiKey,
 } from "./onboard-auth.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
@@ -296,6 +301,46 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyProviderConfig: applyKilocodeProviderConfig,
     noteDefault: KILOCODE_DEFAULT_MODEL_REF,
   },
+  "modelstudio-api-key-cn": {
+    provider: "modelstudio",
+    profileId: "modelstudio:default",
+    expectedProviders: ["modelstudio"],
+    envLabel: "MODELSTUDIO_API_KEY",
+    promptMessage: "Enter Alibaba Cloud Model Studio Coding Plan API key (China)",
+    setCredential: setModelStudioApiKey,
+    defaultModel: MODELSTUDIO_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyModelStudioConfigCn,
+    applyProviderConfig: applyModelStudioProviderConfigCn,
+    noteDefault: MODELSTUDIO_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Get your API key at: https://bailian.console.aliyun.com/",
+      "Endpoint: coding.dashscope.aliyuncs.com",
+      "Models: qwen3.5-plus, glm-4.7, kimi-k2.5, MiniMax-M2.5, etc.",
+    ].join("\n"),
+    noteTitle: "Alibaba Cloud Model Studio Coding Plan (China)",
+    normalize: (value) => String(value ?? "").trim(),
+    validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
+  "modelstudio-api-key": {
+    provider: "modelstudio",
+    profileId: "modelstudio:default",
+    expectedProviders: ["modelstudio"],
+    envLabel: "MODELSTUDIO_API_KEY",
+    promptMessage: "Enter Alibaba Cloud Model Studio Coding Plan API key (Global/Intl)",
+    setCredential: setModelStudioApiKey,
+    defaultModel: MODELSTUDIO_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyModelStudioConfig,
+    applyProviderConfig: applyModelStudioProviderConfig,
+    noteDefault: MODELSTUDIO_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Get your API key at: https://bailian.console.aliyun.com/",
+      "Endpoint: coding-intl.dashscope.aliyuncs.com",
+      "Models: qwen3.5-plus, glm-4.7, kimi-k2.5, MiniMax-M2.5, etc.",
+    ].join("\n"),
+    noteTitle: "Alibaba Cloud Model Studio Coding Plan (Global/Intl)",
+    normalize: (value) => String(value ?? "").trim(),
+    validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+  },
   "synthetic-api-key": {
     provider: "synthetic",
     profileId: "synthetic:default",
@@ -317,14 +362,12 @@ export async function applyAuthChoiceApiProviders(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
-  const applyProviderDefaultModel = createAuthChoiceDefaultModelApplier(
+  const applyProviderDefaultModel = createAuthChoiceDefaultModelApplierForMutableState(
     params,
-    createAuthChoiceModelStateBridge({
-      getConfig: () => nextConfig,
-      setConfig: (config) => (nextConfig = config),
-      getAgentModelOverride: () => agentModelOverride,
-      setAgentModelOverride: (model) => (agentModelOverride = model),
-    }),
+    () => nextConfig,
+    (config) => (nextConfig = config),
+    () => agentModelOverride,
+    (model) => (agentModelOverride = model),
   );
 
   let authChoice = params.authChoice;

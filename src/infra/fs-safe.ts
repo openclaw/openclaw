@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
@@ -5,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { logWarn } from "../logger.js";
 import { sameFileIdentity } from "./file-identity.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
@@ -52,6 +54,14 @@ const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_CREATE_FLAGS =
   fsConstants.O_WRONLY |
+  fsConstants.O_CREAT |
+  fsConstants.O_EXCL |
+  (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_APPEND_EXISTING_FLAGS =
+  fsConstants.O_RDWR | fsConstants.O_APPEND | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_APPEND_CREATE_FLAGS =
+  fsConstants.O_RDWR |
+  fsConstants.O_APPEND |
   fsConstants.O_CREAT |
   fsConstants.O_EXCL |
   (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
@@ -287,7 +297,57 @@ export type SafeWritableOpenResult = {
   handle: FileHandle;
   createdForWrite: boolean;
   openedRealPath: string;
+  openedStat: Stats;
 };
+
+function emitWriteBoundaryWarning(reason: string) {
+  logWarn(`security: fs-safe write boundary warning (${reason})`);
+}
+
+function buildAtomicWriteTempPath(targetPath: string): string {
+  const dir = path.dirname(targetPath);
+  const base = path.basename(targetPath);
+  return path.join(dir, `.${base}.${process.pid}.${randomUUID()}.tmp`);
+}
+
+async function writeTempFileForAtomicReplace(params: {
+  tempPath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mode: number;
+}): Promise<Stats> {
+  const tempHandle = await fs.open(params.tempPath, OPEN_WRITE_CREATE_FLAGS, params.mode);
+  try {
+    if (typeof params.data === "string") {
+      await tempHandle.writeFile(params.data, params.encoding ?? "utf8");
+    } else {
+      await tempHandle.writeFile(params.data);
+    }
+    return await tempHandle.stat();
+  } finally {
+    await tempHandle.close().catch(() => {});
+  }
+}
+
+async function verifyAtomicWriteResult(params: {
+  rootDir: string;
+  targetPath: string;
+  expectedStat: Stats;
+}): Promise<void> {
+  const rootReal = await fs.realpath(params.rootDir);
+  const rootWithSep = ensureTrailingSep(rootReal);
+  const opened = await openVerifiedLocalFile(params.targetPath, { rejectHardlinks: true });
+  try {
+    if (!sameFileIdentity(opened.stat, params.expectedStat)) {
+      throw new SafeOpenError("path-mismatch", "path changed during write");
+    }
+    if (!isPathInside(rootWithSep, opened.realPath)) {
+      throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    }
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
 
 export async function resolveOpenedFileRealPathForHandle(
   handle: FileHandle,
@@ -322,6 +382,8 @@ export async function openWritableFileWithinRoot(params: {
   relativePath: string;
   mkdir?: boolean;
   mode?: number;
+  truncateExisting?: boolean;
+  append?: boolean;
 }): Promise<SafeWritableOpenResult> {
   const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
@@ -357,14 +419,16 @@ export async function openWritableFileWithinRoot(params: {
 
   let handle: FileHandle;
   let createdForWrite = false;
+  const existingFlags = params.append ? OPEN_APPEND_EXISTING_FLAGS : OPEN_WRITE_EXISTING_FLAGS;
+  const createFlags = params.append ? OPEN_APPEND_CREATE_FLAGS : OPEN_WRITE_CREATE_FLAGS;
   try {
     try {
-      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, fileMode);
+      handle = await fs.open(ioPath, existingFlags, fileMode);
     } catch (err) {
       if (!isNotFoundPathError(err)) {
         throw err;
       }
-      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, fileMode);
+      handle = await fs.open(ioPath, createFlags, fileMode);
       createdForWrite = true;
     }
   } catch (err) {
@@ -416,13 +480,14 @@ export async function openWritableFileWithinRoot(params: {
 
     // Truncate only after boundary and identity checks complete. This avoids
     // irreversible side effects if a symlink target changes before validation.
-    if (!createdForWrite) {
+    if (params.append !== true && params.truncateExisting !== false && !createdForWrite) {
       await handle.truncate(0);
     }
     return {
       handle,
       createdForWrite,
       openedRealPath: realPath,
+      openedStat: stat,
     };
   } catch (err) {
     const cleanupCreatedPath = createdForWrite && err instanceof SafeOpenError;
@@ -432,6 +497,50 @@ export async function openWritableFileWithinRoot(params: {
       await fs.rm(cleanupPath, { force: true }).catch(() => {});
     }
     throw err;
+  }
+}
+
+export async function appendFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+  prependNewlineIfNeeded?: boolean;
+}): Promise<void> {
+  const target = await openWritableFileWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    mkdir: params.mkdir,
+    truncateExisting: false,
+    append: true,
+  });
+  try {
+    let prefix = "";
+    if (
+      params.prependNewlineIfNeeded === true &&
+      !target.createdForWrite &&
+      target.openedStat.size > 0 &&
+      ((typeof params.data === "string" && !params.data.startsWith("\n")) ||
+        (Buffer.isBuffer(params.data) && params.data.length > 0 && params.data[0] !== 0x0a))
+    ) {
+      const lastByte = Buffer.alloc(1);
+      const { bytesRead } = await target.handle.read(lastByte, 0, 1, target.openedStat.size - 1);
+      if (bytesRead === 1 && lastByte[0] !== 0x0a) {
+        prefix = "\n";
+      }
+    }
+
+    if (typeof params.data === "string") {
+      await target.handle.appendFile(`${prefix}${params.data}`, params.encoding ?? "utf8");
+      return;
+    }
+
+    const payload =
+      prefix.length > 0 ? Buffer.concat([Buffer.from(prefix, "utf8"), params.data]) : params.data;
+    await target.handle.appendFile(payload);
+  } finally {
+    await target.handle.close().catch(() => {});
   }
 }
 
@@ -446,15 +555,36 @@ export async function writeFileWithinRoot(params: {
     rootDir: params.rootDir,
     relativePath: params.relativePath,
     mkdir: params.mkdir,
+    truncateExisting: false,
   });
+  const destinationPath = target.openedRealPath;
+  const targetMode = target.openedStat.mode & 0o777;
+  await target.handle.close().catch(() => {});
+  let tempPath: string | null = null;
   try {
-    if (typeof params.data === "string") {
-      await target.handle.writeFile(params.data, params.encoding ?? "utf8");
-    } else {
-      await target.handle.writeFile(params.data);
+    tempPath = buildAtomicWriteTempPath(destinationPath);
+    const writtenStat = await writeTempFileForAtomicReplace({
+      tempPath,
+      data: params.data,
+      encoding: params.encoding,
+      mode: targetMode || 0o600,
+    });
+    await fs.rename(tempPath, destinationPath);
+    tempPath = null;
+    try {
+      await verifyAtomicWriteResult({
+        rootDir: params.rootDir,
+        targetPath: destinationPath,
+        expectedStat: writtenStat,
+      });
+    } catch (err) {
+      emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
+      throw err;
     }
   } finally {
-    await target.handle.close().catch(() => {});
+    if (tempPath) {
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+    }
   }
 }
 
@@ -477,38 +607,69 @@ export async function copyFileWithinRoot(params: {
     );
   }
 
-  let target: {
-    handle: FileHandle;
-    createdForWrite: boolean;
-    openedRealPath: string;
-  } | null = null;
+  let target: SafeWritableOpenResult | null = null;
   let sourceClosedByStream = false;
-  let targetClosedByStream = false;
+  let targetClosedByUs = false;
+  let tempHandle: FileHandle | null = null;
+  let tempPath: string | null = null;
+  let tempClosedByStream = false;
   try {
     target = await openWritableFileWithinRoot({
       rootDir: params.rootDir,
       relativePath: params.relativePath,
       mkdir: params.mkdir,
+      truncateExisting: false,
     });
+    const destinationPath = target.openedRealPath;
+    const targetMode = target.openedStat.mode & 0o777;
+    await target.handle.close().catch(() => {});
+    targetClosedByUs = true;
+
+    tempPath = buildAtomicWriteTempPath(destinationPath);
+    tempHandle = await fs.open(tempPath, OPEN_WRITE_CREATE_FLAGS, targetMode || 0o600);
     const sourceStream = source.handle.createReadStream();
-    const targetStream = target.handle.createWriteStream();
+    const targetStream = tempHandle.createWriteStream();
     sourceStream.once("close", () => {
       sourceClosedByStream = true;
     });
     targetStream.once("close", () => {
-      targetClosedByStream = true;
+      tempClosedByStream = true;
     });
     await pipeline(sourceStream, targetStream);
+    const writtenStat = await fs.stat(tempPath);
+    if (!tempClosedByStream) {
+      await tempHandle.close().catch(() => {});
+      tempClosedByStream = true;
+    }
+    tempHandle = null;
+    await fs.rename(tempPath, destinationPath);
+    tempPath = null;
+    try {
+      await verifyAtomicWriteResult({
+        rootDir: params.rootDir,
+        targetPath: destinationPath,
+        expectedStat: writtenStat,
+      });
+    } catch (err) {
+      emitWriteBoundaryWarning(`post-copy verification failed: ${String(err)}`);
+      throw err;
+    }
   } catch (err) {
     if (target?.createdForWrite) {
       await fs.rm(target.openedRealPath, { force: true }).catch(() => {});
     }
     throw err;
   } finally {
+    if (tempPath) {
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+    }
     if (!sourceClosedByStream) {
       await source.handle.close().catch(() => {});
     }
-    if (target && !targetClosedByStream) {
+    if (tempHandle && !tempClosedByStream) {
+      await tempHandle.close().catch(() => {});
+    }
+    if (target && !targetClosedByUs) {
       await target.handle.close().catch(() => {});
     }
   }

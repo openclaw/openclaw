@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixAuth } from "../client.js";
 import { registerMatrixMonitorEvents } from "./events.js";

@@ -15,6 +15,8 @@ import {
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
+  applyModelStudioConfig,
+  applyModelStudioConfigCn,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
@@ -37,6 +39,7 @@ import {
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
+  setModelStudioApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
   setKimiCodingApiKey,
@@ -91,7 +94,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     ? { secretInputMode: requestedSecretInputMode }
     : undefined;
   const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
-    if (requestedSecretInputMode !== "ref") {
+    const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
+    if (storePlaintextSecret) {
       return resolved.key;
     }
     if (resolved.source !== "env") {
@@ -497,6 +501,60 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyQianfanConfig(nextConfig);
   }
 
+  if (authChoice === "modelstudio-api-key-cn") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioApiKeyCn,
+      flagName: "--modelstudio-api-key-cn",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioConfigCn(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioApiKey,
+      flagName: "--modelstudio-api-key",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioConfig(nextConfig);
+  }
+
   if (authChoice === "openai-api-key") {
     const resolved = await resolveApiKey({
       provider: "openai",
@@ -831,7 +889,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
+      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-highspeed" : "MiniMax-M2.5";
     return isCn
       ? applyMinimaxApiConfigCn(nextConfig, modelId)
       : applyMinimaxApiConfig(nextConfig, modelId);
@@ -948,7 +1006,8 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
       let customApiKeyInput: SecretInput | undefined;
       if (resolvedCustomApiKey) {
-        if (requestedSecretInputMode === "ref") {
+        const storeCustomApiKeyAsRef = requestedSecretInputMode === "ref"; // pragma: allowlist secret
+        if (storeCustomApiKeyAsRef) {
           const stored = toStoredSecretInput(resolvedCustomApiKey);
           if (!stored) {
             return null;
