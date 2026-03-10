@@ -212,9 +212,11 @@ function mergeBindingsFromDisk(
   accountId: string,
   options: {
     authoritative?: boolean;
+    includeMissingRecords?: boolean;
   } = {},
 ): number {
   let merged = 0;
+  const includeMissingRecords = options.includeMissingRecords ?? true;
   const loadedBindings = new Map<string, FeishuThreadBindingRecord>();
   for (const entry of loadBindingsFromDisk(accountId)) {
     const record: FeishuThreadBindingRecord = {
@@ -258,6 +260,9 @@ function mergeBindingsFromDisk(
   for (const [key, loaded] of loadedBindings.entries()) {
     const existing = BINDINGS_BY_ACCOUNT_CONVERSATION.get(key);
     if (!existing) {
+      if (!includeMissingRecords) {
+        continue;
+      }
       upsertBindingRecord(loaded);
       merged += 1;
       continue;
@@ -597,9 +602,11 @@ export function createFeishuThreadBindingManager(
     DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   );
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
+  const hasPendingWrites = hasPendingPersistQueue(accountId);
 
   mergeBindingsFromDisk(accountId, {
-    authoritative: persist && !hasPendingPersistQueue(accountId),
+    authoritative: persist && !hasPendingWrites,
+    includeMissingRecords: !hasPendingWrites,
   });
 
   const listBindingsForAccount = () =>
@@ -946,9 +953,11 @@ export function rehydrateFeishuThreadBindingManagerForAccount(params: {
     return null;
   }
   const accountId = normalizeAccountId(params.accountId);
+  const hasPendingWrites = hasPendingPersistQueue(accountId);
   mergeBindingsFromDisk(accountId, {
     // When a local write is still queued, disk can lag behind the live manager.
-    authoritative: manager.shouldPersistMutations() && !hasPendingPersistQueue(accountId),
+    authoritative: manager.shouldPersistMutations() && !hasPendingWrites,
+    includeMissingRecords: !hasPendingWrites,
   });
   return manager;
 }
