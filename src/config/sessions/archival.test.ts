@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { archiveSessionTranscript } from "./archival.js";
 
 function makeSessionLine(role: string, content: string, seq: number): string {
-  return JSON.stringify({ role, content, seq });
+  return JSON.stringify({ message: { role, content }, seq });
 }
 
 function buildSessionFile(turnCount: number): string {
@@ -58,7 +58,10 @@ describe("archiveSessionTranscript", () => {
 
     // Verify exactly keepLastTurns user turns are retained
     const entries = lines.slice(2).map((l) => JSON.parse(l) as Record<string, unknown>);
-    const keptUserTurns = entries.filter((e) => e.role === "user");
+    const keptUserTurns = entries.filter((e) => {
+      const msg = e.message as Record<string, unknown> | undefined;
+      return msg?.role === "user";
+    });
     expect(keptUserTurns).toHaveLength(5);
   });
 
@@ -69,7 +72,7 @@ describe("archiveSessionTranscript", () => {
 
     const result = await archiveSessionTranscript({ sessionFile, keepLastTurns: 5 });
     expect(result.archived).toBe(true);
-    expect(result.archiveMarkerSeq).toBeGreaterThan(0);
+    expect(result.archiveMarkerLineIndex).toBeGreaterThan(0);
   });
 
   it("handles missing file gracefully", async () => {

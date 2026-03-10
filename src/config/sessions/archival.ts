@@ -3,15 +3,13 @@ import fs from "node:fs/promises";
 export type ArchivalParams = {
   sessionFile: string;
   keepLastTurns: number;
-  /** If true, verify entries are synced before archiving. No-op without DB entry sync. */
-  verifyEntrySynced?: boolean;
 };
 
 export type ArchivalResult = {
   archived: boolean;
   linesRemoved: number;
   linesKept: number;
-  archiveMarkerSeq: number;
+  archiveMarkerLineIndex: number;
 };
 
 /**
@@ -28,7 +26,7 @@ export async function archiveSessionTranscript(params: ArchivalParams): Promise<
     archived: false,
     linesRemoved: 0,
     linesKept: 0,
-    archiveMarkerSeq: 0,
+    archiveMarkerLineIndex: 0,
   };
 
   let raw: string;
@@ -51,7 +49,8 @@ export async function archiveSessionTranscript(params: ArchivalParams): Promise<
   for (let i = 1; i < lines.length; i++) {
     try {
       const parsed = JSON.parse(lines[i]);
-      if (parsed && typeof parsed === "object" && parsed.role === "user") {
+      const msg = parsed?.message;
+      if (msg && typeof msg === "object" && (msg as Record<string, unknown>).role === "user") {
         turnStartIndices.push(i);
       }
     } catch {
@@ -72,21 +71,34 @@ export async function archiveSessionTranscript(params: ArchivalParams): Promise<
 
   const header = lines[0];
   const keptLines = lines.slice(cutLineIndex);
-  const removedCount = cutLineIndex - 1; // exclude header from count
+
+  // Count removed entries, excluding any prior archive markers
+  let removedCount = 0;
+  for (let i = 1; i < cutLineIndex; i++) {
+    try {
+      const p = JSON.parse(lines[i]);
+      if (p && typeof p === "object" && (p as Record<string, unknown>).type !== "archive_marker") {
+        removedCount++;
+      }
+    } catch {
+      removedCount++; // count malformed lines as removed entries
+    }
+  }
 
   const archiveMarker = JSON.stringify({
     type: "archive_marker",
-    archivedBeforeSeq: cutLineIndex,
+    archivedBeforeLineIndex: cutLineIndex,
     archivedAt: new Date().toISOString(),
     totalArchived: removedCount,
   });
 
   const newContent = [header, archiveMarker, ...keptLines].join("\n") + "\n";
 
-  // Atomic write: temp file + rename
+  // Atomic write: temp file + rename (preserve original permissions)
+  const stat = await fs.stat(sessionFile);
   const tmpFile = `${sessionFile}.archival-${Date.now()}.tmp`;
   try {
-    await fs.writeFile(tmpFile, newContent, "utf-8");
+    await fs.writeFile(tmpFile, newContent, { encoding: "utf-8", mode: stat.mode });
     await fs.rename(tmpFile, sessionFile);
   } catch (err) {
     // Clean up temp file on failure
@@ -102,6 +114,6 @@ export async function archiveSessionTranscript(params: ArchivalParams): Promise<
     archived: true,
     linesRemoved: removedCount,
     linesKept: keptLines.length,
-    archiveMarkerSeq: cutLineIndex,
+    archiveMarkerLineIndex: cutLineIndex,
   };
 }
