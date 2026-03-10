@@ -156,6 +156,18 @@ export const AgentDefaultsSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
+    imageCompression: z
+      .union([
+        z.union([z.literal("none"), z.literal("low"), z.literal("medium"), z.literal("high")]),
+        z
+          .object({
+            maxWidth: z.number().int().positive().optional(),
+            maxHeight: z.number().int().positive().optional(),
+            quality: z.number().int().min(1).max(100).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
