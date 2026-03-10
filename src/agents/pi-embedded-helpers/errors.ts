@@ -728,6 +728,14 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return "";
   }
 
+  // Raw JSON API error payloads should never reach the user, regardless of
+  // whether the caller flagged this as an error context.  Providers sometimes
+  // stream server_error events as regular assistant text (not isError), and
+  // without this guard the raw JSON leaks into chat.  (#42132)
+  if (isRawApiErrorPayload(trimmed)) {
+    return formatRawAssistantErrorForUi(trimmed);
+  }
+
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
@@ -749,7 +757,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       return BILLING_ERROR_USER_MESSAGE;
     }
 
-    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
+    if (isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
     }
 

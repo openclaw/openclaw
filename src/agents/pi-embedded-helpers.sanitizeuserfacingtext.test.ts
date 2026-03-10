@@ -74,6 +74,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes raw API error payloads even without explicit errorContext", () => {
+    const raw =
+      '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw)).toBe(
+      "LLM error server_error: An error occurred while processing your request.",
+    );
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
