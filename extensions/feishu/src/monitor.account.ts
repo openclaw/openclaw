@@ -413,6 +413,16 @@ function registerEventHandlers(
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
     },
+    "im.chat.access_event.bot_p2p_chat_entered_v1": async (data) => {
+      // Ignore P2P chat entered events - these are informational only
+      // and should not trigger any action or gateway restart
+      try {
+        const event = data as { chat_id?: string; user_id?: string };
+        log(`feishu[${accountId}]: user ${event.user_id} entered bot chat ${event.chat_id || 'unknown'}`);
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling bot p2p chat entered event: ${String(err)}`);
+      }
+    },
     "im.message.reaction.created_v1": async (data) => {
       const processReaction = async () => {
         const event = data as FeishuReactionCreatedEvent;
