@@ -592,7 +592,9 @@ export async function runWithModelFallback<T>(params: {
           // Probe at most once per provider per fallback run when all profiles
           // are cooldowned. Re-probing every same-provider candidate can stall
           // cross-provider fallback on providers with long internal retries.
-          if (cooldownProbeUsedProviders.has(candidate.provider)) {
+          const isTransientCooldownReason =
+            decision.reason === "rate_limit" || decision.reason === "overloaded";
+          if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
             attempts.push({
               provider: candidate.provider,
@@ -619,7 +621,9 @@ export async function runWithModelFallback<T>(params: {
             continue;
           }
           runOptions = { allowTransientCooldownProbe: true };
-          cooldownProbeUsedProviders.add(candidate.provider);
+          if (isTransientCooldownReason) {
+            cooldownProbeUsedProviders.add(candidate.provider);
+          }
         }
         attemptedDuringCooldown = true;
         logModelFallbackDecision({
