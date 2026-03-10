@@ -32,11 +32,25 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
-export function listAgentModelsJsonPaths(config: OpenClawConfig, stateDir: string): string[] {
-  const paths = new Set<string>();
-  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "models.json"));
+function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  if (override) {
+    return resolveUserPath(override);
+  }
+  return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
+}
 
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
+export function listAgentModelsJsonPaths(
+  config: OpenClawConfig,
+  stateDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const resolvedStateDir = resolveUserPath(stateDir);
+  const paths = new Set<string>();
+  paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
+  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
+
+  const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
     for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) {
@@ -48,7 +62,7 @@ export function listAgentModelsJsonPaths(config: OpenClawConfig, stateDir: strin
 
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
-      paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "models.json"));
+      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
       continue;
     }
     const agentDir = resolveAgentDir(config, agentId);

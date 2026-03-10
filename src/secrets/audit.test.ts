@@ -482,6 +482,39 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
+  it("scans active agent-dir override models.json even when outside state dir", async () => {
+    const externalAgentDir = path.join(fixture.rootDir, "external-agent");
+    const externalModelsPath = path.join(externalAgentDir, "models.json");
+    await fs.mkdir(externalAgentDir, { recursive: true });
+    await writeJsonFile(externalModelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-external-plaintext", // pragma: allowlist secret
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({
+      env: {
+        ...fixture.env,
+        OPENCLAW_AGENT_DIR: externalAgentDir,
+      },
+    });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === externalModelsPath &&
+          entry.jsonPath === "providers.openai.apiKey",
+      ),
+    ).toBe(true);
+    expect(report.filesScanned).toContain(externalModelsPath);
+  });
+
   it("does not flag non-sensitive routing headers in openclaw config", async () => {
     await writeJsonFile(fixture.configPath, {
       models: {

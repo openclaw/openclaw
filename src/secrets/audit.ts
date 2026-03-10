@@ -630,7 +630,7 @@ export async function runSecretsAudit(
         defaults,
       });
     }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir)) {
+    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
       collectModelsJsonSecrets({
         modelsJsonPath,
         collector,
