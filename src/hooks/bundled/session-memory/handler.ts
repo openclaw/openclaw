@@ -379,6 +379,34 @@ const saveSessionToMemory: HookHandler = async (event) => {
         // is null because blockPreSet was true) OR if the content changed.
         (writtenEntry === null || postContent !== writtenEntry)
       ) {
+        // Verify ownership before overwriting — if another concurrent run wrote
+        // to the same file since our inline write, do not clobber their content.
+        // Same TOCTOU guard as the late-block retraction path.
+        if (writtenEntry !== null) {
+          let currentContent: string | null = null;
+          try {
+            currentContent = await fs.readFile(memoryFilePath, "utf-8");
+          } catch (err: unknown) {
+            if (
+              err instanceof Error &&
+              "code" in err &&
+              (err as NodeJS.ErrnoException).code === "ENOENT"
+            ) {
+              // File was externally deleted — safe to recreate with new content.
+              currentContent = null;
+            } else {
+              throw err;
+            }
+          }
+          if (currentContent !== null && currentContent !== writtenEntry) {
+            log.warn(
+              "Session save content replacement skipped — file was modified by another " +
+                "session since our inline write (concurrent save detected)",
+            );
+            return;
+          }
+        }
+
         // Ensure memoryDir exists — the inline write may have been
         // skipped (e.g. blockSessionSave was true initially) so mkdir
         // might never have run.
