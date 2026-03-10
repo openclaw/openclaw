@@ -245,7 +245,9 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   lines.push(
     "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
   );
-  lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
+  lines.push(
+    "Reply with: /approve <id> allow-once|allow-always|deny (ID prefix ok, or reply to this message with /approve <decision>)",
+  );
   return lines.join("\n");
 }
 
