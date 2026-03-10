@@ -413,6 +413,9 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
+  "optionalDependencies": {
+    "langfuse": "^3.38.6"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
