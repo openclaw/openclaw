@@ -51,7 +51,6 @@ export type CronUsageSummary = {
   cache_write_tokens?: number;
 };
 
-<<<<<<< HEAD
 export type CronRunTelemetry = {
   model?: string;
   provider?: string;
@@ -107,9 +106,6 @@ type CronAgentTurnPayload = {
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
 } & Partial<CronAgentTurnPayloadFields>;
-
-=======
->>>>>>> b14b352a6 (cron: fix import order in cron types)
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
