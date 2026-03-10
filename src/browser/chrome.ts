@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +69,109 @@ export type RunningChrome = {
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
+}
+
+/**
+ * Detect and kill zombie Chrome processes that may be holding the CDP port.
+ * This handles cases where Chrome was killed but child processes remain.
+ */
+async function killZombieChromeProcesses(cdpPort: number, userDataDir: string): Promise<void> {
+  try {
+    // Check if something is already listening on the CDP port
+    const isReachable = await isChromeReachable(`http://127.0.0.1:${cdpPort}`, 1000);
+    
+    if (isReachable) {
+      // Chrome is running and responsive - check if it's using our profile
+      const wsUrl = await getChromeWebSocketUrl(`http://127.0.0.1:${cdpPort}`, 1000);
+      if (wsUrl) {
+        // Try to verify it's our profile by checking if we can connect
+        const isHealthy = await canRunCdpHealthCommand(wsUrl, 2000);
+        if (isHealthy) {
+          log.info(`Chrome on port ${cdpPort} is healthy, skipping zombie kill`);
+          return;
+        }
+      }
+    }
+
+    // Chrome is either not reachable or unhealthy - kill any processes on this port
+    if (process.platform === "win32") {
+      // Windows: use netstat to find PID, then taskkill
+      try {
+        const netstatOutput = execSync(`netstat -ano | findstr :${cdpPort}`, {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "ignore"],
+        });
+        const pidMatch = netstatOutput.match(/LISTENING\s+(\d+)/);
+        if (pidMatch?.[1]) {
+          const pid = pidMatch[1];
+          log.warn(`Killing zombie Chrome process on port ${cdpPort} (PID ${pid})`);
+          execSync(`taskkill /F /PID ${pid}`, { stdio: ["pipe", "pipe", "ignore"] });
+        }
+      } catch {
+        // No process found or kill failed - continue
+      }
+    } else {
+      // Unix-like: use lsof or fuser to find and kill process
+      try {
+        // Try lsof first
+        const lsofOutput = execSync(`lsof -ti :${cdpPort}`, {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+        if (lsofOutput) {
+          const pids = lsofOutput.split("\n").filter(Boolean);
+          for (const pid of pids) {
+            log.warn(`Killing zombie Chrome process on port ${cdpPort} (PID ${pid})`);
+            try {
+              process.kill(parseInt(pid, 10), "SIGKILL");
+            } catch {
+              // Process already dead
+            }
+          }
+        }
+      } catch {
+        // lsof failed, try fuser as fallback
+        try {
+          execSync(`fuser -k ${cdpPort}/tcp 2>/dev/null`, {
+            stdio: ["pipe", "pipe", "ignore"],
+          });
+        } catch {
+          // No process found or kill failed - continue
+        }
+      }
+    }
+
+    // Also check for Chrome processes with our user data dir (zombie detection)
+    try {
+      if (process.platform !== "win32") {
+        const psOutput = execSync(
+          `ps aux | grep -E "[c]hrome.*${userDataDir.replace(/ /g, "\\ ")}" | awk '{print $2}'`,
+          {
+            encoding: "utf8",
+            stdio: ["pipe", "pipe", "ignore"],
+          },
+        ).trim();
+        if (psOutput) {
+          const pids = psOutput.split("\n").filter(Boolean);
+          for (const pid of pids) {
+            log.warn(`Killing zombie Chrome with user data dir (PID ${pid})`);
+            try {
+              process.kill(parseInt(pid, 10), "SIGKILL");
+            } catch {
+              // Process already dead
+            }
+          }
+        }
+      }
+    } catch {
+      // No matching processes found - continue
+    }
+
+    // Wait a moment for processes to fully terminate
+    await new Promise((r) => setTimeout(r, 500));
+  } catch (err) {
+    log.warn(`Zombie Chrome detection failed: ${String(err)}`);
+  }
 }
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
@@ -332,6 +436,9 @@ export async function launchOpenClawChrome(
   } catch (err) {
     log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
   }
+
+  // Kill any zombie Chrome processes before launching
+  await killZombieChromeProcesses(cdpPort, userDataDir);
 
   const proc = spawnOnce();
 
