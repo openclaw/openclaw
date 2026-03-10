@@ -60,11 +60,7 @@ function resolveTelegramFetchOrThrow(
   proxyFetch?: typeof fetch,
   options?: { network?: { autoSelectFamily?: boolean; dnsResultOrder?: "ipv4first" | "verbatim" } },
 ) {
-  const resolved = resolveTelegramFetch(proxyFetch, options);
-  if (!resolved) {
-    throw new Error("expected resolved fetch");
-  }
-  return resolved;
+  return resolveTelegramFetch(proxyFetch, options);
 }
 
 function getDispatcherFromUndiciCall(nth: number) {

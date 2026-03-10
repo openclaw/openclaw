@@ -254,6 +254,10 @@ function withDispatcherIfMissing(
   return init ? { ...init, dispatcher } : { dispatcher };
 }
 
+function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
+  return resolveFetch(fetchImpl) ?? fetchImpl;
+}
+
 function logResolverNetworkDecisions(params: {
   autoSelectDecision: ReturnType<typeof resolveTelegramAutoSelectFamilyDecision>;
   dnsDecision: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
@@ -340,14 +344,12 @@ export function resolveTelegramFetch(
   });
 
   const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
+  const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
   const sourceFetch = explicitProxyUrl
-    ? resolveFetch(undiciFetch as unknown as typeof fetch)
+    ? undiciSourceFetch
     : proxyFetch
-      ? resolveFetch(proxyFetch)
-      : resolveFetch(undiciFetch as unknown as typeof fetch);
-  if (!sourceFetch) {
-    throw new Error("fetch is not available; set channels.telegram.proxy in config");
-  }
+      ? resolveWrappedFetch(proxyFetch)
+      : undiciSourceFetch;
 
   // Preserve fully caller-owned custom fetch implementations.
   // OpenClaw proxy fetches are metadata-tagged and continue into resolver-scoped policy.
