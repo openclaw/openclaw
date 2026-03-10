@@ -33,6 +33,7 @@ export {
   buildSingleChannelSecretPromptState,
   promptAccountId,
   promptSingleChannelSecretInput,
+  runSingleChannelSecretStep,
   resolveAccountIdForConfigure,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
