@@ -426,14 +426,12 @@ function loadAuthProfileStoreForAgent(
   const syncedCli = syncExternalCliCredentials(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
 
-  // Legacy migration (auth.json → auth-profiles.json) persists unconditionally,
-  // even when readOnly:true.  The readOnly flag suppresses updates to EXISTING
-  // auth-profiles.json (external CLI sync, OAuth merge) but must NOT suppress the
-  // one-time creation of auth-profiles.json from legacy auth.json.  Without this,
-  // updateAuthProfileStoreWithLock's ensureAuthStoreFile creates an empty
-  // auth-profiles.json, the subsequent write-enabled load finds it and returns an
-  // empty store, and toRemove profiles are never actually deleted.  (#2914491523)
-  const shouldMigrateLegacy = !forceReadOnly && legacy !== null;
+  // Legacy migration (auth.json → auth-profiles.json) is suppressed when the
+  // caller passes readOnly:true (dry-run or probe-mode loads that must not write).
+  // For actual cleanup calls the probe is loaded with readOnly:false, so migration
+  // still runs and auth-profiles.json is created before updateAuthProfileStoreWithLock's
+  // ensureAuthStoreFile can create an empty placeholder.  (#2914491523, #2914711181)
+  const shouldMigrateLegacy = !readOnly && !forceReadOnly && legacy !== null;
   // External-CLI / OAuth extras are still suppressed during read-only probes.
   const shouldPersistExtras = !readOnly && !forceReadOnly && (mergedOAuth || syncedCli);
 
