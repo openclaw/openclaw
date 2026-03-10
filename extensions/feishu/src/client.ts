@@ -163,6 +163,7 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: Lark.LoggerLevel.info,
+    autoReconnect: true,
     ...(agent ? { agent } : {}),
   });
 }
