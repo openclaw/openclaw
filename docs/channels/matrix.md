@@ -236,7 +236,7 @@ Notes:
 - Matrix supports native voice-message metadata for compatible audio attachments.
 - Matrix-targeted TTS replies now use OGG/Opus output so supported Matrix clients can render them as voice messages instead of generic audio files.
 - When OpenClaw sends a voice message with text, the audio is sent first and the text is delivered as a follow-up message.
-- Direct media sends can also use the voice-message path with `asVoice: true` when the audio is voice-compatible.
+- Matrix action tools do not currently expose a dedicated voice-message toggle for direct media sends.
 
 ## Capabilities
 
