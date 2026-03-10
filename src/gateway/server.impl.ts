@@ -8,6 +8,7 @@ import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import { listAgentSessionDirs } from "../commands/cleanup-utils.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
@@ -19,8 +20,11 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { STATE_DIR } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { migrateSessionStoreToDirectory } from "../config/sessions/store.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -327,6 +331,34 @@ export async function startGatewayServer(
       );
     } catch (err) {
       log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+    }
+  }
+
+  // Auto-migrate session store from monolithic JSON to directory-per-session layout.
+  // Scans all agent directories on disk so sub-agents and ephemeral agents are covered.
+  // Also handles any custom session.store config path that may differ from disk-scanned defaults.
+  if (!minimalTestGateway) {
+    const sessionDirs = await listAgentSessionDirs(STATE_DIR);
+    for (const sessionsDir of sessionDirs) {
+      const storePath = path.join(sessionsDir, "sessions.json");
+      try {
+        if (await migrateSessionStoreToDirectory(storePath)) {
+          log.info(`Migrated session store to directory layout: ${storePath}`);
+        }
+      } catch (err) {
+        log.warn(`Failed to migrate session store at ${storePath}: ${String(err)}`);
+      }
+    }
+    // Fallback: migrate a custom session.store config path (may resolve outside the default agent dirs).
+    if (configSnapshot.config.session?.store) {
+      try {
+        const configStorePath = resolveStorePath(configSnapshot.config.session.store);
+        if (await migrateSessionStoreToDirectory(configStorePath)) {
+          log.info(`Migrated custom session store to directory layout: ${configStorePath}`);
+        }
+      } catch (err) {
+        log.warn(`Failed to migrate custom session store path: ${String(err)}`);
+      }
     }
   }
 
