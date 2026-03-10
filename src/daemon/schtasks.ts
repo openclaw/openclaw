@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { killProcessTree } from "../process/kill-tree.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -306,12 +309,48 @@ function isTaskNotRunning(res: { stdout: string; stderr: string; code: number })
 
 export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  const taskName = resolveTaskName(resolvedEnv);
   const res = await execSchtasks(["/End", "/TN", taskName]);
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
+
+  // schtasks /End only disables the scheduled task but does not terminate the
+  // running gateway process. Find and kill any gateway process still listening
+  // on the configured port so the behavior matches macOS (launchctl bootout)
+  // and Linux (systemctl stop), both of which terminate the process.
+  await terminateGatewayProcessOnPort(resolvedEnv);
+}
+
+function resolveGatewayPortFromEnv(env: GatewayServiceEnv): number {
+  const raw = env.OPENCLAW_GATEWAY_PORT?.trim();
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_GATEWAY_PORT;
+}
+
+async function terminateGatewayProcessOnPort(env: GatewayServiceEnv): Promise<void> {
+  const port = resolveGatewayPortFromEnv(env);
+  let portUsage;
+  try {
+    portUsage = await inspectPortUsage(port);
+  } catch {
+    return;
+  }
+  if (portUsage.status !== "busy") {
+    return;
+  }
+  for (const listener of portUsage.listeners) {
+    if (Number.isFinite(listener.pid) && (listener.pid as number) > 0) {
+      killProcessTree(listener.pid as number, { graceMs: 2000 });
+    }
+  }
 }
 
 export async function restartScheduledTask({
