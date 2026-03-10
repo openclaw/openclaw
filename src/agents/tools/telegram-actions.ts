@@ -146,10 +146,15 @@ export async function handleTelegramAction(
     }
     const to = readStringParam(params, "to", { required: true });
     const mediaUrl = readStringParam(params, "mediaUrl");
+    const buffer = readStringParam(params, "buffer", { trim: false });
+    const filename = readStringParam(params, "filename");
+    const contentType =
+      readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
+    const hasAttachment = Boolean(mediaUrl || buffer);
     // Allow content to be omitted when sending media-only (e.g., voice notes)
     const content =
       readStringParam(params, "content", {
-        required: !mediaUrl,
+        required: !hasAttachment,
         allowEmpty: true,
       }) ?? "";
     const buttons = readTelegramButtons(params);
@@ -198,6 +203,9 @@ export async function handleTelegramAction(
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
+      buffer: buffer || undefined,
+      filename: filename || undefined,
+      contentType: contentType || undefined,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,

@@ -40,6 +40,9 @@ type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   api?: TelegramApiOverride;
@@ -435,6 +438,9 @@ export async function sendMessageTelegram(
   const target = parseTelegramTarget(to);
   const chatId = normalizeChatId(target.chatId);
   const mediaUrl = opts.mediaUrl?.trim();
+  const bufferBase64 = opts.buffer?.trim();
+  const inlineFileName = opts.filename?.trim();
+  const inlineContentType = opts.contentType?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   const threadParams = buildTelegramThreadReplyParams({
@@ -521,11 +527,17 @@ export async function sendMessageTelegram(
     );
   };
 
-  if (mediaUrl) {
-    const media = await loadWebMedia(mediaUrl, {
-      maxBytes: opts.maxBytes,
-      localRoots: opts.mediaLocalRoots,
-    });
+  if (bufferBase64 || mediaUrl) {
+    const media = bufferBase64
+      ? {
+          buffer: Buffer.from(bufferBase64, "base64"),
+          contentType: inlineContentType,
+          fileName: inlineFileName,
+        }
+      : await loadWebMedia(mediaUrl!, {
+          maxBytes: opts.maxBytes,
+          localRoots: opts.mediaLocalRoots,
+        });
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,

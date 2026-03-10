@@ -330,10 +330,13 @@ export async function hydrateSendAttachmentParams(params: {
   action: ChannelMessageActionName;
   dryRun?: boolean;
 }): Promise<void> {
-  if (params.action !== "sendAttachment") {
+  if (params.action !== "send" && params.action !== "sendAttachment") {
     return;
   }
-  await hydrateAttachmentActionPayload({ ...params, allowMessageCaptionFallback: true });
+  await hydrateAttachmentActionPayload({
+    ...params,
+    allowMessageCaptionFallback: params.action === "sendAttachment",
+  });
 }
 
 export function parseButtonsParam(params: Record<string, unknown>): void {

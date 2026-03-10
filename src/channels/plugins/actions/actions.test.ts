@@ -416,6 +416,35 @@ describe("telegramMessageActions", () => {
     );
   });
 
+  it("forwards inline attachment buffers for send actions", async () => {
+    const cfg = telegramCfg();
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "123",
+        buffer: "QUJD",
+        filename: "note.txt",
+        contentType: "text/plain",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "123",
+        content: "",
+        buffer: "QUJD",
+        filename: "note.txt",
+        contentType: "text/plain",
+      }),
+      cfg,
+    );
+  });
+
   it("passes silent flag for silent sends", async () => {
     const cfg = telegramCfg();
 
