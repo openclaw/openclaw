@@ -157,8 +157,9 @@ export async function startGatewaySidecars(params: {
       await clearPendingInboundEntries(stateDir);
 
       // Per-session cap: system-event queue holds at most MAX_EVENTS entries.
-      // Reserve one slot for a "skipped" summary so we never silently drop events.
-      const REPLAY_CAP_PER_SESSION = MAX_EVENTS - 1;
+      // Sessions with exactly MAX_EVENTS queued entries should replay all of them;
+      // only sessions with MORE than MAX_EVENTS entries should truncate.
+      const REPLAY_CAP_PER_SESSION = MAX_EVENTS;
 
       // Phase 1: resolve sessionKey and eventText for every entry, collecting by session.
       type ResolvedEntry = {
