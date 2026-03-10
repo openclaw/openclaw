@@ -435,6 +435,58 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
+  it("revive re-opens stream for editing the same message after stop", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+    });
+
+    // First message
+    stream.update("Before tool call");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Finalize (simulates lane delivery stop)
+    await stream.stop();
+
+    // Revive — should keep the same message ID
+    stream.revive();
+    stream.update("After tool call");
+    await stream.flush();
+
+    // Should edit the same message, not send a new one
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "After tool call");
+  });
+
+  it("revive does not resurrect an error-stopped stream", async () => {
+    const api = {
+      sendMessage: vi.fn().mockRejectedValueOnce(new Error("API down")),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      warn: () => {},
+    });
+
+    // Trigger error-stop
+    stream.update("Will fail");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Revive should be a no-op on error-stopped streams
+    stream.revive();
+    stream.update("After revive");
+    await stream.flush();
+
+    // No additional API calls — stream remains dead
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
