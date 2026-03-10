@@ -82,4 +82,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expect(payloads).toHaveLength(0);
   });
+
+  it("suppresses assistant text when a deterministic exec approval prompt was already delivered", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Approval is needed. Please run /approve abc allow-once"],
+      didSendDeterministicApprovalPrompt: true,
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
 });

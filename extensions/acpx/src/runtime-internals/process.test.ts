@@ -1,9 +1,15 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
-import { resolveSpawnCommand, type SpawnCommandCache } from "./process.js";
+import {
+  resolveSpawnCommand,
+  spawnAndCollect,
+  type SpawnCommandCache,
+  waitForExit,
+} from "./process.js";
 
 const tempDirs: string[] = [];
 
@@ -223,5 +229,64 @@ describe("resolveSpawnCommand", () => {
     expect(second.command).toBe("C:\\node\\node.exe");
     expect(first.args[0]).toBe(scriptPath);
     expect(second.args[0]).toBe(scriptPath);
+  });
+});
+
+describe("waitForExit", () => {
+  it("resolves when the child already exited before waiting starts", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.once("close", () => {
+        resolve();
+      });
+      child.once("error", reject);
+    });
+
+    const exit = await waitForExit(child);
+    expect(exit.code).toBe(0);
+    expect(exit.signal).toBeNull();
+    expect(exit.error).toBeNull();
+  });
+});
+
+describe("spawnAndCollect", () => {
+  it("returns abort error immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await spawnAndCollect(
+      {
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        cwd: process.cwd(),
+      },
+      undefined,
+      { signal: controller.signal },
+    );
+
+    expect(result.code).toBeNull();
+    expect(result.error?.name).toBe("AbortError");
+  });
+
+  it("terminates a running process when signal aborts", async () => {
+    const controller = new AbortController();
+    const resultPromise = spawnAndCollect(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => process.stdout.write('done'), 10_000)"],
+        cwd: process.cwd(),
+      },
+      undefined,
+      { signal: controller.signal },
+    );
+
+    setTimeout(() => {
+      controller.abort();
+    }, 10);
+
+    const result = await resultPromise;
+    expect(result.error?.name).toBe("AbortError");
   });
 });

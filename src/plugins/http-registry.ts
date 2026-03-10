@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizePluginHttpPath } from "./http-path.js";
+import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
 import { requireActivePluginRegistry } from "./runtime.js";
 
@@ -33,6 +34,18 @@ export function registerPluginHttpRoute(params: {
   }
 
   const routeMatch = params.match ?? "exact";
+  const overlappingRoute = findOverlappingPluginHttpRoute(routes, {
+    path: normalizedPath,
+    match: routeMatch,
+  });
+  if (overlappingRoute && overlappingRoute.auth !== params.auth) {
+    params.log?.(
+      `plugin: route overlap denied at ${normalizedPath} (${routeMatch}, ${params.auth})${suffix}; ` +
+        `overlaps ${overlappingRoute.path} (${overlappingRoute.match}, ${overlappingRoute.auth}) ` +
+        `owned by ${overlappingRoute.pluginId ?? "unknown-plugin"} (${overlappingRoute.source ?? "unknown-source"})`,
+    );
+    return () => {};
+  }
   const existingIndex = routes.findIndex(
     (entry) => entry.path === normalizedPath && entry.match === routeMatch,
   );

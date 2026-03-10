@@ -54,13 +54,71 @@ describe("handleAgentEnd", () => {
 
     const warn = vi.mocked(ctx.log.warn);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("runId=run-1");
-    expect(warn.mock.calls[0]?.[0]).toContain("error=connection refused");
+    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      runId: "run-1",
+      error: "connection refused",
+      rawErrorPreview: "connection refused",
+    });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
         error: "connection refused",
+      },
+    });
+  });
+
+  it("attaches raw provider error metadata without changing the console message", () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-test",
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      content: [{ type: "text", text: "" }],
+    });
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      runId: "run-1",
+      error: "The AI service is temporarily overloaded. Please try again in a moment.",
+      failoverReason: "overloaded",
+      providerErrorType: "overloaded_error",
+    });
+  });
+
+  it("redacts logged error text before emitting lifecycle events", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      error: "x-api-key: ***",
+      rawErrorPreview: "x-api-key: ***",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "x-api-key: ***",
       },
     });
   });

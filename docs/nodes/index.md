@@ -81,8 +81,10 @@ openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
 
 Notes:
 
-- The token is `gateway.auth.token` from the gateway config (`~/.openclaw/openclaw.json` on the gateway host).
-- `openclaw node run` reads `OPENCLAW_GATEWAY_TOKEN` for auth.
+- `openclaw node run` supports token or password auth.
+- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
+- Config fallback is `gateway.auth.token` / `gateway.auth.password`; in remote mode, `gateway.remote.token` / `gateway.remote.password` are also eligible.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored by node-host auth resolution.
 
 ### Start a node host (service)
 
@@ -214,7 +216,7 @@ Notes:
 
 ## Screen recordings (nodes)
 
-Nodes expose `screen.record` (mp4). Example:
+Supported nodes expose `screen.record` (mp4). Example:
 
 ```bash
 openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
@@ -223,10 +225,9 @@ openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-
 
 Notes:
 
-- `screen.record` requires the node app to be foregrounded.
-- Android will show the system screen-capture prompt before recording.
+- `screen.record` availability depends on node platform.
 - Screen recordings are clamped to `<= 60s`.
-- `--no-audio` disables microphone capture (supported on iOS/Android; macOS uses system capture audio).
+- `--no-audio` disables microphone capture on supported platforms.
 - Use `--screen <index>` to select a display when multiple screens are available.
 
 ## Location (nodes)
@@ -273,7 +274,6 @@ Available families:
 - `contacts.search`, `contacts.add`
 - `calendar.events`, `calendar.add`
 - `motion.activity`, `motion.pedometer`
-- `app.update`
 
 Example invokes:
 
@@ -286,7 +286,6 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 Notes:
 
 - Motion commands are capability-gated by available sensors.
-- `app.update` is permission + policy gated by the node runtime.
 
 ## System commands (node host / mac node)
 
