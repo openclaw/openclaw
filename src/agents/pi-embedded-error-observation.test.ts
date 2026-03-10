@@ -28,6 +28,7 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("forces token redaction for observation previews", () => {
+    // pragma: allowlist secret
     const observed = buildApiErrorObservationFields(
       "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     );
@@ -38,6 +39,7 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("redacts observation-only header and cookie formats", () => {
+    // pragma: allowlist secret
     const observed = buildApiErrorObservationFields(
       "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456 Cookie: session=abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     );
