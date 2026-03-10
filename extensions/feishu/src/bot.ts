@@ -1356,6 +1356,12 @@ export async function handleFeishuMessage(params: {
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+
+    // Apply replyToMode: "all" (default) = always reply, "off" = never reply,
+    // "first" = reply only to the first message (handled downstream by outbound)
+    const replyToMode = groupConfig?.replyToMode ?? feishuCfg?.replyToMode ?? "all";
+    const effectiveReplyTargetMessageId =
+      replyToMode === "off" ? undefined : replyTargetMessageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {
@@ -1406,7 +1412,7 @@ export async function handleFeishuMessage(params: {
             agentId,
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
-            replyToMessageId: replyTargetMessageId,
+            replyToMessageId: effectiveReplyTargetMessageId,
             skipReplyToInMessages: !isGroup,
             replyInThread,
             rootId: ctx.rootId,
@@ -1504,7 +1510,7 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
-        replyToMessageId: replyTargetMessageId,
+        replyToMessageId: effectiveReplyTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,
         rootId: ctx.rootId,
