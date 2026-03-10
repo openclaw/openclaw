@@ -131,6 +131,10 @@ export function applySetupAccountConfigPatch(params: {
     channelKey: params.channelKey,
     accountId: params.accountId,
     patch: params.patch,
+    accountPatch: {
+      ...params.patch,
+      enabled: true,
+    },
   });
 }
 
@@ -183,7 +187,12 @@ export function patchScopedAccountConfig(params: {
           ...accounts,
           [accountId]: {
             ...existingAccount,
-            ...(ensureAccountEnabled ? { enabled: true } : {}),
+            ...(ensureAccountEnabled
+              ? {
+                  enabled:
+                    typeof existingAccount.enabled === "boolean" ? existingAccount.enabled : true,
+                }
+              : {}),
             ...accountPatch,
           },
         },
