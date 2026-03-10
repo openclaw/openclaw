@@ -153,6 +153,14 @@ function appendBrowserToolModelHint(message: string): string {
   return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
 }
 
+async function discardResponseBody(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // Best effort only; we're already returning a stable error message.
+  }
+}
+
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
   const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
@@ -205,13 +213,14 @@ async function fetchHttpJson<T>(
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
       if (isRateLimitStatus(res.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        await discardResponseBody(res);
         throw new BrowserServiceError(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
         );
       }
+      const text = await res.text().catch(() => "");
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
