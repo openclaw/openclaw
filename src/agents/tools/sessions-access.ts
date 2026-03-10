@@ -222,6 +222,8 @@ export function precheckSessionLookupAccess(params: {
   }
 
   if (params.visibility === "tree" && params.ownedAcpEnabled) {
+    // We don't know the resolved session key yet, so this precheck can only narrow the
+    // gateway lookup by spawnedBy. The ACP-only check happens later in the visibility guard.
     return {
       allowed: true,
       spawnedByConstraint: params.requesterSessionKey,
