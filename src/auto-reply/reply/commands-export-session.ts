@@ -90,10 +90,10 @@ function generateHtml(sessionData: SessionData): string {
 
   return template
     .replace("{{CSS}}", css)
-    .replace("{{JS}}", templateJs)
+    .replace("{{JS}}", (_m: string) => templateJs)
     .replace("{{SESSION_DATA}}", sessionDataBase64)
-    .replace("{{MARKED_JS}}", markedJs)
-    .replace("{{HIGHLIGHT_JS}}", hljsJs);
+    .replace("{{MARKED_JS}}", (_m: string) => markedJs)
+    .replace("{{HIGHLIGHT_JS}}", (_m: string) => hljsJs);
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
