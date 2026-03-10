@@ -4,6 +4,7 @@ import { loadDotEnv } from "../infra/dotenv.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
@@ -90,6 +91,14 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
+
+  // Node.js fetch() ignores proxy env vars (HTTPS_PROXY, etc.) by default.
+  // Install undici's EnvHttpProxyAgent as the global dispatcher so all
+  // outbound HTTP — including LLM streaming — routes through the proxy.
+  if (hasProxyEnvConfigured()) {
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = await import("undici");
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+  }
 
   try {
     if (await tryRouteCli(normalizedArgv)) {
