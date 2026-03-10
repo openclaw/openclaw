@@ -1,6 +1,7 @@
 name: Labeler
 
 on:
+  # zizmor: ignore[dangerous-triggers] Uses pull_request_target for labeling via GitHub API/App token without checking out or running PR head code.
   pull_request_target:
     types: [opened, synchronize, reopened]
   issues:
