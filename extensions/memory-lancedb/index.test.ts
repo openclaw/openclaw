@@ -617,8 +617,10 @@ describe("memory plugin — namespace isolation", () => {
       agentId: "finn",
       namespace: "global",
       searchResults: [
-        { id: "row-sofi", text: "Customer support note", agentId: "sofi" },
-        { id: "row-finn", text: "Payment note", agentId: "finn" },
+        // _distance=0.3 → score=0.7: above recall threshold (0.1) but below
+        // the duplicate-check threshold (0.95), so memory_store won't skip.
+        { id: "row-sofi", text: "Customer support note", agentId: "sofi", _distance: 0.3 },
+        { id: "row-finn", text: "Payment note", agentId: "finn", _distance: 0.3 },
       ],
     });
     const { default: memoryPlugin } = await import("./index.js");
