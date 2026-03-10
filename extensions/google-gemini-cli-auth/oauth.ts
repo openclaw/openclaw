@@ -245,6 +245,14 @@ async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    // Google OAuth + Cloud Code Assist endpoints may resolve to the RFC 2544
+    // benchmark range (198.18.0.0/15) when a DNS-level proxy (Surge, ClashX,
+    // etc.) is active.  These are first-party Google endpoints, not
+    // user-supplied URLs, so allowing the range is safe here.
+    // DNS pinning must be disabled so the system proxy can route correctly —
+    // a pinned connection to a proxy virtual IP (198.18.x.x) would hang.
+    policy: { allowRfc2544BenchmarkRange: true },
+    pinDns: false,
   });
   try {
     const body = await response.arrayBuffer();
