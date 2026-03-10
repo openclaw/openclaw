@@ -27,6 +27,10 @@ const writeStore = (store: Record<string, unknown>) => {
 beforeEach(() => {
   writeStore({});
   mockGatewayClientCtor.mockClear();
+  mockLoadGatewayTlsRuntime.mockClear().mockResolvedValue({
+    enabled: true,
+    fingerprintSha256: "AA:BB:CC",
+  });
   mockResolveGatewayConnectionAuth.mockReset().mockImplementation(
     async (params: {
       config?: {
@@ -60,6 +64,9 @@ const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true }))
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
+const mockLoadGatewayTlsRuntime = vi.hoisted(() =>
+  vi.fn(async () => ({ enabled: true, fingerprintSha256: "AA:BB:CC" })),
+);
 
 vi.mock("../send.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.shared.js")>();
@@ -98,6 +105,10 @@ vi.mock("../../gateway/client.js", () => ({
 
 vi.mock("../../gateway/connection-auth.js", () => ({
   resolveGatewayConnectionAuth: mockResolveGatewayConnectionAuth,
+}));
+
+vi.mock("../../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: mockLoadGatewayTlsRuntime,
 }));
 
 vi.mock("../../logger.js", () => ({
@@ -707,6 +718,55 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
     expect(gatewayClientParams[0]).toMatchObject({
       token: "env-gateway-token",
       password: undefined,
+    });
+  });
+
+  it("hydrates the local tls fingerprint for local loopback wss gateways", async () => {
+    const handler = new DiscordExecApprovalHandler({
+      token: "discord-bot-token",
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: {
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          tls: { enabled: true },
+          auth: { mode: "token", token: "shared-gateway-token" },
+        },
+      },
+    });
+
+    await handler.start();
+
+    expect(mockLoadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
+    expect(gatewayClientParams[0]).toMatchObject({
+      url: "wss://127.0.0.1:18789",
+      tlsFingerprint: "AA:BB:CC",
+    });
+  });
+
+  it("does not pin the local tls fingerprint for config remote wss gateways", async () => {
+    const handler = new DiscordExecApprovalHandler({
+      token: "discord-bot-token",
+      accountId: "default",
+      config: { enabled: true, approvers: ["123"] },
+      cfg: {
+        gateway: {
+          mode: "remote",
+          bind: "loopback",
+          tls: { enabled: true },
+          remote: { url: "wss://remote.example/ws" },
+          auth: { mode: "token", token: "shared-gateway-token" },
+        },
+      },
+    });
+
+    await handler.start();
+
+    expect(mockLoadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(gatewayClientParams[0]).toMatchObject({
+      url: "wss://remote.example/ws",
+      tlsFingerprint: undefined,
     });
   });
 });

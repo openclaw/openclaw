@@ -427,7 +427,7 @@ export class DiscordExecApprovalHandler {
     });
     const localTlsRuntime =
       this.opts.cfg.gateway?.tls?.enabled === true &&
-      !gatewayUrlOverrideSource &&
+      urlSource === "local loopback" &&
       gatewayUrl.startsWith("wss://")
         ? await loadGatewayTlsRuntime(this.opts.cfg.gateway?.tls)
         : undefined;
