@@ -1,10 +1,11 @@
 import fs from "fs";
 import path from "path";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/feishu";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendMarkdownCardFeishu, sendMessageFeishu, sendStreamingMessageFeishu } from "./send.js";
+import { StreamingManager, globalStreamingManager } from "./streaming.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -43,37 +44,61 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
-function resolveReplyToMessageId(params: {
-  replyToId?: string | null;
-  threadId?: string | number | null;
-}): string | undefined {
-  const replyToId = params.replyToId?.trim();
-  if (replyToId) {
-    return replyToId;
-  }
-  if (params.threadId == null) {
-    return undefined;
-  }
-  const trimmed = String(params.threadId).trim();
-  return trimmed || undefined;
+/**
+ * Check if streaming mode should be used.
+ * Streaming is enabled when:
+ * - account config has streaming.enabled = true
+ * - text contains code blocks or is long (>500 chars)
+ */
+function shouldUseStreaming(params: {
+  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
+  to: string;
+  text: string;
+  accountId?: string;
+}): boolean {
+  const { cfg, to, text, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  
+  // Check if streaming is enabled in config
+  const streamingEnabled = account.config?.streaming?.enabled ?? false;
+  if (!streamingEnabled) return false;
+
+  // Only use streaming for long content or code blocks
+  return text.length > 500 || /```[\s\S]*?```/.test(text);
 }
 
 async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
   text: string;
-  replyToMessageId?: string;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+  // Check streaming mode first
+  if (shouldUseStreaming({ cfg, to, text, accountId })) {
+    const result = await sendStreamingMessageFeishu({
+      cfg,
+      to,
+      initialContent: text,
+      accountId,
+    });
+    
+    if (result) {
+      // Note: For true streaming, the caller should use StreamingManager
+      // This is a simplified version that just sends as card
+      return result.sendResult;
+    }
+    // Fallback to normal send if card creation failed
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+    return sendMarkdownCardFeishu({ cfg, to, text, accountId });
+  }
+
+  return sendMessageFeishu({ cfg, to, text, accountId });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -81,8 +106,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, accountId, replyToId, threadId, mediaLocalRoots }) => {
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+  sendText: async ({ cfg, to, text, accountId }) => {
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
@@ -94,8 +118,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           mediaUrl: localImagePath,
           accountId: accountId ?? undefined,
-          replyToMessageId,
-          mediaLocalRoots,
         });
         return { channel: "feishu", ...result };
       } catch (err) {
@@ -109,21 +131,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       to,
       text,
       accountId: accountId ?? undefined,
-      replyToMessageId,
     });
     return { channel: "feishu", ...result };
   },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    accountId,
-    mediaLocalRoots,
-    replyToId,
-    threadId,
-  }) => {
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
     // Send text first if provided
     if (text?.trim()) {
       await sendOutboundText({
@@ -131,7 +142,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         to,
         text,
         accountId: accountId ?? undefined,
-        replyToMessageId,
       });
     }
 
@@ -144,7 +154,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           mediaUrl,
           accountId: accountId ?? undefined,
           mediaLocalRoots,
-          replyToMessageId,
         });
         return { channel: "feishu", ...result };
       } catch (err) {
@@ -157,7 +166,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           to,
           text: fallbackText,
           accountId: accountId ?? undefined,
-          replyToMessageId,
         });
         return { channel: "feishu", ...result };
       }
@@ -169,7 +177,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       to,
       text: text ?? "",
       accountId: accountId ?? undefined,
-      replyToMessageId,
     });
     return { channel: "feishu", ...result };
   },

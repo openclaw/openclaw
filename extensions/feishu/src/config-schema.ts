@@ -1,13 +1,9 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
-import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-const GroupPolicySchema = z.union([
-  z.enum(["open", "allowlist", "disabled"]),
-  z.literal("allowall").transform(() => "open" as const),
-]);
+const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
   z.string().url().startsWith("https://"),
@@ -41,9 +37,15 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
-// for incremental text display with a "Thinking..." placeholder
-const StreamingModeSchema = z.boolean().optional();
+// Streaming configuration for CardKit-based typewriter effect
+const StreamingConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    throttleMs: z.number().int().min(100).max(5000).optional(),
+    title: z.string().optional(),
+  })
+  .strict()
+  .optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
@@ -114,9 +116,6 @@ const GroupSessionScopeSchema = z
  * Topic session isolation mode for group chats.
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
- *
- * Topic routing uses `root_id` when present to keep session continuity and
- * falls back to `thread_id` when `root_id` is unavailable.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
@@ -165,10 +164,9 @@ const FeishuSharedConfigShape = {
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
-  httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
-  streaming: StreamingModeSchema,
+  streaming: StreamingConfigSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
@@ -185,9 +183,9 @@ export const FeishuAccountConfigSchema = z
     enabled: z.boolean().optional(),
     name: z.string().optional(), // Display name for this account
     appId: z.string().optional(),
-    appSecret: buildSecretInputSchema().optional(),
+    appSecret: z.string().optional(),
     encryptKey: z.string().optional(),
-    verificationToken: buildSecretInputSchema().optional(),
+    verificationToken: z.string().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
     webhookPath: z.string().optional(),
@@ -203,9 +201,9 @@ export const FeishuConfigSchema = z
     defaultAccount: z.string().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
-    appSecret: buildSecretInputSchema().optional(),
+    appSecret: z.string().optional(),
     encryptKey: z.string().optional(),
-    verificationToken: buildSecretInputSchema().optional(),
+    verificationToken: z.string().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
     webhookPath: z.string().optional().default("/feishu/events"),
@@ -239,8 +237,8 @@ export const FeishuConfigSchema = z
     }
 
     const defaultConnectionMode = value.connectionMode ?? "websocket";
-    const defaultVerificationTokenConfigured = hasConfiguredSecretInput(value.verificationToken);
-    if (defaultConnectionMode === "webhook" && !defaultVerificationTokenConfigured) {
+    const defaultVerificationToken = value.verificationToken?.trim();
+    if (defaultConnectionMode === "webhook" && !defaultVerificationToken) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["verificationToken"],
@@ -257,9 +255,9 @@ export const FeishuConfigSchema = z
       if (accountConnectionMode !== "webhook") {
         continue;
       }
-      const accountVerificationTokenConfigured =
-        hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
-      if (!accountVerificationTokenConfigured) {
+      const accountVerificationToken =
+        account.verificationToken?.trim() || defaultVerificationToken;
+      if (!accountVerificationToken) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["accounts", accountId, "verificationToken"],
