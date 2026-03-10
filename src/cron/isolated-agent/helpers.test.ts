@@ -1,10 +1,51 @@
 import { describe, expect, it } from "vitest";
 import {
   isHeartbeatOnlyResponse,
+  mergeNonErrorTextPayloads,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
 } from "./helpers.js";
+
+describe("mergeNonErrorTextPayloads", () => {
+  it("merges multiple text payloads into one string", () => {
+    expect(
+      mergeNonErrorTextPayloads([{ text: "Part 1\n" }, { text: "Part 2\n" }, { text: "Part 3" }]),
+    ).toBe("Part 1\nPart 2\nPart 3");
+  });
+
+  it("skips error payloads", () => {
+    expect(
+      mergeNonErrorTextPayloads([
+        { text: "good" },
+        { text: "bad", isError: true },
+        { text: " stuff" },
+      ]),
+    ).toBe("good stuff");
+  });
+
+  it("returns undefined for empty payloads", () => {
+    expect(mergeNonErrorTextPayloads([])).toBeUndefined();
+  });
+
+  it("returns undefined when all payloads are errors", () => {
+    expect(mergeNonErrorTextPayloads([{ text: "err", isError: true }])).toBeUndefined();
+  });
+
+  it("returns undefined when all payloads have empty text", () => {
+    expect(mergeNonErrorTextPayloads([{ text: "" }, { text: "" }])).toBeUndefined();
+  });
+
+  it("returns undefined when all payloads have whitespace-only text", () => {
+    expect(
+      mergeNonErrorTextPayloads([{ text: "  " }, { text: "\n" }, { text: "\t" }]),
+    ).toBeUndefined();
+  });
+
+  it("returns single payload text unchanged", () => {
+    expect(mergeNonErrorTextPayloads([{ text: "solo" }])).toBe("solo");
+  });
+});
 
 describe("pickSummaryFromPayloads", () => {
   it("picks real text over error payload", () => {

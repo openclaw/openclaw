@@ -212,7 +212,7 @@ describe("runCronIsolatedAgentTurn", () => {
         storePath,
         deps,
         payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-        expectedText: "Final weather summary",
+        expectedText: "Working on it...Final weather summary",
       });
     });
   });
