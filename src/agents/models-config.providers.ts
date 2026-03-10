@@ -745,15 +745,13 @@ export async function resolveImplicitProviders(
       continue;
     }
     const baseUrl =
-      cred.metadata?.baseUrl?.trim() ||
-      process.env.LITELLM_BASE_URL?.trim() ||
-      LITELLM_DEFAULT_BASE_URL;
+      cred.metadata?.baseUrl?.trim() || env.LITELLM_BASE_URL?.trim() || LITELLM_DEFAULT_BASE_URL;
     if (!baseUrl) {
       continue;
     }
     const keyRef = coerceSecretRef(cred.keyRef);
     const apiKey =
-      resolveEnvApiKeyVarName("litellm") ??
+      resolveEnvApiKeyVarName("litellm", env) ??
       cred.key?.trim() ??
       (keyRef?.source === "env" && keyRef.id.trim() ? keyRef.id.trim() : "") ??
       "";
@@ -775,12 +773,12 @@ export async function resolveImplicitProviders(
   }
 
   // LiteLLM fallback - env var only (no auth profile), use default base URL
-  if (!providers.litellm && resolveEnvApiKeyVarName("litellm")) {
-    const baseUrl = process.env.LITELLM_BASE_URL?.trim() || LITELLM_DEFAULT_BASE_URL;
+  if (!providers.litellm && resolveEnvApiKeyVarName("litellm", env)) {
+    const baseUrl = env.LITELLM_BASE_URL?.trim() || LITELLM_DEFAULT_BASE_URL;
     providers.litellm = {
       baseUrl,
       api: "openai-completions",
-      apiKey: resolveEnvApiKeyVarName("litellm")!,
+      apiKey: resolveEnvApiKeyVarName("litellm", env)!,
       models: [
         buildLitellmModelDefinition({
           id: LITELLM_DEFAULT_MODEL_ID,

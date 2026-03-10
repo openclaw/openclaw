@@ -77,15 +77,22 @@ describe("onboard (non-interactive): LiteLLM", () => {
       }
     } finally {
       await fs.rm(tempHome, { recursive: true, force: true });
-      process.env.HOME = prev.home;
-      process.env.OPENCLAW_STATE_DIR = prev.stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
-      process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
-      process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
-      process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
-      process.env.OPENCLAW_GATEWAY_PASSWORD = prev.password;
+      const restoreEnv = (key: string, value: string | undefined) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      };
+      restoreEnv("HOME", prev.home);
+      restoreEnv("OPENCLAW_STATE_DIR", prev.stateDir);
+      restoreEnv("OPENCLAW_CONFIG_PATH", prev.configPath);
+      restoreEnv("OPENCLAW_SKIP_CHANNELS", prev.skipChannels);
+      restoreEnv("OPENCLAW_SKIP_GMAIL_WATCHER", prev.skipGmail);
+      restoreEnv("OPENCLAW_SKIP_CRON", prev.skipCron);
+      restoreEnv("OPENCLAW_SKIP_CANVAS_HOST", prev.skipCanvas);
+      restoreEnv("OPENCLAW_GATEWAY_TOKEN", prev.token);
+      restoreEnv("OPENCLAW_GATEWAY_PASSWORD", prev.password);
     }
   }, 60_000);
 });
