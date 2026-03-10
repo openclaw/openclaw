@@ -116,6 +116,38 @@ describe("createTelegramBot", () => {
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
   });
+  it("answers callback queries in pre-sequentialize middleware", async () => {
+    createTelegramBot({ token: "tok" });
+    // The pre-sequentialize middleware is registered via bot.use before sequentialize.
+    // Find it: it's the middleware registered right before the sequentialize middleware.
+    const seqMiddleware = sequentializeSpy.mock.results[0]?.value;
+    const allMiddlewares = middlewareUseSpy.mock.calls.map((call) => call[0]);
+    const seqIdx = allMiddlewares.indexOf(seqMiddleware);
+    expect(seqIdx).toBeGreaterThan(0);
+    const preSeqMiddleware = allMiddlewares[seqIdx - 1] as (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void>;
+    expect(typeof preSeqMiddleware).toBe("function");
+
+    const nextSpy = vi.fn(async () => {});
+
+    // With callbackQuery present: should answer
+    await preSeqMiddleware(
+      { callbackQuery: { id: "cbq-test" }, answerCallbackQuery: answerCallbackQuerySpy },
+      nextSpy,
+    );
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    expect(nextSpy).toHaveBeenCalledTimes(1);
+
+    answerCallbackQuerySpy.mockClear();
+    nextSpy.mockClear();
+
+    // Without callbackQuery: should not answer, still call next
+    await preSeqMiddleware({}, nextSpy);
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
+    expect(nextSpy).toHaveBeenCalledTimes(1);
+  });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
@@ -141,7 +173,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {

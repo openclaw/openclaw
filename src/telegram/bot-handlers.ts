@@ -1050,16 +1050,8 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
-    const answerCallbackQuery =
-      typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () => ctx.answerCallbackQuery()
-        : () => bot.api.answerCallbackQuery(callback.id);
-    // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: answerCallbackQuery,
-    }).catch(() => {});
+    // answerCallbackQuery is handled by the pre-sequentialize middleware in bot.ts
+    // to avoid Telegram's ~15s server-side timeout when updates are queued.
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;

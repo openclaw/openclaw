@@ -236,6 +236,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
+  // Answer callback queries BEFORE sequentialize to avoid Telegram's ~15s timeout.
+  // When an agent turn is running, sequentialize queues updates for the same topic.
+  // By the time the queued callback is processed, the answer window is dead.
+  // Note: this also answers queries for updates that shouldSkipUpdate would later reject,
+  // but answerCallbackQuery is idempotent and Telegram ignores redundant answers.
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      void ctx.answerCallbackQuery().catch((err: unknown) => {
+        logVerbose(
+          `answerCallbackQuery failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }
+    await next();
+  });
+
   bot.use(sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");

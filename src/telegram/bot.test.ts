@@ -7,7 +7,6 @@ import {
 } from "../auto-reply/commands-registry.js";
 import { normalizeTelegramCommandName } from "../config/telegram-custom-commands.js";
 import {
-  answerCallbackQuerySpy,
   commandSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
@@ -206,7 +205,6 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
   });
 
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
@@ -250,7 +248,6 @@ describe("createTelegramBot", () => {
 
     // The callback should be processed (not silently blocked)
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
   });
 
   it("edits commands list for pagination callbacks", async () => {
@@ -363,7 +360,6 @@ describe("createTelegramBot", () => {
     });
 
     expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
   it("routes compact model callbacks by inferring provider", async () => {
@@ -411,7 +407,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0]?.[0];
     expect(payload?.Body).toContain(`/model amazon-bedrock/${modelId}`);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-1");
   });
 
   it("rejects ambiguous compact model callbacks and returns provider list", async () => {
@@ -464,7 +459,6 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
       'Could not resolve model "shared-model".',
     );
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
   });
 
   it("includes sender identity in group envelope headers", async () => {
