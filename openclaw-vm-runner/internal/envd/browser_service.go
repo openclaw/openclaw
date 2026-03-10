@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/google/uuid"
 	pb "github.com/openclaw/vm-runner/gen/go/envd/v1"
@@ -279,7 +280,14 @@ func (s *BrowserServer) Screenshot(req *pb.ScreenshotRequest, stream grpc.Server
 				return status.Errorf(codes.Internal, "full screenshot jpeg: %v", err)
 			}
 		} else {
-			if err := chromedp.Run(session.ctx, chromedp.CaptureScreenshot(&buf)); err != nil {
+			if err := chromedp.Run(session.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+				var err error
+				buf, err = page.CaptureScreenshot().
+					WithFormat(page.CaptureScreenshotFormatJpeg).
+					WithQuality(int64(quality)).
+					Do(ctx)
+				return err
+			})); err != nil {
 				return status.Errorf(codes.Internal, "screenshot jpeg: %v", err)
 			}
 		}
@@ -387,15 +395,27 @@ func (s *BrowserServer) WaitForSelector(ctx context.Context, req *pb.WaitForSele
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	waitCtx := session.ctx
+	// Combine session.ctx (browser lifetime) with RPC ctx (client deadline)
+	// so that client cancellation propagates and releases the session mutex.
+	waitCtx, waitCancel := context.WithCancel(session.ctx)
+	defer waitCancel()
+	go func() {
+		select {
+		case <-ctx.Done():
+			waitCancel()
+		case <-waitCtx.Done():
+		}
+	}()
 	if req.GetTimeoutMs() > 0 {
 		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(session.ctx, time.Duration(req.GetTimeoutMs())*time.Millisecond)
+		waitCtx, cancel = context.WithTimeout(waitCtx, time.Duration(req.GetTimeoutMs())*time.Millisecond)
 		defer cancel()
 	}
 
 	if err := chromedp.Run(waitCtx, chromedp.WaitVisible(req.GetSelector(), chromedp.ByQuery)); err != nil {
-		// If context deadline exceeded, the selector was not found in time.
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
 		if waitCtx.Err() == context.DeadlineExceeded {
 			return &pb.WaitForSelectorResponse{Found: false}, nil
 		}

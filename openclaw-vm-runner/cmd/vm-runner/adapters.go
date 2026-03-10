@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/openclaw/vm-runner/internal/jailer"
 	"github.com/openclaw/vm-runner/internal/reaper"
@@ -70,10 +71,15 @@ func (d *jailDestroyer) DestroyVM(ctx context.Context, vmID string) error {
 	// Then destroy in JailedLauncher (cleans chroot, releases UID)
 	jlErr := d.jl.Destroy(ctx, vmID)
 
-	if mgrErr != nil && jlErr != nil {
+	// Manager not-found is non-fatal: filesystem orphans (detected after
+	// runner restart) won't exist in the in-memory manager, but their jail
+	// artifacts still need cleanup.
+	mgrNotFound := mgrErr != nil && strings.Contains(mgrErr.Error(), "not found")
+
+	if mgrErr != nil && !mgrNotFound && jlErr != nil {
 		return fmt.Errorf("manager: %w; jailer: %v", mgrErr, jlErr)
 	}
-	if mgrErr != nil {
+	if mgrErr != nil && !mgrNotFound {
 		return mgrErr
 	}
 	// jlErr alone is acceptable (VM might not have a jail entry)
