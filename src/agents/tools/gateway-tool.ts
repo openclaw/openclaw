@@ -130,6 +130,7 @@ export function createGatewayTool(opts?: {
           delayMs,
           reason,
           force,
+          maxWaitMs: 0,
         });
         return jsonResult(scheduled);
       }

@@ -204,13 +204,7 @@ export function deferGatewayRestartUntilIdle(opts: {
   hooks?: RestartDeferralHooks;
   pollMs?: number;
   maxWaitMs?: number;
-  force?: boolean;
 }): void {
-  if (opts.force) {
-    emitGatewayRestart();
-    return;
-  }
-
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
   const maxWaitMsRaw = opts.maxWaitMs ?? DEFAULT_DEFERRAL_MAX_WAIT_MS;
