@@ -81,8 +81,14 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export interface InboundUserContextResult {
+  text: string;
+  hasSeparatorMarker: boolean;
+}
+
+export function buildInboundUserContextPrefix(ctx: TemplateContext): InboundUserContextResult {
   const blocks: string[] = [];
+  let hasSeparatorMarker = false;
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
@@ -128,6 +134,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   // This avoids making the metadata block unconditionally present.
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     (conversationInfo as Record<string, unknown>)._sep = true;
+    hasSeparatorMarker = true;
     blocks.push(
       [
         "Conversation info (untrusted metadata):",
@@ -153,10 +160,17 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     e164: safeTrim(ctx.SenderE164),
   };
   if (senderInfo?.label) {
+    // Add separator marker to sender info as well, so any metadata block triggers
+    // the separator injection/stripping logic consistently.
+    const senderInfoWithMarker = { ...senderInfo, _sep: true };
+    hasSeparatorMarker = true;
     blocks.push(
-      ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
-        "\n",
-      ),
+      [
+        "Sender (untrusted metadata):",
+        "```json",
+        JSON.stringify(senderInfoWithMarker, null, 2),
+        "```",
+      ].join("\n"),
     );
   }
 
@@ -232,5 +246,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  return blocks.filter(Boolean).join("\n\n");
+  return {
+    text: blocks.filter(Boolean).join("\n\n"),
+    hasSeparatorMarker,
+  };
 }
