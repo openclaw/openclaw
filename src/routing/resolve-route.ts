@@ -12,6 +12,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAccountId,
   normalizeAgentId,
+  normalizeMainKey,
   sanitizeAgentId,
 } from "./session-key.js";
 
@@ -96,12 +97,13 @@ export function buildAgentSessionKey(params: {
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
+  mainKey?: string;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
-    mainKey: DEFAULT_MAIN_KEY,
+    mainKey: params.mainKey ?? DEFAULT_MAIN_KEY,
     channel,
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
@@ -658,6 +660,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
+  const configuredMainKey = normalizeMainKey(input.cfg.session?.mainKey);
+
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
@@ -667,10 +671,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       peer,
       dmScope,
       identityLinks,
+      mainKey: configuredMainKey,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,
-      mainKey: DEFAULT_MAIN_KEY,
+      mainKey: configuredMainKey,
     }).toLowerCase();
     const route = {
       agentId: resolvedAgentId,

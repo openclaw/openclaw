@@ -5,6 +5,7 @@ import {
   buildAgentMainSessionKey,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  normalizeMainKey,
 } from "../../../routing/session-key.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
@@ -28,10 +29,11 @@ function buildBroadcastRouteKeys(params: {
     },
     dmScope: params.cfg.session?.dmScope,
     identityLinks: params.cfg.session?.identityLinks,
+    mainKey: normalizeMainKey(params.cfg.session?.mainKey),
   });
   const mainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
-    mainKey: DEFAULT_MAIN_KEY,
+    mainKey: normalizeMainKey(params.cfg.session?.mainKey),
   });
 
   return {
