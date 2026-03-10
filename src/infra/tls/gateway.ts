@@ -6,6 +6,7 @@ import tls from "node:tls";
 import { promisify } from "node:util";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { resolveExecutablePath } from "../executable-path.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
 const execFileAsync = promisify(execFile);
@@ -30,6 +31,55 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+const OPENSSL_UNIX_CANDIDATES = [
+  "/usr/bin/openssl",
+  "/usr/local/bin/openssl",
+  "/opt/homebrew/bin/openssl",
+  "/opt/homebrew/opt/openssl@3/bin/openssl",
+  "/usr/local/opt/openssl@3/bin/openssl",
+  "/opt/local/bin/openssl",
+  "/usr/sbin/openssl",
+  "/sbin/openssl",
+];
+
+function resolveOpenSslSearchPath(): string {
+  const dirs = new Set<string>();
+  for (const candidate of OPENSSL_UNIX_CANDIDATES) {
+    dirs.add(path.dirname(candidate));
+  }
+  return Array.from(dirs).join(path.delimiter);
+}
+
+function getWindowsOpenSslCandidates(): string[] {
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  return [
+    path.join(programFiles, "OpenSSL-Win64", "bin", "openssl.exe"),
+    path.join(programFiles, "OpenSSL-Win32", "bin", "openssl.exe"),
+    path.join(programFiles, "Git", "usr", "bin", "openssl.exe"),
+    path.join(programFilesX86, "OpenSSL-Win32", "bin", "openssl.exe"),
+    path.join(programFilesX86, "Git", "usr", "bin", "openssl.exe"),
+  ];
+}
+
+async function resolveOpenSslPath(): Promise<string | undefined> {
+  if (process.platform === "win32") {
+    for (const candidate of getWindowsOpenSslCandidates()) {
+      if (await fileExists(candidate)) {
+        return candidate;
+      }
+    }
+    return resolveExecutablePath("openssl");
+  }
+
+  for (const candidate of OPENSSL_UNIX_CANDIDATES) {
+    if (await fileExists(candidate)) {
+      return candidate;
+    }
+  }
+  return resolveExecutablePath("openssl", { env: { PATH: resolveOpenSslSearchPath() } });
+}
+
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
@@ -41,7 +91,11 @@ async function generateSelfSignedCert(params: {
   if (keyDir !== certDir) {
     await ensureDir(keyDir);
   }
-  await execFileAsync("openssl", [
+  const opensslPath = await resolveOpenSslPath();
+  if (!opensslPath) {
+    throw new Error("openssl not found in common locations");
+  }
+  await execFileAsync(opensslPath, [
     "req",
     "-x509",
     "-newkey",
