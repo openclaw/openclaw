@@ -43,15 +43,40 @@ let timer: NodeJS.Timeout | null = null;
 let timerDueAt: number | null = null;
 let timerKind: WakeTimerKind | null = null;
 
-// Circuit breaker: track consecutive failures to prevent retry storms.
-// After MAX_CONSECUTIVE_FAILURES, stop retrying for BREAKER_COOLDOWN_MS.
+// Circuit breaker: track consecutive failures *per wake target* to prevent
+// retry storms. After MAX_CONSECUTIVE_FAILURES for a given target, stop
+// retrying that target for BREAKER_COOLDOWN_MS. Other targets are unaffected.
 // The breaker auto-resets (half-open) after the cooldown so heartbeats
 // self-heal once dependencies recover, without requiring a lifecycle restart.
-let consecutiveFailures = 0;
-let breakerTrippedAt = 0;
+type BreakerState = { failures: number; trippedAt: number };
+const breakerByTarget = new Map<string, BreakerState>();
 const MAX_CONSECUTIVE_FAILURES = 5;
 const MAX_RETRY_BACKOFF_MS = 60_000;
 const BREAKER_COOLDOWN_MS = 5 * 60_000; // 5 minutes
+
+function getBreakerState(targetKey: string): BreakerState {
+  let state = breakerByTarget.get(targetKey);
+  if (!state) {
+    state = { failures: 0, trippedAt: 0 };
+    breakerByTarget.set(targetKey, state);
+  }
+  return state;
+}
+
+/** Check if a target's breaker is tripped (open). Returns true if the target should be skipped. */
+function isBreakerOpen(targetKey: string): boolean {
+  const state = breakerByTarget.get(targetKey);
+  if (!state || state.failures < MAX_CONSECUTIVE_FAILURES) {
+    return false;
+  }
+  const elapsed = Date.now() - state.trippedAt;
+  if (elapsed >= BREAKER_COOLDOWN_MS) {
+    // Half-open: allow one probe attempt after the cooldown.
+    state.failures = MAX_CONSECUTIVE_FAILURES - 1;
+    return false;
+  }
+  return true;
+}
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
@@ -168,23 +193,24 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       return;
     }
 
-    // Circuit breaker: if too many consecutive failures, drop pending wakes
-    // unless the cooldown has elapsed (half-open probe).
-    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      const elapsed = Date.now() - breakerTrippedAt;
-      if (elapsed < BREAKER_COOLDOWN_MS) {
-        pendingWakes.clear();
-        return;
+    // Build pending batch, filtering out targets whose breaker is open.
+    const pendingBatch: PendingWakeReason[] = [];
+    for (const [targetKey, wake] of pendingWakes) {
+      if (isBreakerOpen(targetKey)) {
+        // Target's breaker is tripped — drop this wake silently.
+        continue;
       }
-      // Half-open: allow one probe attempt after the cooldown
-      consecutiveFailures = MAX_CONSECUTIVE_FAILURES - 1;
+      pendingBatch.push(wake);
     }
-
-    const pendingBatch = Array.from(pendingWakes.values());
     pendingWakes.clear();
+    if (pendingBatch.length === 0) {
+      return;
+    }
     running = true;
     try {
       for (const pendingWake of pendingBatch) {
+        const targetKey = getWakeTargetKey(pendingWake);
+        const breaker = getBreakerState(targetKey);
         const wakeOpts = {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
@@ -192,13 +218,13 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
         };
         const res = await active(wakeOpts);
         if (res.status === "failed") {
-          consecutiveFailures += 1;
-          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            // Trip the breaker — stop retrying this batch.
-            breakerTrippedAt = Date.now();
-            break;
+          breaker.failures += 1;
+          if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
+            // Trip the breaker for this target — skip remaining retries.
+            breaker.trippedAt = Date.now();
+            continue;
           }
-          const backoffMs = computeRetryBackoffMs(consecutiveFailures);
+          const backoffMs = computeRetryBackoffMs(breaker.failures);
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,
@@ -214,26 +240,32 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           });
           schedule(DEFAULT_RETRY_MS, "retry");
         } else {
-          // Success or benign skip — reset the failure streak.
-          consecutiveFailures = 0;
+          // Success or benign skip — reset the failure streak for this target.
+          breaker.failures = 0;
         }
       }
     } catch {
-      // Error is already logged by the heartbeat runner; apply backoff.
-      consecutiveFailures += 1;
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        // Trip the breaker so the half-open cooldown is respected.
-        breakerTrippedAt = Date.now();
-      } else {
-        const backoffMs = computeRetryBackoffMs(consecutiveFailures);
-        for (const pendingWake of pendingBatch) {
+      // Error is already logged by the heartbeat runner; apply backoff
+      // to all targets in the batch since we don't know which one threw.
+      let maxBackoffMs = 0;
+      for (const pendingWake of pendingBatch) {
+        const targetKey = getWakeTargetKey(pendingWake);
+        const breaker = getBreakerState(targetKey);
+        breaker.failures += 1;
+        if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
+          breaker.trippedAt = Date.now();
+        } else {
+          const backoffMs = computeRetryBackoffMs(breaker.failures);
+          maxBackoffMs = Math.max(maxBackoffMs, backoffMs);
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
           });
         }
-        schedule(backoffMs, "retry");
+      }
+      if (maxBackoffMs > 0) {
+        schedule(maxBackoffMs, "retry");
       }
     } finally {
       running = false;
@@ -272,8 +304,7 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     running = false;
     scheduled = false;
     // Reset the circuit breaker so a fresh lifecycle starts clean.
-    consecutiveFailures = 0;
-    breakerTrippedAt = 0;
+    breakerByTarget.clear();
   }
   if (handler && pendingWakes.size > 0) {
     schedule(DEFAULT_COALESCE_MS, "normal");
@@ -322,8 +353,7 @@ export function resetHeartbeatWakeStateForTests() {
   pendingWakes.clear();
   scheduled = false;
   running = false;
-  consecutiveFailures = 0;
-  breakerTrippedAt = 0;
+  breakerByTarget.clear();
   handlerGeneration += 1;
   handler = null;
 }
