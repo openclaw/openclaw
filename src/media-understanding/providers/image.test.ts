@@ -178,7 +178,7 @@ describe("describeImageWithModel", () => {
       }),
       expect.any(Object),
       expect.objectContaining({
-        apiKey: "oauth-test",
+        apiKey: "oauth-test", // pragma: allowlist secret
       }),
     );
   });

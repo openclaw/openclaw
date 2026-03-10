@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
@@ -182,7 +182,9 @@ function wrapModelRegistryWithProviderNormalization(registry: PiModelRegistry): 
       if (prop === "getAll" || prop === "getAvailable") {
         return () => {
           const result = Reflect.apply(value, target, []);
-          return Array.isArray(result) ? result.map((model) => normalizeRegistryModel(model)) : result;
+          return Array.isArray(result)
+            ? result.map((model) => normalizeRegistryModel(model))
+            : result;
         };
       }
       return value.bind(target);
