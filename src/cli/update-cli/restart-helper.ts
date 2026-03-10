@@ -59,18 +59,16 @@ export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
   gatewayPort: number = DEFAULT_GATEWAY_PORT,
 ): Promise<string | null> {
-  const tmpDir = os.tmpdir();
-  const timestamp = Date.now();
   const platform = process.platform;
 
   let scriptContent = "";
-  let filename = "";
+  let scriptFilename = "";
 
   try {
     if (platform === "linux") {
       const unitName = resolveSystemdUnit(env);
       const escaped = shellEscape(unitName);
-      filename = `openclaw-restart-${timestamp}.sh`;
+      scriptFilename = "restart.sh";
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
@@ -89,7 +87,7 @@ rm -f "$0"
       const home = env.HOME?.trim() || process.env.HOME || os.homedir();
       const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
       const escapedPlistPath = shellEscape(plistPath);
-      filename = `openclaw-restart-${timestamp}.sh`;
+      scriptFilename = "restart.sh";
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
@@ -110,7 +108,7 @@ rm -f "$0"
       }
       const port =
         Number.isFinite(gatewayPort) && gatewayPort > 0 ? gatewayPort : DEFAULT_GATEWAY_PORT;
-      filename = `openclaw-restart-${timestamp}.bat`;
+      scriptFilename = "restart.bat";
       scriptContent = `@echo off
 REM Standalone restart script — survives parent process termination.
 REM Wait briefly to ensure file locks are released after update.
@@ -139,8 +137,15 @@ del "%~f0"
       return null;
     }
 
-    const scriptPath = path.join(tmpDir, filename);
-    await fs.writeFile(scriptPath, scriptContent, { mode: 0o755 });
+    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-"));
+    await fs.chmod(scriptDir, 0o700).catch(() => undefined);
+    const scriptPath = path.join(scriptDir, scriptFilename);
+    const scriptFile = await fs.open(scriptPath, "wx", 0o700);
+    try {
+      await scriptFile.writeFile(scriptContent, "utf-8");
+    } finally {
+      await scriptFile.close();
+    }
     return scriptPath;
   } catch {
     // If we can't write the script, we'll fall back to the standard restart method
