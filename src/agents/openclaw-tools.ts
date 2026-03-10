@@ -73,9 +73,19 @@ export function createOpenClawTools(
     sessionId?: string;
     /** Pre-resolved MCP tools (from gateway startup). */
     mcpTools?: AnyAgentTool[];
+    /**
+     * Workspace directory to pass to spawned subagents for inheritance.
+     * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
+     * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
+     * subagents inherit the real workspace path instead of the sandbox copy.
+     */
+    spawnWorkspaceDir?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
+  const spawnWorkspaceDir = resolveWorkspaceRoot(
+    options?.spawnWorkspaceDir ?? options?.workspaceDir,
+  );
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
@@ -202,7 +212,7 @@ export function createOpenClawTools(
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
-      workspaceDir,
+      workspaceDir: spawnWorkspaceDir,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
