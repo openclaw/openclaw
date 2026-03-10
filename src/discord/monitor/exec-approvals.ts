@@ -13,10 +13,10 @@ import { ButtonStyle, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
-import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
+import { createOperatorApprovalsGatewayClient } from "../../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
+import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -26,11 +26,7 @@ import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../../security/safe-regex.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -45,6 +41,12 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   // Session key format: agent:<id>:discord:channel:<channelId> or agent:<id>:discord:group:<channelId>
   const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
   return match ? match[1] : null;
+}
+
+function buildDiscordApprovalDmRedirectNotice(): { content: string } {
+  return {
+    content: getExecApprovalApproverDmNoticeText(),
+  };
 }
 
 type PendingApproval = {
@@ -401,31 +403,10 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
-    const { url: gatewayUrl, urlSource } = buildGatewayConnectionDetails({
+    this.gatewayClient = await createOperatorApprovalsGatewayClient({
       config: this.opts.cfg,
-      url: this.opts.gatewayUrl,
-    });
-    const gatewayUrlOverrideSource =
-      urlSource === "cli --url"
-        ? "cli"
-        : urlSource === "env OPENCLAW_GATEWAY_URL"
-          ? "env"
-          : undefined;
-    const auth = await resolveGatewayConnectionAuth({
-      config: this.opts.cfg,
-      env: process.env,
-      urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
-      urlOverrideSource: gatewayUrlOverrideSource,
-    });
-
-    this.gatewayClient = new GatewayClient({
-      url: gatewayUrl,
-      token: auth.token,
-      password: auth.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      gatewayUrl: this.opts.gatewayUrl,
       clientDisplayName: "Discord Exec Approvals",
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.approvals"],
       onEvent: (evt) => this.handleGatewayEvent(evt),
       onHelloOk: () => {
         logDebug("discord exec approvals: connected to gateway");
@@ -498,6 +479,24 @@ export class DiscordExecApprovalHandler {
     const sendToDm = target === "dm" || target === "both";
     const sendToChannel = target === "channel" || target === "both";
     let fallbackToDm = false;
+    const originatingChannelId =
+      request.request.sessionKey && target === "dm"
+        ? extractDiscordChannelId(request.request.sessionKey)
+        : null;
+
+    if (target === "dm" && originatingChannelId) {
+      try {
+        await discordRequest(
+          () =>
+            rest.post(Routes.channelMessages(originatingChannelId), {
+              body: buildDiscordApprovalDmRedirectNotice(),
+            }) as Promise<{ id: string; channel_id: string }>,
+          "send-approval-dm-redirect-notice",
+        );
+      } catch (err) {
+        logError(`discord exec approvals: failed to send DM redirect notice: ${String(err)}`);
+      }
+    }
 
     // Send to originating channel if configured
     if (sendToChannel) {
@@ -768,9 +767,9 @@ export class ExecApprovalButton extends Button {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       try {
-        await interaction.update({
+        await interaction.reply({
           content: "This approval is no longer valid.",
-          components: [],
+          ephemeral: true,
         });
       } catch {
         // Interaction may have expired
@@ -800,12 +799,11 @@ export class ExecApprovalButton extends Button {
           ? "Allowed (always)"
           : "Denied";
 
-    // Update the message immediately to show the decision
+    // Acknowledge immediately so Discord does not fail the interaction while
+    // the gateway resolve roundtrip completes. The resolved event will update
+    // the approval card in-place with the final state.
     try {
-      await interaction.update({
-        content: `Submitting decision: **${decisionLabel}**...`,
-        components: [], // Remove buttons
-      });
+      await interaction.acknowledge();
     } catch {
       // Interaction may have expired, try to continue anyway
     }
@@ -815,8 +813,7 @@ export class ExecApprovalButton extends Button {
     if (!ok) {
       try {
         await interaction.followUp({
-          content:
-            "Failed to submit approval decision. The request may have expired or already been resolved.",
+          content: `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
           ephemeral: true,
         });
       } catch {
