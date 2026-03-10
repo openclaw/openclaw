@@ -141,24 +141,12 @@ export async function startGatewaySidecars(params: {
     params.logHooks.error(`failed to load hooks: ${String(err)}`);
   }
 
-  // Launch configured channels so gateway replies via the surface the message came from.
-  // Tests can opt out via OPENCLAW_SKIP_CHANNELS (or legacy OPENCLAW_SKIP_PROVIDERS).
-  const skipChannels =
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
-  if (!skipChannels) {
-    try {
-      await params.startChannels();
-    } catch (err) {
-      params.logChannels.error(`channel startup failed: ${String(err)}`);
-    }
-  } else {
-    params.logChannels.info(
-      "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-    );
-  }
-
   // Replay inbound messages captured during the previous drain.
+  // Must run BEFORE startChannels() so queued events are in-memory before any
+  // live inbound message can trigger a turn on the same session — preventing a
+  // race where live messages are processed ahead of drain-captured replays.
+  // enqueueSystemEvent is a pure in-memory operation; no channel infrastructure
+  // is required at this point.
   try {
     const stateDir = resolveStateDir(process.env);
     const pending = await readPendingInbound(stateDir);
@@ -212,6 +200,23 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`pending-inbound: replay startup failed: ${String(err)}`);
+  }
+
+  // Launch configured channels so gateway replies via the surface the message came from.
+  // Tests can opt out via OPENCLAW_SKIP_CHANNELS (or legacy OPENCLAW_SKIP_PROVIDERS).
+  const skipChannels =
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  if (!skipChannels) {
+    try {
+      await params.startChannels();
+    } catch (err) {
+      params.logChannels.error(`channel startup failed: ${String(err)}`);
+    }
+  } else {
+    params.logChannels.info(
+      "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+    );
   }
 
   // Recover stale active turns — runs that were in-flight when the process died.
