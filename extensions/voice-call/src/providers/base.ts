@@ -55,8 +55,12 @@ export interface VoiceCallProvider {
   /**
    * Play TTS audio to the caller.
    * The provider should handle streaming if supported.
+   *
+   * Returns `{ partial: true }` when barge-in aborted playback mid-stream.
+   * Consumed by the companion PR (fix/tts-streaming) in speakStream to stop
+   * sending remaining sentences after barge-in; unused on this branch alone.
    */
-  playTts(input: PlayTtsInput): Promise<void>;
+  playTts(input: PlayTtsInput): Promise<void | { partial?: boolean }>;
 
   /**
    * Start listening for user speech (activate STT).
