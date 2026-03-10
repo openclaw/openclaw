@@ -497,7 +497,7 @@ export async function initSessionState(params: {
       log.info(
         `skipping parent fork (policy=none): parentKey=${parentSessionKey} → sessionKey=${sessionKey}`,
       );
-      sessionEntry.forkedFromParent = true;
+      sessionEntry.forkedFromParent = true; // marks as processed to prevent re-attempts
     } else {
       const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
       if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
@@ -508,7 +508,7 @@ export async function initSessionState(params: {
           `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
             `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
         );
-        sessionEntry.forkedFromParent = true;
+        sessionEntry.forkedFromParent = true; // marks as processed to prevent re-attempts
       } else {
         log.warn(
           `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
