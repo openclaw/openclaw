@@ -81,14 +81,18 @@ describe("ssrf pinning", () => {
     const lookup = vi.fn(async () => [
       { address: "::", family: 6 },
       { address: "93.184.216.35", family: 4 },
-      { address: "2001:db8::1", family: 6 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
       { address: "93.184.216.34", family: 4 },
       { address: "93.184.216.35", family: 4 },
-      { address: "2001:db8::1", family: 6 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
     ]) as unknown as LookupFn;
 
     const pinned = await resolvePinnedHostname("example.com", lookup);
-    expect(pinned.addresses).toEqual(["93.184.216.35", "93.184.216.34", "2001:db8::1"]);
+    expect(pinned.addresses).toEqual([
+      "93.184.216.35",
+      "93.184.216.34",
+      "2606:2800:220:1:248:1893:25c8:1946",
+    ]);
   });
 
   it("allows RFC2544 benchmark range addresses only when policy explicitly opts in", async () => {
