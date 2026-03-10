@@ -99,6 +99,31 @@ describe("renderTable", () => {
     expect(line1Index).toBeGreaterThan(-1);
     expect(line2Index).toBe(line1Index + 1);
   });
+
+  it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
+    const width = 72;
+    const out = renderTable({
+      width,
+      columns: [
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Skill", header: "Skill", minWidth: 18 },
+        { key: "Description", header: "Description", minWidth: 18, flex: true },
+        { key: "Source", header: "Source", minWidth: 10 },
+      ],
+      rows: [
+        {
+          Status: "✗ missing",
+          Skill: "📸 peekaboo",
+          Description: "Capture screenshots from macOS windows and keep table wrapping stable.",
+          Source: "openclaw-bundled",
+        },
+      ],
+    });
+
+    for (const line of out.trimEnd().split("\n")) {
+      expect(visibleWidth(line)).toBe(width);
+    }
+  });
 });
 
 describe("wrapNoteMessage", () => {
