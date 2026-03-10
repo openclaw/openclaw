@@ -32,4 +32,59 @@ struct VoiceWakeHelpersTests {
         #expect(normalizeLocaleIdentifier("de-DE-u-co-phonebk") == "de-DE")
         #expect(normalizeLocaleIdentifier("ja-JP-t-ja") == "ja-JP")
     }
+
+    // MARK: - TriggerWordEntry tests
+
+    @Test func `sanitize trigger entries trims and drops empty`() {
+        let entries = [
+            TriggerWordEntry(word: "  hi  ", agentId: " leo "),
+            TriggerWordEntry(word: " ", agentId: "x"),
+            TriggerWordEntry(word: "there"),
+        ]
+        let cleaned = sanitizeVoiceWakeTriggerEntries(entries)
+        #expect(cleaned.count == 2)
+        #expect(cleaned[0].word == "hi")
+        #expect(cleaned[0].agentId == "leo")
+        #expect(cleaned[1].word == "there")
+        #expect(cleaned[1].agentId == nil)
+    }
+
+    @Test func `sanitize trigger entries falls back to defaults`() {
+        let cleaned = sanitizeVoiceWakeTriggerEntries([TriggerWordEntry(word: "   ")])
+        #expect(cleaned.map(\.word) == defaultVoiceWakeTriggers)
+        #expect(cleaned.allSatisfy { $0.agentId == nil })
+    }
+
+    @Test func `sanitize trigger entries clears empty agentId`() {
+        let entries = [TriggerWordEntry(word: "hey", agentId: "  ")]
+        let cleaned = sanitizeVoiceWakeTriggerEntries(entries)
+        #expect(cleaned[0].agentId == nil)
+    }
+
+    @Test func `agentIdForTrigger returns matching agentId`() {
+        let entries = [
+            TriggerWordEntry(word: "Hey Sasha", agentId: nil),
+            TriggerWordEntry(word: "Hi Leo", agentId: "leo"),
+        ]
+        #expect(agentIdForTrigger("Hi Leo", in: entries) == "leo")
+        #expect(agentIdForTrigger("hi leo", in: entries) == "leo")
+        #expect(agentIdForTrigger("Hey Sasha", in: entries) == nil)
+    }
+
+    @Test func `matchTriggerEntry finds correct entry`() {
+        let entries = [
+            TriggerWordEntry(word: "Hey Sasha"),
+            TriggerWordEntry(word: "Hi Leo", agentId: "leo"),
+            TriggerWordEntry(word: "Hi Kiki", agentId: "kiki"),
+        ]
+        let match1 = matchTriggerEntry(transcript: "Hi Leo do something", entries: entries)
+        #expect(match1?.agentId == "leo")
+
+        let match2 = matchTriggerEntry(transcript: "Hey Sasha what's up", entries: entries)
+        #expect(match2?.agentId == nil)
+        #expect(match2?.word == "Hey Sasha")
+
+        let match3 = matchTriggerEntry(transcript: "hello world", entries: entries)
+        #expect(match3 == nil)
+    }
 }

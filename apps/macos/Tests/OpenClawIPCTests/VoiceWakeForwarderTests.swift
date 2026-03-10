@@ -20,4 +20,22 @@ import Testing
         #expect(opts.channel == .webchat)
         #expect(opts.channel.shouldDeliver(opts.deliver) == false)
     }
+
+    @Test func `forward options sessionKey set by agentId`() {
+        var opts = VoiceWakeForwarder.ForwardOptions()
+        let agentId: String? = "leo"
+        if let agentId {
+            opts.sessionKey = agentId
+        }
+        #expect(opts.sessionKey == "leo")
+    }
+
+    @Test func `forward options sessionKey remains main when agentId is nil`() {
+        var opts = VoiceWakeForwarder.ForwardOptions()
+        let agentId: String? = nil
+        if let agentId {
+            opts.sessionKey = agentId
+        }
+        #expect(opts.sessionKey == "main")
+    }
 }

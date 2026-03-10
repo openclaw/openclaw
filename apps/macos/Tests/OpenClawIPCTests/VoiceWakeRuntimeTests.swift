@@ -74,4 +74,42 @@ struct VoiceWakeRuntimeTests {
         let config = WakeWordGateConfig(triggers: ["openclaw"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
     }
+
+    // MARK: - Agent routing via TriggerWordEntry
+
+    @Test func `matchTriggerEntry routes to correct agent from transcript`() {
+        let entries = [
+            TriggerWordEntry(word: "Hey Sasha"),
+            TriggerWordEntry(word: "Hi Leo", agentId: "leo"),
+            TriggerWordEntry(word: "Hi Kiki", agentId: "kiki"),
+        ]
+
+        let match1 = matchTriggerEntry(transcript: "Hi Leo tell me a joke", entries: entries)
+        #expect(match1?.agentId == "leo")
+
+        let match2 = matchTriggerEntry(transcript: "Hi Kiki what time is it", entries: entries)
+        #expect(match2?.agentId == "kiki")
+
+        let match3 = matchTriggerEntry(transcript: "Hey Sasha how are you", entries: entries)
+        #expect(match3?.word == "Hey Sasha")
+        #expect(match3?.agentId == nil)
+    }
+
+    @Test func `matchTriggerEntry returns nil for unmatched transcript`() {
+        let entries = [TriggerWordEntry(word: "Claude", agentId: "main")]
+        #expect(matchTriggerEntry(transcript: "hello world", entries: entries) == nil)
+    }
+
+    @Test func `triggerWords computed property extracts words`() {
+        let config = VoiceWakeRuntime.RuntimeConfig(
+            triggers: [
+                TriggerWordEntry(word: "Hey Sasha"),
+                TriggerWordEntry(word: "Hi Leo", agentId: "leo"),
+            ],
+            micID: nil,
+            localeID: nil,
+            triggerChime: .none,
+            sendChime: .none)
+        #expect(config.triggerWords == ["Hey Sasha", "Hi Leo"])
+    }
 }

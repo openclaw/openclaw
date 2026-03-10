@@ -37,6 +37,7 @@ actor VoiceWakeRuntime {
     private var listeningState: ListeningState = .idle
     private var overlayToken: UUID?
     private var activeTriggerEndTime: TimeInterval?
+    private var matchedAgentId: String?
     private var scheduledRestartTask: Task<Void, Never>?
     private var lastLoggedText: String?
     private var lastLoggedAt: Date?
@@ -77,11 +78,14 @@ actor VoiceWakeRuntime {
     }
 
     struct RuntimeConfig: Equatable {
-        let triggers: [String]
+        let triggers: [TriggerWordEntry]
         let micID: String?
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
+
+        /// Plain trigger words for matching APIs that expect [String].
+        var triggerWords: [String] { self.triggers.map(\.word) }
     }
 
     private struct RecognitionUpdate {
@@ -96,7 +100,7 @@ actor VoiceWakeRuntime {
         let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig) in
             let enabled = state.swabbleEnabled
             let config = RuntimeConfig(
-                triggers: sanitizeVoiceWakeTriggers(state.swabbleTriggerWords),
+                triggers: sanitizeVoiceWakeTriggerEntries(state.swabbleTriggerEntries),
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                 localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID,
                 triggerChime: state.voiceWakeTriggerChime,
@@ -243,6 +247,7 @@ actor VoiceWakeRuntime {
         self.capturedTranscript = ""
         self.captureStartedAt = nil
         self.triggerChimePlayed = false
+        self.matchedAgentId = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
         self.preDetectTask?.cancel()
@@ -296,7 +301,7 @@ actor VoiceWakeRuntime {
                 self.maybeLogRecognition(
                     transcript: transcript,
                     segments: update.segments,
-                    triggers: config.triggers,
+                    triggers: config.triggerWords,
                     isFinal: update.isFinal,
                     match: nil,
                     usedFallback: false,
@@ -305,7 +310,7 @@ actor VoiceWakeRuntime {
                     transcript: transcript,
                     segments: update.segments,
                     triggerEndTime: self.activeTriggerEndTime,
-                    triggers: config.triggers)
+                    triggers: config.triggerWords)
                 self.capturedTranscript = trimmed
                 self.updateHeardBeyondTrigger(withTrimmed: trimmed)
                 if update.isFinal {
@@ -335,13 +340,14 @@ actor VoiceWakeRuntime {
 
         if self.isCapturing { return }
 
-        let gateConfig = WakeWordGateConfig(triggers: config.triggers)
+        let triggerWords = config.triggerWords
+        let gateConfig = WakeWordGateConfig(triggers: triggerWords)
         var usedFallback = false
         var match = WakeWordGate.match(transcript: transcript, segments: update.segments, config: gateConfig)
         if match == nil, update.isFinal {
             match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
                 transcript: transcript,
-                triggers: config.triggers,
+                triggers: triggerWords,
                 config: gateConfig,
                 trimWake: Self.trimmedAfterTrigger)
             usedFallback = match != nil
@@ -349,7 +355,7 @@ actor VoiceWakeRuntime {
         self.maybeLogRecognition(
             transcript: transcript,
             segments: update.segments,
-            triggers: config.triggers,
+            triggers: triggerWords,
             isFinal: update.isFinal,
             match: match,
             usedFallback: usedFallback,
@@ -359,22 +365,28 @@ actor VoiceWakeRuntime {
             if let cooldown = cooldownUntil, now < cooldown {
                 return
             }
+            // Resolve the agentId from the matched trigger word.
+            let resolvedAgentId = matchTriggerEntry(transcript: transcript, entries: config.triggers)?.agentId
             if usedFallback {
                 self.logger.info("voicewake runtime detected (text-only fallback) len=\(match.command.count)")
             } else {
                 self.logger.info("voicewake runtime detected len=\(match.command.count)")
             }
-            await self.beginCapture(command: match.command, triggerEndTime: match.triggerEndTime, config: config)
+            await self.beginCapture(
+                command: match.command,
+                triggerEndTime: match.triggerEndTime,
+                agentId: resolvedAgentId,
+                config: config)
         } else if !transcript.isEmpty, update.error == nil {
-            if self.isTriggerOnly(transcript: transcript, triggers: config.triggers) {
+            if self.isTriggerOnly(transcript: transcript, triggers: triggerWords) {
                 self.preDetectTask?.cancel()
                 self.preDetectTask = nil
-                self.scheduleTriggerOnlyPauseCheck(triggers: config.triggers, config: config)
+                self.scheduleTriggerOnlyPauseCheck(triggers: triggerWords, config: config)
             } else {
                 self.triggerOnlyTask?.cancel()
                 self.triggerOnlyTask = nil
                 self.schedulePreDetectSilenceCheck(
-                    triggers: config.triggers,
+                    triggers: triggerWords,
                     gateConfig: gateConfig,
                     config: config)
             }
@@ -491,8 +503,9 @@ actor VoiceWakeRuntime {
         if let cooldown = self.cooldownUntil, Date() < cooldown {
             return
         }
+        let resolvedAgentId = matchTriggerEntry(transcript: lastText, entries: config.triggers)?.agentId
         self.logger.info("voicewake runtime detected (trigger-only pause)")
-        await self.beginCapture(command: "", triggerEndTime: nil, config: config)
+        await self.beginCapture(command: "", triggerEndTime: nil, agentId: resolvedAgentId, config: config)
     }
 
     private func isTriggerOnly(transcript: String, triggers: [String]) -> Bool {
@@ -521,17 +534,22 @@ actor VoiceWakeRuntime {
         if let cooldown = self.cooldownUntil, Date() < cooldown {
             return
         }
+        let resolvedAgentId = matchTriggerEntry(transcript: lastText, entries: config.triggers)?.agentId
         self.logger.info("voicewake runtime detected (silence fallback) len=\(match.command.count)")
         await self.beginCapture(
             command: match.command,
             triggerEndTime: match.triggerEndTime,
+            agentId: resolvedAgentId,
             config: config)
     }
 
-    private func beginCapture(command: String, triggerEndTime: TimeInterval?, config: RuntimeConfig) async {
+    private func beginCapture(command: String, triggerEndTime: TimeInterval?, agentId: String? = nil, config: RuntimeConfig) async {
         self.listeningState = .voiceWake
         self.isCapturing = true
-        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
+        self.matchedAgentId = agentId
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture", fields: [
+            "agentId": agentId ?? "default",
+        ])
         self.capturedTranscript = command
         self.committedTranscript = ""
         self.volatileTranscript = command
@@ -560,7 +578,8 @@ actor VoiceWakeRuntime {
                 source: .wakeWord,
                 text: snapshot,
                 attributed: attributed,
-                forwardEnabled: true)
+                forwardEnabled: true,
+                agentId: agentId)
         }
 
         // Keep the "ears" boosted for the capture window so the status icon animates while recording.
@@ -605,8 +624,10 @@ actor VoiceWakeRuntime {
         self.captureTask = nil
 
         let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let agentId = self.matchedAgentId
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "finalizeCapture", fields: [
             "finalLen": "\(finalTranscript.count)",
+            "agentId": agentId ?? "default",
         ])
         // Stop further recognition events so we don't retrigger immediately with buffered audio.
         self.haltRecognitionPipeline()
@@ -616,6 +637,7 @@ actor VoiceWakeRuntime {
         self.heardBeyondTrigger = false
         self.triggerChimePlayed = false
         self.activeTriggerEndTime = nil
+        self.matchedAgentId = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
         self.preDetectTask?.cancel()
@@ -643,7 +665,11 @@ actor VoiceWakeRuntime {
                 await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
             }
             Task.detached {
-                await VoiceWakeForwarder.forward(transcript: finalTranscript)
+                var opts = VoiceWakeForwarder.ForwardOptions()
+                if let agentId {
+                    opts.sessionKey = agentId
+                }
+                await VoiceWakeForwarder.forward(transcript: finalTranscript, options: opts)
             }
         }
         self.overlayToken = nil

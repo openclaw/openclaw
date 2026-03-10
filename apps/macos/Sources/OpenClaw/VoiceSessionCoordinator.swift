@@ -17,6 +17,7 @@ final class VoiceSessionCoordinator {
         var isFinal: Bool
         var sendChime: VoiceWakeChime
         var autoSendDelay: TimeInterval?
+        var agentId: String?
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.coordinator")
@@ -28,7 +29,8 @@ final class VoiceSessionCoordinator {
         source: Source,
         text: String,
         attributed: NSAttributedString? = nil,
-        forwardEnabled: Bool = false) -> UUID
+        forwardEnabled: Bool = false,
+        agentId: String? = nil) -> UUID
     {
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
@@ -40,7 +42,8 @@ final class VoiceSessionCoordinator {
             attributed: attributedText,
             isFinal: false,
             sendChime: .none,
-            autoSendDelay: nil)
+            autoSendDelay: nil,
+            agentId: agentId)
         self.session = session
         VoiceWakeOverlayController.shared.startSession(
             token: token,
@@ -93,8 +96,13 @@ final class VoiceSessionCoordinator {
             return
         }
         VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: session.sendChime)
+        let agentId = session.agentId
         Task.detached {
-            _ = await VoiceWakeForwarder.forward(transcript: text)
+            var opts = VoiceWakeForwarder.ForwardOptions()
+            if let agentId {
+                opts.sessionKey = agentId
+            }
+            _ = await VoiceWakeForwarder.forward(transcript: text, options: opts)
         }
     }
 
