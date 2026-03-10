@@ -439,7 +439,7 @@ export type BlueBubblesParticipant = {
 };
 
 export type NormalizedWebhookMessage = {
-  text: string;
+  text: string | null;
   senderId: string;
   senderName?: string;
   messageId?: string;

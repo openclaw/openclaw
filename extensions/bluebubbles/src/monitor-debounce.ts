@@ -48,7 +48,7 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const textParts: string[] = [];
 
   for (const entry of entries) {
-    const text = entry.message.text.trim();
+    const text = entry.message.text?.trim();
     if (!text) {
       continue;
     }
@@ -154,7 +154,7 @@ export function createBlueBubblesDebounceRegistry(params: {
             return false;
           }
           // Skip debouncing for control commands - process immediately
-          if (core.channel.text.hasControlCommand(msg.text, config)) {
+          if (msg.text && core.channel.text.hasControlCommand(msg.text, config)) {
             return false;
           }
           // Debounce all other messages to coalesce rapid-fire webhook events
@@ -178,7 +178,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           // Multiple messages - combine and process
           const combined = combineDebounceEntries(entries);
 
-          if (core.logging.shouldLogVerbose()) {
+          if (core.logging.shouldLogVerbose() && combined.text) {
             const count = entries.length;
             const preview = combined.text.slice(0, 50);
             runtime.log?.(
