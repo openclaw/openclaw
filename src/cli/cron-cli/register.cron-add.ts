@@ -81,7 +81,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option(
         "--post-mode <mode>",
-        "Main-session post mode: summary (default), full, or off",
+        "Main-session post mode: summary (default) or off",
       )
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
@@ -150,8 +150,8 @@ export function registerCronAddCommand(cron: Command) {
 
           const postModeRaw =
             typeof opts.postMode === "string" ? opts.postMode.trim() : undefined;
-          if (postModeRaw && postModeRaw !== "summary" && postModeRaw !== "full" && postModeRaw !== "off") {
-            throw new Error("--post-mode must be summary, full, or off");
+          if (postModeRaw && postModeRaw !== "summary" && postModeRaw !== "off") {
+            throw new Error("--post-mode must be summary or off");
           }
 
           const agentId =

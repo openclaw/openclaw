@@ -49,7 +49,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option(
         "--post-mode <mode>",
-        "Main-session post mode: summary (default), full, or off",
+        "Main-session post mode: summary (default) or off",
       )
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
@@ -138,8 +138,8 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.postMode === "string") {
             const pm = opts.postMode.trim();
-            if (pm !== "summary" && pm !== "full" && pm !== "off") {
-              throw new Error("--post-mode must be summary, full, or off");
+            if (pm !== "summary" && pm !== "off") {
+              throw new Error("--post-mode must be summary or off");
             }
             patch.postToMainMode = pm;
           }

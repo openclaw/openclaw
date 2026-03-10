@@ -1,4 +1,4 @@
-export type CronPostToMainMode = "summary" | "full" | "off";
+export type CronPostToMainMode = "summary" | "off";
 
 export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDelivery, TFailureAlert> =
   {

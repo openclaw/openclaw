@@ -1052,6 +1052,8 @@ export async function executeJobCore(
     }
     // When postToMainMode is "off", skip posting to the main session entirely.
     // The job still succeeds — output is recorded in CronEvent for audit.
+    // Note: failure alerts (via failureAlert config) use a separate code path
+    // (emitFailureAlert) and are NOT suppressed by postToMainMode.
     if (job.postToMainMode === "off") {
       return { status: "ok", summary: text };
     }
