@@ -66,6 +66,7 @@ import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
+import { tryStartupConfigAllowedValueSelfHeal } from "./config-startup-heal.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -305,6 +306,14 @@ export async function startGatewayServer(
   }
 
   configSnapshot = await readConfigFileSnapshot();
+  configSnapshot = await tryStartupConfigAllowedValueSelfHeal({
+    snapshot: configSnapshot,
+    writeConfig: writeConfigFile,
+    readSnapshot: readConfigFileSnapshot,
+    logWarn: (message) => {
+      log.warn(message);
+    },
+  });
   if (configSnapshot.exists && !configSnapshot.valid) {
     const issues =
       configSnapshot.issues.length > 0
