@@ -56,12 +56,16 @@ export async function loadInternalHooksForStartup(
 
   let loadedCount = 0;
   const normalizedWorkspaceDirs = normalizeWorkspaceDirs([defaultWorkspaceDir, ...workspaceDirs]);
-  const workspaceEntriesByDir = new Map<string, HookEntry[]>(
-    normalizedWorkspaceDirs.map((workspaceDir) => [
-      workspaceDir,
-      loadWorkspaceLocalHookEntries(workspaceDir),
-    ]),
-  );
+  const workspaceEntriesByDir = new Map<string, HookEntry[]>();
+  for (const workspaceDir of normalizedWorkspaceDirs) {
+    try {
+      workspaceEntriesByDir.set(workspaceDir, loadWorkspaceLocalHookEntries(workspaceDir));
+    } catch (err) {
+      log.error(
+        `Failed to load hooks for workspace ${workspaceDir}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   const overriddenWorkspacesByHookName = buildWorkspaceOverrideMap(workspaceEntriesByDir);
 
   try {
@@ -73,8 +77,12 @@ export async function loadInternalHooksForStartup(
           overriddenWorkspaceDirs: overriddenWorkspacesByHookName.get(entry.hook.name),
         }),
     });
+  } catch (err) {
+    log.error(`Failed to load shared hooks: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
-    for (const [workspaceDir, entries] of workspaceEntriesByDir) {
+  for (const [workspaceDir, entries] of workspaceEntriesByDir) {
+    try {
       loadedCount += await registerHookEntries(cfg, entries, {
         wrapHandler: (_entry, handler) =>
           createWorkspaceScopedHandler({
@@ -83,11 +91,11 @@ export async function loadInternalHooksForStartup(
             workspaceDir,
           }),
       });
+    } catch (err) {
+      log.error(
+        `Failed to load hooks for workspace ${workspaceDir}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-  } catch (err) {
-    log.error(
-      `Failed to load directory-based hooks: ${err instanceof Error ? err.message : String(err)}`,
-    );
   }
 
   loadedCount += await registerLegacyHookHandlers(cfg, defaultWorkspaceDir);
@@ -403,7 +411,6 @@ function createSharedHookHandler(params: {
 
   return async (event) => {
     if (isGatewayStartupEvent(event)) {
-      await params.handler(event);
       return;
     }
 

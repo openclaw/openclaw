@@ -1,7 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -121,6 +122,7 @@ describe("loader", () => {
   }
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     clearInternalHooks();
     envSnapshot.restore();
   });
@@ -495,6 +497,100 @@ describe("loader", () => {
       expect(event.messages).toEqual(["extra", "bundled", "managed", "legacy"]);
     });
 
+    it("continues loading workspace-local hooks when shared hook discovery fails", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "main-local",
+        events: ["command:new"],
+        message: "main-local",
+      });
+      await writeHook({
+        hooksRoot: path.join(opsWorkspace, "hooks"),
+        hookName: "ops-local",
+        events: ["command:new"],
+        message: "ops-local",
+      });
+
+      const originalReaddirSync = fsSync.readdirSync.bind(fsSync);
+      vi.spyOn(fsSync, "readdirSync").mockImplementation(((dir, options) => {
+        if (dir === managedHooksDir) {
+          throw new Error("managed-hooks exploded");
+        }
+        return originalReaddirSync(dir, options as never);
+      }) as typeof fsSync.readdirSync);
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir,
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(2);
+
+      const mainEvent = createInternalHookEvent("command", "new", "agent:main:chat");
+      await triggerInternalHook(mainEvent);
+      expect(mainEvent.messages).toEqual(["main-local"]);
+
+      const opsEvent = createInternalHookEvent("command", "new", "agent:ops:chat");
+      await triggerInternalHook(opsEvent);
+      expect(opsEvent.messages).toEqual(["ops-local"]);
+    });
+
+    it("continues loading other workspaces when one workspace hook discovery fails", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const mainHooksDir = path.join(mainWorkspace, "hooks");
+      await writeHook({
+        hooksRoot: mainHooksDir,
+        hookName: "main-local",
+        events: ["command:new"],
+        message: "main-local",
+      });
+      await writeHook({
+        hooksRoot: path.join(opsWorkspace, "hooks"),
+        hookName: "ops-local",
+        events: ["command:new"],
+        message: "ops-local",
+      });
+
+      const originalReaddirSync = fsSync.readdirSync.bind(fsSync);
+      vi.spyOn(fsSync, "readdirSync").mockImplementation(((dir, options) => {
+        if (dir === mainHooksDir) {
+          throw new Error("main workspace exploded");
+        }
+        return originalReaddirSync(dir, options as never);
+      }) as typeof fsSync.readdirSync);
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir: path.join(tmpDir, "managed-empty"),
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(1);
+
+      const mainEvent = createInternalHookEvent("command", "new", "agent:main:chat");
+      await triggerInternalHook(mainEvent);
+      expect(mainEvent.messages).toEqual([]);
+
+      const opsEvent = createInternalHookEvent("command", "new", "agent:ops:chat");
+      await triggerInternalHook(opsEvent);
+      expect(opsEvent.messages).toEqual(["ops-local"]);
+    });
+
     it("suppresses shared hooks when a matching workspace-local hook exists", async () => {
       const mainWorkspace = path.join(tmpDir, "workspace-main");
       const opsWorkspace = path.join(tmpDir, "workspace-ops");
@@ -580,6 +676,46 @@ describe("loader", () => {
       });
       await triggerInternalHook(event);
       expect(event.messages).toEqual(["shared-startup", mainWorkspace, opsWorkspace]);
+    });
+
+    it("suppresses shared startup hooks when a matching workspace-local startup hook exists", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeHook({
+        hooksRoot: managedHooksDir,
+        hookName: "override-me",
+        events: ["gateway:startup"],
+        message: "shared-startup",
+      });
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "override-me",
+        events: ["gateway:startup"],
+        message: "main-startup",
+        handlerCode:
+          "export default async function(event) { event.messages.push(String(event.context.workspaceDir)); }\n",
+      });
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir,
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(2);
+
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+        cfg,
+        workspaceDir: mainWorkspace,
+      });
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual([mainWorkspace]);
     });
   });
 });
