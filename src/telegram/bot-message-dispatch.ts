@@ -22,6 +22,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -44,6 +45,8 @@ import {
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+
+const log = createSubsystemLogger("telegram/dispatch");
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -624,6 +627,9 @@ export const dispatchTelegramMessage = async ({
         },
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
+          // Always log delivery failures to the structured subsystem log so they
+          // appear in gateway logs even when runtime.error is unavailable.  See #41567.
+          log.warn(`${info.kind} reply delivery failed`, { error: String(err) });
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
       },
@@ -685,6 +691,7 @@ export const dispatchTelegramMessage = async ({
     }));
   } catch (err) {
     dispatchError = err;
+    log.warn("dispatch failed", { error: String(err) });
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
