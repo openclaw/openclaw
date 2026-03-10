@@ -38,6 +38,7 @@ describe("resolveSnapshotStoreConfig", () => {
         env: {
           ...process.env,
           HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
         },
       }),
     ).rejects.toThrow("backup.target must not be inside the live state directory.");
