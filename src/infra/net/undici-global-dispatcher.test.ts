@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   Agent,
@@ -71,6 +71,10 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("replaces default Agent dispatcher with extended stream timeouts", () => {
     getDefaultAutoSelectFamily.mockReturnValue(true);
 
@@ -100,6 +104,23 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.connect).toEqual({
       autoSelectFamily: false,
+      autoSelectFamilyAttemptTimeout: 300,
+    });
+  });
+
+  it("upgrades Agent dispatcher to EnvHttpProxyAgent when proxy env is configured", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.connect).toEqual({
+      autoSelectFamily: true,
       autoSelectFamilyAttemptTimeout: 300,
     });
   });
