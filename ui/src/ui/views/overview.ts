@@ -62,8 +62,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Device pairing docs (opens in new tab)"
-            >Docs: Device pairing</a
+            title=${t("overview.docs.devicePairingTitle", { openInNewTab: t("common.openInNewTab") })}
+            >${t("overview.docs.devicePairingLink")}</a
           >
         </div>
       </div>
@@ -110,8 +110,10 @@ export function renderOverview(props: OverviewProps) {
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">openclaw dashboard --no-open</span> →
+            ${t("overview.auth.tokenizedUrlHint")}<br />
+            <span class="mono">openclaw doctor --generate-gateway-token</span> →
+            ${t("overview.auth.setTokenHint")}
           </div>
           <div style="margin-top: 6px">
             <a
@@ -119,8 +121,10 @@ export function renderOverview(props: OverviewProps) {
               href="https://docs.openclaw.ai/web/dashboard"
               target=${EXTERNAL_LINK_TARGET}
               rel=${buildExternalLinkRel()}
-              title="Control UI auth docs (opens in new tab)"
-              >Docs: Control UI auth</a
+              title=${t("overview.docs.controlUiAuthTitle", {
+                openInNewTab: t("common.openInNewTab"),
+              })}
+              >${t("overview.docs.controlUiAuthLink")}</a
             >
           </div>
         </div>
@@ -135,8 +139,10 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/dashboard"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Control UI auth docs (opens in new tab)"
-            >Docs: Control UI auth</a
+            title=${t("overview.docs.controlUiAuthTitle", {
+              openInNewTab: t("common.openInNewTab"),
+            })}
+            >${t("overview.docs.controlUiAuthLink")}</a
           >
         </div>
       </div>
@@ -174,8 +180,10 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/gateway/tailscale"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Tailscale Serve docs (opens in new tab)"
-            >Docs: Tailscale Serve</a
+            title=${t("overview.docs.tailscaleServeTitle", {
+              openInNewTab: t("common.openInNewTab"),
+            })}
+            >${t("overview.docs.tailscaleServeLink")}</a
           >
           <span class="muted"> · </span>
           <a
@@ -183,8 +191,10 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#insecure-http"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Insecure HTTP docs (opens in new tab)"
-            >Docs: Insecure HTTP</a
+            title=${t("overview.docs.insecureHttpTitle", {
+              openInNewTab: t("common.openInNewTab"),
+            })}
+            >${t("overview.docs.insecureHttpLink")}</a
           >
         </div>
       </div>
@@ -238,7 +248,7 @@ export function renderOverview(props: OverviewProps) {
                       const v = (e.target as HTMLInputElement).value;
                       props.onPasswordChange(v);
                     }}
-                    placeholder="system or shared password"
+                    placeholder=${t("overview.access.passwordPlaceholder")}
                   />
                 </label>
               `

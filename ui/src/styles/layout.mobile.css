@@ -94,6 +94,20 @@
     display: none;
   }
 
+  .topbar-locale {
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .topbar-locale__label {
+    display: none;
+  }
+
+  .topbar-locale__select {
+    min-width: 88px;
+    font-size: 11px;
+  }
+
   /* Nav */
   .nav {
     padding: 8px 10px;
@@ -358,6 +372,16 @@
 
   .topbar-status .pill {
     padding: 3px 6px;
+    font-size: 10px;
+  }
+
+  .topbar-locale {
+    min-height: 28px;
+    padding: 0 4px;
+  }
+
+  .topbar-locale__select {
+    min-width: 72px;
     font-size: 10px;
   }
 

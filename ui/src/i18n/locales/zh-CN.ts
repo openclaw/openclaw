@@ -8,11 +8,13 @@ export const zh_CN: TranslationMap = {
     offline: "离线",
     connect: "连接",
     refresh: "刷新",
+    language: "语言",
     enabled: "已启用",
     disabled: "已禁用",
     na: "不适用",
     docs: "文档",
     resources: "资源",
+    openInNewTab: "在新标签页中打开",
   },
   nav: {
     chat: "聊天",
@@ -52,6 +54,24 @@ export const zh_CN: TranslationMap = {
     debug: "网关快照、事件和手动 RPC 调用。",
     logs: "网关文件日志的实时追踪。",
   },
+  shell: {
+    subtitle: "网关控制台",
+    update: {
+      available: "发现新版本：",
+      updating: "更新中...",
+      updateNow: "立即更新",
+      running: "（当前运行 v{version}）。",
+    },
+  },
+  theme: {
+    label: "主题",
+    system: "跟随系统",
+    systemAria: "系统主题",
+    light: "浅色",
+    lightAria: "浅色主题",
+    dark: "深色",
+    darkAria: "深色主题",
+  },
   overview: {
     access: {
       title: "网关访问",
@@ -59,6 +79,7 @@ export const zh_CN: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "网关令牌",
       password: "密码 (不存储)",
+      passwordPlaceholder: "系统密码或共享密码",
       sessionKey: "默认会话密钥",
       language: "语言",
       connectHint: "点击连接以应用连接更改。",
@@ -94,6 +115,8 @@ export const zh_CN: TranslationMap = {
     auth: {
       required: "此网关需要身份验证。添加令牌或密码，然后点击连接。",
       failed: "身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新令牌，然后点击连接。",
+      tokenizedUrlHint: "带令牌的 URL",
+      setTokenHint: "设置令牌",
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",
@@ -103,6 +126,16 @@ export const zh_CN: TranslationMap = {
     insecure: {
       hint: "此页面为 HTTP，因此浏览器阻止设备标识。请使用 HTTPS (Tailscale Serve) 或在网关主机上打开 {url}。",
       stayHttp: "如果您必须保持 HTTP，请设置 {config} (仅限令牌)。",
+    },
+    docs: {
+      devicePairingTitle: "设备配对文档（{openInNewTab}）",
+      devicePairingLink: "文档：设备配对",
+      controlUiAuthTitle: "控制台鉴权文档（{openInNewTab}）",
+      controlUiAuthLink: "文档：控制台鉴权",
+      tailscaleServeTitle: "Tailscale Serve 文档（{openInNewTab}）",
+      tailscaleServeLink: "文档：Tailscale Serve",
+      insecureHttpTitle: "不安全 HTTP 文档（{openInNewTab}）",
+      insecureHttpLink: "文档：不安全 HTTP",
     },
   },
   chat: {
@@ -140,6 +173,8 @@ export const zh_CN: TranslationMap = {
       searchJobs: "搜索任务",
       searchPlaceholder: "名称、描述或代理",
       enabled: "启用状态",
+      schedule: "调度",
+      lastRun: "上次运行",
       all: "全部",
       sort: "排序",
       nextRun: "下次运行",
@@ -148,6 +183,7 @@ export const zh_CN: TranslationMap = {
       direction: "方向",
       ascending: "升序",
       descending: "降序",
+      reset: "重置",
       noMatching: "没有匹配的任务。",
       loading: "加载中...",
       loadMore: "加载更多任务",

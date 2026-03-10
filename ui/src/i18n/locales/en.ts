@@ -8,11 +8,13 @@ export const en: TranslationMap = {
     offline: "Offline",
     connect: "Connect",
     refresh: "Refresh",
+    language: "Language",
     enabled: "Enabled",
     disabled: "Disabled",
     na: "n/a",
     docs: "Docs",
     resources: "Resources",
+    openInNewTab: "opens in new tab",
   },
   nav: {
     chat: "Chat",
@@ -52,6 +54,24 @@ export const en: TranslationMap = {
     debug: "Gateway snapshots, events, and manual RPC calls.",
     logs: "Live tail of the gateway file logs.",
   },
+  shell: {
+    subtitle: "Gateway Dashboard",
+    update: {
+      available: "Update available:",
+      updating: "Updating...",
+      updateNow: "Update now",
+      running: "(running v{version}).",
+    },
+  },
+  theme: {
+    label: "Theme",
+    system: "System",
+    systemAria: "System theme",
+    light: "Light",
+    lightAria: "Light theme",
+    dark: "Dark",
+    darkAria: "Dark theme",
+  },
   overview: {
     access: {
       title: "Gateway Access",
@@ -59,6 +79,7 @@ export const en: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway Token",
       password: "Password (not stored)",
+      passwordPlaceholder: "system or shared password",
       sessionKey: "Default Session Key",
       language: "Language",
       connectHint: "Click Connect to apply connection changes.",
@@ -95,6 +116,8 @@ export const en: TranslationMap = {
       required: "This gateway requires auth. Add a token or password, then click Connect.",
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
+      tokenizedUrlHint: "tokenized URL",
+      setTokenHint: "set token",
     },
     pairing: {
       hint: "This device needs pairing approval from the gateway host.",
@@ -104,6 +127,16 @@ export const en: TranslationMap = {
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
+    },
+    docs: {
+      devicePairingTitle: "Device pairing docs ({openInNewTab})",
+      devicePairingLink: "Docs: Device pairing",
+      controlUiAuthTitle: "Control UI auth docs ({openInNewTab})",
+      controlUiAuthLink: "Docs: Control UI auth",
+      tailscaleServeTitle: "Tailscale Serve docs ({openInNewTab})",
+      tailscaleServeLink: "Docs: Tailscale Serve",
+      insecureHttpTitle: "Insecure HTTP docs ({openInNewTab})",
+      insecureHttpLink: "Docs: Insecure HTTP",
     },
   },
   chat: {

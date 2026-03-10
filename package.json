@@ -330,6 +330,8 @@
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
+    "ui:i18n:check:zh-CN": "node --import tsx scripts/ui-i18n-report.ts --locale zh-CN --strict",
+    "ui:i18n:report": "node --import tsx scripts/ui-i18n-report.ts",
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
