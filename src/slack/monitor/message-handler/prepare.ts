@@ -748,19 +748,21 @@ export async function prepareSlackMessage(params: {
     );
   };
 
+  const onSkipPinnedMainDmRouteUpdate = (params: {
+    ownerRecipient: string;
+    senderRecipient: string;
+  }) => {
+    logVerbose(
+      `slack: skip main-session last route for ${params.senderRecipient} (pinned owner ${params.ownerRecipient})`,
+    );
+  };
+
   const mainScopedDmOwnerPin =
-    isDirectMessage &&
-    route.mainSessionKey === sessionKey &&
-    pinnedMainDmOwner &&
-    message.user
+    isDirectMessage && route.mainSessionKey === sessionKey && pinnedMainDmOwner && message.user
       ? {
           ownerRecipient: pinnedMainDmOwner,
           senderRecipient: message.user.toLowerCase(),
-          onSkip: ({ ownerRecipient, senderRecipient }) => {
-            logVerbose(
-              `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-            );
-          },
+          onSkip: onSkipPinnedMainDmRouteUpdate,
         }
       : undefined;
 
@@ -795,11 +797,7 @@ export async function prepareSlackMessage(params: {
             ? {
                 ownerRecipient: pinnedMainDmOwner,
                 senderRecipient: message.user.toLowerCase(),
-                onSkip: ({ ownerRecipient, senderRecipient }) => {
-                  logVerbose(
-                    `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                  );
-                },
+                onSkip: onSkipPinnedMainDmRouteUpdate,
               }
             : undefined,
       },

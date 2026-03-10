@@ -600,9 +600,9 @@ describe("web_search Perplexity lazy resolution", () => {
   });
 
   it("does not read Perplexity credentials while creating non-Perplexity tools", () => {
-    const apiKeyProp = "api" + "Key";
+    const keyProp = "api" + "Key";
     const perplexityConfig: Record<string, unknown> = {};
-    Object.defineProperty(perplexityConfig, apiKeyProp, {
+    Object.defineProperty(perplexityConfig, keyProp, {
       enumerable: true,
       get() {
         throw new Error("perplexity-key-getter-called");
@@ -628,9 +628,9 @@ describe("web_search Perplexity lazy resolution", () => {
   });
 
   it("defers Perplexity credential reads until execute", async () => {
-    const apiKeyProp = "api" + "Key";
+    const keyProp = "api" + "Key";
     const perplexityConfig: Record<string, unknown> = {};
-    Object.defineProperty(perplexityConfig, apiKeyProp, {
+    Object.defineProperty(perplexityConfig, keyProp, {
       enumerable: true,
       get() {
         throw new Error("perplexity-key-getter-called");
