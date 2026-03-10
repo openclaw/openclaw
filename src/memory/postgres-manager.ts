@@ -20,7 +20,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryPostgresConfig } from "../config/types.memory.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
-import { normalizeExtraMemoryPaths } from "./internal.js";
+import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -472,6 +472,12 @@ export class PostgresMemoryManager implements MemorySearchManager {
     const fullPath = path.resolve(this.workspaceDir, params.relPath);
     if (!fullPath.startsWith(this.workspaceDir + path.sep) && fullPath !== this.workspaceDir) {
       throw new Error(`Path traversal denied: ${params.relPath}`);
+    }
+
+    // Only allow reading memory paths (MEMORY.md, memory/*)
+    const relNormalized = path.relative(this.workspaceDir, fullPath).replace(/\\/g, "/");
+    if (!isMemoryPath(relNormalized)) {
+      throw new Error(`Access denied: ${params.relPath} is not a memory path`);
     }
 
     const content = await fs.readFile(fullPath, "utf-8");
