@@ -4,15 +4,19 @@ const mocks = vi.hoisted(() => ({
   isRestartEnabled: vi.fn(() => true),
   resolveConfigSnapshotHash: vi.fn(() => undefined),
   extractDeliveryInfo: vi.fn(() => ({
-    deliveryContext: { channel: "telegram", to: "+19995550001", accountId: undefined },
-    threadId: undefined,
+    deliveryContext: {
+      channel: "telegram",
+      to: "+19995550001",
+      accountId: undefined as string | undefined,
+    },
+    threadId: undefined as string | undefined,
   })),
   writeRestartSentinel: vi.fn(async () => undefined),
   scheduleGatewaySigusr1Restart: vi.fn(() => ({ ok: true })),
   formatDoctorNonInteractiveHint: vi.fn(() => ""),
   callGatewayTool: vi.fn(async () => ({})),
   readGatewayCallOptions: vi.fn(() => ({})),
-  resolveGatewayTarget: vi.fn(() => undefined),
+  resolveGatewayTarget: vi.fn((): "local" | "remote" | undefined => undefined),
 }));
 
 vi.mock("../../config/commands.js", () => ({ isRestartEnabled: mocks.isRestartEnabled }));

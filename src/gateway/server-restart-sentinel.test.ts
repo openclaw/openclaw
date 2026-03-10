@@ -151,7 +151,7 @@ describe("scheduleRestartSentinelWake – two-step delivery + resume", () => {
   });
 
   it("no-ops when there is no sentinel file", async () => {
-    mocks.consumeRestartSentinel.mockResolvedValueOnce(null);
+    mocks.consumeRestartSentinel.mockResolvedValueOnce(null as never);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -198,8 +198,8 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
   it("falls back to enqueueSystemEvent when channel is missing from merged delivery context", async () => {
     // mergeDeliveryContext is called twice (inner + outer merge); mock the outer to drop channel
     mocks.mergeDeliveryContext
-      .mockReturnValueOnce(undefined) // inner: sessionDeliveryContext merge
-      .mockReturnValueOnce({ to: "+15550002" }); // outer: sentinelContext wins, no channel
+      .mockReturnValueOnce(undefined as never) // inner: sessionDeliveryContext merge
+      .mockReturnValueOnce({ to: "+15550002" } as never); // outer: sentinelContext wins, no channel
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -212,8 +212,8 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
   it("falls back to enqueueSystemEvent when to is missing from merged delivery context", async () => {
     // Mock outer merge to return a context with no `to`
     mocks.mergeDeliveryContext
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce({ channel: "whatsapp" });
+      .mockReturnValueOnce(undefined as never)
+      .mockReturnValueOnce({ channel: "whatsapp" } as never);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -260,10 +260,10 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:main",
-        deliveryContext: { channel: "slack", to: "C012AB3CD", accountId: undefined },
+        deliveryContext: { channel: "slack", to: "C012AB3CD", accountId: "acct-2" },
         threadId: "1234567890.123456",
       },
-    });
+    } as never);
     mocks.normalizeChannelId.mockReturnValueOnce("slack");
 
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -277,10 +277,10 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:main",
-        deliveryContext: { channel: "discord", to: "123456789", accountId: undefined },
+        deliveryContext: { channel: "discord", to: "123456789", accountId: "acct-2" },
         threadId: "discord-thread-id",
       },
-    });
+    } as never);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -293,10 +293,10 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:main",
-        deliveryContext: { channel: "discord", to: "123456789", accountId: undefined },
+        deliveryContext: { channel: "discord", to: "123456789", accountId: "acct-2" },
         threadId: "discord-thread-id",
       },
-    });
+    } as never);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -308,15 +308,15 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:main",
-        deliveryContext: { channel: "whatsapp", to: "+15550002" },
+        deliveryContext: { channel: "whatsapp", to: "+15550002", accountId: "acct-2" },
         threadId: "sentinel-thread",
       },
-    });
+    } as never);
     // parseSessionThreadInfo would derive a different threadId from the session key
     mocks.parseSessionThreadInfo.mockReturnValueOnce({
       baseSessionKey: null,
       threadId: "session-thread",
-    });
+    } as never);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -339,7 +339,7 @@ describe("scheduleRestartSentinelWake – delivery context priority", () => {
     mocks.deliveryContextFromSession.mockReturnValueOnce({
       channel: "webchat",
       to: "heartbeat",
-    });
+    } as never);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -352,15 +352,15 @@ describe("scheduleRestartSentinelWake – delivery context priority", () => {
   it("falls back to session store when sentinel has no deliveryContext", async () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: { sessionKey: "agent:main:main" }, // no deliveryContext
-    });
+    } as never);
     mocks.deliveryContextFromSession.mockReturnValueOnce({
       channel: "telegram",
       to: "+19990001",
-    });
+    } as never);
     // Mock both merge calls: inner produces session ctx; outer passes it through
     mocks.mergeDeliveryContext
-      .mockReturnValueOnce({ channel: "telegram", to: "+19990001" }) // inner
-      .mockReturnValueOnce({ channel: "telegram", to: "+19990001" }); // outer
+      .mockReturnValueOnce({ channel: "telegram", to: "+19990001" } as never) // inner
+      .mockReturnValueOnce({ channel: "telegram", to: "+19990001" } as never); // outer
     // resolveOutboundTarget must reflect the session-store to value
     mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true as const, to: "+19990001" });
 
