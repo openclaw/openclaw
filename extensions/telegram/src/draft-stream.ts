@@ -207,9 +207,19 @@ export function createTelegramDraftStream(params: {
     // Mark reply as applied BEFORE the await to prevent race with forceNewMessage (#39718).
     // Even if forceNewMessage fires during this in-flight send, subsequent sends
     // will see hasAppliedReply=true and skip the reply context.
+    const replyAppliedGeneration = shouldIncludeReply ? generation : undefined;
     if (shouldIncludeReply) {
       hasAppliedReply = true;
     }
+    const restoreReplyForSafeFailure = (err: unknown) => {
+      if (
+        shouldIncludeReply &&
+        replyAppliedGeneration === generation &&
+        (isSafeToRetrySendError(err) || isTelegramClientRejection(err))
+      ) {
+        hasAppliedReply = false;
+      }
+    };
     const sendParams = sendArgs.renderedParseMode
       ? {
           ...replyParams,
@@ -224,19 +234,25 @@ export function createTelegramDraftStream(params: {
       };
     } catch (err) {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+        restoreReplyForSafeFailure(err);
         throw err;
       }
       const threadlessParams: TelegramSendMessageParams = { ...sendParams };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
-      return {
-        sent: await params.api.sendMessage(
-          chatId,
-          sendArgs.renderedText,
-          Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
-        ),
-        usedThreadParams: false,
-      };
+      try {
+        return {
+          sent: await params.api.sendMessage(
+            chatId,
+            sendArgs.renderedText,
+            Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
+          ),
+          usedThreadParams: false,
+        };
+      } catch (retryErr) {
+        restoreReplyForSafeFailure(retryErr);
+        throw retryErr;
+      }
     }
   };
   const sendMessageTransportPreview = async ({

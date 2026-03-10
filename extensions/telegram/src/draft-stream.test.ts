@@ -600,7 +600,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After rotation", undefined);
   });
 
-  it("keeps thread params when dropping reply_to_message_id after forceNewMessage", async () => {
+  it("keeps thread params when dropping reply_to_message_id after forceNewMessage (#39718)", async () => {
     const api = createMockDraftApi();
     api.sendMessage
       .mockResolvedValueOnce({ message_id: 17 })
