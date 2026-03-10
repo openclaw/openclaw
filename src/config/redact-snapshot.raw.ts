@@ -6,7 +6,10 @@ export function replaceSensitiveValuesInRaw(params: {
   sensitiveValues: string[];
   redactedSentinel: string;
 }): string {
-  const values = [...params.sensitiveValues].toSorted((a, b) => b.length - a.length);
+  // FIX #41247: Filter out empty strings to prevent RangeError
+  const values = [...params.sensitiveValues]
+    .filter((v) => v && v.length > 0)
+    .toSorted((a, b) => b.length - a.length);
   let result = params.raw;
   for (const value of values) {
     result = result.replaceAll(value, params.redactedSentinel);
