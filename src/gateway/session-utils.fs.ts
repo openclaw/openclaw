@@ -582,7 +582,7 @@ function stripSecurityNoticeForPreview(text: string): string {
       /SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[^\n]*(?:\n\s*- [^\n]*)*/g,
       "",
     )
-    .replace(/^Source:\s+[^\n]*(?:\n(?:From|Subject):\s+[^\n]*)*\n---\n?/gm, "")
+    .replace(/^\s*Source:\s+[^\n]*(?:\n(?:From|Subject):\s+[^\n]*)*\n---\n?/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
