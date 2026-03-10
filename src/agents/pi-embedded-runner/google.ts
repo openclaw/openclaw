@@ -556,11 +556,30 @@ export async function sanitizeSessionHistory(params: {
   // failure. These accumulate in the JSONL and can corrupt turn structure by
   // inserting empty assistant turns before a live thinking block, causing the
   // Anthropic API to reject with "thinking blocks cannot be modified".
+  // Guard: only drop stubs whose content is empty/blank — mid-stream failures
+  // can produce messages with stopReason === "error" but non-empty content
+  // (e.g. partial streamed text), and dropping those would discard valid
+  // context and could leave orphaned toolResult blocks.
   const withoutErrorStubs = droppedThinking.filter((msg) => {
     if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
       return true;
     }
-    return (msg as { stopReason?: unknown }).stopReason !== "error";
+    if ((msg as { stopReason?: unknown }).stopReason !== "error") {
+      return true;
+    }
+    // Only drop if content is empty or all text blocks are blank
+    const content = (msg as { content?: unknown[] }).content;
+    if (!Array.isArray(content) || content.length === 0) {
+      return false;
+    }
+    const hasNonEmptyContent = content.some((block) => {
+      if (!block || typeof block !== "object") return false;
+      const b = block as { type?: string; text?: string };
+      if (b.type === "text") return typeof b.text === "string" && b.text.trim().length > 0;
+      // Non-text blocks (toolUse, toolCall, thinking) count as non-empty
+      return b.type !== undefined && b.type !== "text";
+    });
+    return hasNonEmptyContent;
   });
   const sanitizedToolCalls = sanitizeToolCallInputs(withoutErrorStubs, {
     allowedToolNames: params.allowedToolNames,
