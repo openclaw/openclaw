@@ -52,6 +52,7 @@ const TaskBacklogAddSchema = Type.Object({
   harness_project_slug: Type.Optional(Type.String()),
   harness_item_id: Type.Optional(Type.String()),
   pal_tier: Type.Optional(Type.String()),
+  repo_ref: Type.Optional(Type.String()),
 });
 
 const TaskPickBacklogSchema = Type.Object({
@@ -428,6 +429,17 @@ export function createTaskBacklogAddTool(options: {
       const taskId = generateTaskId();
       const workSessionId = generateWorkSessionId();
 
+      // Parse optional repo_ref JSON
+      const repoRefRaw = readStringParam(params, "repo_ref");
+      let repoRef: TaskFile["repoRef"];
+      if (repoRefRaw) {
+        try {
+          repoRef = JSON.parse(repoRefRaw);
+        } catch {
+          /* ignore malformed */
+        }
+      }
+
       const newTask: TaskFile = {
         id: taskId,
         status: "backlog",
@@ -450,6 +462,7 @@ export function createTaskBacklogAddTool(options: {
         harnessProjectSlug: readStringParam(params, "harness_project_slug"),
         harnessItemId: readStringParam(params, "harness_item_id"),
         palTier: readStringParam(params, "pal_tier") as TaskFile["palTier"],
+        repoRef,
       };
 
       // Duplicate detection: reject if a similar backlog task already exists

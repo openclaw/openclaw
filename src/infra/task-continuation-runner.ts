@@ -458,6 +458,35 @@ function formatBacklogPickupPrompt(task: TaskFile): string {
     );
   }
 
+  // Repository context injection
+  if (task.repoRef) {
+    lines.push(``);
+    lines.push(`## Repository Context`);
+    lines.push(`**Repository:** ${task.repoRef.url}`);
+    if (task.repoRef.branch) {
+      lines.push(`**Working Branch:** ${task.repoRef.branch}`);
+      lines.push(`You MUST checkout and work on this branch.`);
+    }
+    if (task.repoRef.baseBranch) {
+      lines.push(`**Base Branch:** ${task.repoRef.baseBranch}`);
+    }
+    if (task.repoRef.paths && task.repoRef.paths.length > 0) {
+      lines.push(`**Scope:** Only modify files within these paths:`);
+      for (const p of task.repoRef.paths) {
+        lines.push(`- \`${p}\``);
+      }
+      lines.push(`Do NOT modify files outside these paths unless absolutely necessary.`);
+    }
+    if (task.repoRef.issueNumber) {
+      lines.push(
+        `**References GitHub Issue:** ${task.repoRef.url}/issues/${task.repoRef.issueNumber}`,
+      );
+    }
+    if (task.repoRef.prNumber) {
+      lines.push(`**References GitHub PR:** ${task.repoRef.url}/pull/${task.repoRef.prNumber}`);
+    }
+  }
+
   // Harness protocol injection
   if (task.harnessProjectSlug) {
     lines.push(``);

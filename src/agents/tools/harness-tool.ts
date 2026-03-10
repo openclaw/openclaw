@@ -111,5 +111,33 @@ export function createHarnessTools(): AnyAgentTool[] {
     },
   };
 
-  return [reportStep, reportCheck];
+  const repoCheck: AnyAgentTool = {
+    name: "harness_repo_check",
+    label: "Harness Repo Check",
+    description:
+      "Run repository-based verification for a harness item. Checks CI status, PR merge state, and whether changes are within the defined scope (paths). Call this after completing work on a harness-managed task that has a repoRef.",
+    parameters: Type.Object({
+      item_id: Type.String(),
+    }),
+    execute: async (_toolCallId, args) => {
+      const itemId = readStringParam(args, "item_id", { required: true });
+
+      const data = await hubFetch(`/api/harness/${itemId}/verify`, {
+        method: "POST",
+        body: JSON.stringify({ type: "repo_check" }),
+      });
+
+      if (data.error) {
+        return jsonResult({ success: false, error: data.error });
+      }
+
+      return jsonResult({
+        success: true,
+        checks: data.checks ?? [],
+        allPassed: data.allPassed ?? false,
+      });
+    },
+  };
+
+  return [reportStep, reportCheck, repoCheck];
 }

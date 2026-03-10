@@ -51,6 +51,15 @@ export interface TaskStep {
   order: number;
 }
 
+export interface TaskRepoRef {
+  url: string;
+  branch?: string;
+  baseBranch?: string;
+  paths?: string[];
+  issueNumber?: number;
+  prNumber?: number;
+}
+
 export interface TaskFile {
   id: string;
   status: TaskStatus;
@@ -85,6 +94,7 @@ export interface TaskFile {
   harnessProjectSlug?: string; // Harness project slug for spec tracking
   harnessItemId?: string; // Harness item ID for verification reporting
   palTier?: "frugal" | "standard" | "frontier"; // PAL Router model tier
+  repoRef?: TaskRepoRef; // GitHub repo reference for harness tasks
   ouroborosHistory?: {
     outputHashes: string[];
     driftScores: number[];
@@ -253,6 +263,7 @@ export function formatTaskFileMd(task: TaskFile): string {
       harnessItemId: task.harnessItemId,
       reassignCount: task.reassignCount,
       palTier: task.palTier,
+      repoRef: task.repoRef,
     };
     lines.push("## Backlog", "```json", JSON.stringify(backlogData), "```", "");
   }
@@ -322,6 +333,7 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
   let harnessItemId: string | undefined;
   let reassignCount: number | undefined;
   let palTier: TaskFile["palTier"];
+  let repoRef: TaskRepoRef | undefined;
   let ouroborosHistory: TaskFile["ouroborosHistory"];
   let createdBySessionKey: string | undefined;
   let simple: boolean | undefined;
@@ -464,6 +476,13 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
           ) {
             palTier = backlogData.palTier;
           }
+          if (
+            backlogData.repoRef &&
+            typeof backlogData.repoRef === "object" &&
+            backlogData.repoRef.url
+          ) {
+            repoRef = backlogData.repoRef;
+          }
         } catch {
           // Ignore malformed JSON
         }
@@ -551,6 +570,7 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
     harnessProjectSlug,
     harnessItemId,
     palTier,
+    repoRef,
     ouroborosHistory,
     reassignCount,
     createdBySessionKey,
