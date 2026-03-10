@@ -519,6 +519,36 @@ describe("modelsAuthCleanCommand", () => {
     expect(call?.agentLocalOnly).toBeFalsy();
   });
 
+  it("non-main agent as configured default: agentLocalOnly:true even when agentId === defaultAgentId", async () => {
+    // Regression: when a config sets a non-main agent as default (e.g. agents.list[0].default=true
+    // with id "custom-agent"), the old code used (agentId === defaultAgentId) which was true,
+    // disabling agentLocalOnly and causing main-store profiles to be written into the agent-local
+    // file (scope bleed). The fix compares resolved agentDir paths against the main agent
+    // directory instead of comparing agentId strings.
+    const agentLocalStore = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    // "custom-agent" is the configured default (not the main agent)
+    mocks.resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
+    // No --agent flag: resolveKnownAgentId returns null (default mock) → agentId = "custom-agent"
+    // First resolveAgentDir call: agentDir for "custom-agent"
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/custom-agent/agent");
+    // Second resolveAgentDir call: mainAgentDir for DEFAULT_AGENT_ID ("main")
+    // falls through to default mock → "/home/user/.openclaw/agents/main/agent"
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(agentLocalStore);
+    captureUpdater(agentLocalStore);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // agentLocalOnly must be true: custom-agent's dir != main agent dir
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentLocalOnly: true }),
+    );
+    // loadAgentLocalAuthProfileStore must be used, NOT ensureAuthProfileStore
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+  });
+
   // ---- Fix: sanitize ANSI escape codes in profile ID output (Aisle Low) ----
 
   it("strips ANSI escape sequences from profile IDs in --dry-run output", async () => {
