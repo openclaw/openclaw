@@ -119,14 +119,22 @@ export class OpenAITTSProvider {
       body.instructions = effectiveInstructions;
     }
 
-    const response = await fetch("https://api.openai.com/v1/audio/speech", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      throw new Error(
+        `OpenAI TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     if (!response.ok) {
       const error = await response.text();
