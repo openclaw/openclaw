@@ -78,6 +78,7 @@ import {
 } from "./app-tool-stream.ts";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { resolveUiLanguage, setUiLanguage } from "./i18n.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 
@@ -350,6 +351,8 @@ export class OpenClawApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    setUiLanguage(this.settings.language);
+    document.documentElement.lang = resolveUiLanguage(this.settings.language);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
   }
 

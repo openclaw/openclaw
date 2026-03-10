@@ -1,5 +1,6 @@
 const KEY = "openclaw.control.settings.v1";
 
+import type { UiLanguage } from "./i18n.ts";
 import type { ThemeMode } from "./theme.ts";
 
 export type UiSettings = {
@@ -13,6 +14,7 @@ export type UiSettings = {
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  language: UiLanguage;
 };
 
 export function loadSettings(): UiSettings {
@@ -32,6 +34,7 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    language: "system",
   };
 
   try {
@@ -77,6 +80,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      language:
+        parsed.language === "en" || parsed.language === "zh-CN" || parsed.language === "system"
+          ? parsed.language
+          : defaults.language,
     };
   } catch {
     return defaults;

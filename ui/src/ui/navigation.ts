@@ -1,13 +1,15 @@
 import type { IconName } from "./icons.js";
+import { tr } from "./i18n.ts";
 
 export const TAB_GROUPS = [
-  { label: "Chat", tabs: ["chat"] },
+  { labelKey: "nav.chat", label: "Chat", tabs: ["chat"] },
   {
+    labelKey: "nav.control",
     label: "Control",
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
-  { label: "Agent", tabs: ["agents", "skills", "nodes"] },
-  { label: "Settings", tabs: ["config", "debug", "logs"] },
+  { labelKey: "nav.agent", label: "Agent", tabs: ["agents", "skills", "nodes"] },
+  { labelKey: "nav.settings", label: "Settings", tabs: ["config", "debug", "logs"] },
 ] as const;
 
 export type Tab =
@@ -158,64 +160,64 @@ export function iconForTab(tab: Tab): IconName {
 export function titleForTab(tab: Tab) {
   switch (tab) {
     case "agents":
-      return "Agents";
+      return tr("tab.agents", "Agents");
     case "overview":
-      return "Overview";
+      return tr("tab.overview", "Overview");
     case "channels":
-      return "Channels";
+      return tr("tab.channels", "Channels");
     case "instances":
-      return "Instances";
+      return tr("tab.instances", "Instances");
     case "sessions":
-      return "Sessions";
+      return tr("tab.sessions", "Sessions");
     case "usage":
-      return "Usage";
+      return tr("tab.usage", "Usage");
     case "cron":
-      return "Cron Jobs";
+      return tr("tab.cron", "Cron Jobs");
     case "skills":
-      return "Skills";
+      return tr("tab.skills", "Skills");
     case "nodes":
-      return "Nodes";
+      return tr("tab.nodes", "Nodes");
     case "chat":
-      return "Chat";
+      return tr("tab.chat", "Chat");
     case "config":
-      return "Config";
+      return tr("tab.config", "Config");
     case "debug":
-      return "Debug";
+      return tr("tab.debug", "Debug");
     case "logs":
-      return "Logs";
+      return tr("tab.logs", "Logs");
     default:
-      return "Control";
+      return tr("nav.control", "Control");
   }
 }
 
 export function subtitleForTab(tab: Tab) {
   switch (tab) {
     case "agents":
-      return "Manage agent workspaces, tools, and identities.";
+      return tr("sub.agents", "Manage agent workspaces, tools, and identities.");
     case "overview":
-      return "Gateway status, entry points, and a fast health read.";
+      return tr("sub.overview", "Gateway status, entry points, and a fast health read.");
     case "channels":
-      return "Manage channels and settings.";
+      return tr("sub.channels", "Manage channels and settings.");
     case "instances":
-      return "Presence beacons from connected clients and nodes.";
+      return tr("sub.instances", "Presence beacons from connected clients and nodes.");
     case "sessions":
-      return "Inspect active sessions and adjust per-session defaults.";
+      return tr("sub.sessions", "Inspect active sessions and adjust per-session defaults.");
     case "usage":
       return "";
     case "cron":
-      return "Schedule wakeups and recurring agent runs.";
+      return tr("sub.cron", "Schedule wakeups and recurring agent runs.");
     case "skills":
-      return "Manage skill availability and API key injection.";
+      return tr("sub.skills", "Manage skill availability and API key injection.");
     case "nodes":
-      return "Paired devices, capabilities, and command exposure.";
+      return tr("sub.nodes", "Paired devices, capabilities, and command exposure.");
     case "chat":
-      return "Direct gateway chat session for quick interventions.";
+      return tr("sub.chat", "Direct gateway chat session for quick interventions.");
     case "config":
-      return "Edit ~/.openclaw/openclaw.json safely.";
+      return tr("sub.config", "Edit ~/.openclaw/openclaw.json safely.");
     case "debug":
-      return "Gateway snapshots, events, and manual RPC calls.";
+      return tr("sub.debug", "Gateway snapshots, events, and manual RPC calls.");
     case "logs":
-      return "Live tail of the gateway file logs.";
+      return tr("sub.logs", "Live tail of the gateway file logs.");
     default:
       return "";
   }

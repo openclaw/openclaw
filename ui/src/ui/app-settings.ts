@@ -22,6 +22,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import { resolveUiLanguage, setUiLanguage } from "./i18n.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -62,6 +63,8 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     lastActiveSessionKey: next.lastActiveSessionKey?.trim() || next.sessionKey.trim() || "main",
   };
   host.settings = normalized;
+  setUiLanguage(normalized.language);
+  document.documentElement.lang = resolveUiLanguage(normalized.language);
   saveSettings(normalized);
   if (next.theme !== host.theme) {
     host.theme = next.theme;

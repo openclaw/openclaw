@@ -51,6 +51,7 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
+import { tr, type UiLanguage } from "./i18n.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 
@@ -136,25 +137,39 @@ export function renderApp(state: AppViewState) {
             <div class="brand-logo">
               <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
             </div>
-            <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-text">
+                <div class="brand-title">OPENCLAW</div>
+                <div class="brand-sub">${tr("title.dashboard", "Gateway Dashboard")}</div>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="topbar-status">
-          <div class="pill">
-            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>Health</span>
-            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
+          <div class="topbar-status">
+            <div class="pill">
+              <span class="statusDot ${state.connected ? "ok" : ""}"></span>
+              <span>${tr("label.health", "Health")}</span>
+              <span class="mono">${state.connected ? "OK" : tr("label.offline", "Offline")}</span>
+            </div>
+            <label class="field field--inline" title=${tr("title.language", "Language")}>
+              <select
+                .value=${state.settings.language}
+                @change=${(event: Event) => {
+                  const next = (event.target as HTMLSelectElement).value as UiLanguage;
+                  state.applySettings({ ...state.settings, language: next });
+                }}
+              >
+                <option value="system">${tr("lang.auto", "Auto")}</option>
+                <option value="en">${tr("lang.english", "English")}</option>
+                <option value="zh-CN">${tr("lang.simplifiedChinese", "简体中文")}</option>
+              </select>
+            </label>
+            ${renderThemeToggle(state)}
           </div>
-          ${renderThemeToggle(state)}
-        </div>
-      </header>
+        </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
         ${TAB_GROUPS.map((group) => {
           const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
           const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+          const localizedLabel = tr(group.labelKey, group.label);
           return html`
             <div class="nav-group ${isGroupCollapsed && !hasActiveTab ? "nav-group--collapsed" : ""}">
               <button
@@ -169,7 +184,7 @@ export function renderApp(state: AppViewState) {
                 }}
                 aria-expanded=${!isGroupCollapsed}
               >
-                <span class="nav-label__text">${group.label}</span>
+                <span class="nav-label__text">${localizedLabel}</span>
                 <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
               </button>
               <div class="nav-group__items">
@@ -179,19 +194,19 @@ export function renderApp(state: AppViewState) {
           `;
         })}
         <div class="nav-group nav-group--links">
-          <div class="nav-label nav-label--static">
-            <span class="nav-label__text">Resources</span>
-          </div>
+            <div class="nav-label nav-label--static">
+            <span class="nav-label__text">${tr("label.resources", "Resources")}</span>
+            </div>
           <div class="nav-group__items">
             <a
               class="nav-item nav-item--external"
               href="https://docs.openclaw.ai"
               target="_blank"
               rel="noreferrer"
-              title="Docs (opens in new tab)"
+              title=${tr("a11y.docsNewTab", "Docs (opens in new tab)")}
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">Docs</span>
+              <span class="nav-item__text">${tr("label.docs", "Docs")}</span>
             </a>
           </div>
         </div>
