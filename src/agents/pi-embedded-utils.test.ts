@@ -5,6 +5,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
+  stripPiAgentToolTranscriptLines,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -506,6 +507,56 @@ describe("formatReasoningMessage", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
     );
+  });
+});
+
+describe("stripPiAgentToolTranscriptLines", () => {
+  it.each([
+    {
+      name: "bare to=cron with JSON args (Discord leak shape from issue #41844)",
+      input: `to=cron {"action":"create","schedule":"in 2 minutes","message":"check cron"}`,
+      expected: "",
+    },
+    {
+      name: "to=cron with json keyword",
+      input: `to=cron json {"action":"create","schedule":"in 2 minutes"}`,
+      expected: "",
+    },
+    {
+      name: "assistant to=cron prefix form",
+      input: `assistant to=cron {"action":"create","schedule":"in 2 minutes"}`,
+      expected: "",
+    },
+    {
+      name: "assistant to=final (iMessage leak shape)",
+      input: `assistant to=final {"text":"hello"}`,
+      expected: "",
+    },
+    {
+      name: "tool call line followed by confirmation text",
+      input: `to=cron json {"action":"create","schedule":"in 2 minutes"}\nSet.`,
+      expected: "Set.",
+    },
+    {
+      name: "confirmation text followed by tool call line",
+      input: `Sure, I'll schedule that.\nto=cron json {"action":"create"}`,
+      expected: "Sure, I'll schedule that.",
+    },
+  ])("strips $name", ({ input, expected }) => {
+    expect(stripPiAgentToolTranscriptLines(input)).toBe(expected);
+  });
+
+  it.each([
+    "Hello, the ratio is 3:1 to=something",
+    "Set up a timeout of 30s",
+    'The value "to=left" is used here',
+    "No tool calls here, just text.",
+  ])("preserves non-tool-call text: %j", (text) => {
+    expect(stripPiAgentToolTranscriptLines(text)).toBe(text);
+  });
+
+  it("returns empty input unchanged", () => {
+    expect(stripPiAgentToolTranscriptLines("")).toBe("");
   });
 });
 

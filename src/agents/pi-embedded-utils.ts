@@ -60,6 +60,40 @@ export function stripModelSpecialTokens(text: string): string {
 }
 
 /**
+ * Strip Pi-agent-style tool transcript lines that leak into assistant text.
+ *
+ * When some models (or the Pi agent fallback path) output tool calls as plain
+ * text, they use a line-oriented format:
+ *   to=<tool>[ json] <args-on-one-line>
+ *   assistant to=<tool>[ json] <args-on-one-line>
+ *
+ * The iMessage outbound sanitizer strips the `assistant to=<word>` prefix but
+ * leaves the argument payload, and the Discord delivery path has no equivalent
+ * stripping at all. This function removes entire lines that match either
+ * variant so they never reach any user-facing channel.
+ *
+ * The quick-check (`to=`) avoids the regex cost on the vast majority of replies.
+ */
+// Match a complete line: optional "assistant " prefix, "to=<word>", optional " json", then args.
+const PI_AGENT_TOOL_LINE_RE = /^[ \t]*(?:assistant\s+)?to=\w+(?:\s+json)?[^\S\n].*$/gm;
+
+export function stripPiAgentToolTranscriptLines(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Fast path: almost no assistant replies contain "to=".
+  if (!text.includes("to=")) {
+    return text;
+  }
+  const cleaned = text.replace(PI_AGENT_TOOL_LINE_RE, "");
+  if (cleaned === text) {
+    return text;
+  }
+  // Collapse any runs of blank lines left by the removal.
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
  * Strip downgraded tool call text representations that leak into text content.
  * When replaying history to Gemini, tool calls without `thought_signature` are
  * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
@@ -238,7 +272,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          stripPiAgentToolTranscriptLines(
+            stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
