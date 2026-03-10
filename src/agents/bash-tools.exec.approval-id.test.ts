@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearConfigCache } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -63,6 +64,7 @@ describe("exec approvals", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+    clearConfigCache();
     if (previousHome === undefined) {
       delete process.env.HOME;
     } else {
@@ -546,6 +548,55 @@ describe("exec approvals", () => {
     await expect(tool.execute("call-registration-fail", { command: "echo fail" })).rejects.toThrow(
       "Exec approval registration failed",
     );
+  });
+
+  it("returns an unavailable approval message instead of a local /approve prompt when discord exec approvals are disabled", async () => {
+    const configPath = path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        channels: {
+          discord: {
+            enabled: true,
+            execApprovals: { enabled: false },
+          },
+        },
+      }),
+    );
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: "approval-id" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: null };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      messageProvider: "discord",
+      accountId: "default",
+      currentChannelId: "1234567890",
+    });
+
+    const result = await tool.execute("call-unavailable", {
+      command: "npm view diver name version description",
+    });
+
+    expect(result.details.status).toBe("approval-unavailable");
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("chat exec approvals are not enabled on Discord");
+    expect(text).toContain("Web UI or terminal UI");
+    expect(text).not.toContain("/approve");
+    expect(text).not.toContain("npm view diver name version description");
+    expect(text).not.toContain("Pending command:");
+    expect(text).not.toContain("Host:");
+    expect(text).not.toContain("CWD:");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

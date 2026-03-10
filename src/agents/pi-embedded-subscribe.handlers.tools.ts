@@ -1,6 +1,9 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { buildExecApprovalPendingReplyPayload } from "../infra/exec-approval-reply.js";
+import {
+  buildExecApprovalPendingReplyPayload,
+  buildExecApprovalUnavailableReplyPayload,
+} from "../infra/exec-approval-reply.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -180,6 +183,38 @@ function readExecApprovalPendingDetails(result: unknown): {
   };
 }
 
+function readExecApprovalUnavailableDetails(result: unknown): {
+  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
+  warningText?: string;
+  channelLabel?: string;
+} | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const outer = result as Record<string, unknown>;
+  const details =
+    outer.details && typeof outer.details === "object" && !Array.isArray(outer.details)
+      ? (outer.details as Record<string, unknown>)
+      : outer;
+  if (details.status !== "approval-unavailable") {
+    return null;
+  }
+  const reason =
+    details.reason === "initiating-platform-disabled" ||
+    details.reason === "initiating-platform-unsupported" ||
+    details.reason === "no-approval-route"
+      ? details.reason
+      : null;
+  if (!reason) {
+    return null;
+  }
+  return {
+    reason,
+    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+  };
+}
+
 function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
@@ -206,6 +241,23 @@ function emitToolResultOutput(params: {
           nodeId: approvalPending.nodeId,
           expiresAtMs: approvalPending.expiresAtMs,
           warningText: approvalPending.warningText,
+        }),
+      );
+      ctx.state.deterministicApprovalPromptSent = true;
+    } catch {
+      // ignore delivery failures
+    }
+    return;
+  }
+
+  const approvalUnavailable = readExecApprovalUnavailableDetails(result);
+  if (!isToolError && approvalUnavailable) {
+    try {
+      void ctx.params.onToolResult?.(
+        buildExecApprovalUnavailableReplyPayload({
+          reason: approvalUnavailable.reason,
+          warningText: approvalUnavailable.warningText,
+          channelLabel: approvalUnavailable.channelLabel,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;

@@ -218,6 +218,56 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     );
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
+
+  it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Discord",
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("chat exec approvals are not enabled on Discord"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("/approve"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("Pending command:"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("Host:"),
+      }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.not.stringContaining("CWD:"),
+      }),
+    );
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
 });
 
 describe("messaging tool media URL tracking", () => {

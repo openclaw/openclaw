@@ -2,6 +2,10 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ExecHost } from "./exec-approvals.js";
 
 export type ExecApprovalReplyDecision = "allow-once" | "allow-always" | "deny";
+export type ExecApprovalUnavailableReason =
+  | "initiating-platform-disabled"
+  | "initiating-platform-unsupported"
+  | "no-approval-route";
 
 export type ExecApprovalReplyMetadata = {
   approvalId: string;
@@ -20,6 +24,12 @@ export type ExecApprovalPendingReplyParams = {
   nodeId?: string;
   expiresAtMs?: number;
   nowMs?: number;
+};
+
+export type ExecApprovalUnavailableReplyParams = {
+  warningText?: string;
+  channelLabel?: string;
+  reason: ExecApprovalUnavailableReason;
 };
 
 function buildFence(text: string, language?: string): string {
@@ -109,5 +119,42 @@ export function buildExecApprovalPendingReplyPayload(
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       },
     },
+  };
+}
+
+export function buildExecApprovalUnavailableReplyPayload(
+  params: ExecApprovalUnavailableReplyParams,
+): ReplyPayload {
+  const lines: string[] = [];
+  const warningText = params.warningText?.trim();
+  if (warningText) {
+    lines.push(warningText, "");
+  }
+
+  if (params.reason === "initiating-platform-disabled") {
+    lines.push(
+      `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
+    );
+    lines.push(
+      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
+    );
+  } else if (params.reason === "initiating-platform-unsupported") {
+    lines.push(
+      `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
+    );
+    lines.push(
+      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
+    );
+  } else {
+    lines.push(
+      "Exec approval is required, but no interactive approval client is currently available.",
+    );
+    lines.push(
+      "Open the Web UI or terminal UI, or enable Discord or Telegram exec approvals, then retry the command.",
+    );
+  }
+
+  return {
+    text: lines.join("\n\n"),
   };
 }

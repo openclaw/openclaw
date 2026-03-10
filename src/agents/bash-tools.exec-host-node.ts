@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
+import { resolveExecApprovalInitiatingSurfaceState } from "../infra/exec-approval-surface.js";
 import {
   type ExecApprovalsFile,
   type ExecAsk,
@@ -249,6 +251,18 @@ export async function executeNodeHostCommand(
     });
     expiresAtMs = registration.expiresAtMs;
     preResolvedDecision = registration.finalDecision;
+    const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
+      channel: params.turnSourceChannel,
+      accountId: params.turnSourceAccountId,
+    });
+    const unavailableReason =
+      preResolvedDecision === null
+        ? "no-approval-route"
+        : initiatingSurface.kind === "disabled"
+          ? "initiating-platform-disabled"
+          : initiatingSurface.kind === "unsupported"
+            ? "initiating-platform-unsupported"
+            : null;
 
     void (async () => {
       const decision = await resolveApprovalDecisionOrUndefined({
@@ -357,28 +371,47 @@ export async function executeNodeHostCommand(
       content: [
         {
           type: "text",
-          text: buildApprovalPendingMessage({
-            warningText,
-            approvalSlug,
-            approvalId,
-            command: prepared.cmdText,
-            cwd: runCwd,
-            host: "node",
-            nodeId,
-          }),
+          text:
+            unavailableReason !== null
+              ? (buildExecApprovalUnavailableReplyPayload({
+                  warningText,
+                  reason: unavailableReason,
+                  channelLabel: initiatingSurface.channelLabel,
+                }).text ?? "")
+              : buildApprovalPendingMessage({
+                  warningText,
+                  approvalSlug,
+                  approvalId,
+                  command: prepared.cmdText,
+                  cwd: runCwd,
+                  host: "node",
+                  nodeId,
+                }),
         },
       ],
-      details: {
-        status: "approval-pending",
-        approvalId,
-        approvalSlug,
-        expiresAtMs,
-        host: "node",
-        command: params.command,
-        cwd: params.workdir,
-        nodeId,
-        warningText,
-      },
+      details:
+        unavailableReason !== null
+          ? ({
+              status: "approval-unavailable",
+              reason: unavailableReason,
+              channelLabel: initiatingSurface.channelLabel,
+              host: "node",
+              command: params.command,
+              cwd: params.workdir,
+              nodeId,
+              warningText,
+            } satisfies ExecToolDetails)
+          : ({
+              status: "approval-pending",
+              approvalId,
+              approvalSlug,
+              expiresAtMs,
+              host: "node",
+              command: params.command,
+              cwd: params.workdir,
+              nodeId,
+              warningText,
+            } satisfies ExecToolDetails),
     };
   }
 
