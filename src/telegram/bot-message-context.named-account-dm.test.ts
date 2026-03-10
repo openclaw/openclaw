@@ -174,6 +174,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
       },
     });
 
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+    // After #41165 fix: DMs use per-channel-peer isolation instead of main
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:direct:42");
   });
 });
