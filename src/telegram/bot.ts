@@ -28,6 +28,7 @@ import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -234,6 +235,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         maybePersistSafeWatermark();
       }
     }
+  });
+
+  // Answer callback queries BEFORE sequentialize to avoid Telegram's ~15s timeout.
+  // When an agent turn is running, sequentialize queues updates for the same topic.
+  // By the time the queued callback is processed, the answer window is dead.
+  // Note: this also answers queries for updates that shouldSkipUpdate would later reject,
+  // but answerCallbackQuery is idempotent and Telegram ignores redundant answers.
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      void withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        fn: () => ctx.answerCallbackQuery(),
+      }).catch(() => {});
+    }
+    await next();
   });
 
   bot.use(sequentialize(getTelegramSequentialKey));
