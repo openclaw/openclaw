@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -429,6 +430,53 @@ describe("backup commands", () => {
       expect(result.assets[0]?.kind).toBe("config");
     } finally {
       delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+  });
+
+  it("rejects with the underlying error and cleans up the .tmp file when the tar stream errors", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-tar-error-"));
+
+    const tarSpy = vi.spyOn(tar.c, "asyncNoFile").mockImplementation((..._args: unknown[]) => {
+      const stream = new Readable({ read() {} });
+      setImmediate(() => stream.emit("error", new Error("simulated tar write failure")));
+      return stream as ReturnType<(typeof tar.c)["asyncNoFile"]>;
+    });
+
+    try {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await expect(backupCreateCommand(runtime, { output: backupDir })).rejects.toThrow(
+        "simulated tar write failure",
+      );
+      // Cleanup must remove any .tmp files created by the streaming write.
+      const files = await fs.readdir(backupDir);
+      expect(files.filter((f) => f.endsWith(".tmp"))).toHaveLength(0);
+    } finally {
+      tarSpy.mockRestore();
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces an actionable OOM hint when archive creation fails with ENOMEM", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-oom-"));
+
+    const tarSpy = vi.spyOn(tar.c, "asyncNoFile").mockImplementation((..._args: unknown[]) => {
+      const stream = new Readable({ read() {} });
+      setImmediate(() => stream.emit("error", new Error("ENOMEM: not enough memory")));
+      return stream as ReturnType<(typeof tar.c)["asyncNoFile"]>;
+    });
+
+    try {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await expect(backupCreateCommand(runtime, { output: backupDir })).rejects.toThrow(
+        /--exclude-logs or --exclude-media/i,
+      );
+    } finally {
+      tarSpy.mockRestore();
+      await fs.rm(backupDir, { recursive: true, force: true });
     }
   });
 });
