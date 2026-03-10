@@ -394,3 +394,161 @@ describe("resolveForwardCompatModel", () => {
     expect(model).toBeUndefined();
   });
 });
+
+// ─── isLocalInferenceEndpoint ────────────────────────────────────────────────
+
+import { isLocalInferenceEndpoint } from "./model-compat.js";
+
+describe("isLocalInferenceEndpoint", () => {
+  // Loopback
+  it("matches localhost", () =>
+    expect(isLocalInferenceEndpoint("http://localhost:8080/v1")).toBe(true));
+  it("matches 127.0.0.1", () =>
+    expect(isLocalInferenceEndpoint("http://127.0.0.1:8080/v1")).toBe(true));
+  it("matches full 127.x.x.x/8 range — 127.0.0.2", () =>
+    expect(isLocalInferenceEndpoint("http://127.0.0.2/v1")).toBe(true));
+  it("matches full 127.x.x.x/8 range — 127.255.255.254", () =>
+    expect(isLocalInferenceEndpoint("http://127.255.255.254/v1")).toBe(true));
+  it("matches IPv6 loopback [::1]", () =>
+    expect(isLocalInferenceEndpoint("http://[::1]:8080/v1")).toBe(true));
+
+  // RFC-1918
+  it("matches 10.x", () => expect(isLocalInferenceEndpoint("http://10.0.0.1/v1")).toBe(true));
+  it("matches 192.168.x (e.g. DGX Spark)", () =>
+    expect(isLocalInferenceEndpoint("http://192.168.1.152:8002/v1")).toBe(true));
+  it("matches 172.16.x (lower bound of /12)", () =>
+    expect(isLocalInferenceEndpoint("http://172.16.0.1/v1")).toBe(true));
+  it("matches 172.31.x (upper bound of /12)", () =>
+    expect(isLocalInferenceEndpoint("http://172.31.255.1/v1")).toBe(true));
+  it("does NOT match 172.15.x (just below /12 range)", () =>
+    expect(isLocalInferenceEndpoint("http://172.15.0.1/v1")).toBe(false));
+  it("does NOT match 172.32.x (just above /12 range)", () =>
+    expect(isLocalInferenceEndpoint("http://172.32.0.1/v1")).toBe(false));
+
+  // Link-local
+  it("matches 169.254.x", () =>
+    expect(isLocalInferenceEndpoint("http://169.254.1.1/v1")).toBe(true));
+
+  // mDNS
+  it("matches *.local hostnames", () =>
+    expect(isLocalInferenceEndpoint("http://spark-38f8.local:8002/v1")).toBe(true));
+  it("matches single-label .local", () =>
+    expect(isLocalInferenceEndpoint("http://raspberrypi.local/v1")).toBe(true));
+
+  // Public/remote — must return false
+  it("rejects api.openai.com", () =>
+    expect(isLocalInferenceEndpoint("https://api.openai.com/v1")).toBe(false));
+  it("rejects api.anthropic.com", () =>
+    expect(isLocalInferenceEndpoint("https://api.anthropic.com")).toBe(false));
+  it("rejects public IP 8.8.8.8", () =>
+    expect(isLocalInferenceEndpoint("http://8.8.8.8/v1")).toBe(false));
+  it("rejects Azure OpenAI endpoint", () =>
+    expect(isLocalInferenceEndpoint("https://my-resource.openai.azure.com/v1")).toBe(false));
+  it("rejects Groq", () =>
+    expect(isLocalInferenceEndpoint("https://api.groq.com/openai/v1")).toBe(false));
+  it("rejects DeepSeek", () =>
+    expect(isLocalInferenceEndpoint("https://api.deepseek.com/v1")).toBe(false));
+  it("returns false for empty string", () => expect(isLocalInferenceEndpoint("")).toBe(false));
+  it("returns false for invalid URL", () =>
+    expect(isLocalInferenceEndpoint("not-a-url")).toBe(false));
+});
+
+// ─── normalizeModelCompat — local inference endpoints ────────────────────────
+
+describe("normalizeModelCompat — local inference endpoints", () => {
+  function localModel(baseUrl: string): Model<Api> {
+    return {
+      id: "Qwen3.5-35B",
+      name: "Qwen3.5-35B",
+      api: "openai-completions",
+      provider: "local-dgx-spark",
+      baseUrl,
+      input: ["text"],
+      reasoning: false,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 4096,
+    } as Model<Api>;
+  }
+
+  it("disables developer role but does NOT force supportsUsageInStreaming false for localhost", () => {
+    const result = normalizeModelCompat(localModel("http://localhost:11434/v1"));
+    const compat = result.compat as Record<string, boolean> | undefined;
+    expect(compat?.supportsDeveloperRole).toBe(false);
+    expect(compat?.supportsUsageInStreaming).toBeUndefined();
+  });
+
+  it("disables developer role but does NOT force supportsUsageInStreaming false for 192.168.x", () => {
+    const result = normalizeModelCompat(localModel("http://192.168.1.152:8002/v1"));
+    const compat = result.compat as Record<string, boolean> | undefined;
+    expect(compat?.supportsDeveloperRole).toBe(false);
+    expect(compat?.supportsUsageInStreaming).toBeUndefined();
+  });
+
+  it("treats 127.0.0.2 (non-standard loopback) as local", () => {
+    const result = normalizeModelCompat(localModel("http://127.0.0.2:8080/v1"));
+    const compat = result.compat as Record<string, boolean> | undefined;
+    expect(compat?.supportsDeveloperRole).toBe(false);
+    expect(compat?.supportsUsageInStreaming).toBeUndefined();
+  });
+
+  it("treats *.local mDNS addresses as local", () => {
+    const result = normalizeModelCompat(localModel("http://spark-38f8.local:8002/v1"));
+    const compat = result.compat as Record<string, boolean> | undefined;
+    expect(compat?.supportsDeveloperRole).toBe(false);
+    expect(compat?.supportsUsageInStreaming).toBeUndefined();
+  });
+
+  it("preserves explicitly configured supportsUsageInStreaming: true for local endpoints", () => {
+    const model = {
+      ...localModel("http://localhost:8080/v1"),
+      compat: { supportsUsageInStreaming: true },
+    };
+    const result = normalizeModelCompat(model);
+    const compat = result.compat as Record<string, boolean> | undefined;
+    expect(compat?.supportsUsageInStreaming).toBe(true);
+    expect(compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  it("is idempotent when supportsDeveloperRole already false for local endpoint", () => {
+    const model = {
+      ...localModel("http://localhost:8080/v1"),
+      compat: { supportsDeveloperRole: false },
+    };
+    const result = normalizeModelCompat(model);
+    expect(result).toBe(model);
+  });
+});
+
+// ─── normalizeModelCompat — remote non-native endpoints ──────────────────────
+
+describe("normalizeModelCompat — remote non-native endpoints", () => {
+  function remoteModel(baseUrl: string): Model<Api> {
+    return {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl,
+      input: ["text"],
+      reasoning: false,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 1024,
+    } as Model<Api>;
+  }
+
+  it("forces BOTH developer role AND streaming usage off for remote non-native endpoints", () => {
+    for (const url of [
+      "https://api.deepseek.com/v1",
+      "https://api.groq.com/openai/v1",
+      "https://api.z.ai/api/paas/v4",
+      "https://my-resource.openai.azure.com/v1",
+    ]) {
+      const result = normalizeModelCompat(remoteModel(url));
+      const compat = result.compat as Record<string, boolean> | undefined;
+      expect(compat?.supportsDeveloperRole, `supportsDeveloperRole for ${url}`).toBe(false);
+      expect(compat?.supportsUsageInStreaming, `supportsUsageInStreaming for ${url}`).toBe(false);
+    }
+  });
+});
