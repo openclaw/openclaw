@@ -1,0 +1,183 @@
+/* Adaptive Card Styles — inline rendering within chat bubbles */
+
+.ac-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-top: 8px;
+  background: var(--card);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+  overflow: hidden;
+}
+
+/* TextBlock */
+.ac-text {
+  margin: 0 0 4px;
+  line-height: 1.45;
+  word-wrap: break-word;
+  color: var(--text);
+}
+
+.ac-bold {
+  font-weight: 600;
+}
+
+.ac-subtle {
+  color: var(--muted);
+}
+
+.ac-nowrap {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ac-size-sm {
+  font-size: 12px;
+}
+
+.ac-size-default {
+  font-size: 13px;
+}
+
+.ac-size-md {
+  font-size: 14px;
+}
+
+.ac-size-lg {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ac-size-xl {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* FactSet */
+.ac-factset {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.ac-factset__key {
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.ac-factset__val {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ColumnSet / Column */
+.ac-columnset {
+  display: flex;
+  gap: 12px;
+  margin: 6px 0;
+}
+
+.ac-column {
+  min-width: 0;
+}
+
+/* Container */
+.ac-container {
+  margin: 4px 0;
+}
+
+/* Image */
+.ac-image {
+  display: block;
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 6px 0;
+}
+
+.ac-img-sm {
+  max-width: 60px;
+}
+
+.ac-img-md {
+  max-width: 120px;
+}
+
+.ac-img-lg {
+  max-width: 200px;
+}
+
+.ac-img-auto {
+  max-width: 100%;
+}
+
+/* Table */
+.ac-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.ac-table__th {
+  text-align: left;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+.ac-table__td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* Actions */
+.ac-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ac-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out;
+}
+
+.ac-action--submit {
+  background: var(--accent);
+  color: var(--accent-foreground, #fff);
+  border: 1px solid transparent;
+}
+
+.ac-action--submit:hover {
+  filter: brightness(1.08);
+}
+
+.ac-action--link {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+
+.ac-action--link:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
