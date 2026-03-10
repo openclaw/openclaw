@@ -1,13 +1,19 @@
 # Workflow Structure Guide
 
-**Date:** March 9, 2026  
-**Topic:** Correct Workflow Structure for Branching Support
+**Last Updated:** March 9, 2026
+**Version:** 2.0
 
 ---
 
-## Structure Requirements
+## Overview
 
-### Basic Sequential Workflow
+This guide covers the correct structure for OpenClaw workflows, including sequential execution and If/Else branching.
+
+---
+
+## Basic Sequential Workflow
+
+A simple linear workflow:
 
 ```json
 {
@@ -15,17 +21,26 @@
     {
       "id": "trigger-1",
       "type": "trigger",
-      "data": { "label": "Schedule (Cron)", "cronExpr": "*/5 * * * *" }
+      "data": {
+        "label": "Schedule (Cron)",
+        "cronExpr": "*/5 * * * *"
+      }
     },
     {
       "id": "agent-1",
       "type": "action",
-      "data": { "label": "AI Agent Prompt", "prompt": "Hello" }
+      "data": {
+        "label": "AI Agent Prompt",
+        "prompt": "Analyze: {{input}}"
+      }
     },
     {
       "id": "send-1",
       "type": "action",
-      "data": { "label": "Send Message", "body": "Done" }
+      "data": {
+        "label": "Send Message",
+        "body": "Done: {{input}}"
+      }
     }
   ],
   "edges": [
@@ -35,29 +50,19 @@
 }
 ```
 
-**Extracted Chain:**
+**Execution Flow:**
 
-```json
-[
-  {
-    "nodeId": "agent-1",
-    "actionType": "agent-prompt",
-    "prompt": "Hello",
-    "trueChain": [
-      {
-        "nodeId": "send-1",
-        "actionType": "send-message",
-        "body": "Done",
-        "trueChain": []
-      }
-    ]
-  }
-]
+```
+Trigger → Agent Prompt → Send Message
+   ↓          ↓              ↓
+  cron    analyze        deliver
 ```
 
 ---
 
-### Workflow with If/Else Branching
+## Workflow with If/Else Branching
+
+Conditional execution based on input:
 
 ```json
 {
@@ -70,7 +75,10 @@
     {
       "id": "agent-1",
       "type": "action",
-      "data": { "label": "AI Agent Prompt", "prompt": "Analyze: {{input}}" }
+      "data": {
+        "label": "AI Agent Prompt",
+        "prompt": "Analyze: {{input}}"
+      }
     },
     {
       "id": "if-else-1",
@@ -83,12 +91,18 @@
     {
       "id": "agent-2",
       "type": "action",
-      "data": { "label": "AI Agent Prompt", "prompt": "Detailed: {{input}}" }
+      "data": {
+        "label": "AI Agent Prompt",
+        "prompt": "Detailed analysis: {{input}}"
+      }
     },
     {
       "id": "agent-3",
       "type": "action",
-      "data": { "label": "AI Agent Prompt", "prompt": "Brief: {{input}}" }
+      "data": {
+        "label": "AI Agent Prompt",
+        "prompt": "Brief summary: {{input}}"
+      }
     },
     {
       "id": "send-1",
@@ -115,51 +129,16 @@
 }
 ```
 
-**Extracted Chain:**
+**Execution Flow:**
 
-```json
-[
-  {
-    "nodeId": "agent-1",
-    "actionType": "agent-prompt",
-    "prompt": "Analyze: {{input}}",
-    "trueChain": [
-      {
-        "nodeId": "if-else-1",
-        "actionType": "if-else",
-        "condition": "input.length > 100",
-        "trueChain": [
-          {
-            "nodeId": "agent-2",
-            "actionType": "agent-prompt",
-            "prompt": "Detailed: {{input}}",
-            "trueChain": [
-              {
-                "nodeId": "send-1",
-                "actionType": "send-message",
-                "trueChain": []
-              }
-            ]
-          }
-        ],
-        "falseChain": [
-          {
-            "nodeId": "agent-3",
-            "actionType": "agent-prompt",
-            "prompt": "Brief: {{input}}",
-            "trueChain": [
-              {
-                "nodeId": "send-1",
-                "actionType": "send-message",
-                "trueChain": []
-              }
-            ]
-          }
-        ]
-      }
-    ]
-  }
-]
+```
+                    TRUE branch
+                 ↗ (length > 100)
+                /   → Agent 2 ─┐
+Trigger → Agent 1 → If/Else    → Send
+                \   → Agent 3 ─┘
+                 ↘ (length ≤ 100)
+                  FALSE branch
 ```
 
 ---
@@ -171,13 +150,14 @@
 Edges from If/Else nodes **MUST** be labeled:
 
 ```typescript
-// In React Flow edge data
+// TRUE branch
 {
   source: "if-else-1",
   target: "agent-2",
   data: { label: "true" }  // or "yes"
 }
 
+// FALSE branch
 {
   source: "if-else-1",
   target: "agent-3",
@@ -187,75 +167,21 @@ Edges from If/Else nodes **MUST** be labeled:
 
 ### Supported Labels
 
-| Label     | Meaning              |
-| --------- | -------------------- |
-| `"true"`  | TRUE branch          |
-| `"yes"`   | TRUE branch (alias)  |
-| `"false"` | FALSE branch         |
-| `"no"`    | FALSE branch (alias) |
+| Label     | Meaning              | Handle Color |
+| --------- | -------------------- | ------------ |
+| `"true"`  | TRUE branch          | 🟢 Green     |
+| `"yes"`   | TRUE branch (alias)  | 🟢 Green     |
+| `"false"` | FALSE branch         | 🔴 Red       |
+| `"no"`    | FALSE branch (alias) | 🔴 Red       |
 
 ### Fallback Behavior
 
-If edges are NOT labeled:
+⚠️ **Warning:** If edges are NOT labeled:
 
 - **First edge** → TRUE branch
 - **Second edge** → FALSE branch
 
-**But this is unreliable!** Always label edges explicitly.
-
----
-
-## How to Label Edges in React Flow
-
-### Option 1: Edge Component with Label Input
-
-```tsx
-// In workflow-editor.tsx
-const onEdgeClick = useCallback(
-  (event: React.MouseEvent, edge: Edge) => {
-    const label = prompt("Enter edge label (true/false):");
-    if (label) {
-      setEdges((eds) => eds.map((e) => (e.id === edge.id ? { ...e, data: { label } } : e)));
-    }
-  },
-  [setEdges],
-);
-
-<ReactFlow
-  onEdgeClick={onEdgeClick}
-  // ...
-/>;
-```
-
-### Option 2: Custom Edge Type with Dropdown
-
-```tsx
-// custom-edge.tsx
-export function BranchEdge({ id, data, markerEnd }: EdgeProps) {
-  const { setEdges } = useReactFlow();
-
-  const onLabelChange = (e: React.ChangeEvent<HTMLSelect>) => {
-    setEdges((eds) =>
-      eds.map((edge) => (edge.id === id ? { ...edge, data: { label: e.target.value } } : edge)),
-    );
-  };
-
-  return (
-    <>
-      <BaseEdge path={getPath()} markerEnd={markerEnd} />
-      <EdgeLabelRenderer>
-        <div className="edge-label-dropdown">
-          <select value={data?.label || ""} onChange={onLabelChange}>
-            <option value="">Select...</option>
-            <option value="true">True</option>
-            <option value="false">False</option>
-          </select>
-        </div>
-      </EdgeLabelRenderer>
-    </>
-  );
-}
-```
+**This is unreliable!** Always label edges explicitly.
 
 ---
 
@@ -263,45 +189,52 @@ export function BranchEdge({ id, data, markerEnd }: EdgeProps) {
 
 ### Before Save
 
-Check these constraints:
+The workflow editor validates:
 
-1. **If/Else must have 2 outgoing edges**
+#### 1. If/Else Must Have 2 Outgoing Edges
 
-   ```typescript
-   const ifElseNodes = nodes.filter((n) => n.data?.label === "If / Else");
-   for (const node of ifElseNodes) {
-     const outgoingEdges = edges.filter((e) => e.source === node.id);
-     if (outgoingEdges.length !== 2) {
-       alert(`If/Else node "${node.id}" must have exactly 2 outgoing edges`);
-       return false;
-     }
-   }
-   ```
+```typescript
+const ifElseNodes = nodes.filter((n) => n.data?.label === "If / Else");
+for (const node of ifElseNodes) {
+  const outgoingEdges = edges.filter((e) => e.source === node.id);
+  if (outgoingEdges.length !== 2) {
+    alert(`If/Else node "${node.id}" must have exactly 2 outgoing edges`);
+    return false;
+  }
+}
+```
 
-2. **Edges from If/Else must be labeled**
+#### 2. Edges from If/Else Must Be Labeled
 
-   ```typescript
-   for (const edge of outgoingEdges) {
-     const label = edge.data?.label || edge.label;
-     if (!label || !["true", "false"].includes(label.toLowerCase())) {
-       alert(`Edge from If/Else must be labeled "true" or "false"`);
-       return false;
-     }
-   }
-   ```
+```typescript
+for (const edge of outgoingEdges) {
+  const label = edge.data?.label || edge.label;
+  if (!label || !["true", "false", "yes", "no"].includes(label.toLowerCase())) {
+    alert(`Edge from If/Else must be labeled "true" or "false"`);
+    return false;
+  }
+}
+```
 
-3. **No cycles in workflow**
-   ```typescript
-   function hasCycle(nodeId: string, visited: Set<string>): boolean {
-     if (visited.has(nodeId)) return true;
-     visited.add(nodeId);
-     const outgoing = edges.filter((e) => e.source === nodeId);
-     for (const edge of outgoing) {
-       if (hasCycle(edge.target, new Set(visited))) return true;
-     }
-     return false;
-   }
-   ```
+#### 3. No Cycles in Workflow
+
+```typescript
+function hasCycle(nodeId: string, visited: Set<string>, path: Set<string>): boolean {
+  if (path.has(nodeId)) return true;
+  if (visited.has(nodeId)) return false;
+
+  visited.add(nodeId);
+  path.add(nodeId);
+
+  const outgoing = edges.filter((e) => e.source === nodeId);
+  for (const edge of outgoing) {
+    if (hasCycle(edge.target, visited, path)) return true;
+  }
+
+  path.delete(nodeId);
+  return false;
+}
+```
 
 ---
 
@@ -319,7 +252,7 @@ Check these constraints:
 }
 ```
 
-**Fix:**
+**✅ Fix:**
 
 ```json
 {
@@ -338,10 +271,12 @@ Check these constraints:
 }
 ```
 
-### ❌ Mistake 2: Both Edges Labeled "true"
+---
+
+### ❌ Mistake 2: Both Edges Same Label
 
 ```json
-// WRONG - Both edges same label
+// WRONG - Both edges labeled "true"
 {
   "edges": [
     { "source": "if-else-1", "target": "agent-2", "data": { "label": "true" } },
@@ -350,27 +285,29 @@ Check these constraints:
 }
 ```
 
-**Fix:** Label one "true" and one "false"
+**✅ Fix:** Label one "true" and one "false"
+
+---
 
 ### ❌ Mistake 3: If/Else with Only 1 Branch
 
 ```json
 // WRONG - Missing false branch
 {
-  "nodes": [{ "id": "if-else-1", "type": "logic", "data": { "label": "If / Else" } }],
+  "nodes": [{ "id": "if-else-1", "type": "logic" }],
   "edges": [{ "source": "if-else-1", "target": "agent-2", "data": { "label": "true" } }]
 }
 ```
 
-**Fix:** Add false branch (can be empty if you want to skip)
+**✅ Fix:** Add false branch (can be empty if you want to skip)
 
 ---
 
-## Testing Your Structure
+## Testing Your Workflow
 
-### Debug Script
+### Debug in Browser Console
 
-Run this in browser console after creating workflow:
+After creating your workflow:
 
 ```javascript
 // Get current workflow state
@@ -390,23 +327,68 @@ for (const node of ifElseNodes) {
   console.log(`  - Labels: ${outgoingEdges.map((e) => e.data?.label || "UNLABELED").join(", ")}`);
 }
 
-// Test extraction
+// Test chain extraction
 const chain = extractChainFromTrigger("trigger-1", nodes, edges);
 console.log("Extracted chain:", JSON.stringify(chain, null, 2));
 ```
 
+### Monitor Gateway Logs
+
+```bash
+# Watch workflow execution
+tail -f /tmp/openclaw-gateway.log | grep -i "workflow\|branch\|if-else"
+```
+
+**Expected logs:**
+
+```
+workflow: executing chain step
+workflow: node execution complete
+workflow: branch taken, executing branch chain
+workflow: chain execution complete
+```
+
 ---
 
-## Summary
+## Visual Layout Tips
 
-### ✅ Correct Structure Checklist
+### Recommended Node Arrangement
+
+```
+Left to Right Flow:
+
+Y=100                 TRUE Branch
+       ┌────────┐  ┌──────────┐  ┌─────────┐
+       │Trigger │→ │ Agent 1  │→ │  Send   │
+       └────────┘  └──────────┘  └─────────┘
+                        ↓
+Y=200              ┌─────────┐
+                   │If / Else│
+                   └─────────┘
+                        ↓
+Y=300                 FALSE Branch
+       ┌────────┐  ┌──────────┐  ┌─────────┐
+       │ Agent 2│← │  Branch  │← │ Agent 3 │
+       └────────┘  └──────────┘  └─────────┘
+```
+
+### Handle Colors
+
+- **Green (Top-Right):** TRUE branch
+- **Red (Bottom-Right):** FALSE branch
+
+---
+
+## Summary Checklist
+
+### ✅ Valid Workflow Structure
 
 - [ ] If/Else nodes have exactly 2 outgoing edges
 - [ ] Each edge from If/Else is labeled "true" or "false"
 - [ ] Sequential nodes have at most 1 outgoing edge
 - [ ] No cycles in the graph
 - [ ] All nodes are reachable from trigger
-- [ ] Chain extraction logs show correct trueChain/falseChain
+- [ ] Chain extraction shows correct trueChain/falseChain
 
 ### 📊 Structure Comparison
 
@@ -420,4 +402,14 @@ console.log("Extracted chain:", JSON.stringify(chain, null, 2));
 
 ---
 
-**Last Updated:** 2026-03-09
+## Related Documentation
+
+- **Nodes Reference:** [`docs/workflow/nodes-reference.md`](https://github.com/openclaw/openclaw/blob/main/docs/workflow/nodes-reference.md)
+- **If/Else Examples:** [`docs/workflow/if-else-examples.md`](https://github.com/openclaw/openclaw/blob/main/docs/workflow/if-else-examples.md)
+- **Implementation:** [`docs/workflow/WORKFLOW_NODES_IMPLEMENTATION.md`](https://github.com/openclaw/openclaw/blob/main/docs/workflow/WORKFLOW_NODES_IMPLEMENTATION.md)
+- **Architecture:** [`src/gateway/workflow-nodes/README.md`](https://github.com/openclaw/openclaw/blob/main/src/gateway/workflow-nodes/README.md)
+
+---
+
+**Version:** 2.0 (Modular Architecture)
+**Last Updated:** March 9, 2026

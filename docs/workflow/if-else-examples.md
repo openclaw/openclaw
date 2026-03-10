@@ -1,12 +1,14 @@
 # If/Else Workflow Examples
 
-**3 Complete Examples** với If/Else branching để học cách sử dụng!
+**3 Complete Examples** with If/Else branching to learn workflow patterns!
+
+**Last Updated:** March 9, 2026
 
 ---
 
 ## 📋 Example 1: Customer Support Auto-Response
 
-**Use Case:** Tự động phân loại và phản hồi customer messages dựa trên độ urgent
+**Use Case:** Automatically classify and respond to customer messages based on urgency.
 
 ### 🎯 Workflow Flow
 
@@ -86,7 +88,7 @@ Best regards, Support Team
 
 ## 📋 Example 2: Smart Alert Router
 
-**Use Case:** Route system alerts based on severity
+**Use Case:** Route system alerts based on severity.
 
 ### 🎯 Workflow Flow
 
@@ -175,7 +177,7 @@ All systems operational.
 
 ## 📋 Example 3: Lead Qualification Bot
 
-**Use Case:** Score and route sales leads by temperature
+**Use Case:** Score and route sales leads by temperature.
 
 ### 🎯 Workflow Flow
 
@@ -372,11 +374,13 @@ input.startsWith("http");
 
 ## 🧪 Testing Your Workflow
 
-### Step 1: Import Example
+### Step 1: Create Workflow
 
-1. Copy JSON from `if-else-examples.json`
-2. Paste into workflow editor (or manually recreate)
-3. Adjust cron schedule for testing
+1. Open Workflow Editor
+2. Drag nodes from palette
+3. Connect nodes with edges
+4. Configure each node
+5. Label If/Else edges
 
 ### Step 2: Check Console Logs
 
@@ -405,13 +409,14 @@ Open browser DevTools (F12) and look for:
 tail -f /tmp/openclaw-gateway.log | grep -i "workflow\|branch\|if-else"
 ```
 
-Expected logs:
+**Expected logs:**
 
 ```
-cron: [STEP 2/5] 🔀 IF/ELSE - Node "If / Else"
-cron: branch condition evaluated
-cron: condition result: TRUE
-cron: ↪️ Executing TRUE branch
+workflow: executing chain step
+workflow: node execution complete
+workflow: branch condition evaluated
+workflow: branch taken, executing branch chain
+workflow: chain execution complete
 ```
 
 ---
@@ -480,6 +485,16 @@ After mastering basic If/Else:
 2. **Multiple If/Else:** Chain multiple conditions
 3. **Merge Branches:** Both branches converge to same node
 4. **Complex Conditions:** Use Agent to pre-process before If/Else
+5. **Delay Nodes:** Add pauses between steps
+6. **Multiple Actions:** Chain several actions per branch
+
+---
+
+## 📚 Related Documentation
+
+- **Nodes Reference:** [`docs/workflow/nodes-reference.md`](https://github.com/openclaw/openclaw/blob/main/docs/workflow/nodes-reference.md)
+- **Structure Guide:** [`docs/workflow/workflow-structure-guide.md`](https://github.com/openclaw/openclaw/blob/main/docs/workflow/workflow-structure-guide.md)
+- **Implementation:** [`docs/workflow/WORKFLOW_NODES_IMPLEMENTATION.md`](https://github.com/openclaw/openclaw/blob/main/docs/workflow/WORKFLOW_NODES_IMPLEMENTATION.md)
 
 ---
 
