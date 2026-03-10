@@ -357,6 +357,22 @@ Done.`,
     expect(result).toBe("Checking now.\nDone.");
   });
 
+  it("strips incomplete parameter tails when function_call wrappers are present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<function_call></function_call>\n<parameter name="command">echo secret`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
   it("strips multiple downgraded tool calls", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

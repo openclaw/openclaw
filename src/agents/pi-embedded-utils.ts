@@ -202,6 +202,9 @@ export function stripDowngradedToolCallText(text: string): string {
   // Strip OpenAI-compatible XML-style function call wrappers that can leak in plain text.
   // Keep this scoped to explicit function_call markers to avoid clobbering normal XML snippets.
   const hasFunctionCallXml = /<\/?\s*function_calls?\b/i.test(cleaned);
+  // Intentionally computed from the pre-substitution text: once we detect a function_call
+  // wrapper + payload in a chunk, we strip matching payload tags globally for that chunk.
+  // Do not widen this predicate casually; broader matches can over-strip unrelated XML.
   const hasFunctionCallPayload = /<\s*invoke\b|<\s*parameter\b|<\/?\s*function_call\b/i.test(
     cleaned,
   );
@@ -220,6 +223,7 @@ export function stripDowngradedToolCallText(text: string): string {
     cleaned = cleaned.replace(/<\s*invoke\b[^>]*>[\s\S]*?<\s*\/\s*invoke\s*>/gi, "");
     cleaned = cleaned.replace(/<\s*invoke\b[^>]*>[\s\S]*$/gi, "");
     cleaned = cleaned.replace(/<\s*parameter\b[^>]*>[\s\S]*?<\s*\/\s*parameter\s*>/gi, "");
+    cleaned = cleaned.replace(/<\s*parameter\b[^>]*>[\s\S]*$/gi, "");
     // Remove any remaining wrapper tags.
     cleaned = cleaned.replace(/<\s*\/?\s*function_calls?\b[^>]*>/gi, "");
     cleaned = cleaned.replace(/<\s*\/?\s*function_call\b[^>]*>/gi, "");
