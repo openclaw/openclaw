@@ -597,6 +597,31 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   };
 }
 
+function isLikelyProviderErrorType(type?: string): boolean {
+  const normalized = type?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.endsWith("_error");
+}
+
+function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
+  const info = parseApiErrorInfo(raw);
+  if (!info) {
+    return false;
+  }
+  if (isLikelyProviderErrorType(info.type)) {
+    return true;
+  }
+  if (info.httpCode) {
+    const parsedCode = Number(info.httpCode);
+    if (Number.isFinite(parsedCode) && parsedCode >= 400) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
@@ -728,11 +753,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return "";
   }
 
-  // Raw JSON API error payloads should never reach the user, regardless of
-  // whether the caller flagged this as an error context.  Providers sometimes
-  // stream server_error events as regular assistant text (not isError), and
-  // without this guard the raw JSON leaks into chat.  (#42132)
-  if (isRawApiErrorPayload(trimmed)) {
+  // Raw JSON API error payloads with strong provider-error signals should not
+  // reach the user even when the stream chunk was not flagged as `isError`.
+  // Keep this narrow to avoid clobbering legitimate assistant JSON output.
+  // (#42132)
+  if (shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
 

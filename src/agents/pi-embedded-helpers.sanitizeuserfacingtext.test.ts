@@ -82,6 +82,12 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("does not rewrite regular assistant JSON that only contains error-shaped fields", () => {
+    const text =
+      '{"request_id":"example-123","error":{"code":"example_code","message":"Example payload for docs"}}';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
