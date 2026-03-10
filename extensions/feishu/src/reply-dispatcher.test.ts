@@ -10,7 +10,7 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
-const recordFeishuNativeThreadBindingMock = vi.hoisted(() => vi.fn());
+const recordBindingMock = vi.hoisted(() => vi.fn());
 const streamingInstances = vi.hoisted(() => [] as any[]);
 const nextStreamingStartError = vi.hoisted(() => ({ current: null as Error | null }));
 
@@ -27,9 +27,7 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./thread-bindings.js", () => ({
-  recordFeishuNativeThreadBinding: recordFeishuNativeThreadBindingMock,
-}));
+vi.mock("./thread-bindings.js", () => ({ recordFeishuNativeThreadBinding: recordBindingMock }));
 vi.mock("./streaming-card.js", () => ({
   mergeStreamingText: (previousText: string | undefined, nextText: string | undefined) => {
     const previous = typeof previousText === "string" ? previousText : "";
@@ -505,7 +503,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: true,
       }),
     );
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+    expect(recordBindingMock).toHaveBeenCalledWith({
       accountId: undefined,
       chatId: "oc_chat",
       rootMessageId: "om_msg",
@@ -534,7 +532,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.deliver({ text: "plain text" }, { kind: "final" });
 
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+    expect(recordBindingMock).toHaveBeenCalledWith({
       accountId: undefined,
       chatId: "oc_chat",
       rootMessageId: "om_root_topic",
@@ -663,7 +661,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
-    expect(recordFeishuNativeThreadBindingMock).toHaveBeenCalledWith({
+    expect(recordBindingMock).toHaveBeenCalledWith({
       accountId: undefined,
       chatId: "oc_chat",
       rootMessageId: "om_root_topic",
