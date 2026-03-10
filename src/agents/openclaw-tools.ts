@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -69,9 +70,20 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /**
+     * Workspace directory to pass to spawned subagents for inheritance.
+     * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
+     * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
+     * subagents inherit the real workspace path instead of the sandbox copy.
+     */
+    spawnWorkspaceDir?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
+  const spawnWorkspaceDir = resolveWorkspaceRoot(
+    options?.spawnWorkspaceDir ?? options?.workspaceDir,
+  );
+  const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
@@ -100,10 +112,12 @@ export function createOpenClawTools(
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeWebSearch: runtimeWebTools?.search,
   });
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
   });
   const messageTool = options?.disableMessageTool
     ? null
@@ -178,7 +192,7 @@ export function createOpenClawTools(
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
-      workspaceDir,
+      workspaceDir: spawnWorkspaceDir,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
