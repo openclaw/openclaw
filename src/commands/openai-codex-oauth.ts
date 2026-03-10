@@ -1,5 +1,6 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
+import { ensureGlobalUndiciStreamTimeouts } from "../infra/net/undici-global-dispatcher.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -41,6 +42,10 @@ export async function loginOpenAICodexOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
+    // Ensure global undici dispatcher respects HTTPS_PROXY so that bare
+    // fetch() calls inside pi-ai's OAuth token exchange go through the proxy.
+    ensureGlobalUndiciStreamTimeouts();
+
     const { onAuth: baseOnAuth, onPrompt } = createVpsAwareOAuthHandlers({
       isRemote,
       prompter,
