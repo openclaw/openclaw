@@ -5,6 +5,7 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/zalouser";
 import {
+  DEFAULT_ACCOUNT_ID,
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,

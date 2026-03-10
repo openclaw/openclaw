@@ -92,4 +92,25 @@ describe("models-config merge helpers", () => {
       }),
     );
   });
+
+  it("does not preserve stale plaintext apiKey when next entry is a marker", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        custom: {
+          apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+          models: [{ id: "model", api: "openai-responses" }],
+        } as ProviderConfig,
+      },
+      existingProviders: {
+        custom: {
+          apiKey: preservedApiKey,
+          models: [{ id: "model", api: "openai-responses" }],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+      explicitBaseUrlProviders: new Set<string>(),
+    });
+
+    expect(merged.custom?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
 });

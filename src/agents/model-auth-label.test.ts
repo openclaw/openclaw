@@ -12,7 +12,7 @@ vi.mock("./auth-profiles.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
-  getCustomProviderApiKey: () => undefined,
+  resolveUsableCustomProviderApiKey: () => null,
   resolveEnvApiKey: () => null,
 }));
 

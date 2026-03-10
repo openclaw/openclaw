@@ -16,6 +16,7 @@ type AuditFixture = {
 };
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -480,6 +481,73 @@ describe("secrets audit", () => {
         (entry) => entry.code === "REF_UNRESOLVED" && entry.file === fixture.modelsPath,
       ),
     ).toBe(true);
+  });
+
+  it("reports non-regular models.json files as unresolved findings", async () => {
+    await fs.rm(fixture.modelsPath, { force: true });
+    await fs.mkdir(fixture.modelsPath, { recursive: true });
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "REF_UNRESOLVED" && entry.file === fixture.modelsPath,
+      ),
+    ).toBe(true);
+  });
+
+  it("reports oversized models.json as unresolved findings", async () => {
+    const oversizedApiKey = "a".repeat(MAX_AUDIT_MODELS_JSON_BYTES + 256);
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: oversizedApiKey,
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "REF_UNRESOLVED" && entry.file === fixture.modelsPath,
+      ),
+    ).toBe(true);
+  });
+
+  it("scans active agent-dir override models.json even when outside state dir", async () => {
+    const externalAgentDir = path.join(fixture.rootDir, "external-agent");
+    const externalModelsPath = path.join(externalAgentDir, "models.json");
+    await fs.mkdir(externalAgentDir, { recursive: true });
+    await writeJsonFile(externalModelsPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-external-plaintext", // pragma: allowlist secret
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({
+      env: {
+        ...fixture.env,
+        OPENCLAW_AGENT_DIR: externalAgentDir,
+      },
+    });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === externalModelsPath &&
+          entry.jsonPath === "providers.openai.apiKey",
+      ),
+    ).toBe(true);
+    expect(report.filesScanned).toContain(externalModelsPath);
   });
 
   it("does not flag non-sensitive routing headers in openclaw config", async () => {

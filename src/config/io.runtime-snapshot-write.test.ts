@@ -7,6 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
+  projectConfigOntoRuntimeSourceSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,
@@ -55,6 +56,46 @@ describe("runtime config snapshot writes", () => {
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+      } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("skips source projection for non-runtime-derived configs", async () => {
+    await withTempHome("openclaw-config-runtime-projection-shape-", async () => {
+      const sourceConfig: OpenClawConfig = {
+        ...createSourceConfig(),
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        ...createRuntimeConfig(),
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      };
+      const independentConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-independent-config", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        const projected = projectConfigOntoRuntimeSourceSnapshot(independentConfig);
+        expect(projected).toBe(independentConfig);
       } finally {
         resetRuntimeConfigState();
       }
