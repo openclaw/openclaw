@@ -226,6 +226,9 @@ importers:
       oxlint-tsgolint:
         specifier: ^0.14.2
         version: 0.14.2
+      rolldown:
+        specifier: 1.0.0-rc.3
+        version: 1.0.0-rc.3
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
