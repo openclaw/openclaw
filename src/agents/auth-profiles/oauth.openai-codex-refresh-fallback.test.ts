@@ -11,18 +11,39 @@ import {
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
-const { getOAuthApiKeyMock } = vi.hoisted(() => ({
+const { getOAuthApiKeyMock, withEnvProxyGlobalDispatcherMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn(async () => {
     throw new Error("Failed to extract accountId from token");
   }),
+  withEnvProxyGlobalDispatcherMock: vi.fn(async (run: () => Promise<unknown>) => await run()),
 }));
 
+<<<<<<< HEAD
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
     { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
   ],
+}));
+=======
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: getOAuthApiKeyMock,
+    getOAuthProviders: () => [
+      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+    ],
+  };
+});
+>>>>>>> 445f5fc (Auth: honor proxy env for OpenAI Codex OAuth)
+
+vi.mock("../../infra/net/env-proxy-global-dispatcher.js", () => ({
+  withEnvProxyGlobalDispatcher: withEnvProxyGlobalDispatcherMock,
 }));
 
 function createExpiredOauthStore(params: {
@@ -55,6 +76,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
   beforeEach(async () => {
     getOAuthApiKeyMock.mockClear();
+    withEnvProxyGlobalDispatcherMock.mockClear();
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     agentDir = path.join(tempRoot, "agents", "main", "agent");
@@ -91,6 +113,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
+    expect(withEnvProxyGlobalDispatcherMock).toHaveBeenCalledTimes(1);
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -111,6 +134,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
+    expect(withEnvProxyGlobalDispatcherMock).not.toHaveBeenCalled();
   });
 
   it("does not use fallback for unrelated openai-codex refresh errors", async () => {

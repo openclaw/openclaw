@@ -1,5 +1,6 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import type { OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
+import { withEnvProxyGlobalDispatcher } from "../infra/net/env-proxy-global-dispatcher.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -50,11 +51,14 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
 
-    const creds = await loginOpenAICodex({
-      onAuth: baseOnAuth,
-      onPrompt,
-      onProgress: (msg: string) => spin.update(msg),
-    });
+    const creds = await withEnvProxyGlobalDispatcher(
+      async () =>
+        await loginOpenAICodex({
+          onAuth: baseOnAuth,
+          onPrompt,
+          onProgress: (msg: string) => spin.update(msg),
+        }),
+    );
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
