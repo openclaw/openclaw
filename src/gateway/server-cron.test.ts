@@ -51,6 +51,15 @@ vi.mock("../logging.js", () => ({
 
 import { buildGatewayCronService } from "./server-cron.js";
 
+type TestDeps = CliDeps & {
+  log: {
+    debug: ReturnType<typeof vi.fn>;
+    info: ReturnType<typeof vi.fn>;
+    warn: ReturnType<typeof vi.fn>;
+    error: ReturnType<typeof vi.fn>;
+  };
+};
+
 describe("buildGatewayCronService", () => {
   const deps = {
     log: {
@@ -59,7 +68,7 @@ describe("buildGatewayCronService", () => {
       warn: vi.fn(),
       error: vi.fn(),
     },
-  } as unknown as CliDeps;
+  } as unknown as TestDeps;
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();

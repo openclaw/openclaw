@@ -396,10 +396,12 @@ export function buildGatewayCronService(params: {
       const output = await resolveCronBackupOutput(job.payload.output);
       const result = await backupCreateCommand(
         {
-          log: (message: string) => {
+          log: (...args: unknown[]) => {
+            const message = args.map((arg) => String(arg)).join(" ");
             cronLogger.info({ jobId: job.id, message }, "cron: backup log");
           },
-          error: (message: string) => {
+          error: (...args: unknown[]) => {
+            const message = args.map((arg) => String(arg)).join(" ");
             cronLogger.warn({ jobId: job.id, message }, "cron: backup warning");
           },
           exit: (code: number) => {
