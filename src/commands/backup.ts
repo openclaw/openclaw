@@ -22,6 +22,8 @@ export type BackupCreateOptions = {
   dryRun?: boolean;
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
+  excludeLogs?: boolean;
+  excludeMedia?: boolean;
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
@@ -43,6 +45,8 @@ type BackupManifest = {
   options: {
     includeWorkspace: boolean;
     onlyConfig?: boolean;
+    excludeLogs?: boolean;
+    excludeMedia?: boolean;
   };
   paths: {
     stateDir: string;
@@ -66,6 +70,8 @@ export type BackupCreateResult = {
   dryRun: boolean;
   includeWorkspace: boolean;
   onlyConfig: boolean;
+  excludeLogs: boolean;
+  excludeMedia: boolean;
   verified: boolean;
   assets: BackupAsset[];
   skipped: Array<{
@@ -194,6 +200,8 @@ function buildManifest(params: {
   archiveRoot: string;
   includeWorkspace: boolean;
   onlyConfig: boolean;
+  excludeLogs: boolean;
+  excludeMedia: boolean;
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
@@ -211,6 +219,8 @@ function buildManifest(params: {
     options: {
       includeWorkspace: params.includeWorkspace,
       onlyConfig: params.onlyConfig,
+      excludeLogs: params.excludeLogs || undefined,
+      excludeMedia: params.excludeMedia || undefined,
     },
     paths: {
       stateDir: params.stateDir,
@@ -238,6 +248,16 @@ function formatTextSummary(result: BackupCreateResult): string[] {
   for (const asset of result.assets) {
     lines.push(`- ${asset.kind}: ${asset.displayPath}`);
   }
+  const excludedSubdirs: string[] = [];
+  if (result.excludeLogs) {
+    excludedSubdirs.push("logs/");
+  }
+  if (result.excludeMedia) {
+    excludedSubdirs.push("media/inbound/");
+  }
+  if (excludedSubdirs.length > 0) {
+    lines.push(`Excluded subdirectories: ${excludedSubdirs.join(", ")}`);
+  }
   if (result.skipped.length > 0) {
     lines.push(`Skipped ${result.skipped.length} path${result.skipped.length === 1 ? "" : "s"}:`);
     for (const entry of result.skipped) {
@@ -257,6 +277,38 @@ function formatTextSummary(result: BackupCreateResult): string[] {
     }
   }
   return lines;
+}
+
+/**
+ * Returns a tar filter that skips logs/ and/or media/inbound/ subtrees within
+ * any of the given asset source paths. Returns undefined when no exclusions apply.
+ */
+function buildTarFilter(params: {
+  excludeLogs: boolean;
+  excludeMedia: boolean;
+  assetSourcePaths: string[];
+}): ((entryPath: string) => boolean) | undefined {
+  if (!params.excludeLogs && !params.excludeMedia) {
+    return undefined;
+  }
+  return (entryPath: string) => {
+    const normalizedEntry = path.resolve(entryPath);
+    for (const assetPath of params.assetSourcePaths) {
+      const rel = path.relative(assetPath, normalizedEntry);
+      // Skip if outside this asset or is the asset root itself
+      if (rel === "" || rel.startsWith("..")) {
+        continue;
+      }
+      const parts = rel.split(path.sep);
+      if (params.excludeLogs && parts[0] === "logs") {
+        return false;
+      }
+      if (params.excludeMedia && parts[0] === "media" && parts[1] === "inbound") {
+        return false;
+      }
+    }
+    return true;
+  };
 }
 
 function remapArchiveEntryPath(params: {
@@ -279,6 +331,8 @@ export async function backupCreateCommand(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  const excludeLogs = Boolean(opts.excludeLogs);
+  const excludeMedia = Boolean(opts.excludeMedia);
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
   const outputPath = await resolveOutputPath({
     output: opts.output,
@@ -317,6 +371,8 @@ export async function backupCreateCommand(
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
     onlyConfig,
+    excludeLogs,
+    excludeMedia,
     verified: false,
     assets: plan.included,
     skipped: plan.skipped,
@@ -333,6 +389,8 @@ export async function backupCreateCommand(
         archiveRoot,
         includeWorkspace,
         onlyConfig,
+        excludeLogs,
+        excludeMedia,
         assets: result.assets,
         skipped: result.skipped,
         stateDir: plan.stateDir,
@@ -342,12 +400,18 @@ export async function backupCreateCommand(
       });
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
+      const tarFilter = buildTarFilter({
+        excludeLogs,
+        excludeMedia,
+        assetSourcePaths: result.assets.map((asset) => asset.sourcePath),
+      });
       await tar.c(
         {
           file: tempArchivePath,
           gzip: true,
           portable: true,
           preservePaths: true,
+          filter: tarFilter,
           onWriteEntry: (entry) => {
             entry.path = remapArchiveEntryPath({
               entryPath: entry.path,

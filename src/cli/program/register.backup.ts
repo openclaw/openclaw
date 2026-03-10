@@ -26,6 +26,8 @@ export function registerBackupCommand(program: Command) {
     .option("--verify", "Verify the archive after writing it", false)
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
+    .option("--exclude-logs", "Exclude logs/ subdirectory from the archive", false)
+    .option("--exclude-media", "Exclude media/inbound/ subdirectory from the archive", false)
     .addHelpText(
       "after",
       () =>
@@ -48,6 +50,10 @@ export function registerBackupCommand(program: Command) {
             "Back up state/config without agent workspace files.",
           ],
           ["openclaw backup create --only-config", "Back up only the active JSON config file."],
+          [
+            "openclaw backup create --exclude-logs --exclude-media",
+            "Skip logs/ and media/inbound/ to reduce archive size on large installations.",
+          ],
         ])}`,
     )
     .action(async (opts) => {
@@ -59,6 +65,8 @@ export function registerBackupCommand(program: Command) {
           verify: Boolean(opts.verify),
           onlyConfig: Boolean(opts.onlyConfig),
           includeWorkspace: opts.includeWorkspace as boolean,
+          excludeLogs: Boolean(opts.excludeLogs),
+          excludeMedia: Boolean(opts.excludeMedia),
         });
       });
     });

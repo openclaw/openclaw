@@ -408,6 +408,144 @@ describe("backup commands", () => {
     expect(result.assets[0]?.kind).toBe("config");
   });
 
+  it("excludes logs/ subtree when --exclude-logs is set", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const logsDir = path.join(stateDir, "logs");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-excl-logs-"));
+    try {
+      await fs.mkdir(logsDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(logsDir, "gateway.log"), "log data\n", "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const nowMs = Date.UTC(2026, 2, 9, 2, 0, 0);
+      const result = await backupCreateCommand(runtime, {
+        output: backupDir,
+        excludeLogs: true,
+        nowMs,
+      });
+
+      expect(result.excludeLogs).toBe(true);
+      expect(result.excludeMedia).toBe(false);
+
+      const extractDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-backup-excl-logs-extract-"),
+      );
+      try {
+        await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
+        const archiveRoot = path.join(extractDir, buildBackupArchiveRoot(nowMs));
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(archiveRoot, "manifest.json"), "utf8"),
+        ) as { options: { excludeLogs?: boolean } };
+        expect(manifest.options.excludeLogs).toBe(true);
+
+        // logs/gateway.log must not be present in the archive
+        const stateAsset = result.assets.find((a) => a.kind === "state");
+        expect(stateAsset).toBeDefined();
+        const encodedLogPath = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+          "logs",
+          "gateway.log",
+        );
+        await expect(fs.access(encodedLogPath)).rejects.toThrow();
+
+        // state.txt outside logs/ must still be present
+        const encodedStatePath = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+          "state.txt",
+        );
+        expect(await fs.readFile(encodedStatePath, "utf8")).toBe("state\n");
+      } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes media/inbound/ subtree when --exclude-media is set", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const mediaDir = path.join(stateDir, "media");
+    const inboundDir = path.join(mediaDir, "inbound");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-excl-media-"));
+    try {
+      await fs.mkdir(inboundDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(inboundDir, "video.mp4"), "fake video\n", "utf8");
+      await fs.writeFile(path.join(mediaDir, "thumb.png"), "fake img\n", "utf8");
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const nowMs = Date.UTC(2026, 2, 9, 3, 0, 0);
+      const result = await backupCreateCommand(runtime, {
+        output: backupDir,
+        excludeMedia: true,
+        nowMs,
+      });
+
+      expect(result.excludeLogs).toBe(false);
+      expect(result.excludeMedia).toBe(true);
+
+      const extractDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-backup-excl-media-extract-"),
+      );
+      try {
+        await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
+        const archiveRoot = path.join(extractDir, buildBackupArchiveRoot(nowMs));
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(archiveRoot, "manifest.json"), "utf8"),
+        ) as { options: { excludeMedia?: boolean } };
+        expect(manifest.options.excludeMedia).toBe(true);
+
+        const stateAsset = result.assets.find((a) => a.kind === "state");
+        expect(stateAsset).toBeDefined();
+        const encodedPayload = path.join(
+          archiveRoot,
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+        );
+
+        // media/inbound/video.mp4 must be absent
+        await expect(
+          fs.access(path.join(encodedPayload, "media", "inbound", "video.mp4")),
+        ).rejects.toThrow();
+
+        // media/thumb.png outside inbound/ must be present
+        expect(await fs.readFile(path.join(encodedPayload, "media", "thumb.png"), "utf8")).toBe(
+          "fake img\n",
+        );
+      } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dry-run summary lists excluded subdirectories when exclude flags are set", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const result = await backupCreateCommand(runtime, {
+      dryRun: true,
+      excludeLogs: true,
+      excludeMedia: true,
+    });
+
+    expect(result.excludeLogs).toBe(true);
+    expect(result.excludeMedia).toBe(true);
+    const logOutput = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => String(c[0]))
+      .join("\n");
+    expect(logOutput).toMatch(/logs\//);
+    expect(logOutput).toMatch(/media\/inbound\//);
+  });
+
   it("allows config-only backups even when the config file is invalid", async () => {
     const configPath = path.join(tempHome.home, "custom-config.json");
     process.env.OPENCLAW_CONFIG_PATH = configPath;
