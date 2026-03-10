@@ -495,4 +495,72 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("blocked");
   });
+
+  it("caps error detail for soft-block (403) responses to save context tokens", async () => {
+    // Simulate a login-wall page like zhihu/weibo that returns 403 + large HTML
+    const loginWallText = "Please login to continue. ".repeat(200); // ~5200 chars
+    const html =
+      "<!doctype html><html><head><title>Login Required</title></head><body>" +
+      "<h1>Login Required</h1><p>" +
+      loginWallText +
+      "</p></body></html>";
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(errorHtmlResponse(html, 403, requestUrl(input))) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/login-wall",
+    });
+
+    expect(message).toContain("Web fetch failed (403):");
+    // Soft-block errors should be much shorter than the default 4000-char cap
+    // to avoid wasting LLM context tokens on login-wall boilerplate.
+    expect(message.length).toBeLessThan(1_000);
+    expect(message).not.toContain("<html");
+  });
+
+  it("caps error detail for 401 responses", async () => {
+    const html =
+      "<!doctype html><html><body><h1>Unauthorized</h1><p>" +
+      "x".repeat(3000) +
+      "</p></body></html>";
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(errorHtmlResponse(html, 401, requestUrl(input))) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/unauth",
+    });
+
+    expect(message).toContain("Web fetch failed (401):");
+    expect(message.length).toBeLessThan(1_000);
+  });
+
+  it("keeps full error detail for non-soft-block errors (500)", async () => {
+    const longError = "Server error detail: " + "info ".repeat(600); // ~3000 chars
+    const html =
+      "<!doctype html><html><body><h1>Internal Server Error</h1><p>" +
+      longError +
+      "</p></body></html>";
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(errorHtmlResponse(html, 500, requestUrl(input))) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/server-error",
+    });
+
+    expect(message).toContain("Web fetch failed (500):");
+    // Non-soft-block should retain the full 4000-char cap
+    expect(message.length).toBeGreaterThan(1_000);
+  });
 });

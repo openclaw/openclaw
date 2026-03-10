@@ -41,6 +41,8 @@ const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
+const SOFT_BLOCK_ERROR_MAX_CHARS = 256;
+const SOFT_BLOCK_STATUS_CODES = new Set([401, 403, 407, 451]);
 const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
@@ -585,12 +587,17 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
       const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
       const rawDetail = rawDetailResult.text;
+      // Access-denied responses (login walls, paywalls) almost never contain
+      // useful detail for the agent — cap them tightly to save context tokens.
+      const errorMaxChars = SOFT_BLOCK_STATUS_CODES.has(res.status)
+        ? SOFT_BLOCK_ERROR_MAX_CHARS
+        : DEFAULT_ERROR_MAX_CHARS;
       const detail = formatWebFetchErrorDetail({
         detail: rawDetail,
         contentType: res.headers.get("content-type"),
-        maxChars: DEFAULT_ERROR_MAX_CHARS,
+        maxChars: errorMaxChars,
       });
-      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
+      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, errorMaxChars);
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
     }
 
