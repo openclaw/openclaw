@@ -393,7 +393,8 @@ export abstract class MemoryManagerSyncOps {
       }
     }
     // Limit depth to avoid FSEventWrap explosion (fd exhaustion) on macOS when memory/ or
-    // extraPaths contain large trees; see #41606.
+    // extraPaths contain large trees; see #41606. Files deeper than 2 levels do not emit
+    // watch events and rely on full sync (interval, new session, or manual) for updates.
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
       depth: 2,
