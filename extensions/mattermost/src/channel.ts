@@ -157,7 +157,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     }
 
     const message = typeof params.message === "string" ? params.message : "";
-    const replyToId = typeof params.replyToId === "string" ? params.replyToId : undefined;
+    // Match the shared runner semantics: trim empty reply IDs away before
+    // falling back from replyToId to replyTo on direct plugin calls.
+    const replyToId = readMattermostReplyToId(params);
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
@@ -200,6 +202,18 @@ const meta = {
   order: 65,
   quickstartAllowFrom: true,
 } as const;
+
+function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
+  const readNormalizedValue = (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  };
+
+  return readNormalizedValue(params.replyToId) ?? readNormalizedValue(params.replyTo);
+}
 
 function normalizeAllowEntry(entry: string): string {
   return entry

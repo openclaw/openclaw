@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 - Agents/memory flush: forward `memoryFlushWritePath` through `runEmbeddedPiAgent` so memory-triggered flush turns keep the append-only write guard without aborting before tool setup. Follows up on #38574. (#41761) Thanks @frankekn.
 - CI/CodeQL Swift toolchain: select Xcode 26.1 before installing Swift build tools so the CodeQL Swift job uses Swift tools 6.2 on `macos-latest`. (#41787) thanks @BunsDev.
 - Sandbox/subagents: pass the real configured workspace through `sessions_spawn` inheritance when a parent agent runs in a copied-workspace sandbox, so child `/agent` mounts point at the configured workspace instead of the parent sandbox copy. (#40757) Thanks @dsantoreis.
+- Mattermost/plugin send actions: normalize direct `replyTo` fallback handling so threaded plugin sends trim blank IDs and reuse the correct reply target again. (#41176) Thanks @hnykda.
 
 ## 2026.3.8
 
