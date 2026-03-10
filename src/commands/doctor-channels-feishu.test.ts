@@ -67,7 +67,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              appSecret: "test_secret", // pragma: allowlist secret
+              appSecret: "TEST_SECRET_PLACEHOLDER", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "allowlist",
@@ -92,7 +92,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              appSecret: "test_secret", // pragma: allowlist secret
+              appSecret: "TEST_SECRET_PLACEHOLDER", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "open",
@@ -114,7 +114,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              appSecret: "test_secret", // pragma: allowlist secret
+              appSecret: "TEST_SECRET_PLACEHOLDER", // pragma: allowlist secret
             },
             default: {
               groupPolicy: "allowlist",
@@ -146,11 +146,11 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              appSecret: "test_secret", // pragma: allowlist secret
+              appSecret: "TEST_SECRET_PLACEHOLDER", // pragma: allowlist secret
             },
             default: {
               appId: "test_app_id_default",
-              appSecret: "test_secret_default", // pragma: allowlist secret
+              appSecret: "TEST_SECRET_DEFAULT_PLACEHOLDER", // pragma: allowlist secret
               groupPolicy: "allowlist",
               groupAllowFrom: ["oc_group1", "oc_group2"],
             },
@@ -183,7 +183,7 @@ describe("diagnoseFeishuChannel", () => {
           accounts: {
             admin: {
               appId: "test_app_id",
-              appSecret: "test_secret", // pragma: allowlist secret
+              appSecret: "TEST_SECRET_PLACEHOLDER", // pragma: allowlist secret
             },
           },
           connectionMode: "webhook",
