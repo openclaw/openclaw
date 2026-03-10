@@ -1133,7 +1133,10 @@ export abstract class MemoryManagerSyncOps {
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           this.lastSessionSyncError = errorMessage;
-          log.warn("memory sessions: sync failed", { err: errorMessage, reason: this.lastSessionSyncReason });
+          log.warn("memory sessions: sync failed", {
+            err: errorMessage,
+            reason: this.lastSessionSyncReason,
+          });
           throw err;
         }
         this.sessionsDirty = false;
@@ -1233,7 +1236,10 @@ export abstract class MemoryManagerSyncOps {
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         this.lastSessionSyncError = errorMessage;
-        log.warn("memory sessions: sync failed", { err: errorMessage, reason: this.lastSessionSyncReason });
+        log.warn("memory sessions: sync failed", {
+          err: errorMessage,
+          reason: this.lastSessionSyncReason,
+        });
         throw err;
       }
       this.sessionsDirty = false;

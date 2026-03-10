@@ -577,9 +577,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         const pendingBytes = sessionSync.pendingBytes ?? 0;
         const pendingMessages = sessionSync.pendingMessages ?? 0;
         lines.push(
-          `${label("Session pending")} ${muted(
-            `${pendingBytes} bytes, ${pendingMessages} msgs`,
-          )}`,
+          `${label("Session pending")} ${muted(`${pendingBytes} bytes, ${pendingMessages} msgs`)}`,
         );
       }
     }
