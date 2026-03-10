@@ -384,14 +384,16 @@ export function registerModelsCli(program: Command) {
     .description(
       "Remove stale profiles from auth-profiles.json that are not configured in openclaw.json",
     )
-    .option("--agent <id>", "Agent id to clean (default: main)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--dry-run", "Preview removals without writing changes")
     .option("--json", "Output as JSON")
-    .action((opts) => {
-      runModelsCommand(async () => {
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
         await modelsAuthCleanCommand(
           {
-            agent: opts.agent as string | undefined,
+            agent,
             dryRun: Boolean(opts.dryRun),
             json: Boolean(opts.json),
           },

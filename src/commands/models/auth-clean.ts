@@ -3,7 +3,6 @@ import {
   ensureAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "../../agents/auth-profiles.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -11,8 +10,9 @@ import { resolveKnownAgentId } from "./shared.js";
 
 /**
  * Remove stale profiles from auth-profiles.json that are no longer present in
- * openclaw.json auth.profiles. Prevents ghost profiles (e.g. anthropic:manual,
- * anthropic:user-me.com) from accumulating and silently corrupting auth order.
+ * openclaw.json auth.profiles or auth.order. Prevents ghost profiles (e.g.
+ * anthropic:manual, anthropic:user-me.com) from accumulating and silently
+ * corrupting auth order.
  *
  * Fixes: https://github.com/openclaw/openclaw/issues/41634
  */
@@ -21,20 +21,65 @@ export async function modelsAuthCleanCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   const cfg = await loadModelsConfig({ commandName: "models auth clean", runtime });
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent }) ?? resolveDefaultAgentId(cfg);
+  const agentId =
+    resolveKnownAgentId({ cfg, rawAgentId: opts.agent }) ?? resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   const authStorePath = shortenHomePath(`${agentDir}/auth-profiles.json`);
 
-  // Collect profile ids that are explicitly configured in openclaw.json auth.profiles
+  // Collect profile ids that are explicitly configured: union of auth.profiles keys
+  // and any ids referenced in auth.order (which may exist only in the store, not in
+  // auth.profiles, and are still valid active profiles).
   const configuredProfiles = new Set<string>(
-    Object.keys(cfg.auth?.profiles ?? {}).map((id) => id.trim()).filter(Boolean),
+    Object.keys(cfg.auth?.profiles ?? {})
+      .map((id) => id.trim())
+      .filter(Boolean),
   );
+  for (const ids of Object.values(cfg.auth?.order ?? {})) {
+    if (Array.isArray(ids)) {
+      for (const id of ids) {
+        if (typeof id === "string" && id.trim()) configuredProfiles.add(id.trim());
+      }
+    }
+  }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const storeProfileIds = Object.keys(store.profiles);
 
   const toRemove = storeProfileIds.filter((id) => !configuredProfiles.has(id));
   const toKeep = storeProfileIds.filter((id) => configuredProfiles.has(id));
+
+  // Safety guard: refuse to wipe everything when openclaw.json has no auth
+  // config at all (e.g. profiles and order both absent/empty). This avoids
+  // accidentally nuking a store-only setup. Require --dry-run to inspect.
+  if (configuredProfiles.size === 0 && storeProfileIds.length > 0) {
+    if (opts.dryRun) {
+      if (opts.json) {
+        runtime.log(
+          JSON.stringify(
+            {
+              warning:
+                "No profiles configured in openclaw.json auth.profiles or auth.order. All store profiles would be removed. Pass --force to proceed.",
+              storeProfiles: storeProfileIds,
+              dryRun: true,
+            },
+            null,
+            2,
+          ),
+        );
+      } else {
+        runtime.log(
+          "Warning: openclaw.json has no configured profiles. All store profiles would be removed.",
+        );
+        runtime.log(`In store: ${storeProfileIds.join(", ")}`);
+        runtime.log("(dry run -- no changes written)");
+      }
+      return;
+    }
+    throw new Error(
+      "openclaw.json has no configured auth profiles (auth.profiles and auth.order are both empty). " +
+        "Run with --dry-run to inspect, or add profiles to openclaw.json before cleaning.",
+    );
+  }
 
   if (opts.json) {
     runtime.log(
@@ -78,36 +123,79 @@ export async function modelsAuthCleanCommand(
     return;
   }
 
+  // Track actual removals inside the lock (concurrent gateway writes may have
+  // already cleaned some ids between our initial read and lock acquisition).
+  let actualRemoved = 0;
+
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
-      let removed = 0;
+      let mutated = false;
+
+      // Remove stale profiles
       for (const id of toRemove) {
         if (id in freshStore.profiles) {
           delete freshStore.profiles[id];
-          removed++;
+          actualRemoved++;
+          mutated = true;
         }
       }
-      // Drop removed ids from the order array as well
-      for (const provider of Object.keys(freshStore.order ?? {})) {
-        const existing = freshStore.order[provider];
-        if (Array.isArray(existing)) {
-          freshStore.order[provider] = existing.filter((id) => !toRemove.includes(id));
+
+      // Prune removed ids from the order map; delete the key entirely when
+      // the filtered list becomes empty (an empty array overrides config with
+      // no candidates, which breaks provider auth resolution).
+      const order = freshStore.order;
+      if (order) {
+        for (const provider of Object.keys(order)) {
+          const existing = order[provider];
+          if (Array.isArray(existing)) {
+            const filtered = existing.filter((id) => !toRemove.includes(id));
+            if (filtered.length !== existing.length) {
+              mutated = true;
+              if (filtered.length > 0) {
+                order[provider] = filtered;
+              } else {
+                delete order[provider];
+              }
+            }
+          }
+        }
+        if (Object.keys(order).length === 0) {
+          delete freshStore.order;
         }
       }
-      // Drop removed ids from usageStats
-      for (const id of toRemove) {
-        delete freshStore.usageStats?.[id];
+
+      // Prune removed ids from usageStats
+      if (freshStore.usageStats) {
+        for (const id of toRemove) {
+          if (id in freshStore.usageStats) {
+            delete freshStore.usageStats[id];
+            mutated = true;
+          }
+        }
       }
-      return removed > 0;
+
+      // Prune removed ids from lastGood (provider -> profileId map)
+      if (freshStore.lastGood) {
+        for (const [provider, profileId] of Object.entries(freshStore.lastGood)) {
+          if (toRemove.includes(profileId)) {
+            delete freshStore.lastGood[provider];
+            mutated = true;
+          }
+        }
+      }
+
+      return mutated;
     },
   });
 
   if (!updated) {
-    throw new Error("Failed to update auth-profiles.json (lock busy or no changes needed).");
+    throw new Error("Failed to update auth-profiles.json (lock busy).");
   }
 
-  if (!opts.json) {
-    runtime.log(`\nRemoved ${toRemove.length} stale profile(s). Restart the gateway to apply.`);
+  if (opts.json) {
+    runtime.log(JSON.stringify({ ok: true, removed: actualRemoved }, null, 2));
+  } else {
+    runtime.log(`\nRemoved ${actualRemoved} stale profile(s). Restart the gateway to apply.`);
   }
 }
