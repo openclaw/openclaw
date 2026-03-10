@@ -67,6 +67,7 @@ export function buildSandboxBrowserResolvedConfig(params: {
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
+  shareNetworkNamespace?: boolean;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
@@ -94,12 +95,15 @@ export function buildSandboxBrowserResolvedConfig(params: {
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
-    // Unconditionally match the normal browser's trusted-network default.
-    // Without this, the SSRF guard blocks localhost/private-IP at the bridge server
-    // layer regardless of shareNetworkNamespace. This is independent of namespace
-    // sharing -- even without it, failing at the SSRF layer instead of the network
-    // layer just produces a confusing error for the same outcome.
-    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    // Only relax the SSRF guard when the browser joins the sandbox container's
+    // network namespace — in that mode localhost refers to the sandbox's loopback
+    // and the browser needs to reach private-IP services running inside it.
+    // Without namespace sharing, the SSRF guard protects against cloud metadata
+    // endpoints (169.254.169.254, metadata.google.internal) reachable via the
+    // Docker bridge network.
+    ...(params.shareNetworkNamespace
+      ? { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } }
+      : {}),
   };
 }
 
@@ -312,7 +316,10 @@ export async function ensureSandboxBrowser(params: {
       ? await readDockerPort(fallbackContainer, params.cfg.browser.cdpPort)
       : null);
   if (!mappedCdp) {
-    throw new Error(`Failed to resolve CDP port mapping for ${portSourceContainer}.`);
+    const tried = fallbackContainer
+      ? `${portSourceContainer} (and fallback ${fallbackContainer})`
+      : portSourceContainer;
+    throw new Error(`Failed to resolve CDP port mapping for ${tried}.`);
   }
 
   const mappedNoVnc = noVncEnabled
@@ -394,6 +401,7 @@ export async function ensureSandboxBrowser(params: {
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
+        shareNetworkNamespace: useNamespaceJoin,
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
