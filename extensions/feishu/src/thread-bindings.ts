@@ -70,7 +70,11 @@ export type FeishuThreadBindingManager = {
   stop: () => void;
 };
 
-const MANAGERS_BY_ACCOUNT_ID = new Map<string, FeishuThreadBindingManager>();
+type FeishuThreadBindingManagerInternal = FeishuThreadBindingManager & {
+  ensureAdapterRegistered: () => void;
+};
+
+const MANAGERS_BY_ACCOUNT_ID = new Map<string, FeishuThreadBindingManagerInternal>();
 const BINDINGS_BY_ACCOUNT_CONVERSATION = new Map<string, FeishuThreadBindingRecord>();
 const BINDINGS_BY_ACCOUNT_NATIVE_THREAD = new Map<string, string>();
 const PERSIST_QUEUE_BY_ACCOUNT = new Map<string, Promise<void>>();
@@ -593,6 +597,7 @@ export function createFeishuThreadBindingManager(
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
   if (existing) {
+    existing.ensureAdapterRegistered();
     return existing;
   }
 
@@ -614,12 +619,124 @@ export function createFeishuThreadBindingManager(
 
   let sweepTimer: NodeJS.Timeout | null = null;
   const adapterOwnerToken = Symbol(`feishu-thread-bindings:${accountId}`);
+  let manager!: FeishuThreadBindingManagerInternal;
+  const ensureAdapterRegistered = () =>
+    registerSessionBindingAdapter(
+      {
+        channel: "feishu",
+        accountId,
+        capabilities: {
+          placements: ["current"],
+        },
+        bind: async (input) => {
+          if (input.conversation.channel !== "feishu") {
+            return null;
+          }
+          const conversationId = normalizeConversationId(input.conversation.conversationId);
+          const targetSessionKey = input.targetSessionKey.trim();
+          if (!targetSessionKey) {
+            return null;
+          }
+          if (!conversationId) {
+            return null;
+          }
+          const record = fromSessionBindingInput({
+            accountId,
+            input: {
+              targetSessionKey,
+              targetKind: input.targetKind,
+              conversationId,
+              metadata: input.metadata,
+            },
+          });
+          upsertBindingRecord(record);
+          void queuePersistBindingsToDisk({ accountId, persist: manager.shouldPersistMutations() });
+          return toSessionBindingRecord(record, {
+            idleTimeoutMs,
+            maxAgeMs,
+          });
+        },
+        listBySession: (targetSessionKeyRaw) => {
+          const targetSessionKey = targetSessionKeyRaw.trim();
+          if (!targetSessionKey) {
+            return [];
+          }
+          return manager.listBySessionKey(targetSessionKey).map((entry) =>
+            toSessionBindingRecord(entry, {
+              idleTimeoutMs,
+              maxAgeMs,
+            }),
+          );
+        },
+        resolveByConversation: (ref) => {
+          if (ref.channel !== "feishu") {
+            return null;
+          }
+          const conversationId = normalizeConversationId(ref.conversationId);
+          if (!conversationId) {
+            return null;
+          }
+          const record = manager.getByConversationId(conversationId);
+          return record
+            ? toSessionBindingRecord(record, {
+                idleTimeoutMs,
+                maxAgeMs,
+              })
+            : null;
+        },
+        touch: (bindingId, at) => {
+          const conversationId = resolveConversationIdFromBindingId({
+            accountId,
+            bindingId,
+          });
+          if (!conversationId) {
+            return;
+          }
+          manager.touchConversation(conversationId, at);
+        },
+        unbind: async (input) => {
+          if (input.targetSessionKey?.trim()) {
+            const removed = manager.unbindBySessionKey({
+              targetSessionKey: input.targetSessionKey,
+            });
+            return removed.map((entry) =>
+              toSessionBindingRecord(entry, {
+                idleTimeoutMs,
+                maxAgeMs,
+              }),
+            );
+          }
+          const conversationId = resolveConversationIdFromBindingId({
+            accountId,
+            bindingId: input.bindingId,
+          });
+          if (!conversationId) {
+            return [];
+          }
+          const removed = manager.unbindConversation({
+            conversationId,
+          });
+          return removed
+            ? [
+                toSessionBindingRecord(removed, {
+                  idleTimeoutMs,
+                  maxAgeMs,
+                }),
+              ]
+            : [];
+        },
+      },
+      {
+        ownerToken: adapterOwnerToken,
+      },
+    );
 
-  const manager: FeishuThreadBindingManager = {
+  manager = {
     accountId,
     shouldPersistMutations: () => persist,
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
+    ensureAdapterRegistered,
     getByConversationId: (conversationIdRaw) => {
       const conversationId = normalizeConversationId(conversationIdRaw);
       if (!conversationId) {
@@ -762,115 +879,7 @@ export function createFeishuThreadBindingManager(
     },
   };
 
-  registerSessionBindingAdapter(
-    {
-      channel: "feishu",
-      accountId,
-      capabilities: {
-        placements: ["current"],
-      },
-      bind: async (input) => {
-        if (input.conversation.channel !== "feishu") {
-          return null;
-        }
-        const conversationId = normalizeConversationId(input.conversation.conversationId);
-        const targetSessionKey = input.targetSessionKey.trim();
-        if (!targetSessionKey) {
-          return null;
-        }
-        if (!conversationId) {
-          return null;
-        }
-        const record = fromSessionBindingInput({
-          accountId,
-          input: {
-            targetSessionKey,
-            targetKind: input.targetKind,
-            conversationId,
-            metadata: input.metadata,
-          },
-        });
-        upsertBindingRecord(record);
-        void queuePersistBindingsToDisk({ accountId, persist: manager.shouldPersistMutations() });
-        return toSessionBindingRecord(record, {
-          idleTimeoutMs,
-          maxAgeMs,
-        });
-      },
-      listBySession: (targetSessionKeyRaw) => {
-        const targetSessionKey = targetSessionKeyRaw.trim();
-        if (!targetSessionKey) {
-          return [];
-        }
-        return manager.listBySessionKey(targetSessionKey).map((entry) =>
-          toSessionBindingRecord(entry, {
-            idleTimeoutMs,
-            maxAgeMs,
-          }),
-        );
-      },
-      resolveByConversation: (ref) => {
-        if (ref.channel !== "feishu") {
-          return null;
-        }
-        const conversationId = normalizeConversationId(ref.conversationId);
-        if (!conversationId) {
-          return null;
-        }
-        const record = manager.getByConversationId(conversationId);
-        return record
-          ? toSessionBindingRecord(record, {
-              idleTimeoutMs,
-              maxAgeMs,
-            })
-          : null;
-      },
-      touch: (bindingId, at) => {
-        const conversationId = resolveConversationIdFromBindingId({
-          accountId,
-          bindingId,
-        });
-        if (!conversationId) {
-          return;
-        }
-        manager.touchConversation(conversationId, at);
-      },
-      unbind: async (input) => {
-        if (input.targetSessionKey?.trim()) {
-          const removed = manager.unbindBySessionKey({
-            targetSessionKey: input.targetSessionKey,
-          });
-          return removed.map((entry) =>
-            toSessionBindingRecord(entry, {
-              idleTimeoutMs,
-              maxAgeMs,
-            }),
-          );
-        }
-        const conversationId = resolveConversationIdFromBindingId({
-          accountId,
-          bindingId: input.bindingId,
-        });
-        if (!conversationId) {
-          return [];
-        }
-        const removed = manager.unbindConversation({
-          conversationId,
-        });
-        return removed
-          ? [
-              toSessionBindingRecord(removed, {
-                idleTimeoutMs,
-                maxAgeMs,
-              }),
-            ]
-          : [];
-      },
-    },
-    {
-      ownerToken: adapterOwnerToken,
-    },
-  );
+  ensureAdapterRegistered();
 
   const sweeperEnabled = params.enableSweeper !== false;
   if (sweeperEnabled) {

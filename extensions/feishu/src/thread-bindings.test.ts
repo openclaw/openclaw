@@ -2,7 +2,10 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
-import { getSessionBindingService } from "openclaw/plugin-sdk/feishu";
+import {
+  getSessionBindingService,
+  unregisterSessionBindingAdapter,
+} from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -115,6 +118,59 @@ describe("feishu thread bindings", () => {
         nativeThreadId: "omt_thread_3",
       })?.conversation.conversationId,
     ).toBe("oc_chat_3:thread:om_root_3");
+  });
+
+  it("re-registers the shared adapter when reusing an existing manager", () => {
+    const first = createFeishuThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    expect(
+      getSessionBindingService().getCapabilities({
+        channel: "feishu",
+        accountId: "default",
+      }),
+    ).toMatchObject({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["current"],
+    });
+
+    unregisterSessionBindingAdapter({
+      channel: "feishu",
+      accountId: "default",
+    });
+
+    expect(
+      getSessionBindingService().getCapabilities({
+        channel: "feishu",
+        accountId: "default",
+      }),
+    ).toMatchObject({
+      adapterAvailable: false,
+      bindSupported: false,
+      placements: [],
+    });
+
+    const reused = createFeishuThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    expect(reused).toBe(first);
+    expect(
+      getSessionBindingService().getCapabilities({
+        channel: "feishu",
+        accountId: "default",
+      }),
+    ).toMatchObject({
+      adapterAvailable: true,
+      bindSupported: true,
+      placements: ["current"],
+    });
   });
 
   it("clears in-memory bindings when a manager stops without persistence", async () => {
