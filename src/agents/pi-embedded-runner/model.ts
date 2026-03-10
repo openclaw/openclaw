@@ -239,7 +239,7 @@ export function resolveModelWithRegistry(params: {
 }
 
 type ModelResolutionCacheEntry = {
-  result: ReturnType<typeof resolveModel>;
+  model: Model<Api>;
   cachedAt: number;
   agentDirMtimeMs: number;
 };
@@ -285,7 +285,9 @@ export function resolveModel(
     now - cached.cachedAt < MODEL_CACHE_TTL_MS &&
     cached.agentDirMtimeMs === agentDirMtime
   ) {
-    return cached.result;
+    const authStorage = discoverAuthStorage(resolvedAgentDir);
+    const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+    return { model: cached.model, authStorage, modelRegistry };
   }
 
   const authStorage = discoverAuthStorage(resolvedAgentDir);
@@ -296,7 +298,9 @@ export function resolveModel(
     ? { model, authStorage, modelRegistry }
     : { error: buildUnknownModelError(provider, modelId), authStorage, modelRegistry };
 
-  MODEL_RESOLUTION_CACHE.set(cacheKey, { result, cachedAt: now, agentDirMtimeMs: agentDirMtime });
+  if (!result.error) {
+    MODEL_RESOLUTION_CACHE.set(cacheKey, { model: result.model!, cachedAt: now, agentDirMtimeMs: agentDirMtime });
+  }
   return result;
 }
 
