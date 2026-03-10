@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { inspectTelegramAccount } from "../telegram/account-inspect.js";
+import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "../telegram/accounts.js";
+import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
@@ -79,6 +82,58 @@ describe("buildChannelSummary", () => {
     expect(lines).toContain("Slack: configured");
     expect(lines).toContain(
       "  - primary (Primary) (bot:config, signing:config, secret unavailable in this command path)",
+    );
+  });
+
+  it("treats multi-account Telegram tokenFile setups as configured", async () => {
+    vi.mocked(listChannelPlugins).mockReturnValue([
+      makeDirectPlugin({
+        id: "telegram",
+        label: "Telegram",
+        docsPath: "/channels/telegram",
+        config: {
+          listAccountIds: listTelegramAccountIds,
+          defaultAccountId: resolveDefaultTelegramAccountId,
+          inspectAccount: (cfg, accountId) => inspectTelegramAccount({ cfg, accountId }),
+          resolveAccount: (cfg, accountId) => inspectTelegramAccount({ cfg, accountId }),
+          isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+          isEnabled: (account) => (account as { enabled?: boolean }).enabled !== false,
+        },
+      }),
+    ]);
+
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: true,
+          defaultAccount: "nimbus",
+          accounts: {
+            default: {
+              tokenFile: "/tmp/openclaw-telegram-default-token",
+            },
+            nimbus: {
+              tokenFile: "/tmp/openclaw-telegram-default-token",
+            },
+            flint: {
+              tokenFile: "/tmp/openclaw-telegram-flint-token",
+            },
+          },
+        },
+      },
+    } as never;
+
+    const lines = await buildChannelSummary(cfg, {
+      colorize: false,
+      includeAllowFrom: false,
+    });
+
+    expect(lines).toContain("Telegram: configured");
+    expect(lines).toContain(
+      "  - default (token:tokenFile, secret unavailable in this command path)",
+    );
+    expect(lines).toContain("  - flint (token:tokenFile, secret unavailable in this command path)");
+    expect(lines).toContain(
+      "  - nimbus (token:tokenFile, secret unavailable in this command path)",
     );
   });
 });
