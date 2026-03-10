@@ -69,6 +69,31 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
+  test("wiki tool exposes object parameters with explicit action enum", () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
+    const schema = tool.parameters as {
+      type?: unknown;
+      anyOf?: unknown;
+      properties?: Record<string, { enum?: unknown; description?: unknown }>;
+      required?: unknown;
+    };
+
+    expect(schema.type).toBe("object");
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.required).toEqual(["action"]);
+    expect(schema.properties?.action?.enum).toEqual(
+      expect.arrayContaining(["spaces", "nodes", "get", "create", "rename"]),
+    );
+    expect(schema.properties?.action?.description).toEqual(expect.stringContaining("search"));
+  });
+
   test("wiki tool prefers configured defaultAccount over inherited default account context", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({

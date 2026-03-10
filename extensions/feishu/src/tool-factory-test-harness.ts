@@ -8,6 +8,8 @@ type ToolFactoryLike = (ctx: ToolContextLike) => AnyAgentTool | AnyAgentTool[] |
 
 export type ToolLike = {
   name: string;
+  description?: string;
+  parameters?: unknown;
   execute: (toolCallId: string, params: unknown) => Promise<unknown> | unknown;
 };
 
@@ -30,6 +32,8 @@ function asToolLike(tool: AnyAgentTool, fallbackName?: string): ToolLike {
   }
   return {
     name,
+    description: candidate.description,
+    parameters: candidate.parameters,
     execute: (toolCallId, params) => execute(toolCallId, params),
   };
 }
