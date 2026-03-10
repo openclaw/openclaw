@@ -5,6 +5,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -444,6 +445,36 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Auto-abort any active runs for this session before starting a new one
+    const activeRunsForSession = Array.from(context.chatAbortControllers.entries()).filter(
+      ([_, entry]) => entry.sessionKey === rawSessionKey,
+    );
+
+    if (activeRunsForSession.length > 0) {
+      // Collect sessionIds to wait for
+      const sessionIds = new Set(activeRunsForSession.map(([_, entry]) => entry.sessionId));
+
+      // Abort old runs
+      abortChatRunsForSessionKey(
+        {
+          chatAbortControllers: context.chatAbortControllers,
+          chatRunBuffers: context.chatRunBuffers,
+          chatDeltaSentAt: context.chatDeltaSentAt,
+          chatAbortedRuns: context.chatAbortedRuns,
+          removeChatRun: context.removeChatRun,
+          agentRunSeq: context.agentRunSeq,
+          broadcast: context.broadcast,
+          nodeSendToSession: context.nodeSendToSession,
+        },
+        { sessionKey: rawSessionKey, stopReason: "replaced" },
+      );
+
+      // Wait for all runs to end (with 2s timeout per session)
+      for (const sessionId of sessionIds) {
+        await waitForEmbeddedPiRunEnd(sessionId, 2000);
+      }
+    }
+
     try {
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
@@ -529,12 +560,19 @@ export const chatHandlers: GatewayRequestHandlers = {
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
+            const clientCaps = client?.connect?.caps;
             const wantsToolEvents = hasGatewayClientCap(
-              client?.connect?.caps,
+              clientCaps,
               GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+            );
+            console.debug(
+              `[gateway] onAgentRunStart: runId=${runId}, connId=${connId}, caps=${JSON.stringify(clientCaps)}, wantsToolEvents=${wantsToolEvents}`,
             );
             if (connId && wantsToolEvents) {
               context.registerToolEventRecipient(runId, connId);
+              console.debug(
+                `[gateway] registered tool event recipient: runId=${runId}, connId=${connId}`,
+              );
               // Register for any other active runs *in the same session* so
               // late-joining clients (e.g. page refresh mid-response) receive
               // in-progress tool events without leaking cross-session data.
