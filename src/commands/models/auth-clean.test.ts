@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   updateAuthProfileStoreWithLock: vi.fn(),
   loadAgentLocalAuthProfileStore: vi.fn(),
   loadModelsConfig: vi.fn(),
-  resolveKnownAgentId: vi.fn(() => null),
+  resolveKnownAgentId: vi.fn<() => string | null>(() => null),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
