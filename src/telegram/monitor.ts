@@ -122,6 +122,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
+    execApprovalsHandler = new TelegramExecApprovalHandler({
+      token,
+      accountId: account.accountId,
+      cfg,
+      runtime: opts.runtime,
+    });
+    await execApprovalsHandler.start();
+
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
       botToken: token,
@@ -339,6 +347,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     }
   } finally {
+    await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
 }
