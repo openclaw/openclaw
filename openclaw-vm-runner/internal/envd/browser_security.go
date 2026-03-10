@@ -35,6 +35,21 @@ var blockedIPRanges = []net.IPNet{
 	parseCIDR("fe80::/10"),
 	// IPv6 loopback
 	parseCIDR("::1/128"),
+	// IPv6 ULA (Unique Local Address) — equivalent of RFC 1918 for IPv6.
+	// Includes fd00:ec2::254 (AWS IPv6 metadata endpoint).
+	parseCIDR("fc00::/7"),
+	// IPv6 unspecified — some stacks route to localhost
+	parseCIDR("::/128"),
+}
+
+// blockedHostnames lists cloud metadata hostnames and IPs that must be blocked.
+var blockedHostnames = map[string]bool{
+	"localhost":                true,
+	"metadata.google.internal": true,
+	// Alibaba Cloud metadata endpoint
+	"100.100.100.200": true,
+	// AWS IPv6 metadata endpoint (also covered by fc00::/7 CIDR above)
+	"fd00:ec2::254": true,
 }
 
 // URLPolicy validates URLs before browser navigation to prevent SSRF attacks.
@@ -80,9 +95,9 @@ func (p *URLPolicy) Validate(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("invalid URL: no hostname")
 	}
 
-	// Check hardcoded hostname blocklist.
+	// Check hardcoded hostname blocklist (cloud metadata, localhost).
 	lower := strings.ToLower(hostname)
-	if lower == "localhost" {
+	if blockedHostnames[lower] {
 		return fmt.Errorf("blocked address: %s", hostname)
 	}
 

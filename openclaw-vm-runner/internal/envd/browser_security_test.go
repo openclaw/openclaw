@@ -99,6 +99,48 @@ func TestValidateURL_PrivateIPBlocked(t *testing.T) {
 	}
 }
 
+func TestValidateURL_IPv6ULABlocked(t *testing.T) {
+	policy := DefaultURLPolicy()
+
+	tests := []string{
+		"http://[fc00::1]/",
+		"http://[fd00::1]/",
+		"http://[fd00:ec2::254]/",
+		"http://[fd12:3456:789a::1]/",
+	}
+	for _, u := range tests {
+		t.Run(u, func(t *testing.T) {
+			err := policy.Validate(context.Background(), u)
+			require.Error(t, err, "IPv6 ULA should be blocked: %s", u)
+			assert.Contains(t, err.Error(), "blocked")
+		})
+	}
+}
+
+func TestValidateURL_IPv6UnspecifiedBlocked(t *testing.T) {
+	policy := DefaultURLPolicy()
+
+	err := policy.Validate(context.Background(), "http://[::]/")
+	require.Error(t, err, "IPv6 unspecified address should be blocked")
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestValidateURL_CloudMetadataHostnamesBlocked(t *testing.T) {
+	policy := DefaultURLPolicy()
+
+	tests := []string{
+		"http://metadata.google.internal/computeMetadata/v1/",
+		"http://100.100.100.200/latest/meta-data/",
+	}
+	for _, u := range tests {
+		t.Run(u, func(t *testing.T) {
+			err := policy.Validate(context.Background(), u)
+			require.Error(t, err, "cloud metadata should be blocked: %s", u)
+			assert.Contains(t, err.Error(), "blocked")
+		})
+	}
+}
+
 func TestValidateURL_ValidPublicURL(t *testing.T) {
 	policy := DefaultURLPolicy()
 
