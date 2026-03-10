@@ -445,7 +445,7 @@ export function createSessionsSendConcurrentTool(opts?: {
               const response = await callGateway<{ runId: string }>({
                 method: "agent",
                 params: sendParams,
-                timeoutMs,
+                timeoutMs: 10_000, // agent.run should return quickly with accepted status
               });
               if (typeof response?.runId === "string" && response.runId) {
                 agentRunId = response.runId;
