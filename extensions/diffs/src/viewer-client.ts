@@ -96,7 +96,10 @@ function createToolbarButton(params: {
   button.dataset.active = String(params.active);
   button.title = params.title;
   button.setAttribute("aria-label", params.title);
-  button.innerHTML = params.iconMarkup;
+  // Use a trusted DOM parser instead of innerHTML to avoid unsafe markup injection.
+  const template = document.createElement("template");
+  template.innerHTML = params.iconMarkup;
+  button.appendChild(template.content);
   applyToolbarButtonStyles(button, params.active);
   button.addEventListener("click", (event) => {
     event.preventDefault();
