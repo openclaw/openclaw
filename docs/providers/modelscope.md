@@ -29,7 +29,7 @@ openclaw onboard --auth-choice apiKey --token-provider modelscope --token "$MODE
 
 ```json5
 {
-  env: { MODELSCOPE_API_KEY: "ms-or-..." },
+  env: { MODELSCOPE_API_KEY: "<your-modelscope-api-key>" },
   agents: {
     defaults: {
       model: { primary: "modelscope/Qwen/Qwen3-32B" },
