@@ -495,7 +495,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    const primaryInput = container.querySelector('input[type="text"]');
+    const primaryInput = container.querySelector<HTMLInputElement>('input[type="text"]');
     expect(primaryInput).not.toBeNull();
     expect(primaryInput?.value).toBe("");
     if (primaryInput) {
