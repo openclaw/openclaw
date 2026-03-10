@@ -18,7 +18,6 @@ async function main() {
   const { request, waitOpen, close } = createGatewayWsClient({
     url: url.toString(),
     onEvent: (evt) => {
-      // Ignore noisy connect handshakes.
       if (evt.event === "connect.challenge") {
         return;
       }
