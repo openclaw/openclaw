@@ -10,7 +10,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -133,6 +133,7 @@ export function renderChatControls(state: AppViewState) {
     state.sessionsResult,
     mainSessionKey,
     hideCron,
+    state.agentsList,
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -436,6 +437,7 @@ function resolveSessionOptions(
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
+  agents?: AgentsListResult | null,
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
@@ -470,6 +472,22 @@ function resolveSessionOptions(
         options.push({
           key: s.key,
           displayName: resolveSessionDisplayName(s.key, s),
+        });
+      }
+    }
+  }
+
+  // Add all configured agents that don't have sessions yet
+  // This ensures users can select agents even before they've chatted with them
+  if (agents?.agents) {
+    for (const agent of agents.agents) {
+      // Generate the default session key for this agent
+      const defaultSessionKey = `agent:${agent.id}:main`;
+      if (!seen.has(defaultSessionKey)) {
+        seen.add(defaultSessionKey);
+        options.push({
+          key: defaultSessionKey,
+          displayName: `${agent.id} (new)`,
         });
       }
     }
