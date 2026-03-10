@@ -179,12 +179,21 @@ function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
+function isFileArchiveEntryType(type: string): boolean {
+  return type === "File" || type === "OldFile" || type === "ContiguousFile";
+}
+
+function isDirectoryArchiveEntryType(type: string): boolean {
+  return type === "Directory";
+}
+
 function buildCoveredAssetArchivePath(params: {
   kind: BackupAssetKind;
   coveredSourcePath: string;
   backupStateDir: string | undefined;
   stateArchivePath: string | undefined;
   entryPaths: Set<string>;
+  entryTypeByPath: Map<string, string>;
 }): string | undefined {
   if (!params.backupStateDir || !params.stateArchivePath) {
     return undefined;
@@ -205,11 +214,27 @@ function buildCoveredAssetArchivePath(params: {
       }
 
       const candidate = path.posix.join(params.stateArchivePath, toArchiveSubpath(relative));
-      const hasExactEntry = params.entryPaths.has(candidate);
+      const exactEntryType = params.entryTypeByPath.get(candidate);
+      const hasExactEntry = typeof exactEntryType === "string";
       const hasNestedEntry = [...params.entryPaths].some(
         (entryPath) => entryPath !== candidate && isArchivePathWithin(entryPath, candidate),
       );
-      if (params.kind === "config" ? hasExactEntry : hasExactEntry || hasNestedEntry) {
+      if (params.kind === "config") {
+        if (
+          hasExactEntry &&
+          exactEntryType &&
+          isFileArchiveEntryType(exactEntryType) &&
+          !hasNestedEntry
+        ) {
+          return candidate;
+        }
+        continue;
+      }
+
+      if (hasExactEntry && exactEntryType && !isDirectoryArchiveEntryType(exactEntryType)) {
+        continue;
+      }
+      if (hasExactEntry || hasNestedEntry) {
         return candidate;
       }
     }
@@ -296,6 +321,7 @@ function buildCoveredAssetManifestEntries(params: {
       backupStateDir: manifest.paths?.stateDir,
       stateArchivePath: stateAssetArchivePath,
       entryPaths: verifiedArchive.entryPaths,
+      entryTypeByPath: verifiedArchive.entryTypeByPath,
     });
     if (!archivePath) {
       continue;

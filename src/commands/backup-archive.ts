@@ -47,6 +47,7 @@ export type VerifiedBackupArchive = {
   manifest: BackupManifest;
   entryCount: number;
   entryPaths: Set<string>;
+  entryTypeByPath: Map<string, string>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -425,5 +426,6 @@ export async function readVerifiedBackupArchive(
     manifest,
     entryCount: entries.length,
     entryPaths: normalizedEntrySet,
+    entryTypeByPath: new Map(entries.map((entry) => [entry.normalized, entry.type])),
   };
 }

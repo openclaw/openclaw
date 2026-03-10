@@ -401,6 +401,91 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("skips covered credentials synthesis when the payload is a file", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-file-credentials-"),
+    );
+    const archivePath = path.join(archiveDir, "file-credentials.tar.gz");
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({ profile: "file-credentials" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials"), "not-a-directory\n", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(archiveDir, rootName);
+      const stateArchiveRelativePath = path.join(
+        "payload",
+        "posix",
+        sourceStateDir.replace(/^\/+/u, ""),
+      );
+      const statePayloadDir = path.join(root, stateArchiveRelativePath);
+      await fs.mkdir(statePayloadDir, { recursive: true });
+      await fs.writeFile(
+        path.join(statePayloadDir, "openclaw.json"),
+        '{"profile":"file-credentials"}',
+        "utf8",
+      );
+      await fs.writeFile(path.join(statePayloadDir, "credentials"), "not-a-directory\n", "utf8");
+      await fs.writeFile(path.join(statePayloadDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: rootName,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              stateDir: sourceStateDir,
+              configPath: path.join(sourceStateDir, "openclaw.json"),
+              oauthDir: path.join(sourceStateDir, "credentials"),
+            },
+            assets: [
+              {
+                kind: "state",
+                sourcePath: sourceStateDir,
+                archivePath: `${rootName}/${stateArchiveRelativePath.replaceAll(path.sep, "/")}`,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: archiveDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const targetHome = await createExtraHome("openclaw-backup-restore-covered-file-home-");
+      const targetConfigPath = path.join(targetHome, "custom-config.json");
+      const targetOauthDir = path.join(targetHome, "oauth-dir");
+      setActiveHome(targetHome, targetConfigPath, targetOauthDir);
+
+      await backupRestoreCommand(runtime, {
+        archive: archivePath,
+      });
+
+      expect(await fs.readFile(targetConfigPath, "utf8")).toContain("file-credentials");
+      await expect(fs.access(path.join(targetOauthDir, "oauth.json"))).rejects.toThrow();
+      await expect(fs.readFile(targetOauthDir, "utf8")).rejects.toThrow();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("restores covered config into an active in-state custom config path", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(
