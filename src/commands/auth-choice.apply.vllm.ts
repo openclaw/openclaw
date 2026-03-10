@@ -1,3 +1,5 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { parseModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
@@ -24,6 +26,55 @@ function applyVllmDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawC
   };
 }
 
+function isManagedVllmProvider(provider: string): boolean {
+  return provider === "vllm" || provider.startsWith("vllm-");
+}
+
+function clearStaleVllmDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
+  const defaultModel = cfg.agents?.defaults?.model;
+  if (!defaultModel) {
+    return cfg;
+  }
+
+  const primaryRaw =
+    typeof defaultModel === "string"
+      ? defaultModel
+      : typeof defaultModel === "object" && "primary" in defaultModel
+        ? defaultModel.primary
+        : undefined;
+  const parsed = primaryRaw ? parseModelRef(primaryRaw, DEFAULT_PROVIDER) : null;
+  if (!parsed || !isManagedVllmProvider(parsed.provider)) {
+    return cfg;
+  }
+  if (cfg.models?.providers?.[parsed.provider]) {
+    return cfg;
+  }
+
+  const defaults = { ...cfg.agents?.defaults };
+  if (typeof defaultModel === "object" && "fallbacks" in defaultModel) {
+    const fallbacks = Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [];
+    const [nextPrimary, ...remainingFallbacks] = fallbacks;
+    if (nextPrimary) {
+      defaults.model = {
+        ...(remainingFallbacks.length > 0 ? { fallbacks: remainingFallbacks } : {}),
+        primary: nextPrimary,
+      };
+    } else {
+      delete defaults.model;
+    }
+  } else {
+    delete defaults.model;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults,
+    },
+  };
+}
+
 export async function applyAuthChoiceVllm(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
@@ -38,7 +89,10 @@ export async function applyAuthChoiceVllm(
   });
 
   if (!vllmSelection.modelRef) {
-    return { config: vllmSelection.config };
+    return {
+      config: clearStaleVllmDefaultModel(vllmSelection.config),
+      clearAgentModelOverride: true,
+    };
   }
 
   const { config: nextConfig, modelRef } = vllmSelection;
