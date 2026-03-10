@@ -38,6 +38,10 @@ import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -169,68 +173,12 @@ type CompactionMessageMetrics = {
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
 
-const BOILERPLATE_REPLY_TEXT = new Set(["HEARTBEAT_OK", "NO_REPLY"]);
-const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
-
-function hasMeaningfulConversationContent(msg: AgentMessage): boolean {
-  const content = (msg as { content?: unknown }).content;
-  if (typeof content === "string") {
-    const trimmed = content.trim();
-    if (!trimmed) {
-      return false;
-    }
-    return !BOILERPLATE_REPLY_TEXT.has(trimmed);
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  let sawNonTextBlock = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const type = (block as { type?: unknown }).type;
-    if (type !== "text") {
-      sawNonTextBlock = true;
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string") {
-      continue;
-    }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (!BOILERPLATE_REPLY_TEXT.has(trimmed)) {
-      return true;
-    }
-  }
-  return sawNonTextBlock;
-}
-
 function hasRealConversationContent(
   msg: AgentMessage,
   messages: AgentMessage[],
   index: number,
 ): boolean {
-  if (msg.role === "user" || msg.role === "assistant") {
-    return hasMeaningfulConversationContent(msg);
-  }
-  if (msg.role !== "toolResult") {
-    return false;
-  }
-  const start = Math.max(0, index - TOOL_RESULT_REAL_CONVERSATION_LOOKBACK);
-  for (let i = index - 1; i >= start; i -= 1) {
-    const candidate = messages[i];
-    if (!candidate || candidate.role !== "user") {
-      continue;
-    }
-    if (hasMeaningfulConversationContent(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  return isRealConversationMessage(msg, messages, index);
 }
 
 function createCompactionDiagId(): string {
@@ -1345,3 +1293,8 @@ export async function compactEmbeddedPiSession(
     }),
   );
 }
+
+export const __testing = {
+  hasRealConversationContent,
+  hasMeaningfulConversationContent,
+} as const;
