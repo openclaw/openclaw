@@ -67,4 +67,23 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
     expect(hoisted.loadWorkspaceSkillEntries).not.toHaveBeenCalled();
   });
+
+  it("can force loading skill entries even when snapshot skills are present", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "host prompt",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    };
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/workspace",
+      config: {},
+      skillsSnapshot: snapshot,
+      forceLoadEntries: true,
+    });
+
+    expect(result.shouldLoadSkillEntries).toBe(true);
+    expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledTimes(1);
+    expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledWith("/workspace", { config: {} });
+  });
 });

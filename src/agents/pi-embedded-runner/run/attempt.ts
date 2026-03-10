@@ -12,6 +12,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
+import { getRemoteSkillEligibility } from "../../../infra/skills-remote.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -768,6 +769,7 @@ export async function runEmbeddedAttempt(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
@@ -777,6 +779,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      forceLoadEntries: preferWorkspaceSkillsPrompt,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -793,6 +796,8 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      preferEntries: preferWorkspaceSkillsPrompt,
+      eligibility: { remote: getRemoteSkillEligibility() },
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
