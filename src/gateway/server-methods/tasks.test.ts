@@ -179,6 +179,24 @@ describe("deliverTaskNotification", () => {
     expect(sendToSession).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers successfully when event name is a prototype key like 'toString'", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+    ]);
+    const sendToSession = vi.fn().mockResolvedValue(undefined);
+    // "toString" is an inherited Object prototype key — must not be treated as already delivered
+    const result = await deliverTaskNotification({
+      taskId: "t1",
+      event: "toString",
+      message: "should deliver",
+      registryPath,
+      sendToSession,
+    });
+    expect(result.skipped).toBeUndefined();
+    expect(result.delivered).toEqual(["s1"]);
+    expect(sendToSession).toHaveBeenCalledTimes(1);
+  });
+
   it("caps notifiedEvents map at MAX_TASK_EVENTS entries", async () => {
     // Fill task with 50 existing idempotency entries
     const existing: Record<string, boolean> = {};

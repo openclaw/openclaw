@@ -138,7 +138,7 @@ async function _deliverTaskNotification(opts: {
   const task = registry.tasks[taskIndex];
 
   // Idempotency: skip if this key was already delivered
-  if (task.notifiedEvents[ikey]) {
+  if (Object.hasOwn(task.notifiedEvents, ikey)) {
     return { delivered: [], failed: [], skipped: "already delivered" };
   }
 
@@ -188,7 +188,7 @@ async function _deliverTaskNotification(opts: {
   // Re-check idempotency after reload: a concurrent tasks.notify with the same key may have
   // completed its writes while our fan-out was in flight. Both callers passed the pre-send guard,
   // but only the first writer wins here — the second returns skipped to prevent duplicate delivery.
-  if (freshTask.notifiedEvents[ikey]) {
+  if (Object.hasOwn(freshTask.notifiedEvents, ikey)) {
     return { delivered: [], failed: [], skipped: "already delivered" };
   }
 
