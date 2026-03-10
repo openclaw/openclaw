@@ -538,7 +538,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   // the outer task to hold the single slot while the inner enqueue waits
   // for a free slot — a classic deadlock.
   void enqueueCommandInLane(
-    "cron-manual" as CommandLane,
+    CommandLane.CronManual,
     async () => {
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {
