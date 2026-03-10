@@ -73,6 +73,8 @@ export function chunkAudio(audio: Buffer, chunkSize = 160): Generator<Buffer, vo
  */
 export type PcmToMulawStreamState = {
   leftover: Buffer | null;
+  /** Deferred tail samples from interpolation boundary (separate from odd-byte leftover) */
+  interpLeftover: Buffer | null;
   /** Fractional source position carried across chunks for resampling continuity */
   srcPosCarry: number;
   /** Number of input samples already consumed (for resampling continuity) */
@@ -80,7 +82,7 @@ export type PcmToMulawStreamState = {
 };
 
 export function createPcmToMulawStreamState(): PcmToMulawStreamState {
-  return { leftover: null, srcPosCarry: 0, inputSamplesConsumed: 0 };
+  return { leftover: null, interpLeftover: null, srcPosCarry: 0, inputSamplesConsumed: 0 };
 }
 
 /**
@@ -93,9 +95,18 @@ export function convertPcmChunkToMulaw8k(
   state: PcmToMulawStreamState,
 ): Buffer {
   let pcm: Buffer;
+  // Prepend odd-byte leftover first, then interpolation-deferred samples
+  const prefixes: Buffer[] = [];
+  if (state.interpLeftover) {
+    prefixes.push(state.interpLeftover);
+    state.interpLeftover = null;
+  }
   if (state.leftover) {
-    pcm = Buffer.concat([state.leftover, chunk]);
+    prefixes.push(state.leftover);
     state.leftover = null;
+  }
+  if (prefixes.length > 0) {
+    pcm = Buffer.concat([...prefixes, chunk]);
   } else {
     pcm = chunk;
   }
@@ -132,7 +143,7 @@ export function convertPcmChunkToMulaw8k(
     if (srcIndex + 1 >= inputSamples && frac > 1e-10) {
       const tailStart = srcIndex * 2;
       const tail = pcm.subarray(tailStart);
-      state.leftover = state.leftover ? Buffer.concat([tail, state.leftover]) : Buffer.from(tail);
+      state.interpLeftover = Buffer.from(tail);
       state.srcPosCarry = frac;
       state.inputSamplesConsumed += srcIndex;
       brokeForInterp = true;
@@ -171,6 +182,7 @@ export function convertPcmChunkToMulaw8k(
  */
 export function flushPcmToMulawStream(state: PcmToMulawStreamState): Buffer {
   state.leftover = null;
+  state.interpLeftover = null;
   return Buffer.alloc(0);
 }
 

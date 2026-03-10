@@ -87,13 +87,13 @@ export class SentenceStream {
     // All parts except the last are complete sentences
     for (let i = 0; i < parts.length - 1; i++) {
       const sentence = parts[i].trim();
+      this.yieldedLength += parts[i].length;
+      // Account for the whitespace that was the split point
+      const nextStart = cumulativeText.indexOf(parts[i + 1], this.yieldedLength);
+      if (nextStart > this.yieldedLength) {
+        this.yieldedLength = nextStart;
+      }
       if (sentence) {
-        this.yieldedLength += parts[i].length;
-        // Account for the whitespace that was the split point
-        const nextStart = cumulativeText.indexOf(parts[i + 1], this.yieldedLength);
-        if (nextStart > this.yieldedLength) {
-          this.yieldedLength = nextStart;
-        }
         this.queue.push(sentence);
       }
     }
@@ -271,8 +271,11 @@ export function generateVoiceResponseStream(params: VoiceResponseParams): {
 
       const text = texts.join(" ") || null;
 
-      // Finish the sentence stream with the authoritative final text
-      sentenceStream.finish(text ?? undefined);
+      // Finish with only the current (last) assistant message text.
+      // Earlier assistant messages were already flushed via resetOffset,
+      // so passing all joined texts would duplicate already-yielded content.
+      const lastText = texts.length > 0 ? texts[texts.length - 1] : undefined;
+      sentenceStream.finish(lastText ?? undefined);
 
       if (!text && agentResult.meta?.aborted) {
         return { text: null, error: "Response generation was aborted" };
