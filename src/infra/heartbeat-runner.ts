@@ -1108,13 +1108,19 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
+    // Capture heartbeatsEnabled at invocation time to avoid race condition where
+    // the flag is toggled during execution (e.g., when user message arrives).
+    // If the job was enabled when it started, the status should reflect the
+    // actual execution outcome, not the flag state at recording time.
+    const heartbeatsEnabledAtStart = heartbeatsEnabled;
+
     if (state.stopped) {
       return {
         status: "skipped",
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (!heartbeatsEnabled) {
+    if (!heartbeatsEnabledAtStart) {
       return {
         status: "skipped",
         reason: "disabled",
