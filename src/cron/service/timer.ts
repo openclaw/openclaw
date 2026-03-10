@@ -187,7 +187,7 @@ function maybeRecoverIsolatedRunnerDegradedState(params: {
         jobName: job.name,
         priorConsecutiveErrors,
       },
-      "cron: detected degraded isolated runner; reset cron command lane",
+      "cron: detected degraded isolated runner; invoked cron lane recovery hook",
     );
   }
 

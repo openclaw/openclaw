@@ -234,26 +234,62 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   return removed;
 }
 
+export type ResetLaneOptions = {
+  /**
+   * Reject queued-but-not-started tasks instead of draining them after reset.
+   */
+  dropQueued?: boolean;
+  /**
+   * Fail closed when tasks are still marked active to avoid clearing runtime
+   * bookkeeping while work may still be executing.
+   */
+  skipIfActive?: boolean;
+};
+
+export type ResetLaneResult = {
+  lane: string;
+  reset: boolean;
+  activeBefore: number;
+  droppedQueued: number;
+};
+
 /**
- * Reset one lane runtime state to idle without mutating other lanes.
+ * Reset one lane runtime state without mutating other lanes.
  *
- * Unlike `resetAllLanes()`, this does not touch global gateway draining state
- * and only clears execution bookkeeping for the requested lane.
+ * Unlike `resetAllLanes()`, this does not touch global gateway draining state.
+ * Callers can either preserve queued work (default) or drop it.
  */
-export function resetLane(lane: string): void {
+export function resetLane(lane: string, opts?: ResetLaneOptions): ResetLaneResult {
   const cleaned = lane.trim() || CommandLane.Main;
   const state = lanes.get(cleaned);
   if (!state) {
-    return;
+    return { lane: cleaned, reset: false, activeBefore: 0, droppedQueued: 0 };
+  }
+
+  const activeBefore = state.activeTaskIds.size;
+  let droppedQueued = 0;
+
+  if (opts?.dropQueued && state.queue.length > 0) {
+    const pending = state.queue.splice(0);
+    droppedQueued = pending.length;
+    for (const entry of pending) {
+      entry.reject(new CommandLaneClearedError(cleaned));
+    }
+  }
+
+  if (opts?.skipIfActive && activeBefore > 0) {
+    return { lane: cleaned, reset: false, activeBefore, droppedQueued };
   }
 
   state.generation += 1;
   state.activeTaskIds.clear();
   state.draining = false;
 
-  if (state.queue.length > 0) {
+  if (!opts?.dropQueued && state.queue.length > 0) {
     drainLane(cleaned);
   }
+
+  return { lane: cleaned, reset: true, activeBefore, droppedQueued };
 }
 
 /**

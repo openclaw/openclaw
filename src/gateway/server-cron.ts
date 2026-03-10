@@ -2,8 +2,6 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
-import { resetLane } from "../process/command-queue.js";
-import { CommandLane } from "../process/lanes.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -29,6 +27,8 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { resetLane } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -298,7 +298,28 @@ export function buildGatewayCronService(params: {
       });
     },
     resetCommandLanes: () => {
-      resetLane(CommandLane.Cron);
+      const result = resetLane(CommandLane.Cron, {
+        dropQueued: true,
+        skipIfActive: true,
+      });
+      if (result.droppedQueued > 0) {
+        cronLogger.warn(
+          {
+            lane: result.lane,
+            droppedQueued: result.droppedQueued,
+          },
+          "cron: dropped queued cron lane tasks during degraded runner recovery",
+        );
+      }
+      if (!result.reset && result.activeBefore > 0) {
+        cronLogger.warn(
+          {
+            lane: result.lane,
+            activeTasks: result.activeBefore,
+          },
+          "cron: skipped cron lane reset during degraded runner recovery; active tasks still running",
+        );
+      }
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
