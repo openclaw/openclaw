@@ -230,6 +230,21 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves Model Studio API key from env", async () => {
+    await withEnvAsync(
+      { [envVar("MODELSTUDIO", "API", "KEY")]: "modelstudio-test-key" },
+      async () => {
+        // pragma: allowlist secret
+        const resolved = await resolveApiKeyForProvider({
+          provider: "modelstudio",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("modelstudio-test-key");
+        expect(resolved.source).toContain("MODELSTUDIO_API_KEY");
+      },
+    );
+  });
+
   it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
     await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
       const resolved = await resolveApiKeyForProvider({
