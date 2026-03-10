@@ -56,7 +56,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   env: {
     OPENROUTER_API_KEY: "sk-or-...",
     vars: {
-      GROQ_API_KEY: "groq-api-key-placeholder",
+      GROQ_API_KEY: "groq-api-key-placeholder", // pragma: allowlist secret
     },
     shellEnv: {
       enabled: true,

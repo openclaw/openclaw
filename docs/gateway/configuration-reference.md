@@ -2660,7 +2660,7 @@ Setup: `openclaw dns setup --apply`.
   env: {
     OPENROUTER_API_KEY: "sk-or-...",
     vars: {
-      GROQ_API_KEY: "groq-api-key-placeholder",
+      GROQ_API_KEY: "groq-api-key-placeholder", // pragma: allowlist secret
     },
     shellEnv: {
       enabled: true,
