@@ -241,7 +241,7 @@ function injectFaviconBasePath(html: string, basePath: string | null): string {
   }
   return html.replace(
     /\bhref="\.?\/((?:favicon|apple-touch-icon)[^"]*)"/g,
-    `href="${basePath}/$1"`,
+    (_, p1) => `href="${basePath}/${p1}"`,
   );
 }
 
