@@ -553,8 +553,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       // Fall back to normal delivery with the full accumulated streamed text
       // so the user receives the complete answer even when stop() fails.
+      // lastStreamPayload is guarded by !== null above; the ! assertion is
+      // required because tsc does not narrow mutable let variables through
+      // spread expressions even with an explicit null guard.
       if (orphanDeleted && lastStreamPayload !== null && streamedText) {
-        await deliverNormally({ ...lastStreamPayload, text: streamedText }, finalStream.threadTs);
+        await deliverNormally({ ...lastStreamPayload!, text: streamedText }, finalStream.threadTs);
       }
     }
   }
