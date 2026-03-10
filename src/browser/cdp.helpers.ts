@@ -3,6 +3,7 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { resolveBrowserRateLimitMessage } from "./client-fetch.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -172,6 +173,10 @@ export async function fetchCdpChecked(
       fetch(url, { ...init, headers, signal: ctrl.signal }),
     );
     if (!res.ok) {
+      if (res.status === 429) {
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        throw new Error(`${resolveBrowserRateLimitMessage(url)} Do NOT retry the browser tool.`);
+      }
       throw new Error(`HTTP ${res.status}`);
     }
     return res;
