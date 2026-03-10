@@ -189,5 +189,5 @@ function wrapModelRegistryWithProviderNormalization(registry: PiModelRegistry): 
       }
       return value.bind(target);
     },
-  }) as PiModelRegistry;
+  });
 }
