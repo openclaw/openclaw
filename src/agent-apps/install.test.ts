@@ -42,10 +42,11 @@ describe("Agent App install helpers", () => {
 
   it("parses local paths into absolute local sources", () => {
     const source = parseAotuiInstallSource("./fixtures/app", "/tmp/work");
+    const absolutePath = path.resolve("/tmp/work", "./fixtures/app");
     expect(source).toEqual({
       kind: "local",
-      source: "local:/tmp/work/fixtures/app",
-      absolutePath: "/tmp/work/fixtures/app",
+      source: `local:${absolutePath}`,
+      absolutePath,
     });
   });
 
