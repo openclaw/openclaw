@@ -561,7 +561,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     if (payload) {
       return payload;
     }
-    throw error;
+    const reason =
+      (error as { cause?: { message?: string; code?: string } })?.cause?.message ??
+      (error as { cause?: { code?: string } })?.cause?.code ??
+      (error as Error)?.message ??
+      "unknown error";
+    throw new Error(`Web fetch failed for ${params.url}: ${reason}`, { cause: error });
   }
 
   try {
