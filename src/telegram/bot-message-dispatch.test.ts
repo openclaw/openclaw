@@ -1903,4 +1903,60 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftA.clear).toHaveBeenCalledTimes(1);
     expect(draftB.clear).toHaveBeenCalledTimes(1);
   });
+
+  it("swallows post-connect network timeout on preview edit to prevent duplicate messages", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    // Simulate a post-connect timeout: editMessageTelegram throws a network
+    // error even though Telegram's server already processed the edit.
+    editMessageTelegram.mockRejectedValue(new Error("timeout: request timed out after 30000ms"));
+
+    await dispatchWithContext({ context: createContext() });
+
+    // The edit was attempted (and may have succeeded server-side).
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    // The fix: no fallback sendPayload via deliverReplies for the final text,
+    // because the editPreview callback swallowed the network timeout.
+    // deliverReplies should NOT have been called with the "Final answer" text
+    // (it would only be called if the fallback chain fired).
+    const deliverCalls = deliverReplies.mock.calls;
+    const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
+      (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
+        (r: { text?: string }) => r.text === "Final answer",
+      ),
+    );
+    expect(finalTextSentViaDeliverReplies).toBe(false);
+  });
+
+  it("re-throws pre-connect errors on preview edit so fallback can send", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    // Simulate a pre-connect error: the edit never reached Telegram.
+    const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
+    (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
+    editMessageTelegram.mockRejectedValue(preConnectErr);
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    // Pre-connect error is re-thrown, so the fallback chain fires and
+    // deliverReplies sends the final text as a new message.
+    expect(deliverReplies).toHaveBeenCalled();
+  });
 });

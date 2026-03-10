@@ -362,6 +362,54 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
+  // ── Duplicate message regression tests ──────────────────────────────────
+  // These document the fallback behavior at the lane-delivery layer.
+  // The real fix lives in bot-message-dispatch.ts: the editPreview callback
+  // swallows post-connect network errors (timeout, reset) so they never
+  // reach this layer. These tests verify that if a non-network API error
+  // (e.g. 500) still reaches tryEditPreviewMessage, the fallback to
+  // sendPayload still works correctly.
+
+  it("falls back to sendPayload on genuine API errors (not network timeout)", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    // A real API error (not a network timeout) — edit definitely didn't land
+    harness.editPreview.mockRejectedValue(new Error("500: Internal Server Error"));
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(result).toBe("sent");
+  });
+
+  it("falls back on archived preview API error and cleans up old preview", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Partial streaming...",
+      deleteIfUnused: true,
+    });
+    // Genuine API error — edit definitely didn't land
+    harness.editPreview.mockRejectedValue(new Error("500: Internal Server Error"));
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Complete final answer",
+      payload: { text: "Complete final answer" },
+      infoKind: "final",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
+    expect(result).toBe("sent");
+  });
+
   it("deletes consumed boundary previews after fallback final send", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({

@@ -39,6 +39,7 @@ import {
   type DraftLaneState,
   type LaneName,
 } from "./lane-delivery.js";
+import { isSafeToRetrySendError } from "./network-errors.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -478,13 +479,35 @@ export const dispatchTelegramMessage = async ({
       await lane.stream?.stop();
     },
     editPreview: async ({ messageId, text, previewButtons }) => {
-      await editMessageTelegram(chatId, messageId, text, {
-        api: bot.api,
-        cfg,
-        accountId: route.accountId,
-        linkPreview: telegramCfg.linkPreview,
-        buttons: previewButtons,
-      });
+      try {
+        await editMessageTelegram(chatId, messageId, text, {
+          api: bot.api,
+          cfg,
+          accountId: route.accountId,
+          linkPreview: telegramCfg.linkPreview,
+          buttons: previewButtons,
+        });
+      } catch (err) {
+        // Post-connect network errors (timeout, connection reset) mean the edit
+        // may have already landed on Telegram's server. Swallow these to prevent
+        // the fallback chain from sending a duplicate message via sendPayload.
+        // Only re-throw pre-connect errors (DNS, connection refused — edit
+        // definitely never reached Telegram) and API errors (400/500 — Telegram
+        // explicitly rejected the edit).
+        if (isSafeToRetrySendError(err)) {
+          throw err;
+        }
+        const isNetworkError =
+          err instanceof Error &&
+          /timeout|timed out|reset|closed|network|fetch failed|socket/i.test(err.message);
+        if (isNetworkError) {
+          logVerbose(
+            `telegram: preview edit may have succeeded despite network error; treating as delivered to avoid duplicate (${String(err)})`,
+          );
+          return;
+        }
+        throw err;
+      }
     },
     deletePreviewMessage: async (messageId) => {
       await bot.api.deleteMessage(chatId, messageId);
