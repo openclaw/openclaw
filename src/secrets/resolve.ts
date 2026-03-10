@@ -15,6 +15,8 @@ import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
 import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   SINGLE_VALUE_FILE_REF_ID,
   resolveDefaultSecretProviderAlias,
   secretRefKey,
@@ -842,6 +844,11 @@ export async function resolveSecretRefValues(
     const id = ref.id.trim();
     if (!id) {
       throw new Error("Secret reference id is empty.");
+    }
+    if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
+      throw new Error(
+        `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
     }
     uniqueRefs.set(secretRefKey(ref), { ...ref, id });
   }
