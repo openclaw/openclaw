@@ -3,7 +3,11 @@ import { z } from "zod";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-function isSafeRelativeModulePath(raw: string): boolean {
+function isSafeRelativeModulePath(raw: unknown): boolean {
+  // Guard against non-string values (Zod refine can receive any type)
+  if (typeof raw !== "string") {
+    return false;
+  }
   const value = raw.trim();
   if (!value) {
     return false;
