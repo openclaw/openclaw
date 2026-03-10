@@ -420,4 +420,146 @@ describe("modelsAuthCleanCommand", () => {
     // ensureAuthProfileStore should not have been called for profile-set computation
     expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
   });
+
+  // ---- Fix: agent media profiles without top-level tools.media (P1 #2912273297) ----
+
+  it("collects agent-level media profiles even when cfg.tools.media is absent", async () => {
+    // Arrange: no top-level tools.media, but one agent override references a profile.
+    // Without the fix, collectMediaProfileIds() returned early on !media and the
+    // agent-level profile was treated as stale and added to toRemove.
+    const store = makeStore(["anthropic:me.com", "anthropic:media-agent"]);
+
+    mocks.loadModelsConfig.mockResolvedValue({
+      ...makeCfg(["anthropic:me.com"]),
+      // Deliberately omit tools.media at the top level
+      agents: {
+        list: [
+          {
+            id: "worker",
+            tools: {
+              media: {
+                models: [{ model: "gpt-4o", profile: "anthropic:media-agent" }],
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // anthropic:media-agent is in an agent's tools.media override — must be kept
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  it("collects agent preferredProfile references without top-level tools.media", async () => {
+    // preferredProfile (not just profile) must also be picked up from agent overrides
+    const store = makeStore(["anthropic:me.com", "anthropic:preferred-agent"]);
+
+    mocks.loadModelsConfig.mockResolvedValue({
+      ...makeCfg(["anthropic:me.com"]),
+      agents: {
+        list: [
+          {
+            id: "worker",
+            tools: {
+              media: {
+                image: {
+                  models: [{ model: "gpt-4o", preferredProfile: "anthropic:preferred-agent" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  // ---- Fix: agentLocalOnly prevents credential scope bleed (Aisle High) ----
+
+  it("non-default agent: passes agentLocalOnly:true to updateAuthProfileStoreWithLock", async () => {
+    // Ensures the write path uses agent-local-only loading, preventing main-store
+    // profiles from being persisted into the agent-local auth-profiles.json file.
+    const agentLocalStore = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(agentLocalStore);
+    captureUpdater(agentLocalStore);
+
+    await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime());
+
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentLocalOnly: true }),
+    );
+  });
+
+  it("default agent: does not set agentLocalOnly on updateAuthProfileStoreWithLock", async () => {
+    // Default agent uses the merged store (ensureAuthProfileStore path) — no agentLocalOnly.
+    const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    const call = mocks.updateAuthProfileStoreWithLock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call?.agentLocalOnly).toBeFalsy();
+  });
+
+  // ---- Fix: sanitize ANSI escape codes in profile ID output (Aisle Low) ----
+
+  it("strips ANSI escape sequences from profile IDs in --dry-run output", async () => {
+    // A profile ID containing an ANSI color sequence must not reach the terminal raw.
+    const maliciousId = "anthropic:\x1b[31mred\x1b[0m";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // ANSI escape sequences must be stripped
+    expect(combined).not.toContain("\x1b[31m");
+    expect(combined).not.toContain("\x1b[0m");
+    // The non-malicious text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("red");
+  });
+
+  it("strips newlines from profile IDs in --dry-run output to prevent log forging", async () => {
+    // A profile ID "anthropic:legit\nINJECTED LINE" must not produce a separate
+    // log entry that starts with "INJECTED LINE" (i.e., must not forge a new line).
+    // After sanitization the \n is removed and the injected text is concatenated
+    // to the profile ID rather than appearing as a standalone forged log entry.
+    const maliciousId = "anthropic:legit\nINJECTED LINE";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    // No log call should start with the injected text (that would mean log forging)
+    for (const line of runtime.logs) {
+      expect(line).not.toMatch(/^\s*INJECTED LINE/);
+    }
+    // The sanitized prefix (before the stripped \n) should still appear
+    expect(runtime.logs.some((line) => line.includes("anthropic:legit"))).toBe(true);
+  });
 });

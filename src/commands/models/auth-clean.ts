@@ -30,17 +30,18 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
     }
   }
 
+  // Scan top-level tools.media if present.
   const media = cfg.tools?.media;
-  if (!media) {
-    return ids;
+  if (media) {
+    addFromModels(media.models);
+    addFromModels(media.image?.models);
+    addFromModels(media.audio?.models);
+    addFromModels(media.video?.models);
   }
 
-  addFromModels(media.models);
-  addFromModels(media.image?.models);
-  addFromModels(media.audio?.models);
-  addFromModels(media.video?.models);
-
-  // Also cover per-agent tool overrides
+  // Always scan per-agent tool overrides, even when cfg.tools.media is absent.
+  // Agent-level overrides may reference profiles not present at the top level;
+  // skipping them would cause those profiles to be treated as stale and wrongly pruned.
   for (const agent of cfg.agents?.list ?? []) {
     const agentMedia = (agent as { tools?: { media?: MediaToolsConfig } }).tools?.media;
     if (!agentMedia) {
@@ -53,6 +54,16 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
   }
 
   return ids;
+}
+
+/**
+ * Sanitize a profile ID string for safe output in terminal/log messages.
+ * Strips ANSI/VT escape sequences and newlines to prevent terminal injection
+ * (log forging) via maliciously crafted profile IDs.
+ */
+function sanitizeProfileId(id: string): string {
+  // eslint-disable-next-line no-control-regex
+  return id.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/[\r\n]/g, "");
 }
 
 /**
@@ -149,7 +160,7 @@ export async function modelsAuthCleanCommand(
         runtime.log(
           "Warning: openclaw.json has no configured profiles. All store profiles would be removed.",
         );
-        runtime.log(`In store: ${storeProfileIds.join(", ")}`);
+        runtime.log(`In store: ${storeProfileIds.map(sanitizeProfileId).join(", ")}`);
         runtime.log("(dry run -- no changes written)");
       }
       return;
@@ -183,8 +194,10 @@ export async function modelsAuthCleanCommand(
   } else {
     runtime.log(`Agent:      ${agentId}`);
     runtime.log(`Auth file:  ${authStorePath}`);
-    runtime.log(`Configured: ${[...configuredProfiles].join(", ") || "(none)"}`);
-    runtime.log(`In store:   ${storeProfileIds.join(", ") || "(none)"}`);
+    runtime.log(
+      `Configured: ${[...configuredProfiles].map(sanitizeProfileId).join(", ") || "(none)"}`,
+    );
+    runtime.log(`In store:   ${storeProfileIds.map(sanitizeProfileId).join(", ") || "(none)"}`);
   }
 
   if (toRemove.length === 0) {
@@ -197,11 +210,11 @@ export async function modelsAuthCleanCommand(
   if (!opts.json) {
     runtime.log(`\nProfiles to remove (${toRemove.length}):`);
     for (const id of toRemove) {
-      runtime.log(`  - ${id}`);
+      runtime.log(`  - ${sanitizeProfileId(id)}`);
     }
     runtime.log(`Profiles to keep (${toKeep.length}):`);
     for (const id of toKeep) {
-      runtime.log(`  + ${id}`);
+      runtime.log(`  + ${sanitizeProfileId(id)}`);
     }
   }
 
@@ -218,6 +231,12 @@ export async function modelsAuthCleanCommand(
 
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
+    // For non-default agents the write target is the agent-local file only.
+    // Setting agentLocalOnly ensures the store loaded inside the lock is the
+    // agent-local view (not the merged main+agent view returned by
+    // ensureAuthProfileStore), which prevents main-store profiles from being
+    // written into the agent-local file (credential scope bleed).
+    agentLocalOnly: !isDefaultAgent,
     updater: (freshStore: AuthProfileStore) => {
       let mutated = false;
 
