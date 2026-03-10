@@ -123,14 +123,15 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     );
   });
 
-  it("defaults to lightweight bootstrapContextMode for heartbeats", async () => {
+  it("defaults to full bootstrap context for heartbeats (lightContext opt-in)", async () => {
     const replyOpts = await runDefaultsHeartbeat({});
     expect(replyOpts).toEqual(
       expect.objectContaining({
         isHeartbeat: true,
-        bootstrapContextMode: "lightweight",
       }),
     );
+    // bootstrapContextMode should be undefined (full context) by default
+    expect((replyOpts as Record<string, unknown>).bootstrapContextMode).toBeUndefined();
   });
 
   it("allows opting out of lightweight bootstrapContextMode with lightContext: false", async () => {
