@@ -61,6 +61,50 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("schedules every listed agent when heartbeat is configured in defaults only", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(["main", "ops"]);
+
+    runner.stop();
+  });
+
+  it("does not schedule heartbeats when heartbeat is not configured anywhere", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.stop();
+  });
+
   it("continues scheduling after runOnce throws an unhandled error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));

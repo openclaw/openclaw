@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  listAgentIds,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -118,16 +119,28 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
+function hasDefaultHeartbeat(cfg: OpenClawConfig) {
+  return Boolean(cfg.agents?.defaults?.heartbeat);
+}
+
+function resolveHeartbeatAgentIds(cfg: OpenClawConfig): string[] {
+  const list = cfg.agents?.list ?? [];
+  const explicitAgentIds = list
+    .filter((entry) => Boolean(entry?.heartbeat))
+    .map((entry) => normalizeAgentId(entry.id))
+    .filter((id, index, ids) => Boolean(id) && ids.indexOf(id) === index);
+  if (hasExplicitHeartbeatAgents(cfg)) {
+    return explicitAgentIds;
+  }
+  if (!hasDefaultHeartbeat(cfg)) {
+    return [];
+  }
+  return listAgentIds(cfg);
+}
+
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
-  const list = cfg.agents?.list ?? [];
-  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
-  if (hasExplicit) {
-    return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
-    );
-  }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  return resolveHeartbeatAgentIds(cfg).includes(resolvedAgentId);
 }
 
 function resolveHeartbeatConfig(
@@ -194,18 +207,12 @@ export function resolveHeartbeatSummaryForAgent(
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
-  const list = cfg.agents?.list ?? [];
-  if (hasExplicitHeartbeatAgents(cfg)) {
-    return list
-      .filter((entry) => entry?.heartbeat)
-      .map((entry) => {
-        const id = normalizeAgentId(entry.id);
-        return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
-      })
-      .filter((entry) => entry.agentId);
-  }
-  const fallbackId = resolveDefaultAgentId(cfg);
-  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+  return resolveHeartbeatAgentIds(cfg)
+    .map((agentId) => ({
+      agentId,
+      heartbeat: resolveHeartbeatConfig(cfg, agentId),
+    }))
+    .filter((entry) => entry.agentId);
 }
 
 export function resolveHeartbeatIntervalMs(
