@@ -428,6 +428,8 @@ export async function runOnboardingWizard(
       includeSkip: true,
     }));
 
+  let skipDefaultModelPrompt = false;
+
   if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({
       prompter,
@@ -449,9 +451,16 @@ export async function runOnboardingWizard(
       },
     });
     nextConfig = authResult.config;
+    skipDefaultModelPrompt = authResult.skipDefaultModelPrompt === true;
+    if (authResult.skipDefaultModelPrompt && authChoice === "openai-codex") {
+      await prompter.note(
+        "OpenAI Codex sign-in did not complete. Skipping default model selection.",
+        "OpenAI Codex OAuth",
+      );
+    }
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  if (authChoiceFromPrompt && authChoice !== "custom-api-key" && !skipDefaultModelPrompt) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,

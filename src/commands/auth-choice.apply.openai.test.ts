@@ -1,4 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as openAICodexOAuth from "./openai-codex-oauth.js";
+
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+  return {
+    ...actual,
+    getOAuthApiKey: vi.fn(),
+    getOAuthProviders: () => [
+      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+    ],
+  };
+});
+
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import {
   createAuthTestLifecycle,
@@ -23,6 +36,7 @@ describe("applyAuthChoiceOpenAI", () => {
   }
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await lifecycle.cleanup();
   });
 
@@ -112,5 +126,51 @@ describe("applyAuthChoiceOpenAI", () => {
     }>(agentDir);
     expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-token");
     expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("skips follow-up model selection when OpenAI Codex OAuth throws", async () => {
+    const loginSpy = vi
+      .spyOn(openAICodexOAuth, "loginOpenAICodexOAuth")
+      .mockRejectedValueOnce(new Error("oauth failed"));
+
+    const prompter = createWizardPrompter({}, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).toMatchObject({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
+    expect(loginSpy).toHaveBeenCalled();
+  });
+
+  it("skips follow-up model selection when OpenAI Codex OAuth returns no credentials", async () => {
+    const loginSpy = vi
+      .spyOn(openAICodexOAuth, "loginOpenAICodexOAuth")
+      .mockResolvedValueOnce(null);
+
+    const prompter = createWizardPrompter({}, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).toMatchObject({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
+    expect(loginSpy).toHaveBeenCalled();
   });
 });

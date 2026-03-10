@@ -496,4 +496,39 @@ describe("runOnboardingWizard", () => {
       }),
     );
   });
+
+  it("skips default model selection when auth flow marks the provider as incomplete", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
+    promptDefaultModel.mockClear();
+
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptDefaultModel).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "OpenAI Codex sign-in did not complete. Skipping default model selection.",
+      "OpenAI Codex OAuth",
+    );
+  });
 });

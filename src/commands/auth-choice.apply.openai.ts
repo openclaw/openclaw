@@ -90,31 +90,32 @@ export async function applyAuthChoiceOpenAI(
       });
     } catch {
       // The helper already surfaces the error to the user.
-      // Keep onboarding flow alive and return unchanged config.
-      return { config: nextConfig, agentModelOverride };
+      // Keep onboarding flow alive, but do not continue as if Codex auth succeeded.
+      return { config: nextConfig, agentModelOverride, skipDefaultModelPrompt: true };
     }
-    if (creds) {
-      const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
-        syncSiblingAgents: true,
-      });
-      nextConfig = applyAuthProfileConfig(nextConfig, {
-        profileId,
-        provider: "openai-codex",
-        mode: "oauth",
-      });
-      if (params.setDefaultModel) {
-        const applied = applyOpenAICodexModelDefault(nextConfig);
-        nextConfig = applied.next;
-        if (applied.changed) {
-          await params.prompter.note(
-            `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-            "Model configured",
-          );
-        }
-      } else {
-        agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
-        await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
+    if (!creds) {
+      return { config: nextConfig, agentModelOverride, skipDefaultModelPrompt: true };
+    }
+    const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
+      syncSiblingAgents: true,
+    });
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    if (params.setDefaultModel) {
+      const applied = applyOpenAICodexModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+          "Model configured",
+        );
       }
+    } else {
+      agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
+      await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
     }
     return { config: nextConfig, agentModelOverride };
   }
