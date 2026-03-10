@@ -229,6 +229,7 @@ export const ModelDefinitionSchema = z
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
+    connectTimeoutMs: z.number().int().min(1000).max(3_600_000).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])

@@ -699,6 +699,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
+  "models.providers.*.connectTimeoutMs":
+    "Connection and first-response timeout in milliseconds applied to provider fetch streaming (undici headers/body timeout). Increase this for slower local inference backends that need longer time before first token.",
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":

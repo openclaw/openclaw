@@ -51,6 +51,7 @@ export type ModelDefinitionConfig = {
 
 export type ModelProviderConfig = {
   baseUrl: string;
+  connectTimeoutMs?: number;
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
