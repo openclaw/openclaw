@@ -425,17 +425,18 @@ export async function setVercelAiGatewayApiKey(
   });
 }
 
-export async function setSambanovaApiKey(key: string, agentDir?: string) {
+export async function setSambanovaApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
   upsertAuthProfile({
     profileId: "sambanova:default",
-    credential: {
-      type: "api_key",
-      provider: "sambanova",
-      key,
-    },
+    credential: buildApiKeyCredential("sambanova", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
 export async function setOpencodeZenApiKey(
   key: SecretInput,
   agentDir?: string,
