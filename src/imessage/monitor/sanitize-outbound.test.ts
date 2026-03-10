@@ -48,6 +48,16 @@ describe("sanitizeOutboundText", () => {
     expect(result).not.toMatch(/^assistant:$/m);
   });
 
+  it("strips inline reply directive tags", () => {
+    const text = "[[reply_to:1578]] Hey Matt.";
+    expect(sanitizeOutboundText(text)).toBe("Hey Matt.");
+  });
+
+  it("strips inline reply_to_current directive tags with whitespace", () => {
+    const text = "[[ reply_to_current ]]\nHello world";
+    expect(sanitizeOutboundText(text)).toBe("Hello world");
+  });
+
   it("collapses excessive blank lines after stripping", () => {
     const text = "Hello\n\n\n\n\nWorld";
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");

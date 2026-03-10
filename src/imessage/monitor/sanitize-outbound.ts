@@ -1,4 +1,5 @@
 import { stripAssistantInternalScaffolding } from "../../shared/text/assistant-visible-text.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.
@@ -23,6 +24,7 @@ export function sanitizeOutboundText(text: string): string {
   cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
   cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");
   cleaned = cleaned.replace(ROLE_TURN_MARKER_RE, "");
+  cleaned = stripInlineDirectiveTagsForDisplay(cleaned).text;
 
   // Collapse excessive blank lines left after stripping.
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
