@@ -670,7 +670,9 @@ describe("browser tool act stale target recovery", () => {
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
   });
+});
 
+describe("browser tool screenshot image sanitization", () => {
   it("passes imageSanitization config to screenshot results", async () => {
     const testConfig: OpenClawConfig = {
       agents: { defaults: { imageMaxDimensionPx: 2000 } },
