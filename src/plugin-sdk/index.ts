@@ -198,6 +198,8 @@ export { createPluginRuntimeStore } from "./runtime-store.js";
 export { createScopedChannelConfigBase } from "./channel-config-helpers.js";
 export {
   AllowFromEntrySchema,
+  AllowFromListSchema,
+  buildNestedDmConfigSchema,
   buildCatchallMultiAccountChannelSchema,
 } from "../channels/plugins/config-schema.js";
 export type { ChannelDock } from "../channels/dock.js";
