@@ -1394,7 +1394,7 @@ export async function runReplyAgent(params: {
     // insufficient API credits): without this guard, systemSent=true
     // would be persisted before the system prompt was actually delivered,
     // causing all subsequent sessions to skip re-sending it (#41462).
-    if (activeIsNewSession && sessionKey && storePath) {
+    if (sessionKey && storePath && activeSessionEntry?.systemSent !== true) {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
