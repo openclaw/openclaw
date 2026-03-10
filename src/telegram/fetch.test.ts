@@ -280,6 +280,41 @@ describe("resolveTelegramFetch", () => {
     expect(firstDispatcher?.options?.connect?.family).not.toBe(4);
   });
 
+  it("treats ALL_PROXY-only env as direct transport and arms sticky IPv4 fallback", async () => {
+    vi.stubEnv("ALL_PROXY", "socks5://127.0.0.1:1080");
+    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
+    undiciFetch
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+    expect(AgentCtor).toHaveBeenCalledTimes(2);
+
+    const firstDispatcher = getDispatcherFromUndiciCall(1);
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+
+    expect(firstDispatcher).not.toBe(secondDispatcher);
+    expect(secondDispatcher).toBe(thirdDispatcher);
+    expect(secondDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+  });
+
   it("arms sticky IPv4 fallback when env proxy init falls back to direct Agent", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
     EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {

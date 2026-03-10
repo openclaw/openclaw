@@ -76,9 +76,6 @@ function resolveProbeFetcher(token: string, options?: TelegramProbeOptions): typ
   const proxyUrl = options?.proxyUrl?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const resolved = resolveTelegramFetch(proxyFetch, { network: options?.network });
-  if (!resolved) {
-    throw new Error("fetch is not available");
-  }
 
   if (cacheKey) {
     return setCachedProbeFetcher(cacheKey, resolved);
