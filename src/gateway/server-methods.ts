@@ -28,6 +28,7 @@ import { skillsHandlers } from "./server-methods/skills.js";
 import { swarmHandlers } from "./server-methods/swarm.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { taskHandlers } from "./server-methods/tasks.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
@@ -98,6 +99,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentsHandlers,
   ...browserHandlers,
   ...swarmHandlers,
+  ...taskHandlers,
   ...providerHandlers,
 };
 
