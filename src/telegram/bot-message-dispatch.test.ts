@@ -1936,7 +1936,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(false);
   });
 
-  it("re-throws pre-connect errors on preview edit so fallback can send", async () => {
+  it("keeps preview on pre-connect error during final edit (lane deliverer treats as delivered)", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1947,7 +1947,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
     deliverReplies.mockResolvedValue({ delivered: true });
-    // Simulate a pre-connect error: the edit never reached Telegram.
+    // Pre-connect error: edit never reached Telegram. The dispatch-level
+    // callback re-throws it, but the lane deliverer catches it and treats
+    // the final edit failure as delivered to avoid a duplicate message.
     const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
     (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
     editMessageTelegram.mockRejectedValue(preConnectErr);
@@ -1955,8 +1957,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
-    // Pre-connect error is re-thrown, so the fallback chain fires and
-    // deliverReplies sends the final text as a new message.
-    expect(deliverReplies).toHaveBeenCalled();
+    // Lane deliverer keeps the preview — no fallback sendPayload.
+    const deliverCalls = deliverReplies.mock.calls;
+    const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
+      (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
+        (r: { text?: string }) => r.text === "Final answer",
+      ),
+    );
+    expect(finalTextSentViaDeliverReplies).toBe(false);
   });
 });

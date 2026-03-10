@@ -4,19 +4,31 @@ import type { TelegramDraftStream } from "./draft-stream.js";
 
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const MESSAGE_NOT_FOUND_RE =
+  /400:\s*Bad Request:\s*message to edit not found|MESSAGE_ID_INVALID|message can't be edited/i;
+
+function extractErrorText(err: unknown): string {
+  return typeof err === "string"
+    ? err
+    : err instanceof Error
+      ? err.message
+      : typeof err === "object" && err && "description" in err
+        ? typeof err.description === "string"
+          ? err.description
+          : ""
+        : "";
+}
 
 function isMessageNotModifiedError(err: unknown): boolean {
-  const text =
-    typeof err === "string"
-      ? err
-      : err instanceof Error
-        ? err.message
-        : typeof err === "object" && err && "description" in err
-          ? typeof err.description === "string"
-            ? err.description
-            : ""
-          : "";
-  return MESSAGE_NOT_MODIFIED_RE.test(text);
+  return MESSAGE_NOT_MODIFIED_RE.test(extractErrorText(err));
+}
+
+/**
+ * Returns true when Telegram reports the target message no longer exists.
+ * In this case the preview is gone and a fallback send is safe (no duplicate).
+ */
+function isMissingPreviewMessageError(err: unknown): boolean {
+  return MESSAGE_NOT_FOUND_RE.test(extractErrorText(err));
 }
 
 export type LaneName = "answer" | "reasoning";
@@ -208,8 +220,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return true;
       }
       if (args.treatEditFailureAsDelivered) {
+        if (isMissingPreviewMessageError(err)) {
+          params.log(
+            `telegram: ${args.laneName} preview ${args.context} edit target missing; falling back to standard send (${String(err)})`,
+          );
+          return false;
+        }
         params.log(
-          `telegram: ${args.laneName} preview ${args.context} edit failed after stop-created flush; treating as delivered (${String(err)})`,
+          `telegram: ${args.laneName} preview ${args.context} edit failed; keeping existing preview to avoid duplicate (${String(err)})`,
         );
         params.markDelivered();
         return true;
@@ -300,7 +318,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     return finalizePreview(
       previewTargetAfterStop.previewMessageId,
-      false,
+      context === "final",
       previewTargetAfterStop.hadPreviewMessage,
     );
   };

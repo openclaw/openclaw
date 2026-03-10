@@ -39,7 +39,7 @@ import {
   type DraftLaneState,
   type LaneName,
 } from "./lane-delivery.js";
-import { isSafeToRetrySendError } from "./network-errors.js";
+import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -497,10 +497,7 @@ export const dispatchTelegramMessage = async ({
         if (isSafeToRetrySendError(err)) {
           throw err;
         }
-        const isNetworkError =
-          err instanceof Error &&
-          /timeout|timed out|reset|closed|network|fetch failed|socket/i.test(err.message);
-        if (isNetworkError) {
+        if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
           logVerbose(
             `telegram: preview edit may have succeeded despite network error; treating as delivered to avoid duplicate (${String(err)})`,
           );

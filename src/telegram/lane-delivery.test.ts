@@ -143,7 +143,9 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("preview-finalized");
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.log).toHaveBeenCalledWith(expect.stringContaining("treating as delivered"));
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("keeping existing preview to avoid duplicate"),
+    );
   });
 
   it("treats 'message is not modified' preview edit errors as delivered", async () => {
@@ -170,9 +172,29 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("falls back to normal delivery when editing an existing preview fails", async () => {
+  it("treats existing preview edit failure as delivered during final to avoid duplicate", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.editPreview).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("keeping existing preview to avoid duplicate"),
+    );
+  });
+
+  it("falls back to sendPayload when preview message is missing during final edit", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.editPreview.mockRejectedValue(new Error("400: Bad Request: message to edit not found"));
 
     const result = await harness.deliverLaneText({
       laneName: "answer",
@@ -363,16 +385,12 @@ describe("createLaneTextDeliverer", () => {
   });
 
   // ── Duplicate message regression tests ──────────────────────────────────
-  // These document the fallback behavior at the lane-delivery layer.
-  // The real fix lives in bot-message-dispatch.ts: the editPreview callback
-  // swallows post-connect network errors (timeout, reset) so they never
-  // reach this layer. These tests verify that if a non-network API error
-  // (e.g. 500) still reaches tryEditPreviewMessage, the fallback to
-  // sendPayload still works correctly.
+  // During final delivery, edit failures keep the existing preview to avoid
+  // sending a duplicate via sendPayload. The only exception is when the
+  // preview message itself is gone ("message to edit not found").
 
-  it("falls back to sendPayload on genuine API errors (not network timeout)", async () => {
+  it("keeps preview on API error during final to avoid duplicate", async () => {
     const harness = createHarness({ answerMessageId: 999 });
-    // A real API error (not a network timeout) — edit definitely didn't land
     harness.editPreview.mockRejectedValue(new Error("500: Internal Server Error"));
 
     const result = await harness.deliverLaneText({
@@ -382,20 +400,20 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
+    expect(result).toBe("preview-finalized");
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
-    expect(result).toBe("sent");
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back on archived preview API error and cleans up old preview", async () => {
+  it("falls back to sendPayload when archived preview is missing during final", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({
       messageId: 5555,
       textSnapshot: "Partial streaming...",
       deleteIfUnused: true,
     });
-    // Genuine API error — edit definitely didn't land
-    harness.editPreview.mockRejectedValue(new Error("500: Internal Server Error"));
+    harness.editPreview.mockRejectedValue(new Error("400: Bad Request: message to edit not found"));
 
     const result = await harness.deliverLaneText({
       laneName: "answer",
@@ -406,7 +424,6 @@ describe("createLaneTextDeliverer", () => {
 
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).toHaveBeenCalledTimes(1);
-    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
     expect(result).toBe("sent");
   });
 
