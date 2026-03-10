@@ -69,8 +69,15 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       continue;
     }
 
+    // If assistant content is not an array (legacy string format), it can't
+    // contain tool_use blocks, so keep it unchanged.
+    if (!Array.isArray(assistantMsg.content)) {
+      result.push(msg);
+      continue;
+    }
+
     // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+    const originalContent = assistantMsg.content;
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
