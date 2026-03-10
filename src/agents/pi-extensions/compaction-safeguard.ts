@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import { configureEnhancedCompaction, enhancedCompaction } from "../compaction-enhanced.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -278,17 +279,56 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
-      const historySummary = await summarizeInStages({
-        messages: messagesToSummarize,
-        model,
-        apiKey,
-        signal,
-        reserveTokens,
-        maxChunkTokens,
-        contextWindow: contextWindowTokens,
-        customInstructions,
-        previousSummary: effectivePreviousSummary,
-      });
+      // 检查是否启用增强版压缩
+      const enhancedConfig = runtime?.enhancedCompaction;
+      const useEnhanced = enhancedConfig?.enabled ?? false;
+
+      let historySummary: string;
+
+      if (useEnhanced) {
+        // 使用增强版压缩（支持并行处理和共享上下文）
+        if (enhancedConfig?.config) {
+          configureEnhancedCompaction(enhancedConfig.config);
+        }
+
+        const enhancedResult = await enhancedCompaction({
+          messages: messagesToSummarize,
+          model,
+          apiKey,
+          signal,
+          reserveTokens,
+          maxChunkTokens,
+          contextWindow: contextWindowTokens,
+          customInstructions,
+          previousSummary: effectivePreviousSummary,
+          sessionId: (ctx as { sessionId?: string }).sessionId ?? "unknown",
+          agentId: (ctx as { agentId?: string }).agentId,
+        });
+
+        historySummary = enhancedResult.summary;
+
+        // 记录增强版压缩指标
+        if (enhancedResult.metrics.parallelUsed) {
+          console.log(
+            `[Enhanced Compaction] Parallel: ${enhancedResult.metrics.parallelUsed}, ` +
+              `Ratio: ${enhancedResult.metrics.compressionRatio.toFixed(2)}x, ` +
+              `Duration: ${enhancedResult.metrics.durationMs}ms`,
+          );
+        }
+      } else {
+        // 使用原始压缩逻辑
+        historySummary = await summarizeInStages({
+          messages: messagesToSummarize,
+          model,
+          apiKey,
+          signal,
+          reserveTokens,
+          maxChunkTokens,
+          contextWindow: contextWindowTokens,
+          customInstructions,
+          previousSummary: effectivePreviousSummary,
+        });
+      }
 
       let summary = historySummary;
       if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {

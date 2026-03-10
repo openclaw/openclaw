@@ -1,6 +1,13 @@
+import type { EnhancedCompactionConfig } from "../compaction-enhanced.js";
+
 export type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;
+  // 增强版压缩配置
+  enhancedCompaction?: {
+    enabled?: boolean;
+    config?: Partial<EnhancedCompactionConfig>;
+  };
 };
 
 // Session-scoped runtime registry keyed by object identity.
