@@ -136,6 +136,7 @@ export async function generateVoiceResponse(
       lane: "voice",
       extraSystemPrompt,
       agentDir,
+      agentId,
     });
 
     // Extract text from payloads
