@@ -435,7 +435,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
   });
 
   it("routes OPENROUTER_API_KEY through chat completions", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    vi.stubEnv("PERPLEXITY_API_KEY", ""); // pragma: allowlist secret
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
     const mockFetch = installPerplexityChatFetch();
     const tool = createPerplexitySearchTool();
