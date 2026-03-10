@@ -94,8 +94,11 @@ export async function deliverTaskNotification(opts: {
     sendToSession,
   } = opts;
 
-  // Default idempotency key is the event name (fires once per event type by default)
-  const ikey = opts.idempotencyKey ?? event;
+  // Default idempotency key is the event name (fires once per event type by default).
+  // Normalize empty/whitespace-only keys to undefined so callers with unset env vars
+  // (which produce "") don't accidentally collapse all future notifications.
+  const rawKey = opts.idempotencyKey?.trim();
+  const ikey = rawKey && rawKey.length > 0 ? rawKey : event;
 
   const registry = loadTaskRegistry(registryPath);
   const taskIndex = registry.tasks.findIndex((t) => t.id === taskId);
@@ -154,15 +157,22 @@ export async function deliverTaskNotification(opts: {
   const freshTask = freshRegistry.tasks[freshIndex];
   const updatedEvents = [...freshTask.events, newEvent].slice(-MAX_TASK_EVENTS);
 
+  // Merge new idempotency key and cap the map to MAX_TASK_EVENTS entries.
+  // Entries are ordered by insertion; when over cap, drop oldest keys first.
+  // This prevents registry bloat for long-lived tasks that use unique keys (e.g. commit SHAs).
+  const mergedNotified = { ...freshTask.notifiedEvents, [ikey]: true };
+  const notifiedKeys = Object.keys(mergedNotified);
+  const cappedNotified: Record<string, boolean> =
+    notifiedKeys.length > MAX_TASK_EVENTS
+      ? Object.fromEntries(notifiedKeys.slice(-MAX_TASK_EVENTS).map((k) => [k, true]))
+      : mergedNotified;
+
   const updatedTask: TaskEntry = {
     ...freshTask,
     updatedAt: Date.now(),
     ...(status !== undefined ? { status } : {}),
     events: updatedEvents,
-    notifiedEvents: {
-      ...freshTask.notifiedEvents,
-      [ikey]: true,
-    },
+    notifiedEvents: cappedNotified,
   };
 
   freshRegistry.tasks[freshIndex] = updatedTask;

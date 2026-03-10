@@ -135,6 +135,62 @@ describe("deliverTaskNotification", () => {
     expect(sendToSession).not.toHaveBeenCalled();
   });
 
+  it("normalizes empty/whitespace idempotency key to event name", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+    ]);
+    const sendToSession = vi.fn().mockResolvedValue(undefined);
+    // First call with empty key — should succeed using event name as key
+    await deliverTaskNotification({
+      taskId: "t1",
+      event: "done",
+      message: "msg",
+      idempotencyKey: "",
+      registryPath,
+      sendToSession,
+    });
+    // Second call with whitespace key — should be treated as idempotent (same event name key)
+    const result = await deliverTaskNotification({
+      taskId: "t1",
+      event: "done",
+      message: "msg2",
+      idempotencyKey: "   ",
+      registryPath,
+      sendToSession,
+    });
+    expect(result.skipped).toBe("already delivered");
+    expect(sendToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps notifiedEvents map at MAX_TASK_EVENTS entries", async () => {
+    // Fill task with 50 existing idempotency entries
+    const existing: Record<string, boolean> = {};
+    for (let i = 0; i < 50; i++) {
+      existing[`event-${i}`] = true;
+    }
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({
+        id: "t1",
+        watchers: [{ sessionKey: "s1", addedAt: Date.now() }],
+        notifiedEvents: existing,
+      }),
+    ]);
+    const sendToSession = vi.fn().mockResolvedValue(undefined);
+    await deliverTaskNotification({
+      taskId: "t1",
+      event: "event-new",
+      message: "msg",
+      registryPath,
+      sendToSession,
+    });
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+    const keys = Object.keys(updated.tasks[0].notifiedEvents);
+    expect(keys.length).toBeLessThanOrEqual(50);
+    // New key should be present; oldest key should have been pruned
+    expect(updated.tasks[0].notifiedEvents["event-new"]).toBe(true);
+    expect(updated.tasks[0].notifiedEvents["event-0"]).toBeUndefined();
+  });
+
   it("returns skipped='already delivered' when idempotency key already set", async () => {
     const registryPath = writeRegistry(tmpDir, [
       makeTask({
