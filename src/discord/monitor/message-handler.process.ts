@@ -32,7 +32,10 @@ import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import {
+  resolveDiscordManagedAccountIdByBotUserId,
+  resolveDiscordMaxLinesPerMessage,
+} from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
@@ -220,6 +223,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
   const senderTag = sender.tag;
+  const senderManagedAccountId = resolveDiscordManagedAccountIdByBotUserId(sender.id);
   const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
@@ -360,6 +364,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
     SenderName: senderName,
+    SenderManagedAccountId: senderManagedAccountId,
     SenderId: sender.id,
     SenderUsername: senderUsername,
     SenderTag: senderTag,

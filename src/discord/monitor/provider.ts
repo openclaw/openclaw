@@ -44,7 +44,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
-import { resolveDiscordAccount } from "../accounts.js";
+import {
+  forgetDiscordManagedBotIdentity,
+  rememberDiscordManagedBotIdentity,
+  resolveDiscordAccount,
+} from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -479,6 +483,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let releaseEarlyGatewayErrorGuard = () => {};
   let deactivateMessageHandler: (() => void) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
+  let botUserId: string | undefined;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -641,7 +646,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
-    let botUserId: string | undefined;
     let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
@@ -657,6 +661,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
       botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+      rememberDiscordManagedBotIdentity({
+        botUserId,
+        accountId: account.accountId,
+      });
     } catch (err) {
       runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     }
@@ -769,6 +777,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       releaseEarlyGatewayErrorGuard,
     });
   } finally {
+    forgetDiscordManagedBotIdentity({
+      botUserId,
+      accountId: account.accountId,
+    });
     deactivateMessageHandler?.();
     autoPresenceController?.stop();
     opts.setStatus?.({ connected: false });
