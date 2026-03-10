@@ -352,3 +352,55 @@ export function resolveAgentDir(
   const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
 }
+
+/**
+ * Get declared skills for an agent.
+ * Returns undefined if the agent has no declared skills.
+ */
+export function getAgentDeclaredSkills(
+  cfg: OpenClawConfig,
+  agentId: string,
+): import("../config/types.a2a-skills.js").AgentSkillDeclarations | undefined {
+  const id = normalizeAgentId(agentId);
+  const config = resolveAgentConfig(cfg, id);
+  return config?.declaredSkills;
+}
+
+/**
+ * Get a specific skill declaration for an agent.
+ * Returns undefined if the agent has no such skill.
+ * Checks both declared skills and built-in skills.
+ */
+export function getAgentSkillDeclaration(
+  cfg: OpenClawConfig,
+  agentId: string,
+  skillName: string,
+): import("../config/types.a2a-skills.js").SkillDeclaration | undefined {
+  const declared = getAgentDeclaredSkills(cfg, agentId);
+  const declaredSkill = declared?.skills.find((s) => s.name === skillName);
+  if (declaredSkill) {
+    return declaredSkill;
+  }
+  // Check built-in skills
+  const { BUILTIN_SKILLS } =
+    require("../config/types.a2a-skills.js") as typeof import("../config/types.a2a-skills.js");
+  return BUILTIN_SKILLS.find((s) => s.name === skillName);
+}
+
+/**
+ * List all available skills for an agent (declared + built-in).
+ */
+export function listAgentSkills(
+  cfg: OpenClawConfig,
+  agentId: string,
+): import("../config/types.a2a-skills.js").SkillDeclaration[] {
+  const declared = getAgentDeclaredSkills(cfg, agentId);
+  const { BUILTIN_SKILLS } =
+    require("../config/types.a2a-skills.js") as typeof import("../config/types.a2a-skills.js");
+  const declaredSkills = declared?.skills ?? [];
+  // Built-in skills not already declared
+  const builtinNotDeclared = BUILTIN_SKILLS.filter(
+    (b) => !declaredSkills.some((d) => d.name === b.name),
+  );
+  return [...declaredSkills, ...builtinNotDeclared];
+}

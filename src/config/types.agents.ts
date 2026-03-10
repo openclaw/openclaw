@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { AgentSkillDeclarations } from "./types.a2a-skills.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
@@ -73,6 +74,8 @@ export type AgentConfig = {
   fastModeDefault?: boolean;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
+  /** Skills this agent declares for A2A delegation (agent_call / debate_call). */
+  declaredSkills?: AgentSkillDeclarations;
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
