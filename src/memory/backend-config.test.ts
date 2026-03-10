@@ -1,12 +1,8 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "./backend-config.js";
-
-const execFileAsync = promisify(execFile);
 
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
