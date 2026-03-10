@@ -1258,7 +1258,7 @@ describe("Cron issue regressions", () => {
       runIsolatedAgentJob: vi.fn(
         async ({ onExecutionStart }: { onExecutionStart?: () => void }) => {
           onExecutionStart?.();
-          await new Promise<never>(() => {});
+          return await new Promise<never>(() => {});
         },
       ),
     });
