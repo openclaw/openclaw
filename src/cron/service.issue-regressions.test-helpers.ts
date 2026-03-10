@@ -84,8 +84,9 @@ export function createDefaultIsolatedRunner(): CronServiceOptions["runIsolatedAg
 
 export function createAbortAwareIsolatedRunner(summary = "late") {
   let observedAbortSignal: AbortSignal | undefined;
-  const runIsolatedAgentJob = vi.fn(async ({ abortSignal }) => {
+  const runIsolatedAgentJob = vi.fn(async ({ abortSignal, onExecutionStart }) => {
     observedAbortSignal = abortSignal;
+    onExecutionStart?.();
     await new Promise<void>((resolve) => {
       if (!abortSignal) {
         return;

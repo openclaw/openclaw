@@ -203,6 +203,7 @@ export async function runCronIsolatedAgentTurn(params: {
   job: CronJob;
   message: string;
   abortSignal?: AbortSignal;
+  onExecutionStart?: () => void;
   signal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
@@ -572,6 +573,7 @@ export async function runCronIsolatedAgentTurn(params: {
             const cliSessionId = cronSession.isNewSession
               ? undefined
               : getCliSessionId(cronSession.sessionEntry, providerOverride);
+            params.onExecutionStart?.();
             const result = await runCliAgent({
               sessionId: cronSession.sessionEntry.sessionId,
               sessionKey: agentSessionKey,
@@ -625,6 +627,7 @@ export async function runCronIsolatedAgentTurn(params: {
             disableMessageTool: toolPolicy.disableMessageTool,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
+            onExecutionStart: params.onExecutionStart,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
           });
