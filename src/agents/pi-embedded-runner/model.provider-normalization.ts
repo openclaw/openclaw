@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { normalizeModelCompat } from "../model-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { normalizeGoogleModelId } from "../models-config.providers.js";
 
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
@@ -54,9 +55,32 @@ function normalizeOpenAICodexTransport(params: {
   } as Model<Api>;
 }
 
+function normalizeGoogleTransport(params: { provider: string; model: Model<Api> }): Model<Api> {
+  if (normalizeProviderId(params.provider) !== "google") {
+    return params.model;
+  }
+
+  const nextId = normalizeGoogleModelId(params.model.id);
+  if (nextId === params.model.id) {
+    return params.model;
+  }
+
+  return {
+    ...params.model,
+    id: nextId,
+    name: params.model.name === params.model.id ? nextId : params.model.name,
+  } as Model<Api>;
+}
+
 export function normalizeResolvedProviderModel(params: {
   provider: string;
   model: Model<Api>;
 }): Model<Api> {
-  return normalizeModelCompat(normalizeOpenAICodexTransport(params));
+  const openAiNormalized = normalizeOpenAICodexTransport(params);
+  return normalizeModelCompat(
+    normalizeGoogleTransport({
+      provider: params.provider,
+      model: openAiNormalized,
+    }),
+  );
 }

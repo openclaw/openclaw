@@ -7,7 +7,11 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  findNormalizedProviderValue,
+  normalizeModelRef,
+  normalizeProviderId,
+} from "../model-selection.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -248,15 +252,21 @@ export function resolveModel(
   modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const normalizedRef = normalizeModelRef(provider, modelId);
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = resolveModelWithRegistry({ provider, modelId, modelRegistry, cfg });
+  const model = resolveModelWithRegistry({
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+    modelRegistry,
+    cfg,
+  });
   if (model) {
     return { model, authStorage, modelRegistry };
   }
 
   return {
-    error: buildUnknownModelError(provider, modelId),
+    error: buildUnknownModelError(normalizedRef.provider, normalizedRef.model),
     authStorage,
     modelRegistry,
   };
