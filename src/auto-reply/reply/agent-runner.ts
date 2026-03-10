@@ -59,6 +59,34 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
+function shouldSurfaceNoPayloadFallback(params: {
+  stopReason: unknown;
+  aborted: unknown;
+  embeddedError: unknown;
+  didSendViaMessagingTool: boolean;
+}): boolean {
+  if (params.didSendViaMessagingTool) {
+    return false;
+  }
+  if (params.embeddedError) {
+    return true;
+  }
+  if (params.aborted === true) {
+    return true;
+  }
+  const stopReason = typeof params.stopReason === "string" ? params.stopReason.toLowerCase() : "";
+  if (!stopReason) {
+    return false;
+  }
+  return (
+    stopReason.includes("tool") ||
+    stopReason === "error" ||
+    stopReason === "abort" ||
+    stopReason === "cancelled" ||
+    stopReason === "canceled"
+  );
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -472,6 +500,58 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      const didSendViaMessagingTool =
+        runResult.didSendViaMessagingTool === true ||
+        (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+        (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0;
+      const stopReason = runResult.meta?.stopReason;
+      const aborted = runResult.meta?.aborted;
+      const embeddedError = runResult.meta?.error;
+
+      if (
+        shouldSurfaceNoPayloadFallback({
+          stopReason,
+          aborted,
+          embeddedError,
+          didSendViaMessagingTool,
+        })
+      ) {
+        const stopReasonLabel =
+          typeof stopReason === "string" && stopReason.trim() ? stopReason.trim() : "unknown";
+        const abortedLabel = aborted === true ? "aborted" : "completed";
+        const errorLabel = (() => {
+          if (
+            !embeddedError ||
+            typeof embeddedError !== "object" ||
+            !("message" in embeddedError)
+          ) {
+            return "";
+          }
+          const messageValue = (embeddedError as Record<string, unknown>).message;
+          if (typeof messageValue === "string") {
+            return messageValue.trim();
+          }
+          if (messageValue === null || messageValue === undefined) {
+            return "";
+          }
+          try {
+            return JSON.stringify(messageValue);
+          } catch {
+            return "";
+          }
+        })();
+        const suffix = errorLabel ? ` error=${errorLabel}` : "";
+        return finalizeWithFollowup(
+          {
+            isError: true,
+            text:
+              `⚠️ Agent ended without producing a reply (${abortedLabel}, stop_reason=${stopReasonLabel}${suffix}). ` +
+              "Please try again.\nLogs: openclaw logs --follow",
+          },
+          queueKey,
+          runFollowupTurn,
+        );
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 

@@ -217,6 +217,106 @@ describe("runReplyAgent onAgentRunStart", () => {
   });
 });
 
+describe("runReplyAgent no-payload fallback", () => {
+  function createRun(params: { embeddedResult: unknown }) {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce(params.embeddedResult);
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "feishu",
+      OriginatingTo: "chat:group",
+      AccountId: "primary",
+      MessageSid: "msg",
+      ChatType: "group",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "feishu",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "wlai",
+        model: "gpt-5.2",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: undefined,
+      typing,
+      sessionCtx,
+      defaultModel: "wlai/gpt-5.2",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("surfaces a fallback reply when a run ends with no payloads but stopReason indicates tool use", async () => {
+    const result = await createRun({
+      embeddedResult: {
+        payloads: undefined,
+        meta: {
+          stopReason: "toolUse",
+          aborted: true,
+          agentMeta: { provider: "wlai", model: "gpt-5.2" },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Agent ended without producing a reply"),
+    });
+    expect((result as { text?: string }).text).toContain("stop_reason=toolUse");
+    expect((result as { text?: string }).text).toContain("Logs: openclaw logs --follow");
+  });
+
+  it("keeps silence when a run ends with no payloads and no error/abort/tool stop reason", async () => {
+    const result = await createRun({
+      embeddedResult: {
+        payloads: undefined,
+        meta: {
+          stopReason: "end_turn",
+          aborted: false,
+          agentMeta: { provider: "wlai", model: "gpt-5.2" },
+        },
+      },
+    });
+
+    expect(result).toBeUndefined();
+  });
+});
+
 describe("runReplyAgent authProfileId fallback scoping", () => {
   it("drops authProfileId when provider changes during fallback", async () => {
     runWithModelFallbackMock.mockImplementationOnce(
