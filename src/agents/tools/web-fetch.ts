@@ -267,7 +267,6 @@ async function fetchParallelContent(params: {
         headers: {
           "Content-Type": "application/json",
           "x-api-key": params.apiKey,
-          "parallel-beta": "search-extract-2025-10-10",
         },
         body: JSON.stringify({
           urls: [params.url],
