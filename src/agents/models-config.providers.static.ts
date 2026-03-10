@@ -163,6 +163,16 @@ export function buildMinimaxProvider(): ProviderConfig {
         input: ["text", "image"],
       }),
       buildMinimaxTextModel({
+        id: "MiniMax-M2.1",
+        name: "MiniMax M2.1",
+        reasoning: false,
+      }),
+      buildMinimaxTextModel({
+        id: "MiniMax-M2.1-lightning",
+        name: "MiniMax M2.1 Lightning",
+        reasoning: false,
+      }),
+      buildMinimaxTextModel({
         id: "MiniMax-M2.5",
         name: "MiniMax M2.5",
         reasoning: true,
@@ -170,6 +180,11 @@ export function buildMinimaxProvider(): ProviderConfig {
       buildMinimaxTextModel({
         id: "MiniMax-M2.5-highspeed",
         name: "MiniMax M2.5 Highspeed",
+        reasoning: true,
+      }),
+      buildMinimaxTextModel({
+        id: "MiniMax-M2.5-Lightning",
+        name: "MiniMax M2.5 Lightning",
         reasoning: true,
       }),
     ],

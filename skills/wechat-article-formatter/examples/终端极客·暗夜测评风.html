@@ -1,0 +1,85 @@
+<!-- 全局容器：模拟 IDE 暗色背景，代码字体优先 -->
+<div style="margin: 10px auto; max-width: 100%; font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', 'PingFang SC', sans-serif; color: #c9d1d9; background-color: #0d1117; line-height: 1.7; padding: 15px; border-radius: 8px; text-indent: 0;">
+
+    <!-- 1. 头部：模拟终端命令行 -->
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; border-bottom: 1px solid #30363d;">
+        <tr>
+            <td style="padding: 15px 0;">
+                <p style="margin: 0; font-size: 13px; color: #8b949e; font-family: monospace;">
+                    <span style="color: #58a6ff;">user@ai-lab</span>:<span style="color: #79c0ff;">~</span>$ ./start_review.sh --target="GPT-5 vs Claude-4"
+                </p>
+                <p style="margin: 10px 0 0 0; color: #3fb950; font-weight: bold; font-size: 14px;">
+                    > 系统初始化完成...<br>
+                    > 正在加载评测数据...
+                </p>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 2. 章节标题：带有光标效果 -->
+    <h2 style="margin: 40px 0 20px; border-left: 4px solid #f78166; padding-left: 15px;">
+        <span style="color: #ffffff; font-weight: bold; font-size: 20px;">01 // 核心架构分析</span>
+    </h2>
+
+    <p style="margin-bottom: 20px; color: #c9d1d9; font-size: 15px;">
+        在这里介绍模型的参数量、训练数据或架构创新点。暗色背景下，文字显得更加沉浸。
+    </p>
+
+    <!-- 3. 代码/Prompt 块：模拟代码高亮 -->
+    <table style="width: 100%; border-collapse: collapse; margin: 25px 0;">
+        <tr>
+            <td style="background-color: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0;">
+                <div style="padding: 8px 15px; border-bottom: 1px solid #30363d; font-size: 12px; color: #8b949e; background: #0d1117; border-top-left-radius: 6px; border-top-right-radius: 6px;">
+                    📝 System Prompt / Python Code
+                </div>
+                <div style="padding: 15px; font-family: monospace; font-size: 13px; color: #e6edf3; overflow-x: scroll;">
+                    <span style="color: #ff7b72;">def</span> <span style="color: #d2a8ff;">evaluate_model</span>(input):<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;prompt = <span style="color: #a5d6ff;">"你是谁？"</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #8b949e;"># 这里展示关键代码或提示词</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #ff7b72;">return</span> model.generate(prompt)
+                </div>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 4. 跑分对比表：红绿对比 -->
+    <table style="width: 100%; border-collapse: collapse; margin: 30px 0; font-size: 14px; text-align: center;">
+        <thead>
+            <tr style="background-color: #21262d; color: #f0f6fc;">
+                <th style="padding: 10px; border: 1px solid #30363d;">Benchmark</th>
+                <th style="padding: 10px; border: 1px solid #30363d;">Llama-3</th>
+                <th style="padding: 10px; border: 1px solid #30363d;">Mixtral 8x7B</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #30363d; color: #8b949e;">MMLU</td>
+                <td style="padding: 10px; border: 1px solid #30363d; color: #3fb950; font-weight: bold;">78.5 (Win)</td>
+                <td style="padding: 10px; border: 1px solid #30363d; color: #c9d1d9;">70.6</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border: 1px solid #30363d; color: #8b949e;">GSM8K</td>
+                <td style="padding: 10px; border: 1px solid #30363d; color: #c9d1d9;">75.2</td>
+                <td style="padding: 10px; border: 1px solid #30363d; color: #f78166; font-weight: bold;">77.4 (Win)</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- 5. 结论卡片：HUD 风格 -->
+    <table style="width: 100%; border-collapse: collapse; margin: 30px 0;">
+        <tr>
+            <td style="background: rgba(56, 139, 253, 0.1); border: 1px solid #388bfd; border-radius: 6px; padding: 20px;">
+                <strong style="color: #58a6ff; display: block; margin-bottom: 10px; font-size: 16px;">🚀 部署建议 / Verdict</strong>
+                <p style="margin: 0; font-size: 14px; color: #c9d1d9;">
+                    如果是生产环境，建议使用 <strong>Model A</strong>，虽然推理成本略高，但逻辑推理能力（Reasoning）显著更强。适合 Agent 场景。
+                </p>
+            </td>
+        </tr>
+    </table>
+
+    <!-- 6. 页脚 -->
+    <div style="margin-top: 40px; border-top: 1px dashed #30363d; padding-top: 20px; font-size: 12px; color: #484f58; text-align: center;">
+        <p>&lt;/ EOF &gt; Powered by Open Source</p>
+    </div>
+
+</div>

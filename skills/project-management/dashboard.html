@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw Project Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --fg: #f8fafc;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --accent: #38bdf8;
+      --success: #22c55e;
+      --in-progress: #3b82f6;
+      --blocked: #ef4444;
+      --todo: #94a3b8;
+    }
+    
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 1.5rem 2rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(30, 41, 59, 0.8);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .status-badge {
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      background: var(--border);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 350px 1fr;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      padding: 1.5rem;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      background: var(--card-bg);
+    }
+
+    .viz {
+      flex: 1;
+      background: radial-gradient(circle at 50% 50%, #1e293b 0%, #0f172a 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      position: relative;
+    }
+
+    .card {
+      background: rgba(30, 41, 59, 0.5);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--todo);
+      margin-bottom: 0.75rem;
+      font-weight: 700;
+    }
+
+    .task-item {
+      padding: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    #graph-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .refresh-btn {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="project-title">📊 OpenClaw Dashboard Loading...</h1>
+    <div id="project-status" class="status-badge">Unknown</div>
+  </header>
+  
+  <main>
+    <div class="sidebar">
+      <div class="card">
+        <div class="card-title">Project Metadata</div>
+        <div id="meta-content"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Tasks Summary</div>
+        <div id="tasks-summary"></div>
+      </div>
+    </div>
+    
+    <div class="viz">
+      <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+      <div id="graph-container">
+        <pre class="mermaid" id="mermaid-root">
+          flowchart TD
+            id1[Dashboard initialization failed. Please check local files.]
+        </pre>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+
+    async function loadData() {
+      try {
+        // Since double-clicking a local HTML file has limited fetch permissions,
+        // we assume the agent will bake the data into a <script> block or the user runs a local server.
+        // For this template, we describe HOW the agent will finalize it.
+        const projectYaml = await (await fetch('./project.yaml?t=' + Date.now())).text();
+        const tasksYaml = await (await fetch('./tasks.yaml?t=' + Date.now())).text();
+        
+        const project = jsyaml.load(projectYaml);
+        const tasksObj = jsyaml.load(tasksYaml);
+        const tasks = tasksObj.tasks || [];
+
+        document.getElementById('project-title').innerText = '📊 ' + (project.title || 'Project Dashboard');
+        document.getElementById('project-status').innerText = project.status || 'Active';
+        
+        document.getElementById('meta-content').innerHTML = `
+          <div style="font-size: 0.8rem">
+            <p>ID: ${project.id}</p>
+            <p>Created: ${project.created_at || 'Recently'}</p>
+          </div>
+        `;
+
+        renderMermaid(tasks);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderMermaid(tasks) {
+      let code = 'flowchart TD\\n';
+      
+      // Class Definitions
+      code += '  classDef done fill:#22c55e,color:white,stroke:#fff\\n';
+      code += '  classDef in_progress fill:#3b82f6,color:white,stroke:#fff\\n';
+      code += '  classDef blocked fill:#ef4444,color:white,stroke:#fff\\n';
+      code += '  classDef todo fill:#475569,color:#cbd5e1,stroke:#334155\\n';
+
+      tasks.forEach(t => {
+        const id = t.id.replace(/-/g, '_');
+        code += `  \${id}([\"\${t.id}: \${t.title}\"])\\n`;
+        if (t.dependencies) {
+          t.dependencies.forEach(dep => {
+            code += `  \${dep.replace(/-/g, '_')} --> \${id}\\n`;
+          });
+        }
+        code += `  class \${id} \${t.status}\\n`;
+      });
+
+      const container = document.getElementById('mermaid-root');
+      container.textContent = code;
+      mermaid.contentLoaded();
+    }
+
+    loadData();
+  </script>
+</body>
+</html>

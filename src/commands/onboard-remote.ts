@@ -151,7 +151,7 @@ export async function promptRemoteGatewayConfig(
     initialValue: suggestedUrl,
     validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
-  const url = ensureWsUrl(String(urlInput));
+  const url = ensureWsUrl(urlInput ?? "");
 
   const authChoice = await prompter.select({
     message: "Gateway auth",

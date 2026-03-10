@@ -14,7 +14,7 @@ export const SYNTHETIC_MODEL_CATALOG = [
   {
     id: SYNTHETIC_DEFAULT_MODEL_ID,
     name: "MiniMax M2.5",
-    reasoning: false,
+    reasoning: true,
     input: ["text"],
     contextWindow: 192000,
     maxTokens: 65536,

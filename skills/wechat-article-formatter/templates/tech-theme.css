@@ -1,0 +1,437 @@
+/*
+ * Tech Theme - 科技风主题
+ * 适用场景：技术文章、开发教程、AI/科技内容
+ * 配色：蓝紫渐变，现代科技感
+ */
+
+/* ========== CSS变量（用于自定义） ========== */
+:root {
+  --primary-color: #7c3aed;        /* 主色调：紫色 */
+  --secondary-color: #3b82f6;      /* 辅助色：蓝色 */
+  --text-color: #333333;           /* 正文颜色 */
+  --text-light: #666666;           /* 浅色文字 */
+  --background: #ffffff;           /* 背景色 */
+  --code-bg: #282c34;              /* 代码块背景 */
+  --code-color: #abb2bf;           /* 代码文字 */
+  --quote-border: #7c3aed;         /* 引用边框 */
+  --quote-bg: #f8f5ff;             /* 引用背景 */
+  --border-radius: 8px;            /* 圆角半径 */
+}
+
+/* ========== 基础样式 ========== */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--text-color);
+  background: var(--background);
+  padding: 20px;
+  max-width: 720px;
+  margin: 0 auto;
+  letter-spacing: 0.5px;
+}
+
+/* ========== 标题样式 ========== */
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 32px 0 24px 0;
+  padding-left: 16px;
+  border-left: 4px solid var(--primary-color);
+  line-height: 1.4;
+  position: relative;
+}
+
+h1::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+  border-radius: 2px;
+}
+
+h2 {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 28px 0 20px 0;
+  padding-bottom: 12px;
+  border-bottom: 2px solid transparent;
+  background-image: linear-gradient(90deg, var(--primary-color) 0%, var(--secondary-color) 50%, transparent 50%);
+  background-size: 100% 2px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  line-height: 1.4;
+}
+
+h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 24px 0 16px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--primary-color);
+  line-height: 1.4;
+}
+
+h4 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333333;
+  margin: 20px 0 12px 0;
+  line-height: 1.4;
+}
+
+h5, h6 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333333;
+  margin: 16px 0 12px 0;
+  line-height: 1.4;
+}
+
+/* ========== 段落和文本 ========== */
+p {
+  margin: 18px 0;
+  text-align: justify;
+  word-break: break-word;
+}
+
+strong, b {
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+em, i {
+  font-style: italic;
+  color: var(--text-color);
+}
+
+/* 行内代码 */
+code {
+  background: #f5f5f5;
+  color: #e83e8c;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+/* ========== 代码块 ========== */
+pre {
+  background: var(--code-bg);
+  color: var(--code-color);
+  padding: 16px;
+  border-radius: var(--border-radius);
+  overflow-x: auto;
+  margin: 20px 0;
+  line-height: 1.6;
+  position: relative;
+}
+
+pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-size: 14px;
+  font-weight: normal;
+}
+
+/* 代码块语言标签 */
+pre::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 12px;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ========== 引用块 ========== */
+blockquote {
+  margin: 20px 0;
+  padding: 16px 20px;
+  background: var(--quote-bg);
+  border-left: 4px solid var(--quote-border);
+  border-radius: 0 var(--border-radius) var(--border-radius) 0;
+  color: var(--text-light);
+  font-style: italic;
+}
+
+blockquote p {
+  margin: 8px 0;
+}
+
+blockquote p:first-child {
+  margin-top: 0;
+}
+
+blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* ========== 列表 ========== */
+ul, ol {
+  margin: 16px 0;
+  padding-left: 28px;
+}
+
+ul li, ol li {
+  margin: 8px 0;
+  line-height: 1.8;
+}
+
+ul li {
+  list-style-type: none;
+  position: relative;
+}
+
+ul li::before {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: 11px;
+  width: 6px;
+  height: 6px;
+  background: var(--primary-color);
+  border-radius: 50%;
+}
+
+ol {
+  counter-reset: item;
+}
+
+ol li {
+  list-style-type: none;
+  counter-increment: item;
+  position: relative;
+}
+
+ol li::before {
+  content: counter(item) ".";
+  position: absolute;
+  left: -28px;
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+/* 嵌套列表 */
+ul ul, ol ol, ul ol, ol ul {
+  margin: 4px 0;
+}
+
+/* ========== 表格 ========== */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 15px;
+  overflow-x: auto;
+  display: block;
+}
+
+table thead {
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+  color: #ffffff;
+}
+
+table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  border: 1px solid #dee2e6;
+}
+
+table td {
+  padding: 12px 16px;
+  border: 1px solid #dee2e6;
+}
+
+table tbody tr:nth-child(even) {
+  background: #f8f9fa;
+}
+
+table tbody tr:hover {
+  background: #f1f3f5;
+}
+
+/* ========== 图片 ========== */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 24px auto;
+  border-radius: var(--border-radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* 图注 */
+p > em:only-child {
+  display: block;
+  text-align: center;
+  color: var(--text-light);
+  font-size: 14px;
+  margin-top: -16px;
+  margin-bottom: 24px;
+}
+
+/* ========== 链接 ========== */
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+a:hover {
+  border-bottom-color: var(--primary-color);
+}
+
+/* ========== 水平分割线 ========== */
+hr {
+  border: none;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--primary-color) 50%, transparent 100%);
+  margin: 32px 0;
+}
+
+/* ========== 特殊元素 ========== */
+/* 标签/徽章 */
+.badge {
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--primary-color);
+  border-radius: 4px;
+  margin: 0 4px;
+}
+
+/* 警告框 */
+.alert {
+  padding: 16px 20px;
+  margin: 20px 0;
+  border-radius: var(--border-radius);
+  border-left: 4px solid;
+}
+
+.alert-info {
+  background: #e7f5ff;
+  border-color: #3b82f6;
+  color: #1e3a8a;
+}
+
+.alert-warning {
+  background: #fff3cd;
+  border-color: #ffc107;
+  color: #856404;
+}
+
+.alert-success {
+  background: #d1f2eb;
+  border-color: #10b981;
+  color: #0f5132;
+}
+
+.alert-danger {
+  background: #fee;
+  border-color: #dc3545;
+  color: #842029;
+}
+
+/* ========== 响应式优化 ========== */
+@media (max-width: 768px) {
+  body {
+    padding: 16px;
+    font-size: 15px;
+  }
+
+  h1 {
+    font-size: 24px;
+  }
+
+  h2 {
+    font-size: 20px;
+  }
+
+  h3 {
+    font-size: 18px;
+  }
+
+  pre {
+    padding: 12px;
+    font-size: 13px;
+  }
+
+  table {
+    font-size: 14px;
+  }
+
+  table th, table td {
+    padding: 8px 10px;
+  }
+}
+
+/* ========== 代码语法高亮（Atom One Dark风格） ========== */
+.hljs {
+  background: var(--code-bg);
+  color: var(--code-color);
+}
+
+.hljs-keyword, .hljs-selector-tag {
+  color: #c678dd;  /* 紫色 */
+}
+
+.hljs-function, .hljs-class .hljs-title {
+  color: #61afef;  /* 蓝色 */
+}
+
+.hljs-string, .hljs-title, .hljs-section {
+  color: #98c379;  /* 绿色 */
+}
+
+.hljs-number, .hljs-literal, .hljs-doctag {
+  color: #d19a66;  /* 橙色 */
+}
+
+.hljs-comment, .hljs-quote {
+  color: #5c6370;  /* 灰色 */
+  font-style: italic;
+}
+
+.hljs-attr, .hljs-attribute {
+  color: #e06c75;  /* 红色 */
+}
+
+.hljs-variable, .hljs-template-variable {
+  color: #e06c75;  /* 红色 */
+}
+
+.hljs-regexp, .hljs-link {
+  color: #56b6c2;  /* 青色 */
+}
+
+.hljs-meta {
+  color: #61afef;  /* 蓝色 */
+}
+
+.hljs-built_in {
+  color: #e6c07b;  /* 黄色 */
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}

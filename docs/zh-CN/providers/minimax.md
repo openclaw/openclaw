@@ -15,7 +15,7 @@ x-i18n:
 
 # MiniMax
 
-MiniMax 是一家构建 **M2/M2.1** 模型系列的 AI 公司。当前面向编程的版本是 **MiniMax M2.1**（2025 年 12 月 23 日），专为现实世界的复杂任务而构建。
+MiniMax 是一家构建 **M2/M2.5** 模型系列的 AI 公司。当前面向编程的版本是 **MiniMax M2.5**（2026 年 1 月），专为现实世界的复杂任务而构建。
 
 来源：[MiniMax M2.1 发布说明](https://www.minimax.io/news/minimax-m21)
 
@@ -65,7 +65,7 @@ openclaw onboard --auth-choice minimax-portal
 
 - 运行 `openclaw configure`
 - 选择 **Model/auth**
-- 选择 **MiniMax M2.1**
+- 选择 **MiniMax M2.5**
 
 ```json5
 {
@@ -80,9 +80,9 @@ openclaw onboard --auth-choice minimax-portal
         api: "anthropic-messages",
         models: [
           {
-            id: "MiniMax-M2.1",
-            name: "MiniMax M2.1",
-            reasoning: false,
+            id: "MiniMax-M2.5",
+            name: "MiniMax M2.5",
+            reasoning: true,
             input: ["text"],
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
             contextWindow: 200000,

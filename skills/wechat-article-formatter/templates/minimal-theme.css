@@ -1,0 +1,182 @@
+/*
+ * Minimal Theme - 简约风主题
+ * 适用场景：通用文章、文学作品、简洁风格
+ * 配色：黑白灰，极简设计
+ */
+
+:root {
+  --primary-color: #333333;
+  --secondary-color: #666666;
+  --text-color: #333333;
+  --text-light: #666666;
+  --background: #ffffff;
+  --code-bg: #f5f5f5;
+  --code-color: #333333;
+  --quote-border: #ddd;
+  --quote-bg: #f9f9f9;
+  --border-radius: 4px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--text-color);
+  background: var(--background);
+  padding: 20px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: #000;
+  margin: 32px 0 24px 0;
+  line-height: 1.3;
+  text-align: center;
+}
+
+h2 {
+  font-size: 24px;
+  font-weight: 600;
+  color: #000;
+  margin: 28px 0 20px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #eee;
+  line-height: 1.4;
+}
+
+h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+  margin: 24px 0 16px 0;
+  line-height: 1.4;
+}
+
+h4, h5, h6 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+  margin: 20px 0 12px 0;
+  line-height: 1.4;
+}
+
+p {
+  margin: 18px 0;
+  text-align: justify;
+}
+
+strong {
+  font-weight: 600;
+  color: #000;
+}
+
+em {
+  font-style: italic;
+}
+
+code {
+  background: #f0f0f0;
+  color: #d73a49;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  background: var(--code-bg);
+  color: var(--code-color);
+  padding: 16px;
+  border-radius: var(--border-radius);
+  border: 1px solid #e1e4e8;
+  overflow-x: auto;
+  margin: 20px 0;
+  line-height: 1.6;
+}
+
+pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 14px;
+}
+
+blockquote {
+  margin: 20px 0;
+  padding: 12px 20px;
+  background: var(--quote-bg);
+  border-left: 3px solid var(--quote-border);
+  color: var(--text-light);
+  font-style: italic;
+}
+
+ul, ol {
+  margin: 16px 0;
+  padding-left: 28px;
+}
+
+li {
+  margin: 8px 0;
+  line-height: 1.8;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 15px;
+}
+
+table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  background: #f6f8fa;
+  border: 1px solid #ddd;
+}
+
+table td {
+  padding: 12px 16px;
+  border: 1px solid #ddd;
+}
+
+table tbody tr:nth-child(even) {
+  background: #fafafa;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 24px auto;
+  border-radius: var(--border-radius);
+}
+
+a {
+  color: #0366d6;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+hr {
+  border: none;
+  height: 1px;
+  background: #eee;
+  margin: 32px 0;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: 16px;
+    font-size: 15px;
+  }
+  h1 { font-size: 24px; }
+  h2 { font-size: 20px; }
+  h3 { font-size: 18px; }
+}

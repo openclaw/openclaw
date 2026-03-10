@@ -1,0 +1,67 @@
+<!-- 全局容器 -->
+<section style="margin: 10px auto; max-width: 100%; font-family: -apple-system-font, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif; color: #333; line-height: 1.75; letter-spacing: 0.5px; text-align: justify;">
+
+    <!-- 1. 顶部装饰：保留渐变条（Div背景渐变是安全的） -->
+    <section style="height: 6px; background: linear-gradient(90deg, #9b51e0, #2f80ed, #56ccf2); border-radius: 3px; margin-bottom: 30px; opacity: 0.9;"></section>
+
+    <!-- 2. 摘要块：用半透明边框代替纯玻璃态，适配暗黑模式 -->
+    <section style="background-color: rgba(244, 246, 248, 0.5); border: 1px solid #e1e4e8; border-radius: 8px; padding: 20px; margin-bottom: 35px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 15px; color: #2f80ed; font-weight: bold; letter-spacing: 1px;">INSIGHT / 洞察</h3>
+        <p style="margin: 0; font-size: 15px; color: #555;">
+            “我们正处于从‘弱人工智能’向‘通用人工智能（AGI）’跃迁的关键奇点。本文将探讨 Multi-modal（多模态）融合的最新进展。”
+        </p>
+    </section>
+
+    <!-- 3. 章节标题：实色字 + 底部渐变装饰线 -->
+    <section style="margin: 40px 0 20px; display: inline-block;">
+        <span style="font-size: 20px; font-weight: 900; color: #2f80ed; display: block; margin-bottom: 4px;">
+            01. 模型架构的演进
+        </span>
+        <!-- 用这个线条代替文字渐变，效果一样好且兼容 -->
+        <span style="display: block; width: 100%; height: 4px; background: linear-gradient(90deg, #2f80ed, #9b51e0); border-radius: 2px;"></span>
+    </section>
+
+    <p style="margin-bottom: 20px; font-size: 16px; color: #333;">
+        传统的 Transformer 架构面临长文本处理的挑战。最近，<strong style="color: #2f80ed;">MoE (Mixture of Experts)</strong> 混合专家模型成为了降低推理成本的首选方案。
+    </p>
+
+    <!-- 4. 数据可视化：使用标准边框，确保深色模式可见 -->
+    <section style="padding: 15px; border: 1px solid #eee; border-radius: 8px; margin: 25px 0;">
+        <p style="margin: 0 0 10px 0; font-size: 12px; color: #888; font-weight: bold;">推理速度 (Tokens/sec)</p>
+        <!-- A -->
+        <div style="margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; color: #555;">
+                <span>Groq LPU</span>
+                <span>500 T/s</span>
+            </div>
+            <div style="width: 100%; background: #f0f0f0; height: 6px; border-radius: 3px; overflow: hidden;">
+                <div style="width: 95%; background: #2f80ed; height: 6px;"></div>
+            </div>
+        </div>
+        <!-- B -->
+        <div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; color: #555;">
+                <span>Standard GPU</span>
+                <span>80 T/s</span>
+            </div>
+            <div style="width: 100%; background: #f0f0f0; height: 6px; border-radius: 3px; overflow: hidden;">
+                <div style="width: 25%; background: #ccc; height: 6px;"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 5. 引用块 -->
+    <section style="margin: 30px 0; padding-left: 15px; border-left: 4px solid #9b51e0;">
+        <p style="margin: 0; font-size: 17px; font-weight: normal; color: #555; font-style: italic;">
+            "Scale is all you need? Maybe not anymore. Data quality is the new gold."
+        </p>
+        <p style="margin: 8px 0 0 0; font-size: 12px; color: #999;">— Sam Altman, OpenAI</p>
+    </section>
+
+    <!-- 页脚 -->
+    <section style="margin-top: 50px; text-align: center;">
+        <span style="display: inline-block; width: 40px; height: 3px; background: #eee;"></span>
+        <p style="font-size: 12px; color: #ccc; margin-top: 8px;">FUTURE INTELLIGENCE WEEKLY</p>
+    </section>
+
+</section>

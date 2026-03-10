@@ -1,0 +1,125 @@
+建议运行 Onboarding 向导：pnpm openclaw onboard
+启动核心网关 (Gateway)
+网关是整个系统的控制中心，负责连接所有聊天渠道（WhatsApp, Telegram, Slack 等）。
+pnpm start
+# 或者
+pnpm openclaw gateway
+开发模式启动（自动重载）：如果你正在修改代码并希望系统在保存时自动重启，请使用：
+pnpm gateway:watch
+使用内置的终端界面 (TUI)
+如果你想通过一个漂亮的终端界面直接与 AI 助手交互，可以运行：
+pnpm tui
+macOS 专用启动
+pnpm mac:open
+检查运行状态
+pnpm openclaw status
+# 或查看详细健康检查
+pnpm openclaw health
+干掉旧进程并强行启动（系统卡死、重启失败、快速重置服务）
+node openclaw.mjs gateway --force
+
+建议你在编译后运行以下命令来更新你的配置文件路径（将配置从 ~/.moltbot 迁移到 ~/.openclaw）：
+node openclaw.mjs doctor --fix
+
+telegram 配对
+node openclaw.mjs pairing approve telegram 2F2HJ4BD
+
+持久化运行 (不受网络/下线影响)
+----------------------------
+
+### 方案 A: 使用 PM2 + Tmux (最推荐：持久运行 + 实时监控)
+将 PM2 进程管理器运行在 Tmux 会话中，既能保证后台持续运行，又能随时查看实时面板。
+
+1. 启动服务并开启监控面板 (包含网络重连优化):
+   tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time && pm2 monit'
+
+2. 退出监控面板 (不影响后台运行):
+   按下 Ctrl+B 然后按 D (Detach)
+
+3. 以后随时回来查看实时面板:
+   tmux attach -t moltbot
+
+---
+
+### 方案 B: 仅使用 PM2 (纯后台运行 - 网络增强版)
+1. 启动服务 (带自动增加等待时间的重启，应对 WiFi 掉线):
+   pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time
+2. 查看状态:
+   pm2 status
+3. 查看带时间戳的日志:
+   pm2 logs moltbot --time
+4. 停止服务:
+   pm2 stop moltbot
+   pm2 restart moltbot
+
+---
+
+### 方案 C: 仅使用 Tmux (简单后台运行)
+1. 进入会话运行:
+   tmux new -s moltbot 'pnpm start'
+2. 分离会话:
+   按下 Ctrl+B 然后按 D
+3. 重新连入:
+   tmux attach -t moltbot
+
+   tmux kill-server
+
+
+新增agent
+openclaw agents add "Agent 名称"
+
+非交互式
+openclaw agents add "My Agent" --workspace ./my-workspace --model gpt-4 --bind "telegram:123456" --non-interactive
+
+# 1. 正常启动 (推荐)
+tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time && pm2 monit'
+
+# 2. 调试模式 (开启原始 Payload 日志)
+# 只有在需要排查 AI 原始输入内容时才使用：
+# tmux new -s moltbot 'export OPENCLAW_ANTHROPIC_PAYLOAD_LOG=true && pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time && pm2 monit'
+每个 agent 都需要一个独立的 Workspace 目录。在新增 agent 后，该目录下通常需要包含以下文件：
+
+AGENTS.md：高层级说明和项目上下文。
+SOUL.md：定义 agent 的性格、动机和行为准则（最重要的文件）。
+TOOLS.md：(可选) 定义该 agent 可用的自定义工具或技能。
+IDENTITY.md：(可选) 设置 agent 的显示名称、Emoji 和头像。
+
+# 将 Telegram 上的某个账号路由到新 agent
+openclaw agents bind --agent my-new-agent --bind "telegram:your_account_id"
+
+# 进入会话
+tmux attach -t moltbot
+
+# 在里面你可以查看状态
+pm2 status
+# 或者查看实时日志
+pm2 logs moltbot
+
+# 按 Ctrl+B 然后按 D 可以退出 tmux 回到主界面（服务会继续运行）
+
+
+其他常用命令
+openclaw dashboard
+
+# 查看所有已安装技能
+
+openclaw skills check
+
+openclaw skills list
+
+# 搜索技能
+openclaw skills search weather
+
+# 查看技能详情
+openclaw skills show weather
+
+重启
+pm2 restart moltbot
+
+
+保证网络不掉线 caffeinate -dimsu pm2 resurrect
+
+tmux kill-session -t moltbot
+pm2 delete moltbot
+# 然后再运行你刚才的那行命令：
+tmux new -s moltbot 'pm2 start "pnpm start" --name moltbot --exp-backoff-restart-delay 5000 --time && pm2 monit'
