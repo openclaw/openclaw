@@ -138,8 +138,29 @@ async function runCompactionScenario(params: {
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
     cancel?: boolean;
+    compaction?: {
+      summary: string;
+      firstKeptEntryId: string;
+      tokensBefore: number;
+    };
   };
   return { result, getApiKeyMock };
+}
+
+function expectCompactionResult(result: {
+  cancel?: boolean;
+  compaction?: {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+  };
+}) {
+  expect(result.cancel).not.toBe(true);
+  expect(result.compaction).toBeDefined();
+  if (!result.compaction) {
+    throw new Error("Expected compaction result");
+  }
+  return result.compaction;
 }
 
 describe("compaction-safeguard tool failures", () => {
@@ -1524,13 +1545,10 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    // After fix for #41981: returns a compaction result (not cancel) to write
-    // a boundary entry and break the re-trigger loop.
-    expect(result.cancel).not.toBe(true);
-    expect(result.compaction).toBeDefined();
-    expect(result.compaction.summary).toBeTruthy();
-    expect(result.compaction.firstKeptEntryId).toBe("entry-1");
-    expect(result.compaction.tokensBefore).toBe(1500);
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toBeTruthy();
+    expect(compaction.firstKeptEntryId).toBe("entry-1");
+    expect(compaction.tokensBefore).toBe(1500);
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 
@@ -1557,12 +1575,11 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expect(result.cancel).not.toBe(true);
-    expect(result.compaction).toBeDefined();
+    const compaction = expectCompactionResult(result);
     // Fallback preserves previous summary when it has required sections
-    expect(result.compaction.summary).toContain("## Decisions");
-    expect(result.compaction.summary).toContain("## Open TODOs");
-    expect(result.compaction.firstKeptEntryId).toBe("entry-2");
+    expect(compaction.summary).toContain("## Decisions");
+    expect(compaction.summary).toContain("## Open TODOs");
+    expect(compaction.firstKeptEntryId).toBe("entry-2");
   });
 
   it("cancels on repeated no-real-messages compaction for same session (boundary already written)", async () => {
@@ -1588,7 +1605,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expect(result1.compaction).toBeDefined();
+    expectCompactionResult(result1);
 
     // Second call with same sessionManager — cancels (boundary already exists)
     const { result: result2 } = await runCompactionScenario({
@@ -1597,6 +1614,35 @@ describe("compaction-safeguard double-compaction guard", () => {
       apiKey: "sk-test", // pragma: allowlist secret
     });
     expect(result2).toEqual({ cancel: true });
+  });
+
+  it("does not write boundary when turnPrefixMessages has real content (split-turn)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user" as const, content: "real turn prefix content" },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-4",
+        tokensBefore: 2000,
+        fileOps: { read: [], edited: [], written: [] },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+    // Should NOT take the boundary fast-path — falls through to normal compaction
+    // (which cancels due to no API key, but that's the expected normal path)
+    expect(result).toEqual({ cancel: true });
   });
 
   it("continues when messages include real conversation content", async () => {

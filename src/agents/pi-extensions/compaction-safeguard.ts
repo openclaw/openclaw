@@ -33,9 +33,9 @@ const log = createSubsystemLogger("compaction-safeguard");
 
 // Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
-// Track session managers where compaction was already cancelled due to no real messages,
-// so repeated attempts within the same session run only log at debug level.
-const noRealMessagesCancelledSessions = new WeakSet<object>();
+// Track session managers that have already hit the no-real-messages fast-path so
+// repeated attempts within the same session lifetime write a boundary only once.
+const noRealMessagesBoundarySessions = new WeakSet<object>();
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -705,24 +705,27 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
-      // When there are no summarizable messages (all messages are "recent"), cancelling
-      // compaction leaves context unchanged but the SDK re-triggers _checkCompaction
-      // after every assistant response — creating a cancel loop that blocks cron lanes (#41981).
+    const hasRealSummarizable = preparation.messagesToSummarize.some(isRealConversationMessage);
+    const hasRealTurnPrefix = preparation.turnPrefixMessages.some(isRealConversationMessage);
+    if (!hasRealSummarizable && !hasRealTurnPrefix) {
+      // When there are no summarizable messages AND no real turn-prefix content,
+      // cancelling compaction leaves context unchanged but the SDK re-triggers
+      // _checkCompaction after every assistant response — creating a cancel loop
+      // that blocks cron lanes (#41981).
       //
       // Strategy: on the FIRST hit, return a minimal compaction result so the SDK writes
       // a boundary entry. The SDK's prepareCompaction() returns undefined when the last
       // entry is a compaction, which blocks immediate re-triggering within the same turn.
       // On SUBSEQUENT hits (same session), cancel directly — the boundary already exists,
       // and cancelling is cheaper than writing additional boundary entries.
-      const alreadyBoundaried = noRealMessagesCancelledSessions.has(ctx.sessionManager);
+      const alreadyBoundaried = noRealMessagesBoundarySessions.has(ctx.sessionManager);
       if (alreadyBoundaried) {
         log.debug(
           "Compaction safeguard: no real conversation messages to summarize (boundary already written, cancelling).",
         );
         return { cancel: true };
       }
-      noRealMessagesCancelledSessions.add(ctx.sessionManager);
+      noRealMessagesBoundarySessions.add(ctx.sessionManager);
       log.info(
         "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
       );
