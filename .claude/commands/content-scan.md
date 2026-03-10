@@ -22,6 +22,11 @@ Output format:
 ...
 ```
 
-Save the full output to `outputs/content/ideas.md` (overwrite if exists).
+Save the full output to two locations:
 
-Confirm when saved and print the top idea with a one-line summary.
+1. `outputs/content/ideas.md` — overwrite with latest (used by downstream pipeline steps)
+2. `outputs/content/ideas/[YYYY-MM-DD-HH-MM]-[topic-slug].md` — dated archive copy that is never overwritten
+
+The topic slug is a 3-5 word kebab-case summary of the scan topic or top idea title (e.g. `geo-search-cpg-brands`, `ai-governance-enterprise`, `general-scan`).
+
+Confirm both save paths and print the top idea with a one-line summary.

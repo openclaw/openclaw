@@ -37,7 +37,16 @@ Audience hook: [What makes leaders stop and read]
 ## 2–5 ...
 ```
 
-Save output to: `outputs/content/ideas.md`
+## Saving
+
+Save output in two places:
+
+1. `outputs/content/ideas.md` — overwrite with latest scan (used by downstream pipeline steps)
+2. `outputs/content/ideas/[YYYY-MM-DD-HH-MM]-[topic-slug].md` — dated archive copy
+
+The topic slug is a 3-5 word kebab-case summary of the scan topic or the top idea (e.g. `geo-search-cpg-brands`, `ai-governance-enterprise`, `general-scan`). Use the current date and time in the filename.
+
+This preserves full history. Every past scan remains searchable by date or topic.
 
 ## Voice
 
@@ -45,4 +54,4 @@ Read `memory/brand/writing_style.md` to ensure ideas match the author's audience
 
 ## After Output
 
-Confirm save location and highlight the strongest idea with a one-line reason why.
+Confirm both save locations and highlight the strongest idea with a one-line reason why.
