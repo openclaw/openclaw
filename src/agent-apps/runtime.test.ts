@@ -145,11 +145,22 @@ describe("AOTUI runtime registry", () => {
       sessionKey: "agent:main:discord:channel:dev",
       sessionId: "session_1",
       agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      isNewSession: true,
       runId: "run_1",
       agent,
     });
 
     expect(adapter).toBe(mocks.adapterInstance);
+    expect(mocks.desktopManager.resetDesktop).toHaveBeenCalledWith(
+      "agent:main:discord:channel:dev",
+      {
+        sessionId: "session_1",
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+        reason: "session_reset",
+      },
+    );
     expect(mocks.OpenClawAgentAdapter).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:discord:channel:dev",
@@ -180,6 +191,8 @@ describe("AOTUI runtime registry", () => {
       sessionKey: "agent:main:discord:channel:dev",
       sessionId: "session_1",
       agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      isNewSession: false,
       runId: "run_1",
       agent: {
         state: { tools: [] },

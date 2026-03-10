@@ -106,6 +106,7 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
 
   async dispose(): Promise<void> {
     this.options.agent.transformContext = this.originalTransformContext;
+    this.options.agent.setTools([...this.baseTools]);
   }
 
   getSessionKey(): string {

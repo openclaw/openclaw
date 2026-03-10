@@ -500,4 +500,52 @@ describe("OpenClawAgentAdapter", () => {
       ),
     ).toEqual(["snap_shared", "snap_shared"]);
   });
+
+  it("restores the agent tool list to the base tools on dispose", async () => {
+    const snapshot = createSnapshot("snap_dispose");
+    kernel.acquireSnapshot.mockResolvedValue(snapshot);
+    const projector: AotuiSnapshotProjector = {
+      projectMessages: vi.fn(() => []),
+      projectToolBindings: vi.fn(() => [
+        {
+          toolName: "shared_tool",
+          description: "Shared tool",
+          parameters: { type: "object", properties: {} },
+          operation: {
+            context: {
+              appId: "app_1" as never,
+              snapshotId: "latest" as never,
+            },
+            name: "shared_tool" as never,
+            args: {},
+          },
+        },
+      ]),
+    };
+
+    const adapter = new OpenClawAgentAdapter({
+      sessionKey: desktopRecord.sessionKey,
+      sessionId: desktopRecord.sessionId,
+      agentId: desktopRecord.agentId,
+      ownerId: "run_dispose",
+      kernel: kernel as never,
+      desktopManager: desktopManager as never,
+      agent,
+      baseTools: [baseTool],
+      projector,
+    });
+
+    await adapter.install();
+    await adapter.dispose();
+
+    const setToolsCalls = (agent.setTools as ReturnType<typeof vi.fn>).mock.calls;
+    expect(setToolsCalls).toHaveLength(2);
+    const installedTools = setToolsCalls[0]?.[0] as AgentTool[] | undefined;
+    const restoredTools = setToolsCalls[1]?.[0] as AgentTool[] | undefined;
+    if (!installedTools || !restoredTools) {
+      throw new Error("expected adapter install and dispose to each set tools once");
+    }
+    expect(installedTools.map((tool) => tool.name)).toEqual(["read_file", "shared_tool"]);
+    expect(restoredTools.map((tool) => tool.name)).toEqual(["read_file"]);
+  });
 });

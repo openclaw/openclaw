@@ -1210,6 +1210,8 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
+          workspaceDir: effectiveWorkspace,
+          isNewSession: params.isNewSession,
           runId: params.runId,
           agent: activeSession.agent as unknown as OpenClawAgentHandle,
         });

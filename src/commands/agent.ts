@@ -4,7 +4,6 @@ import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
-import { syncAotuiDesktopForRun } from "../agent-apps/runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -328,6 +327,7 @@ function runAgentAttempt(params: {
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
+  isNewSession: boolean;
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
@@ -460,6 +460,7 @@ function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
+    isNewSession: params.isNewSession,
     trigger: "user",
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
@@ -863,18 +864,6 @@ async function agentCommandInternal(
       });
     }
 
-    try {
-      await syncAotuiDesktopForRun({
-        sessionKey,
-        sessionId,
-        agentId: sessionAgentId,
-        workspaceDir,
-        isNewSession,
-      });
-    } catch (err) {
-      log.warn(`AOTUI desktop sync failed for ${sessionKey ?? sessionId}: ${String(err)}`);
-    }
-
     let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
@@ -1132,6 +1121,7 @@ async function agentCommandInternal(
             sessionAgentId,
             sessionFile,
             workspaceDir,
+            isNewSession,
             body,
             isFallbackRetry,
             resolvedThinkLevel,

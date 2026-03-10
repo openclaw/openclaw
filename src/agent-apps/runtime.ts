@@ -101,12 +101,24 @@ export async function installAotuiAdapterForRun(params: {
   sessionKey?: string;
   sessionId: string;
   agentId: string;
+  workspaceDir?: string;
+  isNewSession?: boolean;
   runId: string;
   agent: OpenClawAgentHandle;
 }): Promise<OpenClawAgentAdapter | null> {
   const service = getAotuiGatewayRuntime();
   if (!service || !service.isEnabled() || !params.sessionKey) {
     return null;
+  }
+
+  if (params.workspaceDir) {
+    await syncAotuiDesktopForRun({
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      isNewSession: params.isNewSession ?? false,
+    });
   }
 
   const baseTools = [...(params.agent.state.tools ?? [])];

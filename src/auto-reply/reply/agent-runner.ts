@@ -357,6 +357,7 @@ export async function runReplyAgent(params: {
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
+      isNewSession: activeIsNewSession,
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
