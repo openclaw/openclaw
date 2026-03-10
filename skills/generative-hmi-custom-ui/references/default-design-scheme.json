@@ -1,0 +1,72 @@
+{
+  "schemeVersion": "1.0",
+  "meta": {
+    "name": "Default Automotive Theme",
+    "author": "OpenClaw",
+    "sourceFormat": "json"
+  },
+  "tokens": {
+    "colors": {
+      "primary": "#1A73E8",
+      "secondary": "#5F6368",
+      "surface": "#FFFFFF",
+      "surfaceDark": "#1E1E1E",
+      "accent": "#FF6D00",
+      "text": { "primary": "#202124", "secondary": "#5F6368", "disabled": "#9AA0A6" },
+      "status": { "success": "#34A853", "warning": "#FBBC04", "error": "#EA4335" }
+    },
+    "typography": {
+      "fontFamily": "\"HarmonyOS Sans\", system-ui, sans-serif",
+      "scale": { "h1": "28px", "h2": "22px", "h3": "18px", "body": "14px", "caption": "12px" },
+      "weight": { "regular": 400, "medium": 500, "bold": 700 }
+    },
+    "spacing": { "xs": "4px", "sm": "8px", "md": "16px", "lg": "24px", "xl": "32px" },
+    "radius": { "sm": "8px", "md": "12px", "lg": "16px", "pill": "999px" },
+    "elevation": {
+      "card": "0 2px 8px rgba(0,0,0,0.1)",
+      "modal": "0 8px 32px rgba(0,0,0,0.2)"
+    }
+  },
+  "themes": {
+    "light": { "background": "#FFFFFF", "text": "#202124" },
+    "dark": { "background": "#1E1E1E", "text": "#E8EAED" }
+  },
+  "components": {
+    "card": {
+      "minWidth": "140px",
+      "maxWidth": "400px",
+      "padding": "16px",
+      "borderRadius": "12px",
+      "aspectRatios": ["1:1", "2:1", "3:2"]
+    },
+    "widget": {
+      "grid": { "columns": 4, "gap": "16px", "maxRows": 3 },
+      "sizes": { "small": "1x1", "medium": "2x1", "large": "2x2", "wide": "4x1" }
+    }
+  },
+  "constraints": {
+    "maxWidgets": 12,
+    "editMode": { "scaleFactor": 0.85, "showGrid": true, "snapToGrid": true },
+    "animation": { "maxDuration": "300ms", "easing": "cubic-bezier(0.4, 0, 0.2, 1)" },
+    "accessibility": { "minContrastRatio": 4.5, "minTouchTarget": "44px" }
+  },
+  "personalization": {
+    "allowedCustomizations": [
+      "styleDirection",
+      "layoutDensity",
+      "informationEmphasis",
+      "componentArrangement",
+      "themeMode",
+      "motionIntensity",
+      "widgetComposition",
+      "sceneMode",
+      "screenMode",
+      "preferenceMemory"
+    ],
+    "locked": [
+      "tokens.colors.status",
+      "constraints.accessibility",
+      "components.widget.grid.columns"
+    ]
+  }
+}
