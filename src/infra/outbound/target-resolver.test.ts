@@ -75,4 +75,33 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
+
+  it("accepts legacy object-shaped plugin target normalization results", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        normalizeTarget: (raw: string) => ({ ok: true, to: `qqbot:${raw}` }),
+        targetResolver: {
+          looksLikeId: (raw: string) => /^(c2c|group|channel):/i.test(raw),
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "qqbot",
+      input: "c2c:0123456789ABCDEF0123456789ABCDEF",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("normalized");
+      expect(result.target.to).toBe("qqbot:c2c:0123456789ABCDEF0123456789ABCDEF");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
 });

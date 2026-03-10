@@ -15,6 +15,13 @@ import { loadWebMedia } from "../../web/media.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+// Current local dependency resolution can miss the oauth subpath export; this
+// keeps the runner tests focused on outbound behavior.
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(async () => null),
+  getOAuthProviders: () => [],
+}));
+
 vi.mock("../../web/media.js", async () => {
   const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
   return {
@@ -882,6 +889,77 @@ describe("runMessageAction media caption behavior", () => {
       expect.objectContaining({
         text: "caption-only text",
         mediaUrl: "https://example.com/cat.png",
+      }),
+    );
+  });
+});
+
+describe("runMessageAction legacy target normalization compatibility", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("sends through plugins that still return { ok, to } from normalizeTarget", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "qqbot",
+      messageId: "qq-msg-1",
+    });
+    const legacyNormalizeTarget = ((raw: string) => ({
+      ok: true,
+      to: `qqbot:${raw}`,
+    })) as unknown as NonNullable<ChannelPlugin["messaging"]>["normalizeTarget"];
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qqbot",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "qqbot",
+              outbound: {
+                deliveryMode: "direct",
+                sendText,
+                sendMedia: vi.fn().mockResolvedValue({
+                  channel: "qqbot",
+                  messageId: "qq-media-1",
+                }),
+              },
+            }),
+            messaging: {
+              normalizeTarget: legacyNormalizeTarget,
+              targetResolver: {
+                looksLikeId: (raw: string) => /^(c2c|group|channel):/i.test(raw),
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: {
+        channels: {
+          qqbot: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "qqbot",
+        target: "c2c:0123456789ABCDEF0123456789ABCDEF",
+        message: "hi",
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "qqbot:c2c:0123456789ABCDEF0123456789ABCDEF",
+        text: "hi",
       }),
     );
   });
