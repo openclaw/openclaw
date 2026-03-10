@@ -1,7 +1,7 @@
 import type { SecretInput } from "./types.secrets.js";
 
 /** Error types that can trigger retries for one-shot jobs. */
-export type CronRetryOn = "rate_limit" | "network" | "timeout" | "server_error";
+export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
 
 export type CronRetryConfig = {
   /** Max retries for transient errors before permanent disable (default: 3). */

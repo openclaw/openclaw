@@ -67,6 +67,10 @@ async function getToken(creds: Credentials): Promise<string> {
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
   });
+  if (!response.ok) {
+    await release();
+    throw new Error(`Token request failed with HTTP ${response.status}`);
+  }
   const data = (await response.json()) as {
     code: number;
     msg: string;
@@ -198,6 +202,10 @@ export class FeishuStreamingSession {
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
     });
+    if (!createRes.ok) {
+      await releaseCreate();
+      throw new Error(`Create card request failed with HTTP ${createRes.status}`);
+    }
     const createData = (await createRes.json()) as {
       code: number;
       msg: string;

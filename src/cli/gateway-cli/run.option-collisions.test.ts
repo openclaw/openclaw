@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -17,24 +20,45 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const configState = vi.hoisted(() => ({
+  cfg: {} as Record<string, unknown>,
+  snapshot: { exists: false } as Record<string, unknown>,
+}));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  loadConfig: () => ({}),
-  readConfigFileSnapshot: async () => ({ exists: false }),
+  loadConfig: () => configState.cfg,
+  readConfigFileSnapshot: async () => configState.snapshot,
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: () => 18789,
 }));
 
 vi.mock("../../gateway/auth.js", () => ({
-  resolveGatewayAuth: (params: { authConfig?: { token?: string }; env?: NodeJS.ProcessEnv }) => ({
-    mode: "token",
-    token: params.authConfig?.token ?? params.env?.OPENCLAW_GATEWAY_TOKEN,
-    password: undefined,
-    allowTailscale: false,
-  }),
+  resolveGatewayAuth: (params: {
+    authConfig?: { mode?: string; token?: unknown; password?: unknown };
+    authOverride?: { mode?: string; token?: unknown; password?: unknown };
+    env?: NodeJS.ProcessEnv;
+  }) => {
+    const mode = params.authOverride?.mode ?? params.authConfig?.mode ?? "token";
+    const token =
+      (typeof params.authOverride?.token === "string" ? params.authOverride.token : undefined) ??
+      (typeof params.authConfig?.token === "string" ? params.authConfig.token : undefined) ??
+      params.env?.OPENCLAW_GATEWAY_TOKEN;
+    const password =
+      (typeof params.authOverride?.password === "string"
+        ? params.authOverride.password
+        : undefined) ??
+      (typeof params.authConfig?.password === "string" ? params.authConfig.password : undefined) ??
+      params.env?.OPENCLAW_GATEWAY_PASSWORD;
+    return {
+      mode,
+      token,
+      password,
+      allowTailscale: false,
+    };
+  },
 }));
 
 vi.mock("../../gateway/server.js", () => ({
@@ -106,6 +130,8 @@ describe("gateway run option collisions", () => {
 
   beforeEach(() => {
     resetRuntimeCapture();
+    configState.cfg = {};
+    configState.snapshot = { exists: false };
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -189,5 +215,104 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
     );
+  });
+
+  it("allows password mode preflight when password is configured via SecretRef", async () => {
+    configState.cfg = {
+      gateway: {
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+      secrets: {
+        defaults: {
+          env: "default",
+        },
+      },
+    };
+    configState.snapshot = { exists: true, parsed: configState.cfg };
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "loopback",
+      }),
+    );
+  });
+
+  it("reads gateway password from --password-file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
+    try {
+      const passwordFile = path.join(tempDir, "gateway-password.txt");
+      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+
+      await runGatewayCli([
+        "gateway",
+        "run",
+        "--auth",
+        "password",
+        "--password-file",
+        passwordFile,
+        "--allow-unconfigured",
+      ]);
+
+      expect(startGatewayServer).toHaveBeenCalledWith(
+        18789,
+        expect.objectContaining({
+          auth: expect.objectContaining({
+            mode: "password",
+            password: "pw_from_file", // pragma: allowlist secret
+          }),
+        }),
+      );
+      expect(runtimeErrors).not.toContain(
+        "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when gateway password is passed inline", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--auth",
+      "password",
+      "--password",
+      "pw_inline",
+      "--allow-unconfigured",
+    ]);
+
+    expect(runtimeErrors).toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
+  });
+
+  it("rejects using both --password and --password-file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
+    try {
+      const passwordFile = path.join(tempDir, "gateway-password.txt");
+      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+
+      await expect(
+        runGatewayCli([
+          "gateway",
+          "run",
+          "--password",
+          "pw_inline",
+          "--password-file",
+          passwordFile,
+          "--allow-unconfigured",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toContain("Use either --password or --password-file.");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

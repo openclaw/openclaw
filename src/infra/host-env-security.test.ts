@@ -10,6 +10,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "./host-env-security.js";
+import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
 
 describe("isDangerousHostEnvVarName", () => {
   it("matches dangerous keys and prefixes case-insensitively", () => {
@@ -40,6 +41,7 @@ describe("sanitizeHostExecEnv", () => {
     });
 
     expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
       OK: "1",
     });
@@ -57,6 +59,10 @@ describe("sanitizeHostExecEnv", () => {
         HOME: "/tmp/evil-home",
         ZDOTDIR: "/tmp/evil-zdotdir",
         BASH_ENV: "/tmp/pwn.sh",
+        GIT_SSH_COMMAND: "touch /tmp/pwned",
+        EDITOR: "/tmp/editor",
+        NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
+        GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
         SAFE: "ok",
@@ -64,7 +70,12 @@ describe("sanitizeHostExecEnv", () => {
     });
 
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.BASH_ENV).toBeUndefined();
+    expect(env.GIT_SSH_COMMAND).toBeUndefined();
+    expect(env.EDITOR).toBeUndefined();
+    expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
+    expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.SAFE).toBe("ok");
@@ -83,6 +94,7 @@ describe("sanitizeHostExecEnv", () => {
     });
 
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.OK).toBe("1");
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
@@ -101,6 +113,7 @@ describe("sanitizeHostExecEnv", () => {
     });
 
     expect(env.GOOD_KEY).toBe("ok");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env[" BAD KEY"]).toBeUndefined();
     expect(env["NOT-PORTABLE"]).toBeUndefined();
   });
@@ -110,6 +123,10 @@ describe("isDangerousHostEnvOverrideVarName", () => {
   it("matches override-only blocked keys case-insensitively", () => {
     expect(isDangerousHostEnvOverrideVarName("HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("zdotdir")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GIT_SSH_COMMAND")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
@@ -186,6 +203,61 @@ describe("shell wrapper exploit regression", () => {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(bashPath, ["-lc", "echo SAFE"], { env, stdio: "ignore" });
       child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+});
+
+describe("git env exploit regression", () => {
+  it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const gitPath = "/usr/bin/git";
+    if (!fs.existsSync(gitPath)) {
+      return;
+    }
+
+    const marker = path.join(os.tmpdir(), `openclaw-git-ssh-command-${process.pid}-${Date.now()}`);
+    try {
+      fs.unlinkSync(marker);
+    } catch {
+      // no-op
+    }
+
+    const target = "ssh://127.0.0.1:1/does-not-matter";
+    const exploitValue = `touch ${JSON.stringify(marker)}; false`;
+    const baseEnv = {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      GIT_TERMINAL_PROMPT: "0",
+    };
+
+    const unsafeEnv = {
+      ...baseEnv,
+      GIT_SSH_COMMAND: exploitValue,
+    };
+
+    await new Promise<void>((resolve) => {
+      const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
+      child.once("error", () => resolve());
+      child.once("close", () => resolve());
+    });
+
+    expect(fs.existsSync(marker)).toBe(true);
+    fs.unlinkSync(marker);
+
+    const safeEnv = sanitizeHostExecEnv({
+      baseEnv,
+      overrides: {
+        GIT_SSH_COMMAND: exploitValue,
+      },
+    });
+
+    await new Promise<void>((resolve) => {
+      const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
+      child.once("error", () => resolve());
       child.once("close", () => resolve());
     });
 

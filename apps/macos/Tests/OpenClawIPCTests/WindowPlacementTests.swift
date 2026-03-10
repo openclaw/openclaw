@@ -2,18 +2,17 @@ import AppKit
 import Testing
 @testable import OpenClaw
 
-@Suite
 @MainActor
 struct WindowPlacementTests {
     @Test
-    func centeredFrameZeroBoundsFallsBackToOrigin() {
+    func `centered frame zero bounds falls back to origin`() {
         let frame = WindowPlacement.centeredFrame(size: NSSize(width: 120, height: 80), in: NSRect.zero)
         #expect(frame.origin == .zero)
         #expect(frame.size == NSSize(width: 120, height: 80))
     }
 
     @Test
-    func centeredFrameClampsToBoundsAndCenters() {
+    func `centered frame clamps to bounds and centers`() {
         let bounds = NSRect(x: 10, y: 20, width: 300, height: 200)
         let frame = WindowPlacement.centeredFrame(size: NSSize(width: 600, height: 120), in: bounds)
         #expect(frame.size.width == bounds.width)
@@ -23,7 +22,7 @@ struct WindowPlacementTests {
     }
 
     @Test
-    func topRightFrameZeroBoundsFallsBackToOrigin() {
+    func `top right frame zero bounds falls back to origin`() {
         let frame = WindowPlacement.topRightFrame(
             size: NSSize(width: 120, height: 80),
             padding: 12,
@@ -33,7 +32,7 @@ struct WindowPlacementTests {
     }
 
     @Test
-    func topRightFrameClampsToBoundsAndAppliesPadding() {
+    func `top right frame clamps to bounds and applies padding`() {
         let bounds = NSRect(x: 10, y: 20, width: 300, height: 200)
         let frame = WindowPlacement.topRightFrame(
             size: NSSize(width: 400, height: 50),
@@ -46,7 +45,7 @@ struct WindowPlacementTests {
     }
 
     @Test
-    func ensureOnScreenUsesFallbackWhenWindowOffscreen() {
+    func `ensure on screen uses fallback when window offscreen`() {
         let window = NSWindow(
             contentRect: NSRect(x: 100_000, y: 100_000, width: 200, height: 120),
             styleMask: [.borderless],
@@ -62,7 +61,7 @@ struct WindowPlacementTests {
     }
 
     @Test
-    func ensureOnScreenDoesNotMoveVisibleWindow() {
+    func `ensure on screen does not move visible window`() {
         let screen = NSScreen.main ?? NSScreen.screens.first
         #expect(screen != nil)
         guard let screen else { return }
