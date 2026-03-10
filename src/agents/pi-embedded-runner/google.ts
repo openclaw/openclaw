@@ -552,7 +552,17 @@ export async function sanitizeSessionHistory(params: {
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  // Drop error-state assistant stubs that pi-agent-core appends on every LLM
+  // failure. These accumulate in the JSONL and can corrupt turn structure by
+  // inserting empty assistant turns before a live thinking block, causing the
+  // Anthropic API to reject with "thinking blocks cannot be modified".
+  const withoutErrorStubs = droppedThinking.filter((msg) => {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+      return true;
+    }
+    return (msg as { stopReason?: unknown }).stopReason !== "error";
+  });
+  const sanitizedToolCalls = sanitizeToolCallInputs(withoutErrorStubs, {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing
