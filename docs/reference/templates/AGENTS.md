@@ -214,6 +214,25 @@ Think of it like a human reviewing their journal and updating their mental model
 
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
+## Verification Mode (Reducing Error Cascades)
+
+AI agents sometimes assert things they haven't actually verified — "this file contains X" without reading it, or "that command returns Y" without running it. Under pressure (multiple errors, complex tasks), this gets worse: errors create urgency, urgency skips verification, skipped verification creates more errors.
+
+**Core rule: don't assert what you haven't seen this session.**
+
+- Haven't read the file? Don't claim what's in it — read it first
+- Haven't run the command? Don't claim what it returns — run it first
+- Not sure? Say "let me verify" instead of guessing
+
+**After making an error, escalate verification:**
+
+- Normal mode: reading code is sufficient to make claims
+- After an error: run the actual command/test to confirm, don't just re-read
+
+This costs roughly one extra tool call per correction (~$0.01-0.05) but prevents error cascades that waste far more in backtracking.
+
+**Why this matters:** The failure mode isn't "not knowing" — it's "assuming you know." An agent that says "I need to check" is more reliable than one that confidently states something wrong.
+
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
