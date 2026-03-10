@@ -76,6 +76,42 @@ Use:
 
 Do not default to a LAN IP for the Control UI. Plain HTTP on a LAN or tailnet address can trigger insecure-origin/device-auth behavior that is unrelated to CDP itself. See [Control UI](/web/control-ui).
 
+## Prefer the Windows host IP as seen from WSL over the Wi-Fi/LAN IP
+
+In this WSL2 + Windows topology, Chrome is usually launched on Windows with remote debugging bound to loopback (`127.0.0.1:9222`). Because of that loopback-first setup, pointing OpenClaw in WSL2 at a Wi-Fi/LAN address such as `192.168.1.x:9222` can be fragile across reboots, network changes, or forwarding drift.
+
+For this setup, a more stable pattern is to:
+
+- get the Windows host IP from inside WSL
+- expose that host IP on Windows with `portproxy`
+- forward it to `127.0.0.1:9222`
+- use that host IP in the OpenClaw remote `cdpUrl`
+
+Get the Windows host IP from WSL:
+
+```bash
+ip route show | grep -i default | awk '{ print $3 }'
+```
+
+Then on Windows, forward that host IP to local Chrome CDP (`127.0.0.1:9222`):
+
+```powershell
+netsh interface portproxy add v4tov4 listenaddress=WINDOWS_HOST_IP listenport=9222 connectaddress=127.0.0.1 connectport=9222
+```
+
+Quick validation flow:
+
+1. On Windows, verify local Chrome CDP:
+   - `curl http://127.0.0.1:9222/json/version`
+2. In WSL2, verify the host-IP endpoint you will use in `cdpUrl`:
+   - `curl http://WINDOWS_HOST_IP:9222/json/version`
+3. Restart Gateway and confirm browser visibility:
+   - `openclaw gateway restart`
+   - `openclaw browser profiles`
+   - `openclaw browser tabs --profile remote`
+
+If steps 1 and 2 succeed with the same target, OpenClaw profile failures are usually configuration-level rather than transport-level.
+
 ## Validate in layers
 
 Work top to bottom. Do not skip ahead.
