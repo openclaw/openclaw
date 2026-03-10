@@ -436,6 +436,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose("imessage: dropping malformed RPC message payload");
       return;
     }
+    // Early self-echo guard: drop before debouncer to prevent coalescing with real messages
+    if (message.is_from_me) {
+      logVerbose("imessage: dropping own message (is_from_me)");
+      return;
+    }
     await inboundDebouncer.enqueue({ message });
   };
 

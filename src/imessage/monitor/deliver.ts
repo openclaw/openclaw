@@ -21,6 +21,8 @@ export async function deliverReplies(params: {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
   const scope = `${accountId ?? ""}:${target}`;
+  // Account-global scope catches self-echoes even when sender handle differs from target
+  const globalScope = `${accountId ?? ""}:_outbound_`;
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -37,6 +39,7 @@ export async function deliverReplies(params: {
     }
     if (mediaList.length === 0) {
       sentMessageCache?.remember(scope, { text });
+      sentMessageCache?.remember(globalScope, { text });
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         const sent = await sendMessageIMessage(target, chunk, {
           maxBytes,
@@ -45,6 +48,7 @@ export async function deliverReplies(params: {
           replyToId: payload.replyToId,
         });
         sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+        sentMessageCache?.remember(globalScope, { text: chunk, messageId: sent.messageId });
       }
     } else {
       let first = true;
@@ -59,6 +63,10 @@ export async function deliverReplies(params: {
           replyToId: payload.replyToId,
         });
         sentMessageCache?.remember(scope, {
+          text: caption || undefined,
+          messageId: sent.messageId,
+        });
+        sentMessageCache?.remember(globalScope, {
           text: caption || undefined,
           messageId: sent.messageId,
         });

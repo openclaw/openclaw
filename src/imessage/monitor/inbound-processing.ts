@@ -216,6 +216,8 @@ export function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
   // Scope by conversation so same text in different chats is not conflated.
+  // Also check account-global outbound scope to catch self-echoes where the sender handle
+  // differs from the original target (e.g., bot's own handle vs recipient handle).
   const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
@@ -224,8 +226,13 @@ export function resolveIMessageInboundDecision(params: {
       chatId,
       sender,
     });
+    const globalEchoScope = `${params.accountId}:_outbound_`;
     if (
       params.echoCache.has(echoScope, {
+        text: messageText || undefined,
+        messageId: inboundMessageId,
+      }) ||
+      params.echoCache.has(globalEchoScope, {
         text: messageText || undefined,
         messageId: inboundMessageId,
       })
