@@ -57,6 +57,7 @@ vi.mock("node:net", () => ({
   getDefaultAutoSelectFamily,
 }));
 
+import { PROXY_ENV_KEYS } from "./proxy-env.js";
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciStreamTimeouts,
@@ -66,6 +67,10 @@ import {
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
