@@ -330,8 +330,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
             "code" in err &&
             (err as NodeJS.ErrnoException).code === "ENOENT"
           ) {
-            // File was externally deleted — nothing to retract.
-            log.debug("Session save retraction skipped — file already removed");
+            if (preExistingContent !== null) {
+              // Our inline write overwrote a pre-existing entry (slug collision),
+              // and the file was subsequently deleted externally. Restore the
+              // prior session's content — it was lost to our inline overwrite.
+              await writeFileWithinRoot({
+                rootDir: memoryDir,
+                relativePath: filename,
+                data: preExistingContent,
+                encoding: "utf-8",
+              });
+              log.debug(
+                "Session save retracted by post-hook — pre-existing file restored after external deletion",
+              );
+            } else {
+              // No prior content existed — file was externally deleted, nothing to restore.
+              log.debug("Session save retraction skipped — file already removed");
+            }
             return;
           }
           throw err;
