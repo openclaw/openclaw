@@ -322,6 +322,44 @@ describe("command queue", () => {
     );
   });
 
+  it("runs same-lane nested work without deadlocking", async () => {
+    const lane = `reentrant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const result = await Promise.race([
+      enqueueCommandInLane(lane, async () => {
+        const inner = await enqueueCommandInLane(lane, async () => "inner");
+        return `outer:${inner}`;
+      }),
+      new Promise<string>((_, reject) => {
+        setTimeout(() => reject(new Error("nested lane timed out")), 50);
+      }),
+    ]);
+
+    expect(result).toBe("outer:inner");
+  });
+
+  it("runs same-lane work without deadlocking through an intermediate lane", async () => {
+    const outerLane = `outer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const middleLane = `middle-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(outerLane, 1);
+    setCommandLaneConcurrency(middleLane, 1);
+
+    const result = await Promise.race([
+      enqueueCommandInLane(outerLane, async () => {
+        return await enqueueCommandInLane(middleLane, async () => {
+          const inner = await enqueueCommandInLane(outerLane, async () => "inner");
+          return `middle:${inner}`;
+        });
+      }),
+      new Promise<string>((_, reject) => {
+        setTimeout(() => reject(new Error("cross-lane nested work timed out")), 50);
+      }),
+    ]);
+
+    expect(result).toBe("middle:inner");
+  });
+
   it("does not affect already-active tasks after markGatewayDraining", async () => {
     const { task, release } = enqueueBlockedMainTask(async () => "ok");
     markGatewayDraining();

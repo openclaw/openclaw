@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -51,6 +52,7 @@ type LaneState = {
 
 const lanes = new Map<string, LaneState>();
 let nextTaskId = 1;
+const laneExecutionScope = new AsyncLocalStorage<string[]>();
 
 function getLaneState(lane: string): LaneState {
   const existing = lanes.get(lane);
@@ -110,8 +112,11 @@ function drainLane(lane: string) {
         state.activeTaskIds.add(taskId);
         void (async () => {
           const startTime = Date.now();
+          const parentStack = laneExecutionScope.getStore() ?? [];
           try {
-            const result = await entry.task();
+            const result = await laneExecutionScope.run([...parentStack, lane], async () => {
+              return await entry.task();
+            });
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               diag.debug(
@@ -166,10 +171,15 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
+  const cleaned = lane.trim() || CommandLane.Main;
+  // Re-entering a lane we already own would otherwise deadlock by queuing
+  // work behind the currently active task in that same lane.
+  if ((laneExecutionScope.getStore() ?? []).includes(cleaned)) {
+    return task();
+  }
   if (gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
-  const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
