@@ -1134,6 +1134,29 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
   });
 
+  it("fails when an active exec ref id contains traversal segments", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          talk: {
+            apiKey: { source: "exec", provider: "vault", id: "a/../b" },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(/must not include "\." or "\.\." path segments/i);
+  });
+
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
