@@ -84,23 +84,26 @@ func (s *sandboxServer) CreateSandbox(ctx context.Context, req *pb.CreateSandbox
 func (s *sandboxServer) DestroySandbox(ctx context.Context, req *pb.DestroySandboxRequest) (*pb.DestroySandboxResponse, error) {
 	sandboxID := req.GetSandboxId()
 
-	err := s.mgr.Destroy(ctx, sandboxID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, status.Errorf(codes.NotFound, "sandbox %s not found", sandboxID)
-		}
-		return nil, status.Errorf(codes.Internal, "failed to destroy sandbox: %v", err)
-	}
+	mgrErr := s.mgr.Destroy(ctx, sandboxID)
+	mgrNotFound := mgrErr != nil && strings.Contains(mgrErr.Error(), "not found")
 
-	// Clean up jail state (chroot, UID) so the sandbox_id can be reused.
+	// Always attempt jail cleanup even when the manager returns "not found",
+	// because a previous partial destroy may have removed the VM but left
+	// stale jail/chroot/UID state that blocks sandbox_id reuse.
 	if s.jailCleaner != nil {
 		if jlErr := s.jailCleaner.Destroy(ctx, sandboxID); jlErr != nil {
-			// Log but don't fail the RPC — the VM is already destroyed.
-			// Jail-not-found is expected if the VM wasn't jailed.
 			if !strings.Contains(jlErr.Error(), "not found") {
-				return nil, status.Errorf(codes.Internal, "VM destroyed but jail cleanup failed: %v", jlErr)
+				return nil, status.Errorf(codes.Internal, "jail cleanup failed: %v", jlErr)
 			}
 		}
+	}
+
+	// Surface manager errors after jail cleanup has been attempted.
+	if mgrErr != nil && !mgrNotFound {
+		return nil, status.Errorf(codes.Internal, "failed to destroy sandbox: %v", mgrErr)
+	}
+	if mgrNotFound {
+		return nil, status.Errorf(codes.NotFound, "sandbox %s not found", sandboxID)
 	}
 
 	return &pb.DestroySandboxResponse{}, nil

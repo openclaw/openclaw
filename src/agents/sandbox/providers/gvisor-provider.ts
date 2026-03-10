@@ -132,6 +132,8 @@ export class GVisorProvider implements ISandboxProvider, IBrowserCapable {
       // Container exists but stopped — restart it
       log.debug(`Starting existing container ${containerName}`);
       await execDocker(["start", containerName]);
+      // Reapply iptables rules — they don't survive container stop/start
+      await applyMetadataEgressBlock(containerName);
       return containerName;
     }
 
