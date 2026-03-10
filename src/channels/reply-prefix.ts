@@ -29,6 +29,7 @@ export function createReplyPrefixContext(params: {
   const { cfg, agentId } = params;
   const prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, agentId),
+    channel: params.channel,
   };
 
   const onModelSelected = (ctx: ModelSelectionContext) => {

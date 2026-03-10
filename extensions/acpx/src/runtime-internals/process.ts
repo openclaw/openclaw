@@ -180,6 +180,7 @@ export async function spawnAndCollect(
     command: string;
     args: string[];
     cwd: string;
+    timeoutMs?: number;
   },
   options?: SpawnCommandOptions,
   runtime?: {
@@ -212,7 +213,10 @@ export async function spawnAndCollect(
   });
 
   let abortKillTimer: NodeJS.Timeout | undefined;
+  let timeoutTimer: NodeJS.Timeout | undefined;
   let aborted = false;
+  let timedOut = false;
+
   const onAbort = () => {
     aborted = true;
     try {
@@ -234,8 +238,41 @@ export async function spawnAndCollect(
   };
   runtime?.signal?.addEventListener("abort", onAbort, { once: true });
 
+  // Add timeout only when explicitly provided by caller (avoid breaking long-running flows like ACPX bootstrap/install).
+  const timeoutMs = params.timeoutMs;
+  if (timeoutMs != null && timeoutMs > 0) {
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore kill races
+      }
+      timeoutTimer = setTimeout(() => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          return;
+        }
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Ignore kill races
+        }
+      }, 250);
+      timeoutTimer.unref?.();
+    }, timeoutMs);
+    timeoutTimer.unref?.();
+  }
+
   try {
     const exit = await waitForExit(child);
+    if (timedOut && timeoutMs != null) {
+      return {
+        stdout,
+        stderr,
+        code: exit.code,
+        error: new Error(`Command timed out after ${timeoutMs}ms`),
+      };
+    }
     return {
       stdout,
       stderr,
@@ -246,6 +283,9 @@ export async function spawnAndCollect(
     runtime?.signal?.removeEventListener("abort", onAbort);
     if (abortKillTimer) {
       clearTimeout(abortKillTimer);
+    }
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
     }
   }
 }

@@ -71,16 +71,28 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
+// Cache for session messages to prevent redundant file I/O (fixes #41014)
+const sessionMessagesCache = new Map<string, { messages: unknown[]; mtime: number }>();
+const SESSION_MESSAGES_CACHE_TTL_MS = 500; // 500ms TTL - enough for rapid successive reads
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
 ): unknown[] {
+  const cacheKey = `${sessionId}:${sessionFile ?? ""}:${storePath ?? ""}`;
+  const cached = sessionMessagesCache.get(cacheKey);
+  if (cached && Date.now() - cached.mtime < SESSION_MESSAGES_CACHE_TTL_MS) {
+    return cached.messages;
+  }
+
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) {
-    return [];
+    const result: unknown[] = [];
+    sessionMessagesCache.set(cacheKey, { messages: result, mtime: Date.now() });
+    return result;
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
@@ -115,6 +127,19 @@ export function readSessionMessages(
       // ignore bad lines
     }
   }
+
+  sessionMessagesCache.set(cacheKey, { messages, mtime: Date.now() });
+
+  // Periodic cache cleanup (when cache exceeds 1000 entries)
+  if (sessionMessagesCache.size > 1000) {
+    const now = Date.now();
+    for (const [key, value] of sessionMessagesCache.entries()) {
+      if (now - value.mtime > SESSION_MESSAGES_CACHE_TTL_MS * 2) {
+        sessionMessagesCache.delete(key);
+      }
+    }
+  }
+
   return messages;
 }
 
