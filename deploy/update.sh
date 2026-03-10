@@ -49,21 +49,54 @@ if [ ! -d "$PKG_DIR/agents" ]; then
   echo "警告: $PKG_DIR/agents 目录不存在，这可能是一个全新安装"
 fi
 
+# 备份当前服务文件（用于后续比较）
+SERVICE_FILE="/etc/systemd/system/openclaw.service"
+OLD_SERVICE_TMP=""
+if [ -f "$PKG_DIR/deploy/openclaw.service" ] && [ -f "$SERVICE_FILE" ]; then
+  OLD_SERVICE_TMP=$(mktemp)
+  cp "$PKG_DIR/deploy/openclaw.service" "$OLD_SERVICE_TMP"
+fi
+
 echo ">>> 停止服务..."
 sudo systemctl stop openclaw 2>/dev/null || echo "提示: 服务未安装或未运行，继续更新..."
 
 echo ">>> 解压新版本..."
 cd "$PKG_DIR"
 
-# 解压，排除用户数据目录和配置文件
-tar -xzf "$TGZ_PATH" --strip-components=1 --overwrite \
-  --exclude='agents' \
-  --exclude='workspace' \
-  --exclude='openclaw.json' \
-  --exclude='.env'
+# 解压新版本
+# 注意: agents/, workspace/, openclaw.json, .env 不在 pnpm pack 生成的压缩包中，
+# 它们是运行时产生的用户数据，无需排除
+tar -xzf "$TGZ_PATH" --strip-components=1 --overwrite
+
+# 检测服务文件是否有变化
+SERVICE_UPDATED=false
+if [ -n "$OLD_SERVICE_TMP" ] && [ -f "$PKG_DIR/deploy/openclaw.service" ]; then
+  if ! diff -q "$OLD_SERVICE_TMP" "$PKG_DIR/deploy/openclaw.service" > /dev/null 2>&1; then
+    SERVICE_UPDATED=true
+  fi
+  rm -f "$OLD_SERVICE_TMP"
+fi
 
 echo ">>> 重启服务..."
-sudo systemctl restart openclaw 2>/dev/null || echo "提示: 请手动启动服务"
+if [ "$SERVICE_UPDATED" = true ]; then
+  echo ""
+  echo "=========================================="
+  echo "⚠️  检测到服务文件有更新!"
+  echo "=========================================="
+  echo ""
+  echo "新版本的 deploy/openclaw.service 与当前运行的版本不同。"
+  echo "建议执行以下命令更新服务配置:"
+  echo ""
+  echo "  sudo $PKG_DIR/deploy/install-daemon.sh"
+  echo ""
+  echo "或者手动比较差异:"
+  echo "  diff $PKG_DIR/deploy/openclaw.service $SERVICE_FILE"
+  echo ""
+  # 仍然尝试重启现有服务
+  sudo systemctl restart openclaw 2>/dev/null || echo "提示: 请手动启动服务"
+else
+  sudo systemctl restart openclaw 2>/dev/null || echo "提示: 请手动启动服务"
+fi
 
 echo ">>> 完成!"
 sudo systemctl status openclaw 2>/dev/null || true

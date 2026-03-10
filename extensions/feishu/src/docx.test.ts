@@ -442,4 +442,210 @@ describe("feishu_doc image fetch hardening", () => {
       await fs.unlink(localPath);
     }
   });
+
+  it("uploads local image file from markdown image path", async () => {
+    // Create a small test image file
+    const localPath = join(tmpdir(), `feishu-docx-local-img-${Date.now()}.png`);
+    // Minimal valid PNG: 1x1 transparent pixel
+    const pngBuffer = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await fs.writeFile(localPath, pngBuffer);
+
+    try {
+      convertMock.mockResolvedValueOnce({
+        code: 0,
+        data: {
+          blocks: [{ block_type: 27, block_id: "img_from_local" }],
+          first_level_block_ids: ["img_from_local"],
+        },
+      });
+
+      blockDescendantCreateMock.mockResolvedValueOnce({
+        code: 0,
+        data: { children: [{ block_type: 27, block_id: "img_from_local" }] },
+      });
+
+      const feishuDocTool = resolveFeishuDocTool();
+
+      const result = await feishuDocTool.execute("tool-call", {
+        action: "append",
+        doc_token: "doc_1",
+        content: `![Local Image](${localPath})`,
+      });
+
+      expect(result.details.images_processed).toBe(1);
+      expect(result.details.images_failed).toBe(0);
+      expect(driveUploadAllMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            parent_type: "docx_image",
+          }),
+        }),
+      );
+    } finally {
+      await fs.unlink(localPath);
+    }
+  });
+
+  it("uploads data URI image from markdown", async () => {
+    convertMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        blocks: [{ block_type: 27, block_id: "img_from_datauri" }],
+        first_level_block_ids: ["img_from_datauri"],
+      },
+    });
+
+    blockDescendantCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: { children: [{ block_type: 27, block_id: "img_from_datauri" }] },
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    // Minimal PNG as data URI
+    const dataUri =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: `![Data URI Image](${dataUri})`,
+    });
+
+    expect(result.details.images_processed).toBe(1);
+    expect(result.details.images_failed).toBe(0);
+    expect(driveUploadAllMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          parent_type: "docx_image",
+        }),
+      }),
+    );
+  });
+
+  it("reports failed images in result", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchRemoteMediaMock.mockRejectedValueOnce(new Error("Network error"));
+
+    convertMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        blocks: [{ block_type: 27, block_id: "img_failed" }],
+        first_level_block_ids: ["img_failed"],
+      },
+    });
+
+    blockDescendantCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: { children: [{ block_type: 27, block_id: "img_failed" }] },
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: "![Failed Image](https://example.com/notfound.png)",
+    });
+
+    expect(result.details.images_processed).toBe(0);
+    expect(result.details.images_failed).toBe(1);
+    expect(result.details.image_errors).toBeDefined();
+    expect(result.details.image_errors.length).toBe(1);
+    expect(result.details.image_errors[0]).toContain("Network error");
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("skips unknown image source types", async () => {
+    convertMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        blocks: [{ block_type: 27, block_id: "img_unknown" }],
+        first_level_block_ids: ["img_unknown"],
+      },
+    });
+
+    blockDescendantCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: { children: [{ block_type: 27, block_id: "img_unknown" }] },
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    // This is a relative path without ./ prefix, which is treated as unknown
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: "![Unknown Source](some-relative-path.png)",
+    });
+
+    expect(result.details.images_processed).toBe(0);
+    expect(result.details.images_skipped).toBe(1);
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("handles mixed image source types in same markdown", async () => {
+    // Create local file
+    const localPath = join(tmpdir(), `feishu-docx-mixed-${Date.now()}.png`);
+    const pngBuffer = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await fs.writeFile(localPath, pngBuffer);
+
+    try {
+      convertMock.mockResolvedValueOnce({
+        code: 0,
+        data: {
+          blocks: [
+            { block_type: 27, block_id: "img_url" },
+            { block_type: 27, block_id: "img_local" },
+            { block_type: 27, block_id: "img_datauri" },
+          ],
+          first_level_block_ids: ["img_url", "img_local", "img_datauri"],
+        },
+      });
+
+      blockDescendantCreateMock.mockResolvedValueOnce({
+        code: 0,
+        data: {
+          children: [
+            { block_type: 27, block_id: "img_url" },
+            { block_type: 27, block_id: "img_local" },
+            { block_type: 27, block_id: "img_datauri" },
+          ],
+        },
+      });
+
+      // Mock successful remote fetch
+      fetchRemoteMediaMock.mockResolvedValueOnce({
+        buffer: pngBuffer,
+      });
+
+      const feishuDocTool = resolveFeishuDocTool();
+
+      const dataUri =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+      const result = await feishuDocTool.execute("tool-call", {
+        action: "append",
+        doc_token: "doc_1",
+        content: [
+          "![Remote](https://example.com/remote.png)",
+          `![Local](${localPath})`,
+          `![DataURI](${dataUri})`,
+        ].join("\n"),
+      });
+
+      expect(result.details.images_processed).toBe(3);
+      expect(result.details.images_failed).toBe(0);
+      expect(driveUploadAllMock).toHaveBeenCalledTimes(3);
+    } finally {
+      await fs.unlink(localPath);
+    }
+  });
 });

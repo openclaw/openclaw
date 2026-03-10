@@ -28,7 +28,21 @@ Returns: title, plain text content, block statistics. Check `hint` field - if pr
 { "action": "write", "doc_token": "ABC123def", "content": "# Title\n\nMarkdown content..." }
 ```
 
-Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough.
+Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, bold/italic/strikethrough.
+
+**Images in Markdown:** The `write`, `append`, and `insert` actions support multiple image source types in markdown:
+
+- **Remote URLs**: `![alt](https://example.com/image.png)` - downloaded and uploaded
+- **Local paths**: `![alt](/tmp/screenshot.png)` - uploaded from local filesystem
+- **Data URIs**: `![alt](data:image/png;base64,iVBORw0KGgo...)` - decoded and uploaded
+- **Home-relative paths**: `![alt](~/Pictures/photo.png)` - expanded and uploaded
+
+**Result fields:**
+
+- `images_processed`: number of images successfully uploaded
+- `images_failed`: number of images that failed to upload
+- `images_skipped`: number of unsupported image sources
+- `image_errors`: array of error messages (if any failures)
 
 **Limitation:** Markdown tables are NOT supported.
 
@@ -136,7 +150,7 @@ Optional: `parent_block_id` to insert under a specific block.
 
 Optional: `parent_block_id` to insert under a specific block.
 
-### Upload Image to Docx (from URL or local file)
+### Upload Image to Docx (from URL, local file, or data URI)
 
 ```json
 {
@@ -155,6 +169,16 @@ Or local path with position control:
   "file_path": "/tmp/image.png",
   "parent_block_id": "doxcnParent",
   "index": 5
+}
+```
+
+Or data URI (for DALL-E outputs, canvas screenshots, etc.):
+
+```json
+{
+  "action": "upload_image",
+  "doc_token": "ABC123def",
+  "image": "data:image/png;base64,iVBORw0KGgo..."
 }
 ```
 

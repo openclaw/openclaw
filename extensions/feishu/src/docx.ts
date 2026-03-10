@@ -33,18 +33,48 @@ function json(data: unknown) {
   };
 }
 
-/** Extract image URLs from markdown content */
-function extractImageUrls(markdown: string): string[] {
+/** Image source extracted from markdown */
+type ImageSource = {
+  /** Original source string from markdown */
+  raw: string;
+  /** Source type: 'url', 'data_uri', 'local_path', or 'unknown' */
+  type: "url" | "data_uri" | "local_path" | "unknown";
+};
+
+/**
+ * Extract image sources from markdown content.
+ * Supports:
+ * - HTTP/HTTPS URLs
+ * - Data URIs (data:image/...)
+ * - Local file paths (absolute paths starting with /, ~, ./, or ../)
+ */
+function extractImageSources(markdown: string): ImageSource[] {
   const regex = /!\[[^\]]*\]\(([^)]+)\)/g;
-  const urls: string[] = [];
+  const sources: ImageSource[] = [];
   let match;
   while ((match = regex.exec(markdown)) !== null) {
-    const url = match[1].trim();
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      urls.push(url);
+    const raw = match[1].trim();
+    let type: ImageSource["type"];
+
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      type = "url";
+    } else if (raw.startsWith("data:")) {
+      type = "data_uri";
+    } else if (
+      raw.startsWith("/") ||
+      raw.startsWith("~") ||
+      raw.startsWith("./") ||
+      raw.startsWith("../")
+    ) {
+      type = "local_path";
+    } else {
+      // Skip unknown types (could be relative paths without ./ prefix, etc.)
+      type = "unknown";
     }
+
+    sources.push({ raw, type });
   }
-  return urls;
+  return sources;
 }
 
 const BLOCK_TYPE_NAMES: Record<number, string> = {
@@ -526,6 +556,14 @@ async function resolveUploadInput(
   };
 }
 
+/** Result of processing images from markdown */
+type ProcessImagesResult = {
+  processed: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
+};
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function processImages(
   client: Lark.Client,
@@ -533,40 +571,73 @@ async function processImages(
   markdown: string,
   insertedBlocks: any[],
   maxBytes: number,
-): Promise<number> {
+): Promise<ProcessImagesResult> {
   /* eslint-enable @typescript-eslint/no-explicit-any */
-  const imageUrls = extractImageUrls(markdown);
-  if (imageUrls.length === 0) {
-    return 0;
+  const imageSources = extractImageSources(markdown);
+  const supportedSources = imageSources.filter((s) => s.type !== "unknown");
+
+  if (supportedSources.length === 0) {
+    return {
+      processed: 0,
+      failed: 0,
+      skipped: imageSources.filter((s) => s.type === "unknown").length,
+      errors: [],
+    };
   }
 
   const imageBlocks = insertedBlocks.filter((b) => b.block_type === 27);
 
-  let processed = 0;
-  for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
-    const url = imageUrls[i];
+  const result: ProcessImagesResult = { processed: 0, failed: 0, skipped: 0, errors: [] };
+  const count = Math.min(supportedSources.length, imageBlocks.length);
+
+  for (let i = 0; i < count; i++) {
+    const source = supportedSources[i];
     const blockId = imageBlocks[i].block_id;
 
     try {
-      const buffer = await downloadImage(url, maxBytes);
-      const urlPath = new URL(url).pathname;
-      const fileName = urlPath.split("/").pop() || `image_${i}.png`;
-      const fileToken = await uploadImageToDocx(client, blockId, buffer, fileName, docToken);
+      // Use resolveUploadInput to handle all source types (url, data_uri, local_path)
+      const upload = await resolveUploadInput(
+        source.type === "url" ? source.raw : undefined,
+        source.type === "local_path" ? source.raw : undefined,
+        maxBytes,
+        undefined,
+        source.type === "data_uri" ? source.raw : undefined,
+      );
 
-      await client.docx.documentBlock.patch({
+      const fileToken = await uploadImageToDocx(
+        client,
+        blockId,
+        upload.buffer,
+        upload.fileName,
+        docToken,
+      );
+
+      const patchRes = await client.docx.documentBlock.patch({
         path: { document_id: docToken, block_id: blockId },
         data: {
           replace_image: { token: fileToken },
         },
       });
 
-      processed++;
+      if (patchRes.code !== 0) {
+        throw new Error(patchRes.msg || `Patch failed with code ${patchRes.code}`);
+      }
+
+      result.processed++;
     } catch (err) {
-      console.error(`Failed to process image ${url}:`, err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      result.failed++;
+      result.errors.push(`${source.raw}: ${errorMsg}`);
+      console.error(`Failed to process image ${source.raw}:`, err);
     }
   }
 
-  return processed;
+  // Count unsupported/unknown sources as skipped
+  result.skipped =
+    imageSources.filter((s) => s.type === "unknown").length +
+    Math.max(0, supportedSources.length - imageBlocks.length);
+
+  return result;
 }
 
 async function uploadImageBlock(
@@ -829,14 +900,19 @@ async function writeDoc(
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(client, docToken, sortedBlocks, firstLevelBlockIds, logger)
       : await insertBlocksWithDescendant(client, docToken, sortedBlocks, firstLevelBlockIds);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
-  logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
+  const imagesResult = await processImages(client, docToken, markdown, inserted, maxBytes);
+  logger?.info?.(
+    `feishu_doc: Done (${blocks.length} blocks, ${imagesResult.processed}/${imagesResult.processed + imagesResult.failed} images)`,
+  );
 
   return {
     success: true,
     blocks_deleted: deleted,
     blocks_added: blocks.length,
-    images_processed: imagesProcessed,
+    images_processed: imagesResult.processed,
+    images_failed: imagesResult.failed,
+    images_skipped: imagesResult.skipped,
+    ...(imagesResult.errors.length > 0 && { image_errors: imagesResult.errors }),
   };
 }
 
@@ -859,13 +935,18 @@ async function appendDoc(
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(client, docToken, sortedBlocks, firstLevelBlockIds, logger)
       : await insertBlocksWithDescendant(client, docToken, sortedBlocks, firstLevelBlockIds);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
-  logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
+  const imagesResult = await processImages(client, docToken, markdown, inserted, maxBytes);
+  logger?.info?.(
+    `feishu_doc: Done (${blocks.length} blocks, ${imagesResult.processed}/${imagesResult.processed + imagesResult.failed} images)`,
+  );
 
   return {
     success: true,
     blocks_added: blocks.length,
-    images_processed: imagesProcessed,
+    images_processed: imagesResult.processed,
+    images_failed: imagesResult.failed,
+    images_skipped: imagesResult.skipped,
+    ...(imagesResult.errors.length > 0 && { image_errors: imagesResult.errors }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
     block_ids: inserted.map((b: any) => b.block_id),
   };
@@ -935,13 +1016,18 @@ async function insertDoc(
           index: insertIndex,
         });
 
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
-  logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
+  const imagesResult = await processImages(client, docToken, markdown, inserted, maxBytes);
+  logger?.info?.(
+    `feishu_doc: Done (${blocks.length} blocks, ${imagesResult.processed}/${imagesResult.processed + imagesResult.failed} images)`,
+  );
 
   return {
     success: true,
     blocks_added: blocks.length,
-    images_processed: imagesProcessed,
+    images_processed: imagesResult.processed,
+    images_failed: imagesResult.failed,
+    images_skipped: imagesResult.skipped,
+    ...(imagesResult.errors.length > 0 && { image_errors: imagesResult.errors }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
     block_ids: inserted.map((b: any) => b.block_id),
   };
