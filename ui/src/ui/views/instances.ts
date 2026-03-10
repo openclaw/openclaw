@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { PresenceEntry } from "../types.ts";
+import { tr } from "../i18n.ts";
 import { formatPresenceAge, formatPresenceSummary } from "../presenter.ts";
 
 export type InstancesProps = {
@@ -15,7 +16,7 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Connected Instances</div>
+          <div class="card-title">${tr("instances.title.connectedInstances", "Connected Instances")}</div>
           <div class="card-sub">Presence beacons from the gateway and clients.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { LogEntry, LogLevel } from "../types.ts";
+import { tr } from "../i18n.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 
@@ -57,7 +58,7 @@ export function renderLogs(props: LogsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Logs</div>
+          <div class="card-title">${tr("logs.title.page", "Logs")}</div>
           <div class="card-sub">Gateway file logs (JSONL).</div>
         </div>
         <div class="row" style="gap: 8px;">

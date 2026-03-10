@@ -17,6 +17,7 @@ import {
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy.js";
 import { formatRelativeTimestamp } from "../format.ts";
+import { tr } from "../i18n.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -547,7 +548,7 @@ export function renderAgents(props: AgentsProps) {
       <section class="card agents-sidebar">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Agents</div>
+            <div class="card-title">${tr("agents.title.agents", "Agents")}</div>
             <div class="card-sub">${agents.length} configured.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -593,7 +594,7 @@ export function renderAgents(props: AgentsProps) {
           !selectedAgent
             ? html`
                 <div class="card">
-                  <div class="card-title">Select an agent</div>
+                  <div class="card-title">${tr("agents.title.selectAgent", "Select an agent")}</div>
                   <div class="card-sub">Pick an agent to inspect its workspace and tools.</div>
                 </div>
               `
@@ -841,7 +842,7 @@ function renderAgentOverview(params: {
 
   return html`
     <section class="card">
-      <div class="card-title">Overview</div>
+      <div class="card-title">${tr("agents.title.overview", "Overview")}</div>
       <div class="card-sub">Workspace paths and identity metadata.</div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
@@ -934,7 +935,7 @@ function renderAgentOverview(params: {
 function renderAgentContextCard(context: AgentContext, subtitle: string) {
   return html`
     <section class="card">
-      <div class="card-title">Agent Context</div>
+      <div class="card-title">${tr("agents.title.agentContext", "Agent Context")}</div>
       <div class="card-sub">${subtitle}</div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
@@ -1121,7 +1122,7 @@ function renderAgentChannels(params: {
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Channels</div>
+            <div class="card-title">${tr("agents.title.channels", "Channels")}</div>
             <div class="card-sub">Gateway-wide channel status snapshot.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
@@ -1213,7 +1214,7 @@ function renderAgentCron(params: {
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Scheduler</div>
+            <div class="card-title">${tr("agents.title.scheduler", "Scheduler")}</div>
             <div class="card-sub">Gateway cron status.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
@@ -1244,7 +1245,7 @@ function renderAgentCron(params: {
       </section>
     </section>
     <section class="card">
-      <div class="card-title">Agent Cron Jobs</div>
+      <div class="card-title">${tr("agents.title.agentCronJobs", "Agent Cron Jobs")}</div>
       <div class="card-sub">Scheduled jobs targeting this agent.</div>
       ${
         jobs.length === 0
@@ -1308,7 +1309,7 @@ function renderAgentFiles(params: {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Core Files</div>
+          <div class="card-title">${tr("agents.title.coreFiles", "Core Files")}</div>
           <div class="card-sub">Bootstrap persona, identity, and tool guidance.</div>
         </div>
         <button
@@ -1527,7 +1528,7 @@ function renderAgentTools(params: {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Tool Access</div>
+          <div class="card-title">${tr("agents.title.toolAccess", "Tool Access")}</div>
           <div class="card-sub">
             Profile + per-tool overrides for this agent.
             <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
@@ -1756,7 +1757,7 @@ function renderAgentSkills(params: {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Skills</div>
+          <div class="card-title">${tr("agents.title.skills", "Skills")}</div>
           <div class="card-sub">
             Per-agent skill allowlist and workspace skills.
             ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}

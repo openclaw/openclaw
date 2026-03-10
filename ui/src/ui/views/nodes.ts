@@ -11,6 +11,7 @@ import type {
   ExecApprovalsSnapshot,
 } from "../controllers/exec-approvals.ts";
 import { clampText, formatRelativeTimestamp, formatList } from "../format.ts";
+import { tr } from "../i18n.ts";
 
 export type NodesProps = {
   loading: boolean;
@@ -59,7 +60,7 @@ export function renderNodes(props: NodesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Nodes</div>
+          <div class="card-title">${tr("nodes.title.nodes", "Nodes")}</div>
           <div class="card-sub">Paired devices and live links.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -87,7 +88,7 @@ function renderDevices(props: NodesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Devices</div>
+          <div class="card-title">${tr("nodes.title.devices", "Devices")}</div>
           <div class="card-sub">Pairing requests + role tokens.</div>
         </div>
         <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
@@ -471,7 +472,7 @@ function renderBindings(state: BindingState) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">Exec node binding</div>
+          <div class="card-title">${tr("nodes.title.execNodeBinding", "Exec node binding")}</div>
           <div class="card-sub">
             Pin agents to a specific node when using <span class="mono">exec host=node</span>.
           </div>
@@ -564,7 +565,7 @@ function renderExecApprovals(state: ExecApprovalsState) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">Exec approvals</div>
+          <div class="card-title">${tr("nodes.title.execApprovals", "Exec approvals")}</div>
           <div class="card-sub">
             Allowlist and approval policy for <span class="mono">exec host=gateway/node</span>.
           </div>
@@ -902,7 +903,7 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
   return html`
     <div class="row" style="margin-top: 18px; justify-content: space-between;">
       <div>
-        <div class="card-title">Allowlist</div>
+        <div class="card-title">${tr("nodes.title.allowlist", "Allowlist")}</div>
         <div class="card-sub">Case-insensitive glob patterns.</div>
       </div>
       <button
