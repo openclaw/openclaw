@@ -99,7 +99,10 @@ async function stopGatewayWithoutServiceManager(port: number) {
   };
 }
 
-async function restartGatewayWithoutServiceManager(port: number) {
+async function restartGatewayWithoutServiceManager(
+  port: number,
+  onBeforeRestartAction?: () => Promise<void> | void,
+) {
   await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
@@ -110,6 +113,7 @@ async function restartGatewayWithoutServiceManager(port: number) {
       `multiple gateway processes are listening on port ${port}: ${formatGatewayPidList(pids)}; use "openclaw gateway status --deep" before retrying restart`,
     );
   }
+  await onBeforeRestartAction?.();
   signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
   return {
     result: "restarted" as const,
@@ -165,6 +169,22 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
+  let restartSentinelWritable = false;
+  let restartSentinelMarkedInProgress = false;
+  const markRestartSentinelInProgress = async () => {
+    if (!restartSentinelWritable || restartSentinelMarkedInProgress) {
+      return;
+    }
+    restartSentinelMarkedInProgress = true;
+    try {
+      await transitionRestartSentinelStatus("in-progress", {
+        allowedCurrentStatuses: ["pending"],
+      });
+    } catch {
+      // best-effort
+    }
+  };
+
   if (shouldNotify) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
@@ -195,13 +215,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       };
       try {
         await writeRestartSentinel(payload);
-      } catch {
-        // best-effort
-      }
-      try {
-        await transitionRestartSentinelStatus("in-progress", {
-          allowedCurrentStatuses: ["pending"],
-        });
+        restartSentinelWritable = true;
       } catch {
         // best-effort
       }
@@ -214,8 +228,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    onNotLoaded: async () => {
-      const handled = await restartGatewayWithoutServiceManager(restartPort);
+    onBeforeRestartAction: markRestartSentinelInProgress,
+    onNotLoaded: async (ctx) => {
+      const handled = await restartGatewayWithoutServiceManager(
+        restartPort,
+        ctx?.onBeforeRestartAction,
+      );
       if (handled) {
         restartedWithoutServiceManager = true;
       }
@@ -316,7 +334,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   if (shouldNotify && restarted) {
     try {
       await transitionRestartSentinelStatus("ok", {
-        allowedCurrentStatuses: ["pending", "in-progress"],
+        allowedCurrentStatuses: ["in-progress"],
       });
     } catch {
       // best-effort

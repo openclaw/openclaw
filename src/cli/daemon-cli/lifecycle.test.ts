@@ -17,6 +17,7 @@ type RestartPostCheckContext = {
 type RestartParams = {
   opts?: { json?: boolean };
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  onBeforeRestartAction?: () => Promise<void> | void;
 };
 
 const service = {
@@ -175,6 +176,7 @@ describe("runDaemonRestart health checks", () => {
         err.hints = hints;
         throw err;
       };
+      await params.onBeforeRestartAction?.();
       await params.postRestartCheck?.({
         json: Boolean(params.opts?.json),
         stdout: process.stdout,
@@ -274,7 +276,7 @@ describe("runDaemonRestart health checks", () => {
       2,
       "ok",
       expect.objectContaining({
-        allowedCurrentStatuses: ["pending", "in-progress"],
+        allowedCurrentStatuses: ["in-progress"],
       }),
     );
 
@@ -283,6 +285,39 @@ describe("runDaemonRestart health checks", () => {
     const finalizeOrder = transitionRestartSentinelStatus.mock.invocationCallOrder[1];
     expect(finalizeOrder).toBeGreaterThan(restartOrder);
   });
+  it("does not finalize restart sentinel when restart action never begins", async () => {
+    let sentinelStatus: "pending" | "in-progress" | "ok" = "pending";
+    writeRestartSentinel.mockImplementation(async () => {
+      sentinelStatus = "pending";
+    });
+    transitionRestartSentinelStatus.mockImplementation(
+      async (
+        next: "pending" | "in-progress" | "ok",
+        options?: { allowedCurrentStatuses?: string[] },
+      ) => {
+        const allowed = options?.allowedCurrentStatuses ?? [];
+        if (allowed.length > 0 && !allowed.includes(sentinelStatus)) {
+          throw new Error(`invalid transition ${sentinelStatus} -> ${next}`);
+        }
+        sentinelStatus = next;
+      },
+    );
+    runServiceRestart.mockImplementation(async () => true);
+
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    const result = await runDaemonRestart({ json: true, notify: true });
+
+    expect(result).toBe(true);
+    expect(sentinelStatus).toBe("pending");
+    expect(transitionRestartSentinelStatus).toHaveBeenCalledTimes(1);
+    expect(transitionRestartSentinelStatus).toHaveBeenCalledWith(
+      "ok",
+      expect.objectContaining({
+        allowedCurrentStatuses: ["in-progress"],
+      }),
+    );
+  });
+
   it("fails restart when gateway remains unhealthy", async () => {
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,

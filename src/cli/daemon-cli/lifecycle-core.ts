@@ -41,6 +41,7 @@ type NotLoadedActionContext = {
   json: boolean;
   stdout: Writable;
   fail: (message: string, hints?: string[]) => void;
+  onBeforeRestartAction?: () => Promise<void> | void;
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -333,6 +334,7 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
+  onBeforeRestartAction?: () => Promise<void> | void;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
@@ -379,7 +381,13 @@ export async function runServiceRestart(params: {
 
   if (!loaded) {
     try {
-      handledNotLoaded = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
+      handledNotLoaded =
+        (await params.onNotLoaded?.({
+          json,
+          stdout,
+          fail,
+          onBeforeRestartAction: params.onBeforeRestartAction,
+        })) ?? null;
     } catch (err) {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
@@ -435,6 +443,7 @@ export async function runServiceRestart(params: {
   try {
     let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
+      await params.onBeforeRestartAction?.();
       restartResult = await params.service.restart({ env: process.env, stdout });
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
