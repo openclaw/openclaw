@@ -8,6 +8,7 @@ import {
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
+  recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
@@ -186,6 +187,10 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
+    // Normalize job tick state (clears stale runningAtMs markers) before
+    // checking if already running, so a stale marker from a crashed Phase-1
+    // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
+    recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };

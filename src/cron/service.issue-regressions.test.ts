@@ -443,4 +443,59 @@ describe("Cron issue regressions", () => {
 
     await store.cleanup();
   });
+
+  it("#17554: run() clears stale runningAtMs and executes the job", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
+
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "stale-running",
+              name: "stale-running",
+              enabled: true,
+              createdAtMs: now - 3_600_000,
+              updatedAtMs: now - 3_600_000,
+              schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "stale-running" },
+              state: {
+                runningAtMs: staleRunningAtMs,
+                lastRunAtMs: now - 3_600_000,
+                lastStatus: "ok",
+                nextRunAtMs: now - 60_000,
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    const result = await cron.run("stale-running", "force");
+
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("stale-running", { agentId: undefined });
+
+    cron.stop();
+    await store.cleanup();
+  });
 });
