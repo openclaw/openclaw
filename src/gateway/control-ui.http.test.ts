@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
@@ -161,6 +162,11 @@ describe("handleControlUiHttpRequest", () => {
       relayUpdatedAt: string | null;
       relayCurrentPath: string | null;
     };
+  }
+
+  function growthReviewItemKey(value: string): string {
+    const normalized = value.replace(/`/g, "").trim().split(/\s+/).join(" ");
+    return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
   }
 
   function makePostRequest(url: string, payload: Record<string, unknown>) {
@@ -900,6 +906,129 @@ describe("handleControlUiHttpRequest", () => {
           expect(parsed.relayCurrentPath).toBe(
             "memory/projects/growth-foundation/relay/current.md",
           );
+        } finally {
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("suppresses stale completed review items from current.md using manual-state", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-growth-manual-state-"));
+        const workspace = path.join(home, ".openclaw", "workspace");
+        try {
+          const projectDir = path.join(workspace, "memory", "projects", "growth-foundation");
+          const reviewText =
+            "人手レビューを実施する: `live-queue-codex-patch-20260306` (codex/succeeded)";
+          const reviewKey = growthReviewItemKey(reviewText);
+          await fs.mkdir(path.join(projectDir, "actions"), { recursive: true });
+          await fs.mkdir(path.join(projectDir, "alerts"), { recursive: true });
+          await fs.mkdir(path.join(projectDir, "weekly"), { recursive: true });
+          await fs.writeFile(
+            path.join(projectDir, "weekly", "2026-03-06-weekly-review.md"),
+            [
+              "# Weekly Review - 2026-03-06",
+              "",
+              "## Follow-ups",
+              "",
+              `- human review: \`${reviewText.split("`")[1]}\` (codex/succeeded)`,
+              "",
+              "## Needs Attention",
+              "",
+              "- no failed, rejected, or timed out jobs",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(projectDir, "actions", "current.md"),
+            [
+              "# Growth Action Items",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `actionable`",
+              "- updated_at: `2026-03-08T18:20:14+09:00`",
+              "- latest-weekly: `memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md`",
+              "",
+              "## Priority Now",
+              "",
+              "- none",
+              "",
+              "## This Week",
+              "",
+              `- [ ] ${reviewText}`,
+              "",
+              "## Watch",
+              "",
+              "- none",
+              "",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(projectDir, "actions", "manual-state.json"),
+            JSON.stringify(
+              {
+                schema: "growth-action-manual-state/v1",
+                updated_at: "2026-03-08T18:25:00+09:00",
+                completed: {
+                  [reviewKey]: {
+                    status: "completed",
+                    section: "this_week",
+                    weekly: "2026-03-06-weekly-review.md",
+                    text: reviewText,
+                    completed_at: "2026-03-08T18:25:00+09:00",
+                    source: "codex-human-review",
+                  },
+                },
+              },
+              null,
+              2,
+            ),
+          );
+          await fs.writeFile(
+            path.join(projectDir, "alerts", "current.md"),
+            [
+              "# Growth Alert State",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- transition: `steady-clear`",
+              "- updated_at: `2026-03-08T20:46:57+09:00`",
+              "- action: `none`",
+              "- weekly-review: `memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md`",
+              "- notes:",
+              "  - none",
+              "",
+            ].join("\n"),
+          );
+
+          const { res, end } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: { agents: { defaults: { workspace } } },
+            },
+          );
+
+          expect(handled).toBe(true);
+          const parsed = parseGrowthPayload(end);
+          expect(parsed.available).toBe(true);
+          expect(parsed.actionsStatus).toBe("clear");
+          expect(parsed.reviewCount).toBe(0);
+          expect(parsed.thisWeek).toEqual([]);
+          expect(parsed.thisWeekItems).toEqual([]);
+          expect(parsed.notificationStatus).toBe("clear");
+          expect(parsed.notificationCount).toBe(0);
+          expect(parsed.completedReviewCount).toBe(1);
+          expect(parsed.completedThisWeekItems).toEqual([
+            expect.objectContaining({
+              key: reviewKey,
+              display: "人手レビューを実施する: live-queue-codex-patch-20260306 (codex/succeeded)",
+            }),
+          ]);
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }

@@ -91,6 +91,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Overview: growth foundation review actions are serialized in the browser so overlapping item updates cannot race the snapshot state
 - Overview: growth foundation artifact relpaths are normalized to the active workspace project even when source markdown keeps a display-name alias
 - Overview: growth foundation file links stay on the current Control UI basePath, so `/openclaw/overview` resolves them to `/openclaw/__openclaw/...`
+- Overview: growth foundation open-review counts are reconciled against `actions/manual-state.json`, so stale `actions/current.md` entries do not re-open completed reviews in the panel
 
 Cron jobs panel notes:
 

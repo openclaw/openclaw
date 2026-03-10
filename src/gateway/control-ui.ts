@@ -1047,6 +1047,35 @@ function completedGrowthReviewItems(params: {
   );
 }
 
+function filterCompletedGrowthReviewItems(params: {
+  thisWeekItems: ControlUiGrowthReviewItem[];
+  completedThisWeekItems: ControlUiGrowthReviewItem[];
+}): ControlUiGrowthReviewItem[] {
+  if (params.thisWeekItems.length === 0 || params.completedThisWeekItems.length === 0) {
+    return params.thisWeekItems;
+  }
+  const completedKeys = new Set(params.completedThisWeekItems.map((item) => item.key));
+  return params.thisWeekItems.filter((item) => !completedKeys.has(item.key));
+}
+
+function deriveGrowthActionStatus(params: {
+  priorityNow: string[];
+  thisWeekItems: ControlUiGrowthReviewItem[];
+  watch: string[];
+  fallbackStatus: string | null;
+}): string {
+  if (params.priorityNow.length > 0) {
+    return "blocked";
+  }
+  if (params.thisWeekItems.length > 0 || params.watch.length > 0) {
+    return "actionable";
+  }
+  if (params.fallbackStatus === "missing") {
+    return "missing";
+  }
+  return "clear";
+}
+
 function completedGrowthHistory(params: { workspaceRoot: string; projectId: string }): {
   path: string | null;
   items: ControlUiGrowthCompletionEntry[];
@@ -1627,12 +1656,15 @@ function buildGrowthFoundationSnapshot(
     alertsFields["weekly-review"] ?? actionsFields["latest-weekly"] ?? null,
   );
   const priorityNow = parseMarkdownSectionItems(actionsText, "Priority Now");
-  const thisWeekItems = parseMarkdownSectionReviewItems(actionsText, "This Week");
   const watch = parseMarkdownSectionItems(actionsText, "Watch");
   const completedThisWeekItems = completedGrowthReviewItems({
     workspaceRoot,
     projectId: projectFiles.projectId,
     weeklyReviewPath,
+  });
+  const thisWeekItems = filterCompletedGrowthReviewItems({
+    thisWeekItems: parseMarkdownSectionReviewItems(actionsText, "This Week"),
+    completedThisWeekItems,
   });
   const completedHistory = completedGrowthHistory({
     workspaceRoot,
@@ -1779,7 +1811,12 @@ function buildGrowthFoundationSnapshot(
     alertStatus: alertsFields.status ?? "missing",
     alertTransition: alertsFields.transition ?? null,
     alertUpdatedAt: alertsFields.updated_at ?? null,
-    actionsStatus: actionsFields.status ?? "missing",
+    actionsStatus: deriveGrowthActionStatus({
+      priorityNow,
+      thisWeekItems,
+      watch,
+      fallbackStatus: actionsFields.status ?? null,
+    }),
     actionsUpdatedAt: actionsFields.updated_at ?? null,
     priorityNow,
     thisWeek: thisWeekItems.map((item) => item.display),
