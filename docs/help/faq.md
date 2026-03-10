@@ -1489,10 +1489,16 @@ Set `cli.banner.taglineMode` in config:
 
 ### How do I enable web search and web fetch
 
-`web_fetch` works without an API key. `web_search` requires a Brave Search API
-key. **Recommended:** run `openclaw configure --section web` to store it in
-`tools.web.search.apiKey`. Environment alternative: set `BRAVE_API_KEY` for the
-Gateway process.
+`web_fetch` works without an API key. `web_search` requires a key for your
+selected provider (Brave, Gemini, Grok, Kimi, or Perplexity).
+**Recommended:** run `openclaw configure --section web` and choose a provider.
+Environment alternatives:
+
+- Brave: `BRAVE_API_KEY`
+- Gemini: `GEMINI_API_KEY`
+- Grok: `XAI_API_KEY`
+- Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 
 ```json5
 {
@@ -1500,6 +1506,7 @@ Gateway process.
     web: {
       search: {
         enabled: true,
+        provider: "brave",
         apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5,
       },
