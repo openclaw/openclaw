@@ -29,13 +29,13 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 ## Choosing a search provider
 
-| Provider                  | Result shape                       | Provider-specific filters                    | Notes                                                                                  | API key                                     |
-| ------------------------- | ---------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------- |
-| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time       | Supports Brave `llm-context` mode and [Goggles](https://search.brave.com/help/goggles) | `BRAVE_API_KEY`                             |
-| **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                           | `GEMINI_API_KEY`                            |
-| **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                        | `XAI_API_KEY`                               |
-| **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path         | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| Provider                  | Result shape                       | Provider-specific filters                         | Notes                                                                                  | API key                                     |
+| ------------------------- | ---------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time, `goggles` | Supports Brave `llm-context` mode and [Goggles](https://search.brave.com/help/goggles) | `BRAVE_API_KEY`                             |
+| **Gemini**                | AI-synthesized answers + citations | —                                                 | Uses Google Search grounding                                                           | `GEMINI_API_KEY`                            |
+| **Grok**                  | AI-synthesized answers + citations | —                                                 | Uses xAI web-grounded responses                                                        | `XAI_API_KEY`                               |
+| **Kimi**                  | AI-synthesized answers + citations | —                                                 | Uses Moonshot web search                                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter`      | Supports content extraction controls; OpenRouter uses Sonar compatibility path         | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 
 ### Auto-detection
 

@@ -1528,7 +1528,6 @@ function mapBraveLlmContextResults(
   }));
 }
 
-
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1626,7 +1625,7 @@ async function runWebSearch(params: {
   const cacheKey =
     normalizeCacheKey(
       params.provider === "brave" && effectiveBraveMode === "llm-context"
-        ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
+        ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}`
         : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
     ) + (params.goggles ? `:${params.goggles}` : "");
   const cached = readCache(SEARCH_CACHE, cacheKey);
