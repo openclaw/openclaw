@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
@@ -108,14 +109,28 @@ export async function createChildAdapter(params: {
     : undefined;
 
   const onStdout = (listener: (chunk: string) => void) => {
+    const decoder = new StringDecoder("utf8");
     child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+      listener(decoder.write(chunk));
+    });
+    child.stdout.on("end", () => {
+      const remaining = decoder.end();
+      if (remaining) {
+        listener(remaining);
+      }
     });
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
+    const decoder = new StringDecoder("utf8");
     child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+      listener(decoder.write(chunk));
+    });
+    child.stderr.on("end", () => {
+      const remaining = decoder.end();
+      if (remaining) {
+        listener(remaining);
+      }
     });
   };
 

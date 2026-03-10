@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -36,7 +37,11 @@ function escapeForCmdExe(arg: string): string {
 }
 
 function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+  const cmdLine = [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+  // Switch console codepage to UTF-8 before running the command so that
+  // multi-byte characters (e.g. Chinese) are emitted as UTF-8 instead of the
+  // system's default codepage (often GBK/cp936 on Chinese Windows).
+  return `chcp 65001 >nul && ${cmdLine}`;
 }
 
 /**
@@ -297,13 +302,21 @@ export async function runCommandWithTimeout(
       child.stdin.end();
     }
 
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      stdout += stdoutDecoder.write(d);
       armNoOutputTimer();
     });
+    child.stdout?.on("end", () => {
+      stdout += stdoutDecoder.end();
+    });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      stderr += stderrDecoder.write(d);
       armNoOutputTimer();
+    });
+    child.stderr?.on("end", () => {
+      stderr += stderrDecoder.end();
     });
     child.on("error", (err) => {
       if (settled) {
