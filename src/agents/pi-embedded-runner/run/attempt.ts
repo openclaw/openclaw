@@ -1758,6 +1758,7 @@ export async function runEmbeddedAttempt(
       }
 
       let aborted = Boolean(params.abortSignal?.aborted);
+      let yieldAborted = false;
       let timedOut = false;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
@@ -2087,8 +2088,15 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt));
           }
         } catch (err) {
-          // Yield-triggered abort is intentional — treat as clean stop, not error
-          if (yieldDetected && isRunnerAbortError(err)) {
+          // Yield-triggered abort is intentional — treat as clean stop, not error.
+          // Check the abort reason to distinguish from external aborts (timeout, user cancel)
+          // that may race after yieldDetected is set.
+          yieldAborted =
+            yieldDetected &&
+            isRunnerAbortError(err) &&
+            err instanceof Error &&
+            err.cause === "sessions_yield";
+          if (yieldAborted) {
             aborted = false;
           } else {
             promptError = err;
@@ -2122,7 +2130,7 @@ export async function runEmbeddedAttempt(
 
           // Skip compaction wait when yield aborted the run — the signal is
           // already tripped and abortable() would immediately reject.
-          const compactionRetryWait = yieldDetected
+          const compactionRetryWait = yieldAborted
             ? { timedOut: false }
             : await waitForCompactionRetryWithAggregateTimeout({
                 waitForCompactionRetry,

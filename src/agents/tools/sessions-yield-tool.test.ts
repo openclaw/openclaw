@@ -32,9 +32,12 @@ describe("sessions_yield tool", () => {
     expect(onYield).toHaveBeenCalledOnce();
   });
 
-  it("succeeds without onYield callback", async () => {
+  it("returns error without onYield callback", async () => {
     const tool = createSessionsYieldTool({ sessionId: "test-session" });
     const result = await tool.execute("call-1", {});
-    expect(result.details).toMatchObject({ status: "yielded", message: "Turn yielded." });
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Yield not supported in this context",
+    });
   });
 });

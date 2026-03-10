@@ -22,7 +22,10 @@ export function createSessionsYieldTool(opts?: {
       if (!opts?.sessionId) {
         return jsonResult({ status: "error", error: "No session context" });
       }
-      opts.onYield?.();
+      if (!opts?.onYield) {
+        return jsonResult({ status: "error", error: "Yield not supported in this context" });
+      }
+      opts.onYield();
       return jsonResult({ status: "yielded", message });
     },
   };
