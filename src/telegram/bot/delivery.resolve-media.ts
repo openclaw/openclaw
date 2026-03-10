@@ -98,11 +98,7 @@ function resolveRequiredFetchImpl(
   proxyFetch?: typeof fetch,
   network?: TelegramNetworkConfig,
 ): typeof fetch {
-  const fetchImpl = resolveTelegramFetch(proxyFetch, { network });
-  if (!fetchImpl) {
-    throw new Error("fetch is not available; set channels.telegram.proxy in config");
-  }
-  return fetchImpl;
+  return resolveTelegramFetch(proxyFetch, { network }) as typeof fetch;
 }
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */

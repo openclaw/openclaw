@@ -335,6 +335,10 @@ describe("resolveMedia original filename preservation", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();
+    resolveTelegramFetch.mockReset();
+    resolveTelegramFetch.mockImplementation(
+      (fetchImpl?: typeof fetch) => fetchImpl ?? globalThis.fetch,
+    );
   });
 
   afterEach(() => {
