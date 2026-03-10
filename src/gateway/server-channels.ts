@@ -90,6 +90,12 @@ type ChannelManagerOptions = {
    * @see {@link ChannelGatewayContext.channelRuntime}
    */
   channelRuntime?: PluginRuntime["channel"];
+  onInboundMessage?: (params: {
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 type StartChannelOptions = {
@@ -109,7 +115,7 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime } = opts;
+  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime, onInboundMessage } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   // Tracks restart attempts per channel:account. Reset on successful start.
@@ -234,6 +240,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
           ...(channelRuntime ? { channelRuntime } : {}),
+          ...(onInboundMessage ? { onInboundMessage } : {}),
         });
         const trackedPromise = Promise.resolve(task)
           .catch((err) => {

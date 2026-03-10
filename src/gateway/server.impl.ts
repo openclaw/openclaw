@@ -76,7 +76,7 @@ import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
-import { createAgentEventHandler } from "./server-chat.js";
+import { createAgentEventHandler, createEmitInboundUserMessage } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -569,16 +569,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
-  const channelManager = createChannelManager({
-    loadConfig,
-    channelLogs,
-    channelRuntimeEnvs,
-    channelRuntime: createPluginRuntime().channel,
-  });
-  const getReadiness = createReadinessChecker({
-    channelManager,
-    startedAt: serverStartedAt,
-  });
+
   const {
     canvasHost,
     httpServer,
@@ -622,7 +613,6 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
-    getReadiness,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -652,6 +642,17 @@ export async function startGatewayServer(
   });
   let { cron, storePath: cronStorePath } = cronState;
 
+  const channelManager = createChannelManager({
+    loadConfig,
+    channelLogs,
+    channelRuntimeEnvs,
+    channelRuntime: createPluginRuntime().channel,
+    onInboundMessage: createEmitInboundUserMessage(broadcast),
+  });
+  const _getReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
+  });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
 

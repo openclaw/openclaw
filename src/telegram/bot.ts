@@ -43,6 +43,7 @@ import { createTelegramSendChatActionHandler } from "./sendchataction-401-backof
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
+export type { Bot as TelegramBot } from "grammy";
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;
@@ -64,6 +65,12 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  onInboundMessage?: (params: {
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -412,6 +419,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     streamMode,
     textLimit,
     opts,
+    onInboundMessage: opts.onInboundMessage,
   });
 
   registerTelegramNativeCommands({

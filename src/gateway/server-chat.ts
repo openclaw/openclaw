@@ -646,3 +646,29 @@ export function createAgentEventHandler({
     }
   };
 }
+
+export type EmitInboundUserMessage = (params: {
+  sessionKey: string;
+  text: string;
+  channel: string;
+  senderName?: string;
+}) => void;
+
+export function createEmitInboundUserMessage(
+  broadcast: ChatEventBroadcast,
+): EmitInboundUserMessage {
+  return ({ sessionKey, text, channel, senderName }) => {
+    const payload = {
+      sessionKey,
+      state: "inbound" as const,
+      channel,
+      message: {
+        role: "user",
+        content: [{ type: "text", text }],
+        senderName,
+        timestamp: Date.now(),
+      },
+    };
+    broadcast("chat", payload);
+  };
+}

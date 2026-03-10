@@ -1,6 +1,5 @@
 import type { ReplyToMode } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
-import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   buildTelegramMessageContext,
@@ -22,6 +21,12 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
+  onInboundMessage?: (params: {
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -46,6 +51,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     streamMode,
     textLimit,
     opts,
+    onInboundMessage,
   } = deps;
 
   return async (
@@ -79,29 +85,24 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       return;
     }
-    try {
-      await dispatchTelegramMessage({
-        context,
-        bot,
-        cfg,
-        runtime,
-        replyToMode,
-        streamMode,
-        textLimit,
-        telegramCfg,
-        opts,
+    if (onInboundMessage && context.ctxPayload.Body) {
+      onInboundMessage({
+        sessionKey: context.ctxPayload.SessionKey ?? "",
+        text: context.ctxPayload.Body,
+        channel: "telegram",
+        senderName: context.ctxPayload.From,
       });
-    } catch (err) {
-      runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
-      try {
-        await bot.api.sendMessage(
-          context.chatId,
-          "Something went wrong while processing your request. Please try again.",
-          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
-        );
-      } catch {
-        // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
-      }
     }
+    await dispatchTelegramMessage({
+      context,
+      bot,
+      cfg,
+      runtime,
+      replyToMode,
+      streamMode,
+      textLimit,
+      telegramCfg,
+      opts,
+    });
   };
 };

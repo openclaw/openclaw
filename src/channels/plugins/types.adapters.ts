@@ -236,6 +236,12 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * @see {@link https://docs.openclaw.ai/plugins/developing-plugins | Plugin SDK documentation}
    */
   channelRuntime?: PluginRuntime["channel"];
+  onInboundMessage?: (params: {
+    sessionKey: string;
+    text: string;
+    channel: string;
+    senderName?: string;
+  }) => void;
 };
 
 export type ChannelLogoutResult = {
