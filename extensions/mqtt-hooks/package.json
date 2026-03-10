@@ -6,8 +6,11 @@
   "dependencies": {
     "mqtt": "^5.15.0"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "peerDependencies": {
-    "openclaw": ">=2026.3.8"
+    "openclaw": ">=2026.3.9"
   },
   "peerDependenciesMeta": {
     "openclaw": {
