@@ -255,6 +255,33 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
+  it("coerces openai-completions assistant content arrays to text", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "first line" },
+          { type: "text", text: "second line" },
+        ],
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistant = result[0] as { content?: unknown };
+    expect(typeof assistant.content).toBe("string");
+    expect(assistant.content).toBe("first line\nsecond line");
+  });
+
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
     setNonGoogleModelApi();
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
