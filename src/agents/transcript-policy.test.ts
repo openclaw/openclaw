@@ -23,6 +23,7 @@ describe("resolveTranscriptPolicy", () => {
       allowBase64Only: true,
       includeCamelCase: true,
     });
+    expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
@@ -43,7 +44,7 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
-    expect(policy.validateAnthropicTurns).toBeFalsy();
+    expect(policy.validateAnthropicTurns).toBe(false);
   });
 
   it("enables turn validation for all non-OpenAI providers", () => {
