@@ -562,7 +562,8 @@ export async function runSetupWizard(
     // can use them.  When tools.allow is set, only listed tools are permitted;
     // without this, search setup would configure the provider but the tool
     // would still be blocked by the policy pipeline.
-    if (nextConfig.tools?.web?.search?.provider) {
+    const selectedProvider = nextConfig.tools?.web?.search?.provider;
+    if (selectedProvider) {
       const toolsAllow = nextConfig.tools?.allow;
       const hasExplicitAllow = Array.isArray(toolsAllow);
       const baseList: string[] = hasExplicitAllow
@@ -573,6 +574,24 @@ export async function runSetupWizard(
           baseList.push(tool);
         }
       }
+
+      // When Parallel is the search provider, also enable Parallel extract for
+      // web_fetch (same API key, better extraction for JS-heavy sites).
+      // When switching away, disable it so it doesn't linger.
+      const fetch = nextConfig.tools?.web?.fetch;
+      const updatedFetch =
+        selectedProvider === "parallel"
+          ? {
+              ...fetch,
+              parallel: { ...(fetch?.parallel as Record<string, unknown>), enabled: true },
+            }
+          : fetch?.parallel
+            ? {
+                ...fetch,
+                parallel: { ...(fetch.parallel as Record<string, unknown>), enabled: false },
+              }
+            : fetch;
+
       nextConfig = {
         ...nextConfig,
         tools: {
@@ -580,6 +599,10 @@ export async function runSetupWizard(
           ...(hasExplicitAllow
             ? { allow: baseList, alsoAllow: undefined }
             : { alsoAllow: baseList }),
+          web: {
+            ...nextConfig.tools?.web,
+            fetch: updatedFetch,
+          },
         },
       };
     }
