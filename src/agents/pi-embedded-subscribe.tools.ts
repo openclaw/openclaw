@@ -209,7 +209,7 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   const paths: string[] = [];
   let hasImageContent = false;
   let imagePathFromBlock: string | undefined;
-  
+
   for (const item of content) {
     if (!item || typeof item !== "object") {
       continue;
@@ -218,9 +218,12 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     if (entry.type === "image") {
       hasImageContent = true;
       // Try to extract path directly from image block (read tool includes it)
-      const pathVal = entry.path as string | undefined;
-      if (pathVal && typeof pathVal === "string" && pathVal.trim()) {
-        imagePathFromBlock = pathVal.trim();
+      // Store first path only (first match wins strategy)
+      if (!imagePathFromBlock) {
+        const pathVal = entry.path as string | undefined;
+        if (pathVal && typeof pathVal === "string" && pathVal.trim()) {
+          imagePathFromBlock = pathVal.trim();
+        }
       }
       continue;
     }

@@ -109,7 +109,7 @@ export function splitMediaFromOutput(raw: string): {
   const media: string[] = [];
   let foundMediaToken = false;
 
-  // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
+  // Parse fenced code blocks to identify MEDIA tokens inside them
   const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
   const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
 
@@ -119,13 +119,8 @@ export function splitMediaFromOutput(raw: string): {
 
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
-    // Skip MEDIA extraction if this line is inside a fenced code block
-    if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
-      keptLines.push(line);
-      lineOffset += line.length + 1; // +1 for newline
-      continue;
-    }
-
+    const isInsideFenceBlock = hasFenceMarkers && isInsideFence(fenceSpans, lineOffset);
+    
     const trimmedStart = line.trimStart();
     if (!trimmedStart.startsWith("MEDIA:")) {
       keptLines.push(line);
@@ -133,6 +128,8 @@ export function splitMediaFromOutput(raw: string): {
       continue;
     }
 
+    // Extract MEDIA tokens even from inside code fences
+    // LLMs frequently wrap paths in code blocks, and these should still be delivered
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
     if (matches.length === 0) {
       keptLines.push(line);
@@ -221,7 +218,8 @@ export function splitMediaFromOutput(raw: string): {
       .trim();
 
     // If the line becomes empty, drop it.
-    if (cleanedLine) {
+    // For MEDIA tokens inside code fences, strip the entire line to avoid leaking the token
+    if (cleanedLine && !isInsideFenceBlock) {
       keptLines.push(cleanedLine);
     }
     lineOffset += line.length + 1; // +1 for newline
