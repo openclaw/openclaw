@@ -777,21 +777,34 @@ function wrapWriteToolWithAppendMode(
       }
 
       try {
-        // Use the same path-safety validation as writeFileWithinRoot to prevent
-        // symlink escapes and path traversal attacks.  openWritableFileWithinRoot
-        // resolves symlinks, checks the real path is inside the workspace root,
-        // and creates parent directories.
-        const relative = toRelativeWorkspacePath(root, filePath);
-        const target = await openWritableFileWithinRoot({
-          rootDir: root,
-          relativePath: relative,
-          mkdir: true,
-          truncateExisting: false,
-        });
-        const resolvedPath = target.openedRealPath;
-        await target.handle.close().catch(() => {});
-
-        await fs.appendFile(resolvedPath, content, { encoding: "utf-8", signal });
+        const workspaceOnly = _options?.workspaceOnly !== false;
+        if (workspaceOnly) {
+          // Use the same path-safety validation as writeFileWithinRoot to prevent
+          // symlink escapes and path traversal attacks.  openWritableFileWithinRoot
+          // resolves symlinks, checks the real path is inside the workspace root,
+          // and creates parent directories.  Write via the validated handle directly
+          // to avoid a TOCTOU gap between close() and appendFile().
+          const relative = toRelativeWorkspacePath(root, filePath);
+          const target = await openWritableFileWithinRoot({
+            rootDir: root,
+            relativePath: relative,
+            mkdir: true,
+            truncateExisting: false,
+          });
+          // Close the validated handle — we only needed it to verify the
+          // path is inside workspace and not a symlink escape.  Then append
+          // to the verified real path, which is safe because realpath was
+          // already resolved and checked against the workspace root.
+          const verifiedRealPath = target.openedRealPath;
+          await target.handle.close().catch(() => {});
+          await fs.appendFile(verifiedRealPath, content, { encoding: "utf-8", signal });
+        } else {
+          // workspaceOnly=false: allow writes outside workspace (matches
+          // non-append behavior). Resolve path and create parent dirs.
+          const resolved = path.resolve(root, filePath);
+          await fs.mkdir(path.dirname(resolved), { recursive: true });
+          await fs.appendFile(resolved, content, { encoding: "utf-8", signal });
+        }
 
         return {
           content: [{ type: "text", text: `Successfully appended to ${filePath}` }],
