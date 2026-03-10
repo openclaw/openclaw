@@ -9,12 +9,13 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, MiniMax, OpenAI, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
+- **MiniMax** (primary or fallback provider; strong Chinese/multilingual support)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
@@ -32,9 +33,10 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or MiniMax:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+- `MINIMAX_API_KEY`
 - `OPENAI_API_KEY`
 
 Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
@@ -50,6 +52,7 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [MiniMax Text to Audio (T2A)](https://platform.minimax.io/docs/api-reference/speech-t2a-http)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -112,6 +115,28 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           useSpeakerBoost: true,
           speed: 1.0,
         },
+      },
+    },
+  },
+}
+```
+
+### MiniMax primary (Chinese/multilingual)
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "minimax",
+      minimax: {
+        apiKey: "minimax_api_key", // pragma: allowlist secret
+        model: "speech-2.8-hd",
+        voiceId: "Chinese (Mandarin)_Lyrical_Voice",
+        speed: 1.0,
+        vol: 1.0,
+        pitch: 0,
+        languageBoost: "auto",
       },
     },
   },
@@ -205,9 +230,9 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"minimax"`, `"openai"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `minimax` (if key), otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
@@ -215,7 +240,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -236,6 +261,14 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `minimax.baseUrl`: override MiniMax API base URL (default `https://api.minimax.io`).
+- `minimax.model`: T2A model (`speech-2.8-hd`, `speech-2.8-turbo`, etc.).
+- `minimax.voiceId`: system voice or cloned voice ID.
+- `minimax.speed`: `0.5..2.0` (1.0 = normal).
+- `minimax.vol`: `(0, 10]` (1.0 = normal volume).
+- `minimax.pitch`: `-12..12` (0 = original pitch).
+- `minimax.emotion`: optional emotion (`happy`, `sad`, `angry`, `calm`, etc.).
+- `minimax.languageBoost`: language hint (`auto`, `Chinese`, `English`, etc.).
 
 ## Model-driven overrides (default on)
 
@@ -260,7 +293,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
+- `provider` (`openai` | `elevenlabs` | `minimax` | `edge`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
@@ -327,7 +360,9 @@ These override `messages.tts.*` for that host.
     guaranteed Opus voice notes. citeturn1search1
   - If the configured Edge output format fails, OpenClaw retries with MP3.
 
-OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
+- **MiniMax**: MP3 at 32kHz / 128kbps (all channels).
+
+OpenAI/ElevenLabs/MiniMax formats are fixed; Telegram expects Opus for voice-note UX.
 
 ## Auto-TTS behavior
 

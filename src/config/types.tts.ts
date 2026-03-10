@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "minimax";
 
 export type TtsMode = "final" | "all";
 
@@ -75,6 +75,18 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** MiniMax T2A configuration. */
+  minimax?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voiceId?: string;
+    speed?: number;
+    vol?: number;
+    pitch?: number;
+    emotion?: string;
+    languageBoost?: string;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

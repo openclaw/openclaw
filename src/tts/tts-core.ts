@@ -151,7 +151,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "minimax"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -655,6 +660,124 @@ export async function openaiTTS(params: {
     }
 
     return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export const MINIMAX_TTS_MODELS = [
+  "speech-2.8-hd",
+  "speech-2.8-turbo",
+  "speech-2.6-hd",
+  "speech-2.6-turbo",
+  "speech-02-hd",
+  "speech-02-turbo",
+] as const;
+
+export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io";
+
+function normalizeMinimaxBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_MINIMAX_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+type MinimaxTtsResponse = {
+  data?: { audio?: string; status?: number };
+  base_resp?: { status_code?: number; status_msg?: string };
+  extra_info?: { audio_format?: string };
+};
+
+export async function minimaxTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  voiceId: string;
+  audioFormat: string;
+  sampleRate: number;
+  bitrate: number;
+  speed: number;
+  vol: number;
+  pitch: number;
+  emotion?: string;
+  languageBoost?: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    model,
+    voiceId,
+    audioFormat,
+    sampleRate,
+    bitrate,
+    speed,
+    vol,
+    pitch,
+    emotion,
+    languageBoost,
+    timeoutMs,
+  } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const body: Record<string, unknown> = {
+      model,
+      text,
+      stream: false,
+      output_format: "hex",
+      voice_setting: {
+        voice_id: voiceId,
+        speed,
+        vol,
+        pitch,
+        ...(emotion ? { emotion } : {}),
+      },
+      audio_setting: {
+        sample_rate: sampleRate,
+        bitrate,
+        format: audioFormat,
+        channel: 1,
+      },
+    };
+    if (languageBoost) {
+      body.language_boost = languageBoost;
+    }
+
+    const url = `${normalizeMinimaxBaseUrl(baseUrl)}/v1/t2a_v2`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`MiniMax T2A API error (${response.status})`);
+    }
+
+    const json = (await response.json()) as MinimaxTtsResponse;
+    if (json.base_resp?.status_code !== 0) {
+      throw new Error(
+        `MiniMax T2A error: ${json.base_resp?.status_msg ?? "unknown"} (code ${json.base_resp?.status_code})`,
+      );
+    }
+
+    const hexAudio = json.data?.audio;
+    if (!hexAudio) {
+      throw new Error("MiniMax T2A returned empty audio data");
+    }
+
+    return Buffer.from(hexAudio, "hex");
   } finally {
     clearTimeout(timeout);
   }
