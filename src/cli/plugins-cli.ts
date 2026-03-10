@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { persistPluginConfigWrite } from "../plugins/config-write.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
@@ -189,7 +190,7 @@ async function installBundledPluginSource(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await persistPluginConfigWrite(next);
   logSlotWarnings(slotResult.warnings);
   defaultRuntime.log(theme.warn(params.warning));
   defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
@@ -242,7 +243,7 @@ async function runPluginInstallCommand(params: {
       });
       const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await persistPluginConfigWrite(next);
       logSlotWarnings(slotResult.warnings);
       defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
       defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -272,7 +273,7 @@ async function runPluginInstallCommand(params: {
     });
     const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
     next = slotResult.config;
-    await writeConfigFile(next);
+    await persistPluginConfigWrite(next);
     logSlotWarnings(slotResult.warnings);
     defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
     defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -356,7 +357,7 @@ async function runPluginInstallCommand(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await persistPluginConfigWrite(next);
   logSlotWarnings(slotResult.warnings);
   defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
   defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -557,7 +558,7 @@ export function registerPluginsCli(program: Command) {
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await persistPluginConfigWrite(next);
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
         defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
@@ -577,7 +578,7 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string) => {
       const cfg = loadConfig();
       const next = setPluginEnabledInConfig(cfg, id, false);
-      await writeConfigFile(next);
+      await persistPluginConfigWrite(next);
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
 
@@ -688,7 +689,7 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn(warning));
       }
 
-      await writeConfigFile(result.config);
+      await persistPluginConfigWrite(result.config);
 
       const removed: string[] = [];
       if (result.actions.entry) {
@@ -783,7 +784,7 @@ export function registerPluginsCli(program: Command) {
       }
 
       if (!opts.dryRun && result.changed) {
-        await writeConfigFile(result.config);
+        await persistPluginConfigWrite(result.config);
         defaultRuntime.log("Restart the gateway to load plugins.");
       }
     });
