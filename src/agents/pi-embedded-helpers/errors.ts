@@ -1010,6 +1010,14 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
+  // OAuth refresh wrappers can include provider payloads with `server_error`.
+  // Keep auth classification ahead of the generic streaming server_error fallback.
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "auth_permanent";
+  }
+  if (isAuthErrorMessage(raw)) {
+    return "auth";
+  }
   if (isStreamingProviderServerError(raw)) {
     return "timeout";
   }
@@ -1021,12 +1029,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
-  }
-  if (isAuthPermanentErrorMessage(raw)) {
-    return "auth_permanent";
-  }
-  if (isAuthErrorMessage(raw)) {
-    return "auth";
   }
   return null;
 }

@@ -833,4 +833,11 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("keeps oauth refresh failures in auth lane even when payload includes server_error", () => {
+    expect(
+      classifyFailoverReason(
+        'OAuth token refresh failed for qwen-portal: Qwen OAuth refresh failed: {"error":"server_error"}. Please try again or re-authenticate.',
+      ),
+    ).toBe("auth");
+  });
 });
