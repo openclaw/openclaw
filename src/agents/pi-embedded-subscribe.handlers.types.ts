@@ -66,6 +66,8 @@ export type EmbeddedPiSubscribeState = {
   textRepetitionLastCheckedLen: number;
   /** Resolved text-repetition-guard config, cached at message start. */
   resolvedTextRepetitionGuardConfig?: ResolvedTextRepetitionGuardConfig;
+  /** Set when the text-repetition guard fires; prevents blockChunker drain in handleMessageEnd. */
+  abortedByTextRepetitionGuard: boolean;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;

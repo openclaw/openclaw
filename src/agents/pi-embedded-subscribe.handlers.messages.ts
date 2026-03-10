@@ -185,6 +185,7 @@ export function handleMessageUpdate(
         ctx.state.textRepetitionLastCheckedLen = ctx.state.deltaBuffer.length;
         const result = detectTextRepetition(ctx.state.deltaBuffer, guardConfig);
         if (result.looping) {
+          ctx.state.abortedByTextRepetitionGuard = true;
           void ctx.params.session.abort();
           return;
         }
@@ -416,8 +417,11 @@ export function handleMessageEnd(
     text &&
     onBlockReply
   ) {
-    if (ctx.blockChunker?.hasBuffered()) {
+    if (ctx.blockChunker?.hasBuffered() && !ctx.state.abortedByTextRepetitionGuard) {
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+      ctx.blockChunker.reset();
+    } else if (ctx.state.abortedByTextRepetitionGuard && ctx.blockChunker?.hasBuffered()) {
+      // Guard fired — discard buffered repetitive content instead of emitting it.
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Check for duplicates before emitting (same logic as emitBlockChunk).
@@ -451,6 +455,7 @@ export function handleMessageEnd(
 
   ctx.state.deltaBuffer = "";
   ctx.state.textRepetitionLastCheckedLen = 0;
+  ctx.state.abortedByTextRepetitionGuard = false;
   ctx.state.resolvedTextRepetitionGuardConfig = undefined;
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
