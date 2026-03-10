@@ -538,6 +538,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!notifyOnExit) {
         return;
       }
+      if (obj.suppressNotifyOnExit === true) {
+        return;
+      }
 
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";

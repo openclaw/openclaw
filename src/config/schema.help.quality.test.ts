@@ -522,6 +522,12 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "channels.telegram",
   "channels.telegram.botToken",
   "channels.telegram.capabilities.inlineButtons",
+  "channels.telegram.execApprovals",
+  "channels.telegram.execApprovals.enabled",
+  "channels.telegram.execApprovals.approvers",
+  "channels.telegram.execApprovals.agentFilter",
+  "channels.telegram.execApprovals.sessionFilter",
+  "channels.telegram.execApprovals.target",
   "channels.whatsapp",
 ] as const;
 

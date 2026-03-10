@@ -31,6 +31,11 @@ type PendingEntry = {
   promise: Promise<ExecApprovalDecision | null>;
 };
 
+export type ExecApprovalIdLookupResult =
+  | { kind: "exact" | "prefix"; id: string }
+  | { kind: "ambiguous"; ids: string[] }
+  | { kind: "none" };
+
 export class ExecApprovalManager {
   private pending = new Map<string, PendingEntry>();
 
@@ -169,5 +174,38 @@ export class ExecApprovalManager {
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
+  }
+
+  lookupPendingId(input: string): ExecApprovalIdLookupResult {
+    const normalized = input.trim();
+    if (!normalized) {
+      return { kind: "none" };
+    }
+
+    const exact = this.pending.get(normalized);
+    if (exact) {
+      return exact.record.resolvedAtMs === undefined
+        ? { kind: "exact", id: normalized }
+        : { kind: "none" };
+    }
+
+    const lowerPrefix = normalized.toLowerCase();
+    const matches: string[] = [];
+    for (const [id, entry] of this.pending.entries()) {
+      if (entry.record.resolvedAtMs !== undefined) {
+        continue;
+      }
+      if (id.toLowerCase().startsWith(lowerPrefix)) {
+        matches.push(id);
+      }
+    }
+
+    if (matches.length === 1) {
+      return { kind: "prefix", id: matches[0] };
+    }
+    if (matches.length > 1) {
+      return { kind: "ambiguous", ids: matches };
+    }
+    return { kind: "none" };
   }
 }

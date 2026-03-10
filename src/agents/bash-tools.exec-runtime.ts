@@ -230,6 +230,40 @@ export function createApprovalSlug(id: string) {
   return id.slice(0, APPROVAL_SLUG_LENGTH);
 }
 
+export function buildApprovalPendingMessage(params: {
+  warningText?: string;
+  approvalSlug: string;
+  approvalId: string;
+  command: string;
+  cwd: string;
+  host: "gateway" | "node";
+  nodeId?: string;
+}) {
+  let fence = "```";
+  while (params.command.includes(fence)) {
+    fence += "`";
+  }
+  const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
+  const lines: string[] = [];
+  const warningText = params.warningText?.trim();
+  if (warningText) {
+    lines.push(warningText, "");
+  }
+  lines.push(`Approval required (id ${params.approvalSlug}, full ${params.approvalId}).`);
+  lines.push(`Host: ${params.host}`);
+  if (params.nodeId) {
+    lines.push(`Node: ${params.nodeId}`);
+  }
+  lines.push(`CWD: ${params.cwd}`);
+  lines.push("Command:");
+  lines.push(commandBlock);
+  lines.push("Mode: foreground (interactive approvals available).");
+  lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
+  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  lines.push("If the short code is ambiguous, use the full id in /approve.");
+  return lines.join("\n");
+}
+
 export function resolveApprovalRunningNoticeMs(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;

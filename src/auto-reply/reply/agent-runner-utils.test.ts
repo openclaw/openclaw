@@ -12,6 +12,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 const {
+  buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
@@ -172,5 +173,45 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("uses OriginatingTo for threading tool context on telegram native commands", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "telegram",
+        To: "slash:8460800771",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1003841603622",
+        MessageThreadId: 928,
+        MessageSid: "2284",
+      },
+      config: { channels: { telegram: { allowFrom: ["*"] } } },
+      hasRepliedRef: undefined,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "telegram:-1003841603622",
+      currentThreadTs: "928",
+      currentMessageId: "2284",
+    });
+  });
+
+  it("uses OriginatingTo for threading tool context on discord native commands", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "discord",
+        To: "slash:1177378744822943744",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:123456789012345678",
+        MessageSid: "msg-9",
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "channel:123456789012345678",
+      currentMessageId: "msg-9",
+    });
   });
 });

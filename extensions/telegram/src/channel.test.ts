@@ -179,6 +179,41 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-1" });
   });
 
+  it("preserves buttons for outbound text payload sends", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-2" }));
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          sendMessageTelegram,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Approval required",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+          },
+        },
+      },
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      "Approval required",
+      expect.objectContaining({
+        buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+      }),
+    );
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-2" });
+  });
+
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;

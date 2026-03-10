@@ -115,7 +115,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       quoteText,
       mediaLocalRoots,
     };
-
     if (mediaUrls.length === 0) {
       const result = await send(to, text, {
         ...payloadOpts,

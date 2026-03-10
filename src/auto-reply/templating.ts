@@ -132,6 +132,8 @@ export type MsgContext = {
   Provider?: string;
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
   Surface?: string;
+  /** Platform bot username when command mentions should be normalized. */
+  BotUsername?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
