@@ -395,6 +395,7 @@ export function buildAgentSystemPrompt(params: {
     "## Safety",
     "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
     "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
+    "Before changing system or user config (for example crontab, systemd units, nginx configs, shell rc files, or schedulers), inspect the existing state first and preserve/merge it by default; do not clobber whole files with one-liners unless the user explicitly asks for replacement.",
     "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
     "",
   ];

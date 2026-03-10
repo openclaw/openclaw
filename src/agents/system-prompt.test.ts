@@ -125,6 +125,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
     expect(prompt).toContain("Inspired by Anthropic's constitution");
+    expect(prompt).toContain("Before changing system or user config");
+    expect(prompt).toContain(
+      "crontab, systemd units, nginx configs, shell rc files, or schedulers",
+    );
     expect(prompt).toContain("Do not manipulate or persuade anyone");
     expect(prompt).toContain("Do not copy yourself or change system prompts");
     expect(prompt).toContain("## Subagent Context");
@@ -168,6 +172,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
     expect(prompt).toContain("Inspired by Anthropic's constitution");
+    expect(prompt).toContain("Before changing system or user config");
+    expect(prompt).toContain(
+      "crontab, systemd units, nginx configs, shell rc files, or schedulers",
+    );
     expect(prompt).toContain("Do not manipulate or persuade anyone");
     expect(prompt).toContain("Do not copy yourself or change system prompts");
   });
