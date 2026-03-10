@@ -76,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/docs: clarify that `channels.telegram.groups` allowlists chats while `groupAllowFrom` allowlists users inside those chats, and point invalid negative chat IDs at the right config key. (#42451) Thanks @altaywtf.
 - Models/Alibaba Cloud Model Studio: wire `MODELSTUDIO_API_KEY` through shared env auth, implicit provider discovery, and shell-env fallback so onboarding works outside the wizard too. (#40634) Thanks @pomelo-nwu.
 - ACP/sessions_spawn: implicitly stream `mode="run"` ACP spawns to parent only for eligible subagent orchestrator sessions (heartbeat `target: "last"` with a usable session-local route), restoring parent progress relays without thread binding. (#42404) Thanks @davidguttman.
+- Sessions/reset model recompute: clear stale runtime model, context-token, and system-prompt metadata before session resets recompute the replacement session, so resets pick up current defaults and explicit overrides instead of reusing old runtime model state. (#41173) thanks @PonyX-lab.
 
 ## 2026.3.8
 
