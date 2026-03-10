@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildSlackReasoningProgressText,
   isSlackStreamingEnabled,
-  resolveSlackStreamDelta,
   resolveSlackStreamingThreadHint,
   shouldForceSlackDraftBoundary,
 } from "./dispatch.js";
@@ -75,23 +73,5 @@ describe("slack draft boundary rotation", () => {
         draftMode: "append",
       }),
     ).toBe(true);
-  });
-});
-
-describe("slack native stream delta", () => {
-  it("returns only the newly appended text", () => {
-    expect(resolveSlackStreamDelta("Hello", "Hello world")).toBe(" world");
-  });
-
-  it("rejects non-monotonic updates", () => {
-    expect(resolveSlackStreamDelta("Hello world", "Hello")).toBeNull();
-  });
-});
-
-describe("slack reasoning progress text", () => {
-  it("formats concise structured progress bullets", () => {
-    expect(buildSlackReasoningProgressText("Reasoning:\n_step one_\n- step two")).toBe(
-      "*Analyzing*\n- step one\n- step two",
-    );
   });
 });

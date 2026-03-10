@@ -35,9 +35,9 @@ function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 }
 
-const REASONING_PROGRESS_MAX_CHARS = 800;
+const REASONING_PROGRESS_MAX_CHARS = 1200;
 
-export function buildSlackReasoningProgressText(text?: string): string | undefined {
+function buildSlackReasoningProgressText(text?: string): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
     return undefined;
@@ -65,20 +65,11 @@ export function buildSlackReasoningProgressText(text?: string): string | undefin
     .filter(Boolean)
     .map((line) => `- ${line}`)
     .join("\n");
-  const structured = `*Analyzing*\n${bulletLines}`;
+  const structured = `*Status update*\nstate: analyzing\nprogress:\n${bulletLines}`;
   const truncated = truncateUtf16Safe(structured, REASONING_PROGRESS_MAX_CHARS).trimEnd();
   const ellipsis = structured.length > truncated.length ? "\n..." : "";
   return `${truncated}${ellipsis}`;
 }
-
-export function resolveSlackStreamDelta(previous: string, next: string): string | null {
-  if (!next.startsWith(previous)) {
-    return null;
-  }
-  return next.slice(previous.length);
-}
-
-type SlackStreamSyncResult = "synced" | "diverged" | "missing_thread";
 
 export function isSlackStreamingEnabled(params: {
   mode: "off" | "partial" | "block" | "progress";
@@ -282,25 +273,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
-  let streamedText = "";
-  let currentStreamMessageBase = "";
-  let pendingStreamBoundary = false;
-  let warnedOnNonMonotonicPartial = false;
-
-  const markStreamBoundary = () => {
-    if (!streamSession && !streamedText) {
-      return;
-    }
-    pendingStreamBoundary = true;
-  };
-
-  const applyPendingStreamBoundary = () => {
-    if (!pendingStreamBoundary) {
-      return;
-    }
-    currentStreamMessageBase = streamedText ? `${streamedText}\n` : "";
-    pendingStreamBoundary = false;
-  };
 
   const maybeSendProgressAck = async (): Promise<void> => {
     if (!sendProgressAck || didSendProgressAck) {
@@ -363,90 +335,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyPlan.markSent();
   };
 
-  const syncSlackStreamToText = async (
-    nextMessageText: string,
-    opts?: { allowImplicitBoundary?: boolean },
-  ): Promise<SlackStreamSyncResult> => {
-    const text = nextMessageText.trim();
-    if (!text) {
-      return "synced";
-    }
-
-    applyPendingStreamBoundary();
-
-    let nextBase = currentStreamMessageBase;
-    let nextRenderedText = `${nextBase}${text}`;
-    let delta = resolveSlackStreamDelta(streamedText, nextRenderedText);
-    if (delta === null && opts?.allowImplicitBoundary && streamedText) {
-      nextBase = `${streamedText}\n`;
-      nextRenderedText = `${nextBase}${text}`;
-      delta = resolveSlackStreamDelta(streamedText, nextRenderedText);
-    }
-    if (delta === null) {
-      return "diverged";
-    }
-
-    if (!streamSession) {
-      const streamThreadTs = replyPlan.nextThreadTs();
-      if (!streamThreadTs) {
-        logVerbose("slack-stream: no reply thread target for stream start");
-        return "missing_thread";
-      }
-      streamSession = await startSlackStream({
-        client: ctx.app.client,
-        channel: message.channel,
-        threadTs: streamThreadTs,
-        text: nextRenderedText,
-        teamId: ctx.teamId,
-        userId: message.user,
-      });
-      usedReplyThreadTs ??= streamThreadTs;
-      replyPlan.markSent();
-    } else if (delta) {
-      await appendSlackStream({
-        session: streamSession,
-        text: delta,
-      });
-    }
-
-    streamedText = nextRenderedText;
-    currentStreamMessageBase = nextBase;
-    return "synced";
-  };
-
-  const streamPartialText = async (text?: string): Promise<void> => {
-    if (streamFailed) {
-      return;
-    }
-    const trimmed = text?.trimEnd();
-    if (!trimmed) {
-      return;
-    }
-    try {
-      const synced = await syncSlackStreamToText(trimmed);
-      if (synced === "synced") {
-        return;
-      }
-      if (synced === "missing_thread") {
-        runtime.error?.(danger("slack-stream: no reply thread target for live partial stream"));
-        streamFailed = true;
-        return;
-      }
-      if (!warnedOnNonMonotonicPartial) {
-        warnedOnNonMonotonicPartial = true;
-        runtime.error?.(
-          danger("slack-stream: non-monotonic partial update ignored; live preview may freeze"),
-        );
-      }
-      logVerbose("slack-stream: ignored non-monotonic partial update");
-    } catch (err) {
-      runtime.error?.(
-        danger(`slack-stream: partial streaming API call failed: ${String(err)}, falling back`),
-      );
-      streamFailed = true;
-    }
-  };
-
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
     if (streamFailed || hasMedia(payload) || !payload.text?.trim()) {
       await deliverNormally(payload, streamSession?.threadTs);
@@ -454,33 +342,43 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     const text = payload.text.trim();
+    let plannedThreadTs: string | undefined;
     try {
-      const synced = await syncSlackStreamToText(text, {
-        allowImplicitBoundary: Boolean(streamSession || streamedText),
-      });
-      if (synced === "synced") {
+      if (!streamSession) {
+        const streamThreadTs = replyPlan.nextThreadTs();
+        plannedThreadTs = streamThreadTs;
+        if (!streamThreadTs) {
+          logVerbose(
+            "slack-stream: no reply thread target for stream start, falling back to normal delivery",
+          );
+          streamFailed = true;
+          await deliverNormally(payload);
+          return;
+        }
+
+        streamSession = await startSlackStream({
+          client: ctx.app.client,
+          channel: message.channel,
+          threadTs: streamThreadTs,
+          text,
+          teamId: ctx.teamId,
+          userId: message.user,
+        });
+        usedReplyThreadTs ??= streamThreadTs;
+        replyPlan.markSent();
         return;
       }
-      if (synced === "missing_thread") {
-        runtime.error?.(danger("slack-stream: no reply thread target for live stream fallback"));
-      } else {
-        runtime.error?.(
-          danger("slack-stream: final text diverged from streamed partials; falling back"),
-        );
-      }
+
+      await appendSlackStream({
+        session: streamSession,
+        text: "\n" + text,
+      });
     } catch (err) {
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
-    }
-    streamFailed = true;
-    try {
-      await deliverNormally(payload, streamSession?.threadTs);
-    } catch (fallbackErr) {
-      runtime.error?.(
-        danger(`slack-stream: fallback delivery also failed: ${String(fallbackErr)}`),
-      );
-      throw fallbackErr;
+      streamFailed = true;
+      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
 
@@ -648,11 +546,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             lastReasoningProgressText = "";
           }
         };
-  const onStreamBoundary = useStreaming
-    ? async () => {
-        markStreamBoundary();
-      }
-    : onDraftBoundary;
 
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
@@ -669,9 +562,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           : undefined,
       onModelSelected,
       onPartialReply: useStreaming
-        ? async (payload) => {
-            await streamPartialText(payload.text);
-          }
+        ? undefined
         : !previewStreamingEnabled
           ? undefined
           : async (payload) => {
@@ -684,8 +575,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           : async (payload) => {
               updateDraftFromReasoning(payload.text);
             },
-      onAssistantMessageStart: onStreamBoundary,
-      onReasoningEnd: onStreamBoundary,
+      onAssistantMessageStart: onDraftBoundary,
+      onReasoningEnd: onDraftBoundary,
     },
   });
   await draftStream.flush();

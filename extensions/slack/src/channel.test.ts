@@ -48,21 +48,6 @@ describe("slackPlugin actions", () => {
   });
 });
 
-describe("slackPlugin agentPrompt", () => {
-  it("returns Slack readability hints", () => {
-    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
-    });
-    expect(Array.isArray(hints)).toBe(true);
-    expect(hints?.length).toBeGreaterThanOrEqual(3);
-    expect(hints?.some((hint) => hint.includes("lead with the answer or key findings first"))).toBe(
-      true,
-    );
-    expect(hints?.some((hint) => hint.includes("Avoid nested bullets"))).toBe(true);
-  });
-});
-
 describe("slackPlugin outbound", () => {
   const cfg = {
     channels: {

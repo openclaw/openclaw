@@ -215,13 +215,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
   },
-  agentPrompt: {
-    messageToolHints: () => [
-      "- Slack readability: keep replies compact and well-scannable; prefer a short lead line plus flat bullets over long paragraphs.",
-      "- For review/audit/investigation outputs: lead with the answer or key findings first, then supporting detail.",
-      "- Use short section labels when helpful. Avoid nested bullets, markdown tables, and long preambles.",
-    ],
-  },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
     targetResolver: {
