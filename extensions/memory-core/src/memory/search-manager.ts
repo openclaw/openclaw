@@ -58,7 +58,6 @@ export async function getMemorySearchManager(params: {
         providers: resolved.chain.providers,
         global: resolved.chain.global ?? {
           defaultTimeout: 5000,
-          enableAsyncWrite: true,
           enableFallback: true,
           healthCheckInterval: 30000,
         },

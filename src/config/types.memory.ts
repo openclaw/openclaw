@@ -80,7 +80,6 @@ export type MemoryChainProvider = {
   backend?: string;
   plugin?: string;
   enabled?: boolean;
-  writeMode?: "sync" | "async";
   timeout?: {
     add?: number;
     search?: number;
@@ -100,7 +99,6 @@ export type MemoryChainProvider = {
 
 export type MemoryChainGlobalConfig = {
   defaultTimeout?: number;
-  enableAsyncWrite?: boolean;
   enableFallback?: boolean;
   healthCheckInterval?: number;
 };

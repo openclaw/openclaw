@@ -25,7 +25,7 @@ const BackendSchema = z.enum(["builtin", "qmd"], {
 });
 
 /**
- * 超时配置
+ * Timeout configuration
  */
 const TimeoutSchema = z
   .object({
@@ -53,7 +53,7 @@ const TimeoutSchema = z
   .optional();
 
 /**
- * 重试配置
+ * Retry configuration
  */
 const RetrySchema = z
   .object({
@@ -72,7 +72,7 @@ const RetrySchema = z
   .optional();
 
 /**
- * 熔断器配置
+ * Circuit breaker configuration
  */
 const CircuitBreakerSchema = z
   .object({
@@ -91,20 +91,11 @@ const CircuitBreakerSchema = z
   .optional();
 
 /**
- * 写入模式
- */
-const WriteModeSchema = z
-  .enum(["sync", "async"], {
-    message: "writeMode must be one of: sync, async",
-  })
-  .optional();
-
-/**
- * Provider 配置
+ * Provider configuration
  *
- * 支持 backend 或 plugin 二选一：
- * - backend: 内置后端（builtin, qmd）
- * - plugin: OpenClaw 插件（@mem9/openclaw, @mem0/openclaw-mem0 等）
+ * Supports backend or plugin (mutually exclusive):
+ * - backend: Built-in backends (builtin, qmd)
+ * - plugin: OpenClaw plugins (@mem9/openclaw, @mem0/openclaw-mem0, etc.)
  */
 const ProviderSchema = z
   .object({
@@ -118,7 +109,7 @@ const ProviderSchema = z
 
     priority: PrioritySchema,
 
-    // backend 或 plugin 二选一
+    // backend or plugin (mutually exclusive)
     backend: BackendSchema.optional(),
     plugin: z.string().optional(),
 
@@ -127,11 +118,10 @@ const ProviderSchema = z
     timeout: TimeoutSchema,
     retry: RetrySchema,
     circuitBreaker: CircuitBreakerSchema,
-    writeMode: WriteModeSchema,
   })
   .passthrough()
   .refine(
-    // 验证：backend 或 plugin 必须存在
+    // Validate: backend or plugin must exist
     (data) => data.backend || data.plugin,
     {
       message: "Either backend or plugin must be specified",
@@ -139,7 +129,7 @@ const ProviderSchema = z
     },
   )
   .refine(
-    // 验证：backend 和 plugin 不能同时存在
+    // Validate: backend and plugin cannot both exist
     (data) => !(data.backend && data.plugin),
     {
       message: "Cannot specify both backend and plugin - choose one",
@@ -148,7 +138,7 @@ const ProviderSchema = z
   );
 
 /**
- * 全局配置
+ * Global configuration
  */
 const GlobalConfigSchema = z
   .object({
@@ -158,7 +148,6 @@ const GlobalConfigSchema = z
       .max(60000, { message: "global.defaultTimeout must be less than 60000ms" })
       .optional(),
 
-    enableAsyncWrite: z.boolean().optional(),
     enableFallback: z.boolean().optional(),
 
     healthCheckInterval: z
@@ -170,7 +159,7 @@ const GlobalConfigSchema = z
   .optional();
 
 /**
- * Chain 配置 Schema
+ * Chain configuration Schema
  */
 const ChainConfigSchema = z.object({
   providers: z.array(ProviderSchema).min(1, { message: "at least one provider required" }),
@@ -179,13 +168,12 @@ const ChainConfigSchema = z.object({
 });
 
 /**
- * 验证结果类型
+ * Validation result type
  */
 export interface ValidationResult {
   providers: z.infer<typeof ProviderSchema>[];
   global: {
     defaultTimeout: number;
-    enableAsyncWrite: boolean;
     enableFallback: boolean;
     healthCheckInterval: number;
   };
@@ -193,7 +181,7 @@ export interface ValidationResult {
 }
 
 /**
- * 验证错误类
+ * Validation error class
  */
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -203,11 +191,11 @@ export class ConfigValidationError extends Error {
 }
 
 /**
- * 验证 Chain 配置
+ * Validate Chain configuration
  *
- * @param config - 配置对象
- * @returns 验证结果（包含默认值）
- * @throws ConfigValidationError - 如果配置无效
+ * @param config - Configuration object
+ * @returns Validation result (including defaults)
+ * @throws ConfigValidationError - If configuration is invalid
  *
  * @example
  * ```typescript
@@ -222,41 +210,41 @@ export class ConfigValidationError extends Error {
  * ```
  */
 export function validateChainConfig(config: unknown): ValidationResult {
-  // 1. Zod schema 验证
+  // 1. Zod schema validation
   let parsed: z.infer<typeof ChainConfigSchema>;
 
   try {
     parsed = ChainConfigSchema.parse(config);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      // 提取第一个错误信息
+      // Extract first error message
       const firstError = error.issues[0];
       throw new ConfigValidationError(firstError.message);
     }
     throw error;
   }
 
-  // 2. 自定义验证逻辑
+  // 2. Custom validation logic
   const warnings: string[] = [];
 
-  // 检查名称唯一性
+  // Check name uniqueness
   const names = parsed.providers.map((p) => p.name);
   const uniqueNames = new Set(names);
   if (uniqueNames.size !== names.length) {
-    // 找出重复的名称
+    // Find duplicate names
     const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
     throw new ConfigValidationError(
       `provider names must be unique, duplicate: ${duplicates.join(", ")}`,
     );
   }
 
-  // 检查至少一个 enabled provider
+  // Check at least one enabled provider
   const enabledProviders = parsed.providers.filter((p) => p.enabled !== false);
   if (enabledProviders.length === 0) {
     throw new ConfigValidationError("at least one enabled provider required");
   }
 
-  // 检查只有一个 primary（在 enabled providers 中）
+  // Check only one primary (among enabled providers)
   const primaryProviders = enabledProviders.filter((p) => p.priority === "primary");
   if (primaryProviders.length > 1) {
     throw new ConfigValidationError("only one primary provider allowed");
@@ -265,33 +253,26 @@ export function validateChainConfig(config: unknown): ValidationResult {
     throw new ConfigValidationError("at least one primary provider required");
   }
 
-  // 检查 primary 不能嵌套 chain
+  // Check primary cannot nest chain
   const chainBackends = parsed.providers.filter((p) => (p.backend as string) === "chain");
   if (chainBackends.length > 0) {
     throw new ConfigValidationError("chain backend cannot be nested");
   }
 
-  // 警告：primary 使用 async writeMode
-  const primary = primaryProviders[0];
-  if (primary && primary.writeMode === "async") {
-    warnings.push("primary provider with async writeMode may cause data inconsistency");
-  }
-
-  // 警告：没有 fallback
+  // Warning: no fallback
   const fallbackProviders = parsed.providers.filter((p) => p.priority === "fallback");
   if (fallbackProviders.length === 0 && parsed.global?.enableFallback !== false) {
     warnings.push("no fallback provider configured, system may fail if primary fails");
   }
 
-  // 3. 应用默认值
+  // 3. Apply defaults
   const global = {
     defaultTimeout: parsed.global?.defaultTimeout ?? 5000,
-    enableAsyncWrite: parsed.global?.enableAsyncWrite ?? true,
     enableFallback: parsed.global?.enableFallback ?? true,
     healthCheckInterval: parsed.global?.healthCheckInterval ?? 30000,
   };
 
-  // 4. 为每个 provider 应用默认值
+  // 4. Apply defaults for each provider
   const providers = parsed.providers.map((p) => ({
     ...p,
     enabled: p.enabled ?? true,
@@ -309,8 +290,6 @@ export function validateChainConfig(config: unknown): ValidationResult {
       failureThreshold: p.circuitBreaker?.failureThreshold ?? 5,
       resetTimeoutMs: p.circuitBreaker?.resetTimeoutMs ?? 60000,
     },
-    writeMode:
-      p.writeMode ?? (p.priority === "primary" || p.priority === "fallback" ? "sync" : "async"),
   }));
 
   return {
@@ -321,6 +300,6 @@ export function validateChainConfig(config: unknown): ValidationResult {
 }
 
 /**
- * 导出类型和 schema
+ * Export types and schemas
  */
 export { ChainConfigSchema, ProviderSchema, PrioritySchema, BackendSchema };

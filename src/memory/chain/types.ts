@@ -14,12 +14,7 @@ import type { MemorySearchManager, MemorySearchResult } from "../types.js";
 export type ProviderPriority = "primary" | "secondary" | "fallback";
 
 /**
- * Write mode
- */
-export type WriteMode = "sync" | "async";
-
-/**
- * Circuit BreakerStatus
+ * Circuit Breaker Status
  */
 export type CircuitBreakerState = "CLOSED" | "OPEN" | "HALF-OPEN";
 
@@ -58,8 +53,6 @@ export interface ProviderConfig {
     resetTimeoutMs?: number;
   };
 
-  writeMode?: WriteMode;
-
   [key: string]: unknown;
 }
 
@@ -68,7 +61,6 @@ export interface ProviderConfig {
  */
 export interface GlobalConfig {
   defaultTimeout: number;
-  enableAsyncWrite: boolean;
   enableFallback: boolean;
   healthCheckInterval: number;
 }
@@ -89,7 +81,7 @@ export interface ProviderStats {
   priority: ProviderPriority;
   health: HealthStatus;
 
-  // Circuit BreakerStatus
+  // Circuit Breaker Status
   circuitBreakerState: CircuitBreakerState;
   failureCount: number;
 
@@ -127,41 +119,11 @@ export interface ProviderWrapper {
 }
 
 /**
- * Async write task
- */
-export interface AsyncWriteTask {
-  id: string;
-  providerName: string;
-  operation: "add" | "update" | "delete";
-  data: unknown;
-  timestamp: number;
-  attempts: number;
-  maxAttempts: number;
-}
-
-/**
- * Dead letter queue item
- */
-export interface DeadLetterItem extends AsyncWriteTask {
-  error: string;
-  failedAt: number;
-}
-
-/**
  * Chain manager status
  */
 export interface ChainManagerStatus {
   backend: string;
   providers: ProviderStats[];
-
-  // Async queue status
-  asyncQueue: {
-    pending: number;
-    processing: number;
-    deadLetter: number;
-  };
-
-  // Global configuration
   global: GlobalConfig;
 }
 
