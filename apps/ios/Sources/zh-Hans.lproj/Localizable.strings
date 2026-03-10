@@ -33,8 +33,8 @@
 "settings.gateway.debug.logs" = "发现调试日志";
 "settings.gateway.discovery_logs" = "发现日志";
 "settings.gateway.debug.canvas" = "调试画布状态";
-"settings.gateway.auth.token" = "网关认证令牌";
-"settings.gateway.auth.password" = "网关密码";
+"settings.gateway.auth.token" = "网关认证令牌"; // pragma: allowlist secret
+"settings.gateway.auth.password" = "网关密码"; // pragma: allowlist secret
 "settings.gateway.reset.onboarding" = "重置入门";
 "settings.gateway.debug.title" = "调试";
 "settings.gateway.no.gateways" = "尚未找到网关。";
@@ -65,7 +65,7 @@
 "settings.device.advanced.title" = "高级";
 "settings.device.talk_voice.gateway" = "对话语音（网关）";
 "settings.device.provider" = "提供商";
-"settings.device.api_key" = "API密钥";
+"settings.device.api_key" = "API密钥"; // pragma: allowlist secret
 "settings.device.configured" = "已配置";
 "settings.device.not_configured" = "未配置";
 "settings.device.not_loaded" = "未加载";

@@ -33,8 +33,8 @@
 "settings.gateway.debug.logs" = "Discovery Debug Logs";
 "settings.gateway.discovery_logs" = "Discovery Logs";
 "settings.gateway.debug.canvas" = "Debug Canvas Status";
-"settings.gateway.auth.token" = "Gateway Auth Token";
-"settings.gateway.auth.password" = "Gateway Password";
+"settings.gateway.auth.token" = "Gateway Auth Token"; // pragma: allowlist secret
+"settings.gateway.auth.password" = "Gateway Password"; // pragma: allowlist secret
 "settings.gateway.reset.onboarding" = "Reset Onboarding";
 "settings.gateway.debug.title" = "Debug";
 "settings.gateway.no.gateways" = "No gateways found yet.";
@@ -65,7 +65,7 @@
 "settings.device.advanced.title" = "Advanced";
 "settings.device.talk_voice.gateway" = "Talk Voice (Gateway)";
 "settings.device.provider" = "Provider";
-"settings.device.api_key" = "API Key";
+"settings.device.api_key" = "API Key"; // pragma: allowlist secret
 "settings.device.configured" = "Configured";
 "settings.device.not_configured" = "Not configured";
 "settings.device.not_loaded" = "Not loaded";

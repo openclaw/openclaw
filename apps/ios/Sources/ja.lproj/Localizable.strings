@@ -33,8 +33,8 @@
 "settings.gateway.debug.logs" = "検出デバッグログ";
 "settings.gateway.discovery_logs" = "検出ログ";
 "settings.gateway.debug.canvas" = "キャンバスデバッグステータス";
-"settings.gateway.auth.token" = "ゲートウェイ認証トークン";
-"settings.gateway.auth.password" = "ゲートウェイパスワード";
+"settings.gateway.auth.token" = "ゲートウェイ認証トークン"; // pragma: allowlist secret
+"settings.gateway.auth.password" = "ゲートウェイパスワード"; // pragma: allowlist secret
 "settings.gateway.reset.onboarding" = "オンボーディングをリセット";
 "settings.gateway.debug.title" = "デバッグ";
 "settings.gateway.no.gateways" = "まだゲートウェイが見つかりません。";
@@ -65,7 +65,7 @@
 "settings.device.advanced.title" = "詳細";
 "settings.device.talk_voice.gateway" = "トーク音声（ゲートウェイ）";
 "settings.device.provider" = "プロバイダー";
-"settings.device.api_key" = "APIキー";
+"settings.device.api_key" = "APIキー"; // pragma: allowlist secret
 "settings.device.configured" = "設定済み";
 "settings.device.not_configured" = "未設定";
 "settings.device.not_loaded" = "未読み込み";
