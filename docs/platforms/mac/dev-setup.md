@@ -172,7 +172,10 @@ LEARN MORE
   Read the manual at https://cli.github.com/manual
   Learn about exit codes using `gh help exit-codes`
   Learn about accessibility experiences using `gh help accessibility`).
+## GitHub CLI Authentication
+To perform repository automation (e.g., creating PRs, managing issues) via OpenClaw, you need to authenticate the GitHub CLI (`gh`).
+
 1. Generate a **Classic Personal Access Token (PAT)** on GitHub (Settings > Developer settings > Tokens (classic)).
-2. Ensure the token has **** (full control of private/public repositories) and **** (required for organization/repo metadata queries) scopes.
-3. Set the  environment variable in your shell profile (e.g., ): 
-4. Run  to apply.
+2. Ensure the token has `repo` (full control of private/public repositories) and `read:org` (required for organization/repo metadata queries) scopes.
+3. Set the `GH_TOKEN` environment variable in your shell profile (e.g., `~/.bash_profile`): `export GH_TOKEN=your_token_here`
+4. Run `source ~/.bash_profile` to apply.
