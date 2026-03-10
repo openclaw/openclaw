@@ -465,6 +465,8 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "restore"]);
 
+      expect(mockFsAccess).toHaveBeenCalledWith(expect.stringContaining(".bak"));
+      expect(mockFsReadFile).toHaveBeenCalledWith(expect.stringContaining(".bak"), "utf-8");
       expect(mockFsCopyFile).toHaveBeenCalledWith(
         expect.stringContaining(".bak"),
         expect.stringContaining("openclaw.json")
