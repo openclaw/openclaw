@@ -57,14 +57,19 @@ function parseGoogleChatInboundPayload(
   if (rawObj.commonEventObject?.hostApp === "CHAT") {
     // It's a GSuite Add-on payload for Chat
     addOnBearerToken = String(rawObj.authorizationEventObject?.systemIdToken ?? "").trim();
-    
+
     // Convert to standard Chat API format based on what's available
     const chat = rawObj.chat;
     if (chat) {
-      const space = chat.messagePayload?.space || chat.spacesPayload?.space || chat.spacePayload?.space || (chat as any).space;
+      const space =
+        chat.messagePayload?.space ||
+        chat.spacesPayload?.space ||
+        chat.spacePayload?.space ||
+        (chat as any).space;
       const message = chat.messagePayload?.message || (chat as any).message;
-      const eventType = chat.type || (chat as any).eventType || (message ? "MESSAGE" : "ADDED_TO_SPACE");
-      
+      const eventType =
+        chat.type || (chat as any).eventType || (message ? "MESSAGE" : "ADDED_TO_SPACE");
+
       eventPayload = {
         type: eventType,
         space: space,
@@ -72,7 +77,9 @@ function parseGoogleChatInboundPayload(
         user: chat.user,
         eventTime: chat.eventTime,
       };
-      console.log(`[googlechat/webhook] Transformed Add-on payload to Chat API event type=${eventType}`);
+      console.log(
+        `[googlechat/webhook] Transformed Add-on payload to Chat API event type=${eventType}`,
+      );
     } else {
       console.log("[googlechat/webhook] Add-on payload missing chat object");
     }
@@ -81,14 +88,18 @@ function parseGoogleChatInboundPayload(
   const event = eventPayload as GoogleChatEvent;
   const eventType = event.type ?? (eventPayload as { eventType?: string }).eventType;
   if (typeof eventType !== "string") {
-    console.error(`[googlechat/webhook] invalid payload (no event type): ${JSON.stringify(raw).slice(0, 500)}`);
+    console.error(
+      `[googlechat/webhook] invalid payload (no event type): ${JSON.stringify(raw).slice(0, 500)}`,
+    );
     res.statusCode = 400;
     res.end("invalid payload");
     return { ok: false };
   }
 
   if (!event.space || typeof event.space !== "object" || Array.isArray(event.space)) {
-    console.error(`[googlechat/webhook] invalid payload (no space object): type=${eventType} payload=${JSON.stringify(raw).slice(0, 500)}`);
+    console.error(
+      `[googlechat/webhook] invalid payload (no space object): type=${eventType} payload=${JSON.stringify(raw).slice(0, 500)}`,
+    );
     res.statusCode = 400;
     res.end("invalid payload");
     return { ok: false };
@@ -96,7 +107,9 @@ function parseGoogleChatInboundPayload(
 
   if (eventType === "MESSAGE") {
     if (!event.message || typeof event.message !== "object" || Array.isArray(event.message)) {
-      console.error(`[googlechat/webhook] invalid payload (MESSAGE event has no message object): ${JSON.stringify(raw).slice(0, 500)}`);
+      console.error(
+        `[googlechat/webhook] invalid payload (MESSAGE event has no message object): ${JSON.stringify(raw).slice(0, 500)}`,
+      );
       res.statusCode = 400;
       res.end("invalid payload");
       return { ok: false };
