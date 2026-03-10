@@ -410,6 +410,50 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects startup when fetching the bot identity fails", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockRejectedValue(new Error("whoami boom"));
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow("whoami boom");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord: failed to fetch bot identity for account default"),
+    );
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects startup when the bot identity is missing an id", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockResolvedValue({ username: "OpenClaw" });
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow('fetchUser("@me") returned no bot user id');
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'discord: failed to resolve bot identity for account default: fetchUser("@me") returned no bot user id',
+      ),
+    );
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 

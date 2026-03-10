@@ -683,9 +683,9 @@ export async function preflightDiscordMessage(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionGate.shouldSkip=${mentionGate.shouldSkip} wasMentioned=${wasMentioned}`,
   );
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionGate.shouldSkip) {
+    if (mentionGate.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);
-      logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
+      logVerbose(`discord: drop guild message (mention required, botId=${botId ?? "unknown"})`);
       logger.info(
         {
           channelId: messageChannelId,

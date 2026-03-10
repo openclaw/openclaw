@@ -653,12 +653,26 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       });
     }
 
+    let botUser: Awaited<ReturnType<Client["fetchUser"]>>;
     try {
-      const botUser = await client.fetchUser("@me");
-      botUserId = botUser?.id;
-      botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+      botUser = await client.fetchUser("@me");
     } catch (err) {
-      runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
+      runtime.error?.(
+        danger(
+          `discord: failed to fetch bot identity for account ${account.accountId}: ${formatErrorMessage(err)}`,
+        ),
+      );
+      throw err;
+    }
+
+    botUserId = typeof botUser?.id === "string" ? botUser.id.trim() || undefined : undefined;
+    botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+    if (!botUserId) {
+      const error = new Error(
+        `discord: failed to resolve bot identity for account ${account.accountId}: fetchUser("@me") returned no bot user id`,
+      );
+      runtime.error?.(danger(error.message));
+      throw error;
     }
 
     if (voiceEnabled) {

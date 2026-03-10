@@ -436,6 +436,51 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("drops unmentioned guild messages when mention regexes are available even without botUserId", async () => {
+    const channelId = "channel-require-mention-no-bot-id";
+    const guildId = "guild-require-mention-no-bot-id";
+    const client = createGuildTextClient(channelId);
+    const message = createMessage({
+      id: "m-require-mention-no-bot-id",
+      channelId,
+      content: "hello there",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("../../config/config.js").OpenClawConfig,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: undefined,
+      guildEntries: {
+        [guildId]: {
+          requireMention: true,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-1";
     const guildId = "guild-other-mention-1";
