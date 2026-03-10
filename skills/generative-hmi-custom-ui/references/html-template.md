@@ -699,22 +699,22 @@
        The active scene influences widget priority and theme hints.
        ================================================================ -->
   <nav class="hmi-scene-bar" id="sceneBar" aria-label="Scene modes">
-    <button class="hmi-scene-btn hmi-scene-btn--active" data-scene="commute" onclick="selectScene('commute')">
+    <button class="hmi-scene-btn hmi-scene-btn--active" data-scene="commute">
       Commute
     </button>
-    <button class="hmi-scene-btn" data-scene="relax" onclick="selectScene('relax')">
+    <button class="hmi-scene-btn" data-scene="relax">
       Relax
     </button>
-    <button class="hmi-scene-btn" data-scene="sport" onclick="selectScene('sport')">
+    <button class="hmi-scene-btn" data-scene="sport">
       Sport
     </button>
-    <button class="hmi-scene-btn" data-scene="rest" onclick="selectScene('rest')">
+    <button class="hmi-scene-btn" data-scene="rest">
       Rest
     </button>
-    <button class="hmi-scene-btn" data-scene="workout" onclick="selectScene('workout')">
+    <button class="hmi-scene-btn" data-scene="workout">
       Workout
     </button>
-    <button class="hmi-scene-btn" data-scene="night-driving" onclick="selectScene('night-driving')">
+    <button class="hmi-scene-btn" data-scene="night-driving">
       Night Driving
     </button>
   </nav>
@@ -827,10 +827,20 @@
 
   <!-- ================================================================
        SECTION 7: Scripts
-       Core page functions. The chatbot WebSocket connection is
-       handled by chatbot-widget.js loaded as an external asset.
+       IMPORTANT: chatbot-widget.js and customization-engine.js must be
+       INLINED in the generated HTML (not external scripts), because
+       Canvas host serves HTML from a specific directory where external
+       script paths may not resolve.
        ================================================================ -->
-  <script src="chatbot-widget.js"></script>
+  <script>
+    // [INLINE: Full content of assets/chatbot-widget.js here]
+  </script>
+  <script>
+    HMIChatbot.init({ sessionId: 'hmi-' + Date.now() });
+  </script>
+  <script>
+    // [INLINE: Full content of assets/customization-engine.js here]
+  </script>
   <script>
     /* ==============================================================
        applyDesignScheme(scheme)
@@ -928,31 +938,13 @@
 
     /* ==============================================================
        switchTheme(mode)
-       Toggles the data-theme attribute on <html>.
-       Accepted values: "day", "night", "auto"
-       Auto mode checks the current hour (6-18 = day, else night).
+       Delegates to HMIEngine which handles theme mode application
+       including day/night/auto detection and CSS property updates.
        ============================================================== */
     function switchTheme(mode) {
-      const root = document.documentElement;
-
-      if (mode === 'auto') {
-        const hour = new Date().getHours();
-        mode = (hour >= 6 && hour < 18) ? 'day' : 'night';
+      if (typeof HMIEngine !== 'undefined') {
+        HMIEngine.apply({ themeMode: mode });
       }
-
-      root.setAttribute('data-theme', mode);
-
-      // Re-apply theme-aware aliases from saved scheme
-      const savedScheme = loadPreference('designScheme');
-      if (savedScheme && savedScheme.themes) {
-        const themeData = mode === 'night' ? savedScheme.themes.dark : savedScheme.themes.light;
-        if (themeData) {
-          if (themeData.background) root.style.setProperty('--theme-background', themeData.background);
-          if (themeData.text) root.style.setProperty('--theme-text', themeData.text);
-        }
-      }
-
-      savePreference('themeMode', mode);
     }
 
     /* ==============================================================
@@ -1106,19 +1098,13 @@
 
     /* ==============================================================
        selectScene(mode)
-       Activates a scene mode button and deactivates all others.
-       The active scene is persisted and can influence widget
-       priority and theme hints.
+       Delegates to HMIEngine which handles scene mode application
+       including style hints, theme hints, and widget reordering.
        ============================================================== */
     function selectScene(mode) {
-      const buttons = document.querySelectorAll('.hmi-scene-btn');
-      buttons.forEach(function(btn) {
-        btn.classList.remove('hmi-scene-btn--active');
-        if (btn.getAttribute('data-scene') === mode) {
-          btn.classList.add('hmi-scene-btn--active');
-        }
-      });
-      savePreference('sceneMode', mode);
+      if (typeof HMIEngine !== 'undefined') {
+        HMIEngine.apply({ sceneMode: mode });
+      }
     }
 
     /* ==============================================================
@@ -1183,23 +1169,16 @@
 
     /* ==============================================================
        Page Initialization
-       Restores saved preferences (theme, scene, design scheme)
-       when the page loads.
+       HMIEngine.init() restores all saved customization state
+       (style, density, theme, scene, etc.) from localStorage.
        ============================================================== */
     (function init() {
-      // Restore theme
-      const savedTheme = loadPreference('themeMode');
-      if (savedTheme) {
-        switchTheme(savedTheme);
+      // Initialize the customization engine (restores all saved state)
+      if (typeof HMIEngine !== 'undefined') {
+        HMIEngine.init();
       }
 
-      // Restore scene
-      const savedScene = loadPreference('sceneMode');
-      if (savedScene) {
-        selectScene(savedScene);
-      }
-
-      // Restore design scheme
+      // Restore design scheme (handled separately since it maps full token set)
       const savedScheme = loadPreference('designScheme');
       if (savedScheme) {
         applyDesignScheme(savedScheme);
@@ -1238,6 +1217,7 @@
 | Widget Grid | `widgetGrid` | 4-column CSS Grid for widget placement |
 | Scene Bar | `sceneBar` | Horizontal scrollable mode selector |
 | Chatbot | _(dynamic)_ | Created by chatbot-widget.js at runtime |
+| Engine | _(global)_ | HMIEngine from customization-engine.js; applies visual changes |
 | Upload Modal | `schemeModal` | Design scheme file upload with drag-and-drop |
 | Edit Overlay | `editGridOverlay` | Grid guidelines shown in edit mode |
 | Edit Toolbar | `editToolbar` | Add/remove widget buttons, exit edit mode |
@@ -1266,12 +1246,16 @@
 | Function | Description |
 |----------|-------------|
 | `applyDesignScheme(scheme)` | Maps design scheme JSON tokens to CSS custom properties |
-| `switchTheme(mode)` | Toggles `data-theme` attribute (`"day"`, `"night"`, `"auto"`) |
+| `switchTheme(mode)` | Delegates to `HMIEngine.apply({ themeMode: mode })` |
 | `toggleEditMode()` | Enters/exits edit mode with grid scaling and overlays |
 | `openSchemeUpload()` | Opens the design scheme upload modal |
 | `closeSchemeUpload()` | Closes the upload modal and resets state |
-| `selectScene(mode)` | Activates a scene mode button |
+| `selectScene(mode)` | Delegates to `HMIEngine.apply({ sceneMode: mode })` |
 | `sendChatMessage(text)` | Delegates a message to HMIChatbot.sendMessage() |
+| `HMIEngine.init()` | Initializes customization engine, restores saved state, binds events |
+| `HMIEngine.apply(params)` | Applies customization params (styleDirection, layoutDensity, etc.) |
+| `HMIEngine.applyScheme(scheme)` | Applies a design scheme's tokens to CSS custom properties |
+| `HMIEngine.getState()` | Returns current customization state object |
 | `savePreference(key, value)` | Persists a preference to localStorage |
 | `loadPreference(key)` | Loads a preference from localStorage |
 | `clearPreferences()` | Removes all saved preferences |
@@ -1288,5 +1272,5 @@
 6. **Include `data-widget-type` and `data-widget-size` attributes** on every widget root element.
 7. **Include a `.hmi-edit-drag-handle`** inside every widget for edit mode support.
 8. **Both themes must work.** Test that the generated page looks correct with both `data-theme="day"` and `data-theme="night"`.
-9. **Load `chatbot-widget.js`** as an external script. Do not inline the WebSocket connection logic.
+9. **Inline `chatbot-widget.js` and `customization-engine.js`** in `<script>` tags. Do not reference them as external scripts (Canvas host may not resolve external paths). Initialize with `HMIChatbot.init(...)` and `HMIEngine.init()`.
 10. **Preserve all script functions.** Do not remove or rename any function listed in the Script API Quick Reference.

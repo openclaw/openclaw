@@ -81,11 +81,11 @@ Map every token from the active scheme to the corresponding CSS custom property 
 - `themes.light/dark` maps to `--theme-background` and `--theme-text`
 - `constraints.animation.*` maps to `--animation-duration` and `--animation-easing`
 
-### Step 8: Include chatbot widget
+### Step 8: Include chatbot widget and customization engine
 
-**IMPORTANT**: The chatbot JavaScript (`assets/chatbot-widget.js`) must be **inlined** in the generated HTML, not referenced as an external script. This is required because Canvas host serves HTML from a specific directory, and external script paths may not resolve.
+**IMPORTANT**: Both `assets/chatbot-widget.js` and `assets/customization-engine.js` must be **inlined** in the generated HTML, not referenced as external scripts. This is required because Canvas host serves HTML from a specific directory, and external script paths may not resolve.
 
-Inline the full content of `assets/chatbot-widget.js` inside a `<script>` tag in the HTML `<body>`. Then add an initialization call:
+Inline the full content of both scripts inside `<script>` tags in the HTML `<body>`, then add initialization calls:
 
 ```html
 <script>
@@ -94,7 +94,19 @@ Inline the full content of `assets/chatbot-widget.js` inside a `<script>` tag in
 <script>
   HMIChatbot.init({ sessionId: 'hmi-' + Date.now() });
 </script>
+<script>
+  // [Full content of assets/customization-engine.js inlined here]
+</script>
+<script>
+  HMIEngine.init();
+</script>
 ```
+
+The customization engine:
+- Listens for `hmi-customization` events dispatched by the chatbot widget
+- Binds click handlers to `.hmi-scene-btn` and `[data-scene]` elements
+- Applies style direction, layout density, theme mode, motion intensity, and scene mode presets
+- Persists and restores customization state from localStorage
 
 The chatbot module auto-detects the environment:
 - **Canvas mode**: Uses the native bridge (`openclawSendUserAction`) injected by Canvas host. User actions are sent to the OpenClaw agent. The agent responds by calling `canvas action:eval` with `openclawHMIResponse({content: '...', customization: {...}})`.
@@ -253,3 +265,4 @@ Consult these bundled files during generation. Do not guess at specs when the re
 | `references/customization-dimensions.md` | 10-dimension customization spec with guardrails | When processing any chatbot DIY request |
 | `references/html-template.md` | HTML page skeleton structure | As the base template for every generated page |
 | `assets/chatbot-widget.js` | Chatbot JavaScript module (Canvas bridge + WebSocket fallback, UI, message handling) | **Inline** the full content in a script tag in every generated page. Exposes `openclawHMIResponse()` for receiving agent responses in Canvas mode. |
+| `assets/customization-engine.js` | Customization runtime engine (style presets, scene modes, layout density, theme, motion) | **Inline** the full content in a script tag after chatbot-widget.js. Exposes `HMIEngine.init()` and `HMIEngine.apply(params)`. Listens for `hmi-customization` events from chatbot and click events from scene buttons. |
