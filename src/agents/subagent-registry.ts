@@ -598,18 +598,19 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
     .then((didAnnounce) => {
-      // Send external notification if configured (fire-and-forget).
-      void sendExternalCompletionNotification(entry);
+      // Only send external notification when the internal announce succeeded,
+      // otherwise the parent session hasn't been notified yet and an external
+      // notification would be premature.
+      if (didAnnounce) {
+        void sendExternalCompletionNotification(entry);
+      }
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     })
     .catch((error) => {
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
-      // Still attempt external notification even if the internal announce failed.
-      void sendExternalCompletionNotification(entry).finally(() => {
-        void finalizeSubagentCleanup(runId, entry.cleanup, false);
-      });
+      void finalizeSubagentCleanup(runId, entry.cleanup, false);
     });
   return true;
 }
