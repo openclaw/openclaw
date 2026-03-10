@@ -267,13 +267,20 @@ export async function updateNpmInstalledPlugins(params: {
         mode: "update",
         dryRun: true,
         expectedPluginId: pluginId,
-        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
-        onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-          pluginId,
-          dryRun: true,
-          logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
+        // For real updates, the probe is only used to discover the target version.
+        // Keep integrity-drift handling for the actual install step to avoid duplicate
+        // prompts/warnings/callback side effects.
+        expectedIntegrity: params.dryRun
+          ? expectedIntegrityForUpdate(record.spec, record.integrity)
+          : undefined,
+        onIntegrityDrift: params.dryRun
+          ? createPluginUpdateIntegrityDriftHandler({
+              pluginId,
+              dryRun: true,
+              logger,
+              onIntegrityDrift: params.onIntegrityDrift,
+            })
+          : undefined,
         logger,
       });
     } catch (err) {

@@ -203,6 +203,70 @@ describe("updateNpmInstalledPlugins", () => {
       },
     ]);
   });
+
+  it("keeps integrity drift callbacks on the real update step only", async () => {
+    await fs.mkdir("/tmp/opik-openclaw", { recursive: true });
+    await fs.writeFile(
+      "/tmp/opik-openclaw/package.json",
+      JSON.stringify({ name: "@opik/opik-openclaw", version: "0.2.5" }),
+      "utf-8",
+    );
+
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: true,
+        pluginId: "opik-openclaw",
+        targetDir: "/tmp/opik-openclaw",
+        version: "0.2.6",
+        extensions: ["index.ts"],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        pluginId: "opik-openclaw",
+        targetDir: "/tmp/opik-openclaw",
+        version: "0.2.6",
+        extensions: ["index.ts"],
+      });
+
+    const onIntegrityDrift = vi.fn(async () => true);
+    const { updateNpmInstalledPlugins } = await import("./update.js");
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "opik-openclaw": {
+              source: "npm",
+              spec: "@opik/opik-openclaw@0.2.5",
+              integrity: "sha512-old",
+              installPath: "/tmp/opik-openclaw",
+            },
+          },
+        },
+      },
+      pluginIds: ["opik-openclaw"],
+      onIntegrityDrift,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(2);
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        dryRun: true,
+        expectedIntegrity: undefined,
+        onIntegrityDrift: undefined,
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        expectedIntegrity: "sha512-old",
+        onIntegrityDrift: expect.any(Function),
+      }),
+    );
+    expect(onIntegrityDrift).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.outcomes[0]?.status).toBe("updated");
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
