@@ -43,7 +43,17 @@ export async function enforceTelegramDmAccess(params: {
   logger: TelegramDmAccessLogger;
   pairingMessage?: PairingMessageConfig;
 }): Promise<boolean> {
-  const { isGroup, dmPolicy, msg, chatId, effectiveDmAllow, accountId, bot, logger, pairingMessage: pairingMessageCfg } = params;
+  const {
+    isGroup,
+    dmPolicy,
+    msg,
+    chatId,
+    effectiveDmAllow,
+    accountId,
+    bot,
+    logger,
+    pairingMessage: pairingMessageCfg,
+  } = params;
   if (isGroup) {
     return true;
   }

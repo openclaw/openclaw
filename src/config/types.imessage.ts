@@ -1,3 +1,4 @@
+import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,

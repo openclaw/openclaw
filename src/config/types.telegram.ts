@@ -1,3 +1,4 @@
+import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -14,7 +15,6 @@ import type {
 } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
-import type { PairingMessageConfig } from "../pairing/pairing-messages.js";
 
 export type TelegramActionConfig = {
   reactions?: boolean;

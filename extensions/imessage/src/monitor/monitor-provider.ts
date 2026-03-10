@@ -293,7 +293,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (!sender) {
         return;
       }
-      const pairingMessageCfg = cfg.pairingMessage;
+      const pairingMessageCfg = imessageCfg.pairingMessage;
       await issuePairingChallenge({
         channel: "imessage",
         senderId: decision.senderId,
