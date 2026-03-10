@@ -13,11 +13,15 @@ import {
 describe("exec safe bin trust", () => {
   it("keeps default trusted dirs limited to immutable system paths", () => {
     const dirs = getTrustedSafeBinDirs({ refresh: true });
+    const normalize = (p: string) =>
+      process.platform === "darwin" || process.platform === "win32"
+        ? path.resolve(p).toLowerCase()
+        : path.resolve(p);
 
-    expect(dirs.has(path.resolve("/bin"))).toBe(true);
-    expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
-    expect(dirs.has(path.resolve("/usr/local/bin"))).toBe(false);
-    expect(dirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
+    expect(dirs.has(normalize("/bin"))).toBe(true);
+    expect(dirs.has(normalize("/usr/bin"))).toBe(true);
+    expect(dirs.has(normalize("/usr/local/bin"))).toBe(false);
+    expect(dirs.has(normalize("/opt/homebrew/bin"))).toBe(false);
   });
 
   it("builds trusted dirs from defaults and explicit extra dirs", () => {
@@ -25,10 +29,14 @@ describe("exec safe bin trust", () => {
       baseDirs: ["/usr/bin"],
       extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
     });
+    const normalize = (p: string) =>
+      process.platform === "darwin" || process.platform === "win32"
+        ? path.resolve(p).toLowerCase()
+        : path.resolve(p);
 
-    expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
-    expect(dirs.has(path.resolve("/custom/bin"))).toBe(true);
-    expect(dirs.has(path.resolve("/alt/bin"))).toBe(true);
+    expect(dirs.has(normalize("/usr/bin"))).toBe(true);
+    expect(dirs.has(normalize("/custom/bin"))).toBe(true);
+    expect(dirs.has(normalize("/alt/bin"))).toBe(true);
     expect(dirs.size).toBe(3);
   });
 
@@ -49,7 +57,11 @@ describe("exec safe bin trust", () => {
   });
 
   it("validates resolved paths using injected trusted dirs", () => {
-    const trusted = new Set([path.resolve("/usr/bin")]);
+    const normalize = (p: string) =>
+      process.platform === "darwin" || process.platform === "win32"
+        ? path.resolve(p).toLowerCase()
+        : path.resolve(p);
+    const trusted = new Set([normalize("/usr/bin")]);
     expect(
       isTrustedSafeBinPath({
         resolvedPath: "/usr/bin/jq",
@@ -64,12 +76,53 @@ describe("exec safe bin trust", () => {
     ).toBe(false);
   });
 
+  it.runIf(process.platform === "darwin" || process.platform === "win32")(
+    "matches trusted dirs case-insensitively on case-insensitive filesystems",
+    () => {
+      const dirs = buildTrustedSafeBinDirs({
+        baseDirs: [],
+        extraDirs: ["/Users/Dev/Custom/bin"],
+      });
+      // Trusted dir should be stored lowercased on case-insensitive FS
+      expect(dirs.has("/users/dev/custom/bin")).toBe(true);
+      expect(dirs.has("/Users/Dev/Custom/bin")).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === "darwin" || process.platform === "win32")(
+    "isTrustedSafeBinPath matches regardless of resolvedPath case on case-insensitive filesystems",
+    () => {
+      // Simulate: normalizeConfiguredSafeBins lowercases bin paths,
+      // but resolvedPath might retain original case from the filesystem.
+      const dirs = buildTrustedSafeBinDirs({
+        baseDirs: [],
+        extraDirs: ["/Users/Dev/scripts"],
+      });
+      expect(
+        isTrustedSafeBinPath({
+          resolvedPath: "/users/dev/scripts/my-tool.sh",
+          trustedDirs: dirs,
+        }),
+      ).toBe(true);
+      expect(
+        isTrustedSafeBinPath({
+          resolvedPath: "/Users/Dev/Scripts/my-tool.sh",
+          trustedDirs: dirs,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("does not trust PATH entries by default", () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
 
     withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
       const refreshed = getTrustedSafeBinDirs({ refresh: true });
-      expect(refreshed.has(path.resolve(injected))).toBe(false);
+      const normalize = (p: string) =>
+        process.platform === "darwin" || process.platform === "win32"
+          ? path.resolve(p).toLowerCase()
+          : path.resolve(p);
+      expect(refreshed.has(normalize(injected))).toBe(false);
     });
   });
 
@@ -81,9 +134,13 @@ describe("exec safe bin trust", () => {
     try {
       await fs.chmod(dir, 0o777);
       const hits = listWritableExplicitTrustedSafeBinDirs([dir]);
+      // After the win32 guard above, TS narrows out "win32". Cast to avoid
+      // the TS2367 narrowing complaint while keeping the test correct on all platforms.
+      const caseInsensitive = (["darwin", "win32"] as string[]).includes(process.platform);
+      const expectedDir = caseInsensitive ? path.resolve(dir).toLowerCase() : path.resolve(dir);
       expect(hits).toEqual([
         {
-          dir: path.resolve(dir),
+          dir: expectedDir,
           groupWritable: true,
           worldWritable: true,
         },

@@ -28,12 +28,18 @@ export type WritableTrustedSafeBinDir = {
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
+// macOS (APFS) and Windows (NTFS) use case-insensitive filesystems.
+// normalizeConfiguredSafeBins() lowercases bin paths, so trusted dirs
+// must also be lowercased for the Set membership check to match.
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
 function normalizeTrustedDir(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
-  return path.resolve(trimmed);
+  const resolved = path.resolve(trimmed);
+  return CASE_INSENSITIVE_FS ? resolved.toLowerCase() : resolved;
 }
 
 export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null): string[] {
@@ -93,7 +99,7 @@ export function getTrustedSafeBinDirs(
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
   const resolvedDir = path.dirname(path.resolve(params.resolvedPath));
-  return trustedDirs.has(resolvedDir);
+  return trustedDirs.has(CASE_INSENSITIVE_FS ? resolvedDir.toLowerCase() : resolvedDir);
 }
 
 export function listWritableExplicitTrustedSafeBinDirs(

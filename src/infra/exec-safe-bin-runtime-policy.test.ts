@@ -9,6 +9,12 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "./exec-safe-bin-runtime-policy.js";
 
+// On case-insensitive filesystems, trusted dirs are stored lowercased.
+const resolveTrusted = (p: string) =>
+  process.platform === "darwin" || process.platform === "win32"
+    ? path.resolve(p).toLowerCase()
+    : path.resolve(p);
+
 describe("exec safe-bin runtime policy", () => {
   const interpreterCases: Array<{ bin: string; expected: boolean }> = [
     { bin: "python3", expected: true },
@@ -88,22 +94,22 @@ describe("exec safe-bin runtime policy", () => {
       },
     });
 
-    expect(policy.trustedSafeBinDirs.has(path.resolve(customDir))).toBe(true);
-    expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
+    expect(policy.trustedSafeBinDirs.has(resolveTrusted(customDir))).toBe(true);
+    expect(policy.trustedSafeBinDirs.has(resolveTrusted(agentDir))).toBe(true);
   });
 
   it("does not trust package-manager bin dirs unless explicitly configured", () => {
     const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
-    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
-    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
+    expect(defaultPolicy.trustedSafeBinDirs.has(resolveTrusted("/opt/homebrew/bin"))).toBe(false);
+    expect(defaultPolicy.trustedSafeBinDirs.has(resolveTrusted("/usr/local/bin"))).toBe(false);
 
     const optedIn = resolveExecSafeBinRuntimePolicy({
       global: {
         safeBinTrustedDirs: ["/opt/homebrew/bin", "/usr/local/bin"],
       },
     });
-    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
-    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(resolveTrusted("/opt/homebrew/bin"))).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(resolveTrusted("/usr/local/bin"))).toBe(true);
   });
 
   it("emits runtime warning when explicitly trusted dir is writable", async () => {
@@ -123,12 +129,12 @@ describe("exec safe-bin runtime policy", () => {
 
       expect(policy.writableTrustedSafeBinDirs).toEqual([
         {
-          dir: path.resolve(dir),
+          dir: resolveTrusted(dir),
           groupWritable: true,
           worldWritable: true,
         },
       ]);
-      expect(onWarning).toHaveBeenCalledWith(expect.stringContaining(path.resolve(dir)));
+      expect(onWarning).toHaveBeenCalledWith(expect.stringContaining(resolveTrusted(dir)));
       expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("world-writable"));
     } finally {
       await fs.chmod(dir, 0o755).catch(() => undefined);
