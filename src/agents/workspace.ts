@@ -141,7 +141,9 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_ALT_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  // Widened to accept arbitrary names (e.g. SHARED_*.md from the shared-bootstrap
+  // hook) while preserving autocomplete for known filenames.
+  name: WorkspaceBootstrapFileName | (string & {});
   path: string;
   content?: string;
   missing: boolean;

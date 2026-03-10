@@ -7,6 +7,7 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { clearAllBootstrapSnapshots } from "./bootstrap-cache.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -20,8 +21,21 @@ function registerExtraBootstrapFileHook() {
         path: path.join(context.workspaceDir, "EXTRA.md"),
         content: "extra",
         missing: false,
-      } as unknown as WorkspaceBootstrapFile,
+      },
     ];
+  });
+}
+
+function registerMutatingPushHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    // Mimics shared-bootstrap hook: mutates via .push() instead of spread
+    context.bootstrapFiles.push({
+      name: "SHARED_TEST.md",
+      path: path.join(context.workspaceDir, "SHARED_TEST.md"),
+      content: "shared",
+      missing: false,
+    });
   });
 }
 
@@ -63,6 +77,30 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+  });
+
+  it("does not accumulate hook-pushed files across cached calls", async () => {
+    registerMutatingPushHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const sessionKey = "test-session-cache-mutation";
+
+    try {
+      const first = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+      const sharedCountFirst = first.filter((f) => f.name === "SHARED_TEST.md").length;
+      expect(sharedCountFirst).toBe(1);
+
+      const second = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+      const sharedCountSecond = second.filter((f) => f.name === "SHARED_TEST.md").length;
+      expect(sharedCountSecond).toBe(1);
+
+      // Third call to be thorough — would be 3 copies without the fix
+      const third = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+      const sharedCountThird = third.filter((f) => f.name === "SHARED_TEST.md").length;
+      expect(sharedCountThird).toBe(1);
+    } finally {
+      clearAllBootstrapSnapshots();
+    }
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {

@@ -46,6 +46,20 @@ Logs all command events to a centralized audit file.
 openclaw hooks enable command-logger
 ```
 
+### 🔗 shared-bootstrap
+
+Injects shared `SHARED_*.md` files from `~/.openclaw/shared/` into every agent's bootstrap context.
+
+**Events**: `agent:bootstrap`
+**What it does**: Auto-discovers files matching `SHARED_*.md` in `<stateDir>/shared/`, sorts them alphabetically, and appends them to injected context for all session types (including subagent and cron).
+**Output**: No files written; context is modified in-memory only.
+
+**Enable**:
+
+```bash
+openclaw hooks enable shared-bootstrap
+```
+
 ### 🚀 boot-md
 
 Runs `BOOT.md` whenever the gateway starts (after channels start).
