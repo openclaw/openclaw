@@ -357,11 +357,17 @@ function authorizeTrustedProxy(params: {
   }
 
   const userHeaderValue = headerValue(req.headers[trustedProxyConfig.userHeader.toLowerCase()]);
-  if (!userHeaderValue || userHeaderValue.trim() === "") {
+  const userFromHeader = userHeaderValue?.trim();
+  const loopbackUser = trustedProxyConfig.loopbackUser?.trim();
+  const user =
+    userFromHeader && userFromHeader.length > 0
+      ? userFromHeader
+      : isLoopbackAddress(remoteAddr) && loopbackUser && loopbackUser.length > 0
+        ? loopbackUser
+        : undefined;
+  if (!user) {
     return { reason: "trusted_proxy_user_missing" };
   }
-
-  const user = userHeaderValue.trim();
 
   const allowUsers = trustedProxyConfig.allowUsers ?? [];
   if (allowUsers.length > 0 && !allowUsers.includes(user)) {

@@ -532,6 +532,62 @@ describe("trusted-proxy auth", () => {
     expect(res.reason).toBe("trusted_proxy_user_missing");
   });
 
+  it("accepts loopbackUser when user header is missing on loopback", async () => {
+    const res = await authorizeTrustedProxy({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          loopbackUser: "local@example.com",
+        },
+      },
+      trustedProxies: ["127.0.0.1"],
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("local@example.com");
+  });
+
+  it("rejects missing user header from non-loopback even when loopbackUser is set", async () => {
+    const res = await authorizeTrustedProxy({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          loopbackUser: "local@example.com",
+        },
+      },
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_user_missing");
+  });
+
+  it("applies allowUsers to loopbackUser fallback", async () => {
+    const res = await authorizeTrustedProxy({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          loopbackUser: "local@example.com",
+          allowUsers: ["admin@example.com"],
+        },
+      },
+      trustedProxies: ["::1"],
+      remoteAddress: "::1",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_user_not_allowed");
+  });
+
   it("rejects request with missing required headers", async () => {
     const res = await authorizeTrustedProxy({
       headers: {

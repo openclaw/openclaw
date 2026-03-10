@@ -134,6 +134,11 @@ export type GatewayTrustedProxyConfig = {
    */
   userHeader: string;
   /**
+   * Optional fallback user identity for direct loopback requests when
+   * userHeader is missing (for example local CLI/sub-agent traffic).
+   */
+  loopbackUser?: string;
+  /**
    * Additional headers that MUST be present for the request to be trusted.
    * Use this to verify the request actually came through the proxy.
    * Example: ["x-forwarded-proto", "x-forwarded-host"]
