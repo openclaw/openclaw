@@ -934,7 +934,9 @@ public final class OpenClawChatViewModel {
     private static func normalizedThinkingLevel(_ level: String?) -> String? {
         guard let level else { return nil }
         let trimmed = level.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard ["off", "low", "medium", "high"].contains(trimmed) else { return nil }
+        guard ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(trimmed) else {
+            return nil
+        }
         return trimmed
     }
 }

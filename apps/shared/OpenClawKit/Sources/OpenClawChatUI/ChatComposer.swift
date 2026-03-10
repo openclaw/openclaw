@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct OpenClawChatComposer: View {
+    private static let menuThinkingLevels = ["off", "low", "medium", "high"]
+
     @Bindable var viewModel: OpenClawChatViewModel
     let style: OpenClawChatView.Style
     let showsSessionSwitcher: Bool
@@ -97,6 +99,9 @@ struct OpenClawChatComposer: View {
             Text("Low").tag("low")
             Text("Medium").tag("medium")
             Text("High").tag("high")
+            if !Self.menuThinkingLevels.contains(self.viewModel.thinkingLevel) {
+                Text(self.viewModel.thinkingLevel.capitalized).tag(self.viewModel.thinkingLevel)
+            }
         }
         .labelsHidden()
         .pickerStyle(.menu)

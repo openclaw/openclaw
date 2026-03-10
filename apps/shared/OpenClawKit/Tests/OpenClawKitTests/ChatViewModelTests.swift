@@ -193,6 +193,7 @@ private actor TestChatTransportState {
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
     var sentRunIds: [String] = []
+    var sentThinkingLevels: [String] = []
     var abortedRunIds: [String] = []
     var patchedModels: [String?] = []
     var patchedThinkingLevels: [String] = []
@@ -250,11 +251,12 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func sendMessage(
         sessionKey _: String,
         message _: String,
-        thinking _: String,
+        thinking: String,
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         await self.state.sentRunIdsAppend(idempotencyKey)
+        await self.state.sentThinkingLevelsAppend(thinking)
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
@@ -316,6 +318,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.abortedRunIds
     }
 
+    func sentThinkingLevels() async -> [String] {
+        await self.state.sentThinkingLevels
+    }
+
     func patchedModels() async -> [String?] {
         await self.state.patchedModels
     }
@@ -344,6 +350,10 @@ extension TestChatTransportState {
 
     fileprivate func abortedRunIdsAppend(_ v: String) {
         self.abortedRunIds.append(v)
+    }
+
+    fileprivate func sentThinkingLevelsAppend(_ v: String) {
+        self.sentThinkingLevels.append(v)
     }
 
     fileprivate func patchedModelsAppend(_ v: String?) {
@@ -976,6 +986,24 @@ extension TestChatTransportState {
 
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
         #expect(await MainActor.run { callbackState.values } == ["medium"])
+    }
+
+    @Test func serverProvidedThinkingLevelsOutsideMenuArePreservedForSend() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "xhigh")
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        #expect(await MainActor.run { vm.thinkingLevel } == "xhigh")
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("send uses preserved thinking level") {
+            await transport.sentThinkingLevels() == ["xhigh"]
+        }
     }
 
     @Test func staleThinkingPatchCompletionReappliesLatestSelection() async throws {
