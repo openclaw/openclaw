@@ -356,6 +356,65 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
+  it("uses no_proxy over NO_PROXY when deciding env-proxy bypass", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "api.telegram.org");
+    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
+    undiciFetch
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    expect(secondDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+  });
+
+  it("matches whitespace and wildcard no_proxy entries like EnvHttpProxyAgent", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("no_proxy", "localhost *.telegram.org");
+    const fetchError = buildFetchFallbackError("EHOSTUNREACH");
+    undiciFetch
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(2);
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    expect(secondDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+  });
+
   it("fails closed when explicit proxy dispatcher initialization fails", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");

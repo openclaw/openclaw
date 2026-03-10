@@ -137,46 +137,41 @@ function buildTelegramConnectOptions(params: {
   return Object.keys(connect).length > 0 ? connect : null;
 }
 
-function parseNoProxyRule(rawRule: string): string {
-  const trimmed = rawRule.trim().toLowerCase();
-  if (!trimmed || trimmed === "*") {
-    return trimmed;
-  }
-  if (trimmed.startsWith("[")) {
-    const bracketEnd = trimmed.indexOf("]");
-    if (bracketEnd > 0) {
-      return trimmed.slice(1, bracketEnd);
-    }
-  }
-  const portSep = trimmed.lastIndexOf(":");
-  if (portSep > -1 && trimmed.indexOf(":") === portSep) {
-    return trimmed.slice(0, portSep);
-  }
-  return trimmed;
-}
-
-function hostMatchesNoProxyRule(hostname: string, rawRule: string): boolean {
-  const normalizedHostname = hostname.trim().toLowerCase();
-  const rule = parseNoProxyRule(rawRule);
-  if (!normalizedHostname || !rule) {
+function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
+  // Match EnvHttpProxyAgent behavior (undici):
+  // - lower-case no_proxy takes precedence over NO_PROXY
+  // - entries split by comma or whitespace
+  // - wildcard handling is exact-string "*" only
+  // - leading "." and "*." are normalized the same way
+  const noProxyValue = env.no_proxy ?? env.NO_PROXY ?? "";
+  if (!noProxyValue) {
     return false;
   }
-  if (rule === "*") {
+  if (noProxyValue === "*") {
     return true;
   }
-  const suffix = rule.startsWith(".") ? rule.slice(1) : rule;
-  if (!suffix) {
-    return false;
+  const targetHostname = TELEGRAM_API_HOSTNAME.toLowerCase();
+  const targetPort = 443;
+  const noProxyEntries = noProxyValue.split(/[,\s]/);
+  for (let i = 0; i < noProxyEntries.length; i++) {
+    const entry = noProxyEntries[i];
+    if (!entry) {
+      continue;
+    }
+    const parsed = entry.match(/^(.+):(\d+)$/);
+    const entryHostname = (parsed ? parsed[1] : entry).replace(/^\*?\./, "").toLowerCase();
+    const entryPort = parsed ? Number.parseInt(parsed[2], 10) : 0;
+    if (entryPort && entryPort !== targetPort) {
+      continue;
+    }
+    if (
+      targetHostname === entryHostname ||
+      targetHostname.slice(-(entryHostname.length + 1)) === `.${entryHostname}`
+    ) {
+      return true;
+    }
   }
-  return normalizedHostname === suffix || normalizedHostname.endsWith(`.${suffix}`);
-}
-
-function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  const noProxy = env.NO_PROXY ?? env.no_proxy;
-  if (typeof noProxy !== "string" || noProxy.trim().length === 0) {
-    return false;
-  }
-  return noProxy.split(",").some((rule) => hostMatchesNoProxyRule(TELEGRAM_API_HOSTNAME, rule));
+  return false;
 }
 
 function createTelegramDispatcher(params: {
