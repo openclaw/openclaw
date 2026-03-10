@@ -532,6 +532,7 @@ export async function runWithModelFallback<T>(params: {
       params.provider === candidate.provider && params.model === candidate.model;
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
+    let transientProbeProviderForAttempt: string | null = null;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -622,7 +623,7 @@ export async function runWithModelFallback<T>(params: {
           }
           runOptions = { allowTransientCooldownProbe: true };
           if (isTransientCooldownReason) {
-            cooldownProbeUsedProviders.add(candidate.provider);
+            transientProbeProviderForAttempt = candidate.provider;
           }
         }
         attemptedDuringCooldown = true;
@@ -678,6 +679,18 @@ export async function runWithModelFallback<T>(params: {
     }
     const err = attemptRun.error;
     {
+      if (transientProbeProviderForAttempt) {
+        const probeFailureReason = describeFailoverError(err).reason;
+        const shouldPreserveTransientProbeSlot =
+          probeFailureReason === "model_not_found" ||
+          probeFailureReason === "format" ||
+          probeFailureReason === "auth" ||
+          probeFailureReason === "auth_permanent" ||
+          probeFailureReason === "session_expired";
+        if (!shouldPreserveTransientProbeSlot) {
+          cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
+        }
+      }
       // Context overflow errors should be handled by the inner runner's
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
