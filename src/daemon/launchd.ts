@@ -520,12 +520,30 @@ export async function restartLaunchAgent({
   const verify = await execLaunchctl(["print", `${domain}/${label}`]);
   if (verify.code !== 0) {
     // Service not loaded - try one more bootstrap
-    const retry = await execLaunchctl(["bootstrap", domain, plistPath]);
-    if (retry.code !== 0) {
-      const detail = (retry.stderr || retry.stdout).trim();
+    // launchd can persist 'disabled' state after bootout; clear it before bootstrap
+    const enable = await execLaunchctl(["enable", `${domain}/${label}`]);
+    if (enable.code !== 0) {
+      const detail = (enable.stderr || enable.stdout).trim();
+      throw new Error(`launchctl enable failed: ${detail}`);
+    }
+    const retryBoot = await execLaunchctl(["bootstrap", domain, plistPath]);
+    if (retryBoot.code !== 0) {
+      const detail = (retryBoot.stderr || retryBoot.stdout).trim();
       throw new Error(`launchctl bootstrap failed after restart: ${detail}`);
     }
-    stdout.write(`${formatLine("Re-loaded LaunchAgent after restart", `${domain}/${label}`)}\n`);
+    const retryStart = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+    if (retryStart.code !== 0) {
+      throw new Error(
+        `launchctl kickstart failed after retry bootstrap: ${retryStart.stderr || retryStart.stdout}`.trim(),
+      );
+    }
+    try {
+      stdout.write(`${formatLine("Re-loaded LaunchAgent after restart", `${domain}/${label}`)}\n`);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+        throw err;
+      }
+    }
   }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
