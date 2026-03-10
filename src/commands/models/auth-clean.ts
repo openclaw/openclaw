@@ -117,7 +117,11 @@ export async function modelsAuthCleanCommand(
     configuredProfiles.add(id);
   }
 
-  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: opts.dryRun === true };
+  // Load the store read-only for inspection: this probe read collects storeProfileIds
+  // and storeOrder only.  The write-enabled load happens inside updateAuthProfileStoreWithLock
+  // (which only runs when cleanup actually proceeds) — so readOnly:true is correct here
+  // regardless of whether this is a dry-run or not.
+  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: true };
   const store = isMainAgentDir
     ? ensureAuthProfileStore(agentDir, storeLoadOpts)
     : loadAgentLocalAuthProfileStore(agentDir, storeLoadOpts);
