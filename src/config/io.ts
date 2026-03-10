@@ -1485,10 +1485,17 @@ export async function writeConfigFile(
   const hadBothSnapshots = Boolean(capturedRuntimeSnapshot && capturedSourceSnapshot);
 
   return enqueueConfigWrite(async () => {
-    const matchesCapturedRuntimeContext = (): boolean =>
-      runtimeConfigSnapshot === capturedRuntimeSnapshot &&
-      runtimeConfigSourceSnapshot === capturedSourceSnapshot &&
-      runtimeConfigSnapshotRefreshHandler === capturedRefreshHandler;
+    const matchesCapturedRuntimeContext = (): boolean => {
+      // If the snapshot was completely cleared while we were queued, context no longer matches.
+      if (!runtimeConfigSnapshot) {
+        return false;
+      }
+      // If we had a refresh handler, make sure a brand new session hasn't replaced it.
+      if (capturedRefreshHandler && runtimeConfigSnapshotRefreshHandler !== capturedRefreshHandler) {
+        return false;
+      }
+      return true;
+    };
 
     let nextCfg = cfg;
     if (hadBothSnapshots) {
