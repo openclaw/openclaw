@@ -66,6 +66,11 @@ export async function loadInternalHooks(
     const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
 
     for (const entry of eligible) {
+      if (entry.metadata?.metadataOnly === true) {
+        log.debug(`Skipping metadata-only hook registration: ${entry.hook.name}`);
+        continue;
+      }
+
       const hookConfig = resolveHookConfig(cfg, entry.hook.name);
 
       // Skip if explicitly disabled in config

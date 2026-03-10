@@ -9,6 +9,7 @@ export type HookInstallSpec = {
 
 export type OpenClawHookMetadata = {
   always?: boolean;
+  metadataOnly?: boolean;
   hookKey?: string;
   emoji?: string;
   homepage?: string;

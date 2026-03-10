@@ -57,6 +57,8 @@ export function resolveOpenClawMetadata(
   const eventsRaw = normalizeStringList(metadataObj.events);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    metadataOnly:
+      typeof metadataObj.metadataOnly === "boolean" ? metadataObj.metadataOnly : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
     homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
     hookKey: typeof metadataObj.hookKey === "string" ? metadataObj.hookKey : undefined,

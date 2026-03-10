@@ -241,6 +241,33 @@ describe("loader", () => {
       expect(getRegisteredEventKeys()).toContain("command:new");
     });
 
+    it("skips runtime registration for metadata-only directory hooks", async () => {
+      const hookDir = path.join(tmpDir, "hooks", "metadata-only-hook");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: metadata-only-hook",
+          "description: metadata-only test",
+          'metadata: {"openclaw":{"events":["command:new"],"metadataOnly":true}}',
+          "---",
+          "",
+          "# Metadata Only Hook",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(hookDir, "handler.js"),
+        "export default async function() {}",
+        "utf-8",
+      );
+
+      const count = await loadInternalHooks(createEnabledHooksConfig(), tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    });
+
     it("rejects directory hook handlers that escape hook dir via symlink", async () => {
       const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-${caseId}.js`);
       await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");

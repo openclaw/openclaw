@@ -83,7 +83,15 @@ name: my-hook
 description: "Short description"
 homepage: https://docs.openclaw.ai/automation/hooks#my-hook
 metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
+  {
+    "openclaw":
+      {
+        "emoji": "🔗",
+        "events": ["command:new"],
+        "requires": { "bins": ["node"] },
+        "metadataOnly": false,
+      },
+  }
 ---
 # Hook Title
 
@@ -101,6 +109,7 @@ Documentation goes here...
   - **config**: Required config paths (e.g., `["workspace.dir"]`)
   - **os**: Required platforms (e.g., `["darwin", "linux"]`)
 - **install**: Installation methods (for bundled hooks: `[{"id":"bundled","kind":"bundled"}]`)
+- **metadataOnly**: When `true`, expose the hook in metadata/status UIs but skip runtime registration
 
 ## Creating Custom Hooks
 
