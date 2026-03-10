@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - Tools/web search: recover OpenRouter Perplexity citation extraction from `message.annotations` when chat-completions responses omit top-level citations. (#40881) Thanks @laurieluo.
 - Security/external content: treat whitespace-delimited `EXTERNAL UNTRUSTED CONTENT` boundary markers like underscore-delimited variants so prompt wrappers cannot bypass marker sanitization. (#35983) Thanks @urianpaul94.
 - Telegram/network env-proxy: apply configured transport policy to proxied HTTPS dispatchers as well as direct `NO_PROXY` bypasses, so resolver-scoped IPv4 fallback and network settings work consistently for env-proxied Telegram traffic. (#40740) Thanks @sircrumpet.
+- Agents/memory flush: forward `memoryFlushWritePath` through `runEmbeddedPiAgent` so memory-triggered flush turns keep the append-only write guard without aborting before tool setup. Follows up on #38574. (#41761) Thanks @frankekn.
 
 ## 2026.3.8
 
