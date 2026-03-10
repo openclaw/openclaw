@@ -583,12 +583,47 @@ describe("control UI routing", () => {
       'input[placeholder="ws://100.x.y.z:18789"]',
     );
     expect(gatewayUrlInput).not.toBeNull();
+
     gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await refreshed.updateComplete;
 
     expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
     expect(refreshed.settings.token).toBe("");
+  });
+
+  it("preserves a typed token while editing the gateway URL within the same endpoint scope", async () => {
+    const app = mountApp("/ui/overview");
+    await app.updateComplete;
+
+    const tokenInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="OPENCLAW_GATEWAY_TOKEN"]',
+    );
+    expect(tokenInput).not.toBeNull();
+
+    tokenInput!.value = "typed-token";
+    tokenInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    const gatewayUrlInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="ws://100.x.y.z:18789"]',
+    );
+    expect(gatewayUrlInput).not.toBeNull();
+
+    gatewayUrlInput!.value = `${app.settings.gatewayUrl}/`;
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    gatewayUrlInput!.value = `  ${app.settings.gatewayUrl}  `;
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    const nextTokenInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="OPENCLAW_GATEWAY_TOKEN"]',
+    );
+
+    expect(app.settings.token).toBe("typed-token");
+    expect(nextTokenInput?.value).toBe("typed-token");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {

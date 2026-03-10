@@ -103,7 +103,7 @@ function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
-function normalizeGatewayTokenScope(gatewayUrl: string): string {
+export function normalizeGatewayTokenScope(gatewayUrl: string): string {
   const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
   if (!trimmed) {
     return "default";
