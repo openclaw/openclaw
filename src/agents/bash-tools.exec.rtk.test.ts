@@ -267,8 +267,28 @@ describe("bash-tools.exec rtk integration", () => {
     expect(runExecProcessMock).toHaveBeenCalledOnce();
   });
 
-  // Case 7: SafeBins + rtk → rtk rewrites the safeBins-resolved command
-  it("case 7: safeBins resolved command → rtk rewrites the override, not the original", async () => {
+  // Case 7: pendingResult → rtk is skipped on this path (rewrite happens inside gateway module)
+  it("case 7: pendingResult from gateway → rtk rewrite is skipped (handled in approval flow)", async () => {
+    const pendingResult = {
+      content: [{ type: "text" as const, text: "Waiting for approval..." }],
+      details: { status: "pending" as const },
+    };
+    processGatewayAllowlistMock.mockResolvedValue({
+      pendingResult,
+      execCommandOverride: undefined,
+    });
+
+    const tool = createExecTool(GATEWAY_DEFAULTS);
+    await tool.execute("call-7a", { command: "rm -rf /tmp/test" });
+
+    // tryRtkRewrite is NOT called (pendingResult returns early before rtk block)
+    expect(tryRtkRewriteMock).not.toHaveBeenCalled();
+    // runExecProcess is NOT called (pendingResult returns early)
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
+  // Case 8: SafeBins + rtk → rtk rewrites the safeBins-resolved command
+  it("case 8: safeBins resolved command → rtk rewrites the override, not the original", async () => {
     const safeBinsResolvedCmd = "/usr/local/bin/git log --oneline -10";
     const rtkRewrite = "rtk /usr/local/bin/git log --oneline -10";
 

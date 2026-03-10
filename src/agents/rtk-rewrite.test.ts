@@ -130,6 +130,29 @@ describe("rtk-rewrite", () => {
       expect(result).toBeNull();
     });
 
+    it("rejects rewritten output that does not start with 'rtk ' (prefix validation)", async () => {
+      execFileMock.mockImplementation(
+        (_bin: string, _args: string[], _opts: unknown, cb: Function) => {
+          cb(null, { stdout: "rm -rf /\n", stderr: "" });
+        },
+      );
+
+      const result = await tryRtkRewrite("git status");
+      expect(result).toBeNull();
+    });
+
+    it("rejects rewritten output that matches input even with rtk prefix", async () => {
+      const cmd = "rtk ls -la";
+      execFileMock.mockImplementation(
+        (_bin: string, _args: string[], _opts: unknown, cb: Function) => {
+          cb(null, { stdout: cmd, stderr: "" });
+        },
+      );
+
+      const result = await tryRtkRewrite(cmd);
+      expect(result).toBeNull();
+    });
+
     it("returns null when rtk output is empty", async () => {
       execFileMock.mockImplementation(
         (_bin: string, _args: string[], _opts: unknown, cb: Function) => {
@@ -144,7 +167,7 @@ describe("rtk-rewrite", () => {
     it("passes the exact command string to rtk as an argument", async () => {
       execFileMock.mockImplementation(
         (_bin: string, _args: string[], _opts: unknown, cb: Function) => {
-          cb(null, { stdout: "rewritten", stderr: "" });
+          cb(null, { stdout: "rtk git log --format='%H %s'", stderr: "" });
         },
       );
 
@@ -157,6 +180,40 @@ describe("rtk-rewrite", () => {
         expect.objectContaining({ timeout: 2000 }),
         expect.any(Function),
       );
+    });
+
+    it("forwards env to execFileAsync merged with process.env", async () => {
+      execFileMock.mockImplementation(
+        (_bin: string, _args: string[], _opts: unknown, cb: Function) => {
+          cb(null, { stdout: "rtk ls -la", stderr: "" });
+        },
+      );
+
+      const customEnv = { PATH: "/custom/bin:/usr/bin", MY_VAR: "test" };
+      await tryRtkRewrite("ls -la", customEnv);
+
+      // Second call (first was detection) should have merged env
+      const rewriteCall = execFileMock.mock.calls[execFileMock.mock.calls.length - 1];
+      const opts = rewriteCall[2] as { env?: Record<string, string> };
+      expect(opts.env).toBeDefined();
+      expect(opts.env!.PATH).toBe("/custom/bin:/usr/bin");
+      expect(opts.env!.MY_VAR).toBe("test");
+      // process.env keys should also be present (merged)
+      expect(opts.env!.HOME).toBe(process.env.HOME);
+    });
+
+    it("does not set env option when no env parameter is passed", async () => {
+      execFileMock.mockImplementation(
+        (_bin: string, _args: string[], _opts: unknown, cb: Function) => {
+          cb(null, { stdout: "rtk ls -la", stderr: "" });
+        },
+      );
+
+      await tryRtkRewrite("ls -la");
+
+      const rewriteCall = execFileMock.mock.calls[execFileMock.mock.calls.length - 1];
+      const opts = rewriteCall[2] as { env?: Record<string, string> };
+      expect(opts.env).toBeUndefined();
     });
   });
 
