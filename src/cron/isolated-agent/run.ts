@@ -563,31 +563,84 @@ export async function runCronIsolatedAgentTurn(params: {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());
           }
-          const bootstrapPromptWarningSignature =
-            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-          if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-            // Fresh isolated cron sessions must not reuse a stored CLI session ID.
-            // Passing an existing ID activates the resume watchdog profile
-            // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
-            // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
-            // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
-            const cliSessionId = cronSession.isNewSession
-              ? undefined
-              : getCliSessionId(cronSession.sessionEntry, providerOverride);
-            const result = await runCliAgent({
+          // Create a per-attempt AbortController so the model fallback chain
+          // survives when a single attempt is aborted by the cron timeout.
+          // The parent signal propagates to the attempt controller, but each
+          // new attempt gets a fresh (non-aborted) controller.  (#37505)
+          const attemptAbort = new AbortController();
+          const onParentAbort = () => attemptAbort.abort(abortSignal?.reason);
+          abortSignal?.addEventListener("abort", onParentAbort, { once: true });
+          try {
+            const bootstrapPromptWarningSignature =
+              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+            if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+              // Fresh isolated cron sessions must not reuse a stored CLI session ID.
+              // Passing an existing ID activates the resume watchdog profile
+              // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
+              // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
+              // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
+              const cliSessionId = cronSession.isNewSession
+                ? undefined
+                : getCliSessionId(cronSession.sessionEntry, providerOverride);
+              const result = await runCliAgent({
+                sessionId: cronSession.sessionEntry.sessionId,
+                sessionKey: agentSessionKey,
+                agentId,
+                sessionFile,
+                workspaceDir,
+                config: cfgWithAgentDefaults,
+                prompt: promptText,
+                provider: providerOverride,
+                model: modelOverride,
+                thinkLevel,
+                timeoutMs,
+                runId: cronSession.sessionEntry.sessionId,
+                cliSessionId,
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature,
+              });
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                result.meta?.systemPromptReport,
+              );
+              return result;
+            }
+            const result = await runEmbeddedPiAgent({
               sessionId: cronSession.sessionEntry.sessionId,
               sessionKey: agentSessionKey,
               agentId,
+              trigger: "cron",
+              // Cron jobs are trusted local automation, so isolated runs should
+              // inherit owner-only tooling like local `openclaw agent` runs.
+              senderIsOwner: true,
+              messageChannel,
+              agentAccountId: resolvedDelivery.accountId,
               sessionFile,
+              agentDir,
               workspaceDir,
               config: cfgWithAgentDefaults,
+              skillsSnapshot,
               prompt: promptText,
+              lane: resolveNestedAgentLane(params.lane),
               provider: providerOverride,
               model: modelOverride,
+              authProfileId,
+              authProfileIdSource,
               thinkLevel,
+              fastMode: resolveFastModeState({
+                cfg: cfgWithAgentDefaults,
+                provider: providerOverride,
+                model: modelOverride,
+                sessionEntry: cronSession.sessionEntry,
+              }).enabled,
+              verboseLevel: resolvedVerboseLevel,
               timeoutMs,
+              bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
+              bootstrapContextRunKind: "cron",
               runId: cronSession.sessionEntry.sessionId,
-              cliSessionId,
+              requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
+              disableMessageTool: toolPolicy.disableMessageTool,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              abortSignal: attemptAbort.signal,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature,
             });
@@ -595,51 +648,10 @@ export async function runCronIsolatedAgentTurn(params: {
               result.meta?.systemPromptReport,
             );
             return result;
+          } finally {
+            abortSignal?.removeEventListener("abort", onParentAbort);
           }
-          const result = await runEmbeddedPiAgent({
-            sessionId: cronSession.sessionEntry.sessionId,
-            sessionKey: agentSessionKey,
-            agentId,
-            trigger: "cron",
-            // Cron jobs are trusted local automation, so isolated runs should
-            // inherit owner-only tooling like local `openclaw agent` runs.
-            senderIsOwner: true,
-            messageChannel,
-            agentAccountId: resolvedDelivery.accountId,
-            sessionFile,
-            agentDir,
-            workspaceDir,
-            config: cfgWithAgentDefaults,
-            skillsSnapshot,
-            prompt: promptText,
-            lane: resolveNestedAgentLane(params.lane),
-            provider: providerOverride,
-            model: modelOverride,
-            authProfileId,
-            authProfileIdSource,
-            thinkLevel,
-            fastMode: resolveFastModeState({
-              cfg: cfgWithAgentDefaults,
-              provider: providerOverride,
-              model: modelOverride,
-              sessionEntry: cronSession.sessionEntry,
-            }).enabled,
-            verboseLevel: resolvedVerboseLevel,
-            timeoutMs,
-            bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
-            bootstrapContextRunKind: "cron",
-            runId: cronSession.sessionEntry.sessionId,
-            requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
-            disableMessageTool: toolPolicy.disableMessageTool,
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-            abortSignal,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature,
-          });
-          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-            result.meta?.systemPromptReport,
-          );
-          return result;
+
         },
       });
       runResult = fallbackResult.result;
