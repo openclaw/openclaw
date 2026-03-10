@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **mindkeeper** — Time Machine for Your AI's Brain. Version control for agent context files (AGENTS.md, SOUL.md, MEMORY.md). Auto-snapshots, diffs, rollback, named checkpoints. LLM-powered commit messages.
+  npm: `mindkeeper-openclaw`
+  repo: `https://github.com/seekcontext/mindkeeper`
+  install: `openclaw plugins install mindkeeper-openclaw`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
