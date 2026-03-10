@@ -247,7 +247,7 @@ Parallel provides an LLM-optimized search API that returns structured excerpts f
         provider: "parallel",
         parallel: {
           // API key (optional if PARALLEL_API_KEY is set)
-          apiKey: "par-...",
+          apiKey: "par-...", // pragma: allowlist secret
           // Base URL (defaults to "https://api.parallel.ai")
           // baseUrl: "https://api.parallel.ai",
         },
