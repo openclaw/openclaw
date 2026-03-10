@@ -40,6 +40,7 @@ function createApi(params: {
     registerService() {},
     registerProvider() {},
     registerContextEngine() {},
+    registerDispatchInterceptor() {},
     registerCommand: params.registerCommand,
     resolvePath(input: string) {
       return input;
