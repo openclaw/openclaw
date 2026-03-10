@@ -86,6 +86,14 @@ class MemoryDB {
 
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
+      // Migrate pre-namespace tables: add agentId column if absent so that
+      // scoped delete predicates (`agentId = '...' OR agentId IS NULL`) work
+      // on existing deployments that were created before this feature.
+      const schema = await this.table.schema();
+      const hasAgentId = schema.fields.some((f) => f.name === "agentId");
+      if (!hasAgentId) {
+        await this.table.addColumns([{ name: "agentId", valueSql: "CAST(NULL AS STRING)" }]);
+      }
     } else {
       this.table = await this.db.createTable(TABLE_NAME, [
         {
