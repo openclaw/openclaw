@@ -51,7 +51,11 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         handleAgentStart(ctx);
         return;
       case "auto_compaction_start":
-        handleAutoCompactionStart(ctx);
+        // Async: await so pre-compaction channel notices are delivered
+        // before the compaction summarization model call proceeds.
+        handleAutoCompactionStart(ctx).catch((err) => {
+          ctx.log.debug(`auto_compaction_start handler failed: ${String(err)}`);
+        });
         return;
       case "auto_compaction_end":
         handleAutoCompactionEnd(ctx, evt as never);

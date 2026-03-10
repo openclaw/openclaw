@@ -4,7 +4,7 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
+export async function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
   ctx.ensureCompactionPromise();
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId}`);
@@ -13,7 +13,9 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
     stream: "compaction",
     data: { phase: "start" },
   });
-  void ctx.params.onAgentEvent?.({
+  // Await the callback so pre-compaction notices (e.g. channel notifications)
+  // are delivered before the compaction summarization model call proceeds.
+  await ctx.params.onAgentEvent?.({
     stream: "compaction",
     data: { phase: "start" },
   });

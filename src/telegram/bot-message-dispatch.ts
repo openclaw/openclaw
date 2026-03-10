@@ -633,6 +633,13 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
+        onCompactionBoundary: () =>
+          enqueueDraftLaneEvent(async () => {
+            // Auto-compaction is about to rewrite the context.  Finalize
+            // any in-flight preview message so it survives the cleanup
+            // phase, then force a new message for post-compaction content.
+            await rotateAnswerLaneForNewAssistantMessage();
+          }),
         onPartialReply:
           answerLane.stream || reasoningLane.stream
             ? (payload) =>

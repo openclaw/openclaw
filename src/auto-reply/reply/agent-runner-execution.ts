@@ -391,9 +391,22 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts?.onToolStart?.({ name, phase });
                   }
                 }
-                // Track auto-compaction completion
+                // Track auto-compaction completion and fire notices
                 if (evt.stream === "compaction") {
                   const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  if (phase === "start") {
+                    // Signal channel dispatchers to finalize in-flight previews
+                    // before compaction rewrites the context.
+                    await params.opts?.onCompactionBoundary?.();
+                    const compactionNotify =
+                      params.followupRun.run.config?.agents?.defaults?.compaction?.notify;
+                    // Default to true when not explicitly set
+                    if (compactionNotify !== false) {
+                      await params.opts?.onCompactionNotice?.({
+                        text: "⏳ Compacting context…",
+                      });
+                    }
+                  }
                   if (phase === "end") {
                     autoCompactionCompleted = true;
                   }

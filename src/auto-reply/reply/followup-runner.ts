@@ -216,11 +216,22 @@ export function createFollowupRunner(params: {
                 bootstrapPromptWarningSignaturesSeen[
                   bootstrapPromptWarningSignaturesSeen.length - 1
                 ],
-              onAgentEvent: (evt) => {
+              onAgentEvent: async (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
                 }
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "start") {
+                  const compactionNotify =
+                    queued.run.config?.agents?.defaults?.compaction?.notify;
+                  // Default to true when not explicitly set
+                  if (compactionNotify !== false) {
+                    await sendFollowupPayloads(
+                      [{ text: "⏳ Compacting context…" }],
+                      queued,
+                    );
+                  }
+                }
                 if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
