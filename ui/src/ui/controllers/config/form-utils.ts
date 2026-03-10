@@ -37,14 +37,18 @@ export function setPathValue(
       if (record[key] == null) {
         record[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
       } else if (
-        typeof nextKey === "string" &&
         (typeof record[key] === "string" ||
           typeof record[key] === "number" ||
-          typeof record[key] === "boolean")
+          typeof record[key] === "boolean") &&
+        record[key] != null
       ) {
-        // Promote primitive to object so nested path can be set (e.g. model: "gpt-4" -> model.primary).
-        // Preserve the primitive in the target field; the final assignment will overwrite if needed.
-        record[key] = { [nextKey]: record[key] } as Record<string, unknown>;
+        if (typeof nextKey === "string") {
+          // Promote primitive to object so nested path can be set (e.g. model: "gpt-4" -> model.primary).
+          record[key] = { [nextKey]: record[key] } as Record<string, unknown>;
+        } else if (typeof nextKey === "number") {
+          // Promote primitive to array so array-index path can be set (e.g. model.fallbacks[0]).
+          record[key] = [];
+        }
       }
       current = record[key] as Record<string, unknown> | unknown[];
     }
