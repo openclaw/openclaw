@@ -1,0 +1,91 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`insta360 plugin registration > tool schema matches snapshot 1`] = `
+{
+  "properties": {
+    "action": {
+      "description": "Camera action: info, status, photo, record_start, record_stop, settings, list_files, download, delete.",
+      "enum": [
+        "info",
+        "status",
+        "photo",
+        "record_start",
+        "record_stop",
+        "settings",
+        "list_files",
+        "download",
+        "delete",
+      ],
+      "type": "string",
+    },
+    "count": {
+      "description": "Number of files to list (default 10).",
+      "type": "number",
+    },
+    "fileUrls": {
+      "description": "File URLs for download/delete.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "hdr": {
+      "description": "Enable HDR (photo only).",
+      "type": "boolean",
+    },
+    "options": {
+      "description": "Camera settings for the 'settings' action.",
+      "properties": {
+        "exposureProgram": {
+          "description": "1=Manual, 2=Auto, 4=Shutter Priority, 9=ISO Priority.",
+          "type": "number",
+        },
+        "iso": {
+          "description": "ISO value.",
+          "type": "number",
+        },
+        "shutterSpeed": {
+          "description": "Shutter speed.",
+          "type": "number",
+        },
+        "whiteBalance": {
+          "description": "White balance preset.",
+          "enum": [
+            "auto",
+            "incandescent",
+            "fluorescent",
+            "daylight",
+            "cloudy-daylight",
+          ],
+          "type": "string",
+        },
+      },
+      "type": "object",
+    },
+    "stitching": {
+      "description": "Photo stitching mode.",
+      "enum": [
+        "none",
+        "ondevice",
+      ],
+      "type": "string",
+    },
+    "timelapseInterval": {
+      "description": "Timelapse interval in seconds (0.2-120). Only for timelapse.",
+      "type": "number",
+    },
+    "videoType": {
+      "description": "Video type for record_start.",
+      "enum": [
+        "normal",
+        "timelapse",
+      ],
+      "type": "string",
+    },
+  },
+  "required": [
+    "action",
+  ],
+  "type": "object",
+}
+`;

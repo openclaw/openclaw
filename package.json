@@ -120,6 +120,10 @@
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
     },
+    "./plugin-sdk/insta360": {
+      "types": "./dist/plugin-sdk/insta360.d.ts",
+      "default": "./dist/plugin-sdk/insta360.js"
+    },
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
