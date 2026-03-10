@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { readJsonFile } from "./json-files.js";
 
 export type OpenClawTaskStatusPhase =
@@ -60,9 +61,27 @@ export type OpenClawTaskStatusReadResult =
 export async function readTaskStatusFile(
   filePath: string,
 ): Promise<OpenClawTaskStatusReadResult> {
-  const raw = await readJsonFile<unknown>(filePath);
-  if (!raw) {
-    return { ok: false, error: "TASK_STATUS_FILE_MISSING_OR_UNREADABLE" };
+  // Prefer a more precise error surface than readJsonFile for callers that need
+  // to distinguish missing files from malformed JSON.
+  let raw: unknown;
+  try {
+    const text = await fs.readFile(filePath, "utf8");
+    try {
+      raw = JSON.parse(text) as unknown;
+    } catch {
+      return { ok: false, error: "TASK_STATUS_INVALID_JSON" };
+    }
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === "ENOENT") {
+      return { ok: false, error: "TASK_STATUS_FILE_MISSING" };
+    }
+    // Fall back to the generic helper for non-ENOENT errors so future
+    // enhancements there (metrics, logging) still apply.
+    const fallback = await readJsonFile<unknown>(filePath);
+    if (!fallback) {
+      return { ok: false, error: "TASK_STATUS_FILE_UNREADABLE" };
+    }
+    raw = fallback;
   }
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, error: "TASK_STATUS_INVALID_ROOT" };
@@ -90,7 +109,7 @@ export async function readTaskStatusFile(
   }
 
   if (data.progress) {
-    const { current, total, percentage } = data.progress;
+    const { current, total, percentage, etaSeconds } = data.progress;
     if (current !== undefined && typeof current !== "number") {
       return { ok: false, error: "TASK_STATUS_INVALID_PROGRESS_CURRENT" };
     }
@@ -99,6 +118,9 @@ export async function readTaskStatusFile(
     }
     if (percentage !== undefined && typeof percentage !== "number") {
       return { ok: false, error: "TASK_STATUS_INVALID_PROGRESS_PERCENTAGE" };
+    }
+    if (etaSeconds !== undefined && typeof etaSeconds !== "number") {
+      return { ok: false, error: "TASK_STATUS_INVALID_PROGRESS_ETA_SECONDS" };
     }
   }
 

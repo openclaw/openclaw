@@ -64,7 +64,7 @@ The agent might create a shell script:
 # compress-images.sh
 # Compress large images and write progress to a status file.
 
-IMAGES=$(find static/images/ -size +500k -name "*.png" -o -name "*.jpg")
+IMAGES=$(find static/images/ \( -name "*.png" -o -name "*.jpg" \) -a -size +500k)
 TOTAL=$(echo "$IMAGES" | wc -l)
 DONE=0
 
