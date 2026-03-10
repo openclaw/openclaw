@@ -120,8 +120,10 @@ func main() {
 				}
 				return entry.ID, nil
 			},
-			// destroyVM
+			// destroyVM: evict from ConnCache before destroying to avoid leaking
+			// stale gRPC connections (goroutines + FDs) for golden-* VMs.
 			func(ctx context.Context, sandboxID string) error {
+				connCache.Remove(sandboxID)
 				return mgr.Destroy(ctx, sandboxID)
 			},
 			// createSnapshot

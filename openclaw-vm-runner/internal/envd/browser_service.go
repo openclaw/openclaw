@@ -184,11 +184,23 @@ func (s *BrowserServer) Navigate(ctx context.Context, req *pb.NavigateRequest) (
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	runCtx := session.ctx
+	// Derive runCtx from session.ctx (required by chromedp to find the browser)
+	// but propagate RPC context cancellation so client disconnects/timeouts
+	// stop the navigation and release the session mutex.
+	runCtx, runCancel := context.WithCancel(session.ctx)
+	defer runCancel()
+	go func() {
+		select {
+		case <-ctx.Done():
+			runCancel()
+		case <-runCtx.Done():
+		}
+	}()
+
 	if req.GetTimeoutMs() > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(session.ctx, time.Duration(req.GetTimeoutMs())*time.Millisecond)
-		defer cancel()
+		var timeoutCancel context.CancelFunc
+		runCtx, timeoutCancel = context.WithTimeout(runCtx, time.Duration(req.GetTimeoutMs())*time.Millisecond)
+		defer timeoutCancel()
 	}
 
 	if err := chromedp.Run(runCtx, chromedp.Navigate(req.GetUrl())); err != nil {

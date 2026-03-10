@@ -9,7 +9,8 @@ const log = createSubsystemLogger("sandbox-resolver");
 const DETECTION_ORDER: Array<Exclude<SandboxBackend, "auto">> = ["firecracker", "gvisor", "docker"];
 
 let cachedProvider: ISandboxProvider | null = null;
-let cachedBackend: SandboxBackend | null = null;
+/** Stores the *requested* backend (including "auto"), not the resolved one. */
+let cachedRequestedBackend: SandboxBackend | null = null;
 
 function createProvider(backend: Exclude<SandboxBackend, "auto">): ISandboxProvider {
   switch (backend) {
@@ -30,8 +31,9 @@ function createProvider(backend: Exclude<SandboxBackend, "auto">): ISandboxProvi
 export async function resolveProvider(
   requestedBackend: SandboxBackend = "auto",
 ): Promise<ISandboxProvider> {
-  // Return cached if compatible
-  if (cachedProvider && (requestedBackend === "auto" || requestedBackend === cachedBackend)) {
+  // Return cached only if same request type (auto vs auto, docker vs docker, etc.)
+  // This prevents resolveProvider("docker") from polluting the cache for "auto".
+  if (cachedProvider && requestedBackend === cachedRequestedBackend) {
     return cachedProvider;
   }
 
@@ -49,7 +51,7 @@ export async function resolveProvider(
     );
 
     cachedProvider = provider;
-    cachedBackend = requestedBackend;
+    cachedRequestedBackend = requestedBackend;
     return provider;
   }
 
@@ -63,7 +65,7 @@ export async function resolveProvider(
         `Auto-detected sandbox backend: ${backend} (${health.version ?? "unknown version"})`,
       );
       cachedProvider = provider;
-      cachedBackend = backend;
+      cachedRequestedBackend = requestedBackend;
       return provider;
     }
 
@@ -75,5 +77,5 @@ export async function resolveProvider(
 
 export function resetProviderCache(): void {
   cachedProvider = null;
-  cachedBackend = null;
+  cachedRequestedBackend = null;
 }
