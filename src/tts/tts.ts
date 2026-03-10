@@ -26,6 +26,7 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -503,6 +504,46 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 /** Channels that require opus audio and support voice-bubble playback */
 const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
 
+async function maybeNormalizeVoiceBubbleAudio(params: {
+  audioPath: string;
+  channelId: ChannelId | null;
+}): Promise<string> {
+  if (params.channelId === null || !VOICE_BUBBLE_CHANNELS.has(params.channelId)) {
+    return params.audioPath;
+  }
+  if (path.extname(params.audioPath).toLowerCase() !== ".webm") {
+    return params.audioPath;
+  }
+
+  const outputPath = path.join(
+    path.dirname(params.audioPath),
+    `${path.basename(params.audioPath, ".webm")}.ogg`,
+  );
+
+  try {
+    await runFfmpeg([
+      "-y",
+      "-i",
+      params.audioPath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-ar",
+      "48000",
+      "-ac",
+      "1",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      outputPath,
+    ]);
+    return outputPath;
+  } catch {
+    return params.audioPath;
+  }
+}
+
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
@@ -645,15 +686,20 @@ export async function textToSpeech(params: {
           }
         }
 
+        const normalizedAudioPath = await maybeNormalizeVoiceBubbleAudio({
+          audioPath: edgeResult.audioPath,
+          channelId,
+        });
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: normalizedAudioPath });
 
         return {
           success: true,
-          audioPath: edgeResult.audioPath,
+          audioPath: normalizedAudioPath,
           latencyMs: Date.now() - providerStart,
           provider,
-          outputFormat: edgeResult.outputFormat,
+          outputFormat:
+            normalizedAudioPath === edgeResult.audioPath ? edgeResult.outputFormat : "ogg-opus",
           voiceCompatible,
         };
       }
@@ -976,4 +1022,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  maybeNormalizeVoiceBubbleAudio,
 };

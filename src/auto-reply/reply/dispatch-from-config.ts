@@ -33,7 +33,10 @@ import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
-import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import {
+  resolveToolDeliveryPayload as resolveDefaultToolDeliveryPayload,
+  shouldSuppressReasoningPayload,
+} from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -379,22 +382,7 @@ export async function dispatchReplyFromConfig(params: {
       if (shouldSendToolSummaries) {
         return payload;
       }
-      const execApproval =
-        payload.channelData &&
-        typeof payload.channelData === "object" &&
-        !Array.isArray(payload.channelData)
-          ? payload.channelData.execApproval
-          : undefined;
-      if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
-        return payload;
-      }
-      // Group/native flows intentionally suppress tool summary text, but media-only
-      // tool results (for example TTS audio) must still be delivered.
-      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-      if (!hasMedia) {
-        return null;
-      }
-      return { ...payload, text: undefined };
+      return resolveDefaultToolDeliveryPayload(payload);
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,

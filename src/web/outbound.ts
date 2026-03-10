@@ -59,6 +59,7 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let audioAsVoice: boolean | undefined;
     if (options.mediaUrl) {
       const media = await loadWebMedia(options.mediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
@@ -68,11 +69,11 @@ export async function sendMessageWhatsApp(
       mediaBuffer = media.buffer;
       mediaType = media.contentType;
       if (media.kind === "audio") {
-        // WhatsApp expects explicit opus codec for PTT voice notes.
-        mediaType =
-          media.contentType === "audio/ogg"
-            ? "audio/ogg; codecs=opus"
-            : (media.contentType ?? "application/octet-stream");
+        // Only Opus/Ogg audio should be labeled as a WhatsApp voice note.
+        audioAsVoice = media.contentType === "audio/ogg";
+        mediaType = audioAsVoice
+          ? "audio/ogg; codecs=opus"
+          : (media.contentType ?? "application/octet-stream");
       } else if (media.kind === "video") {
         text = caption ?? "";
       } else if (media.kind === "image") {
@@ -88,10 +89,11 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback || accountId || documentFileName || audioAsVoice
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(audioAsVoice ? { audioAsVoice: true } : {}),
             accountId,
           }
         : undefined;

@@ -57,6 +57,7 @@ export async function deliverWebReply(params: {
     : replyResult.mediaUrl
       ? [replyResult.mediaUrl]
       : [];
+  const wantsVoiceNote = replyResult.audioAsVoice === true;
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
     let lastErr: unknown;
@@ -138,15 +139,20 @@ export async function deliverWebReply(params: {
           "media:image",
         );
       } else if (media.kind === "audio") {
+        if (caption) {
+          remainingText.unshift(caption);
+        }
         await sendWithRetry(
           () =>
             msg.sendMedia({
               audio: media.buffer,
-              ptt: true,
-              mimetype: media.contentType,
-              caption,
+              ...(wantsVoiceNote ? { ptt: true } : {}),
+              mimetype:
+                wantsVoiceNote && media.contentType === "audio/ogg"
+                  ? "audio/ogg; codecs=opus"
+                  : media.contentType,
             }),
-          "media:audio",
+          wantsVoiceNote ? "media:voice" : "media:audio",
         );
       } else if (media.kind === "video") {
         await sendWithRetry(

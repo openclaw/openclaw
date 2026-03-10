@@ -1,3 +1,4 @@
+import path from "node:path";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -14,6 +15,10 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
     completeSimple: vi.fn(),
   };
 });
+
+const { runFfmpegMock } = vi.hoisted(() => ({
+  runFfmpegMock: vi.fn(),
+}));
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthProviders: () => [],
@@ -51,6 +56,18 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
+vi.mock("../media/ffmpeg-exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../media/ffmpeg-exec.js")>("../media/ffmpeg-exec.js");
+  runFfmpegMock.mockImplementation((...args: Parameters<typeof actual.runFfmpeg>) =>
+    actual.runFfmpeg(...args),
+  );
+  return {
+    ...actual,
+    runFfmpeg: (...args: Parameters<typeof actual.runFfmpeg>) => runFfmpegMock(...args),
+  };
+});
+
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
@@ -65,6 +82,7 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  maybeNormalizeVoiceBubbleAudio,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -267,6 +285,45 @@ describe("tts", () => {
         const config = resolveTtsConfig(testCase.cfg);
         expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
       }
+    });
+  });
+
+  describe("maybeNormalizeVoiceBubbleAudio", () => {
+    it("transcodes webm audio to ogg for voice-bubble channels", async () => {
+      runFfmpegMock.mockResolvedValueOnce("");
+      const inputPath = path.join(path.sep, "tmp", "voice.webm");
+      const outputPath = path.join(path.sep, "tmp", "voice.ogg");
+
+      const result = await maybeNormalizeVoiceBubbleAudio({
+        audioPath: inputPath,
+        channelId: "whatsapp",
+      });
+
+      expect(result).toBe(outputPath);
+      expect(runFfmpegMock).toHaveBeenCalledWith(
+        expect.arrayContaining(["-i", inputPath, "-c:a", "libopus", outputPath]),
+      );
+    });
+
+    it("keeps non-webm audio untouched", async () => {
+      const result = await maybeNormalizeVoiceBubbleAudio({
+        audioPath: "/tmp/voice.mp3",
+        channelId: "whatsapp",
+      });
+
+      expect(result).toBe("/tmp/voice.mp3");
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps original audio when transcode fails", async () => {
+      runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg failed"));
+
+      const result = await maybeNormalizeVoiceBubbleAudio({
+        audioPath: "/tmp/voice.webm",
+        channelId: "whatsapp",
+      });
+
+      expect(result).toBe("/tmp/voice.webm");
     });
   });
 
@@ -758,6 +815,20 @@ describe("tts", () => {
         });
 
         expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("runs auto-TTS in tagged mode when a bare tts tag is present", async () => {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "[[tts]]Hello world" },
+          cfg: taggedCfg,
+          kind: "final",
+        });
+
+        expect(result.mediaUrl).toBeDefined();
+        expect(result.text).toBe("Hello world");
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
     });

@@ -74,6 +74,38 @@ export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
 
+export function resolveToolDeliveryPayload(
+  payload: ReplyPayload,
+  options?: { allowText?: boolean; allowExecApproval?: boolean },
+): ReplyPayload | null {
+  const allowText = options?.allowText !== false;
+  const allowExecApproval = options?.allowExecApproval !== false;
+  if (allowText && payload.text?.trim()) {
+    return payload;
+  }
+  const execApproval =
+    payload.channelData &&
+    typeof payload.channelData === "object" &&
+    !Array.isArray(payload.channelData)
+      ? payload.channelData.execApproval
+      : undefined;
+  if (
+    allowExecApproval &&
+    execApproval &&
+    typeof execApproval === "object" &&
+    !Array.isArray(execApproval)
+  ) {
+    return payload;
+  }
+  // Media-only tool results, such as TTS output, still need delivery even when
+  // tool summary text is suppressed on chat surfaces.
+  const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+  if (!hasMedia) {
+    return null;
+  }
+  return { ...payload, text: undefined };
+}
+
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
