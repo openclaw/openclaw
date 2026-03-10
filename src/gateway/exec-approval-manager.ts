@@ -183,8 +183,10 @@ export class ExecApprovalManager {
     }
 
     const exact = this.pending.get(normalized);
-    if (exact && exact.record.resolvedAtMs === undefined) {
-      return { kind: "exact", id: normalized };
+    if (exact) {
+      return exact.record.resolvedAtMs === undefined
+        ? { kind: "exact", id: normalized }
+        : { kind: "none" };
     }
 
     const lowerPrefix = normalized.toLowerCase();

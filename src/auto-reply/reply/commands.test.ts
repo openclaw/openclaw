@@ -301,6 +301,7 @@ describe("/approve command", () => {
       },
     } as OpenClawConfig;
     const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
+      BotUsername: "bot",
       Provider: "telegram",
       Surface: "telegram",
       SenderId: "123",
@@ -317,6 +318,30 @@ describe("/approve command", () => {
         params: { id: "abc12345", decision: "allow-once" },
       }),
     );
+  });
+
+  it("rejects Telegram /approve mentions targeting a different bot", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve@otherbot abc12345 allow-once", cfg, {
+      BotUsername: "bot",
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("targets a different Telegram bot");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("surfaces unknown or expired approval id errors", async () => {

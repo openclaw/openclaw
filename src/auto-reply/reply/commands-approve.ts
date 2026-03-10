@@ -8,7 +8,8 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const COMMAND_WITH_MENTION_REGEX = /^\/approve(?:@[^\s]+)?(?:\s|$)/i;
+const COMMAND_REGEX = /^\/approve(?:\s|$)/i;
+const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
   allow: "allow-once",
@@ -29,7 +30,10 @@ type ParsedApproveCommand =
 
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
-  const commandMatch = trimmed.match(COMMAND_WITH_MENTION_REGEX);
+  if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
+    return { ok: false, error: "❌ This /approve command targets a different Telegram bot." };
+  }
+  const commandMatch = trimmed.match(COMMAND_REGEX);
   if (!commandMatch) {
     return null;
   }

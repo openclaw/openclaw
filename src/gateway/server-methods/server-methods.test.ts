@@ -531,6 +531,19 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
+    const manager = new ExecApprovalManager();
+    const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
+    void manager.register(resolvedRecord, 2_000);
+    expect(manager.resolve("abc", "allow-once")).toBe(true);
+
+    const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
+    void manager.register(pendingRecord, 2_000);
+
+    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+  });
+
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({

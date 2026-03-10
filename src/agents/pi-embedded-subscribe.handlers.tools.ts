@@ -217,7 +217,7 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   };
 }
 
-function emitToolResultOutput(params: {
+async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
   meta?: string;
@@ -233,7 +233,7 @@ function emitToolResultOutput(params: {
   const approvalPending = readExecApprovalPendingDetails(result);
   if (!isToolError && approvalPending) {
     try {
-      void ctx.params.onToolResult(
+      await ctx.params.onToolResult(
         buildExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
@@ -255,7 +255,7 @@ function emitToolResultOutput(params: {
   const approvalUnavailable = readExecApprovalUnavailableDetails(result);
   if (!isToolError && approvalUnavailable) {
     try {
-      void ctx.params.onToolResult?.(
+      await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
           warningText: approvalUnavailable.warningText,
@@ -545,7 +545,7 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
