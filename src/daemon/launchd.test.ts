@@ -328,6 +328,46 @@ describe("launchd install", () => {
     expect(state.launchctlCalls.some((call) => call.includes(serviceId))).toBe(false);
   });
 
+  it("does not rely on OPENCLAW_SERVICE_MARKER when launchd hints still indicate a managed runtime", async () => {
+    const env = createDefaultLaunchdEnv();
+    const originalMarker = process.env.OPENCLAW_SERVICE_MARKER;
+    const originalXpcService = process.env.XPC_SERVICE_NAME;
+    const originalLaunchdLabel = process.env.OPENCLAW_LAUNCHD_LABEL;
+
+    try {
+      // Simulate a launchd-managed child where the custom marker was stripped
+      // but native launchd hints still point at the gateway service.
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+      process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+
+      await restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      });
+
+      expect(prepareRestartScript).toHaveBeenCalledWith(env);
+      expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
+      expect(state.launchctlCalls).toEqual([]);
+    } finally {
+      if (originalMarker === undefined) {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      } else {
+        process.env.OPENCLAW_SERVICE_MARKER = originalMarker;
+      }
+      if (originalXpcService === undefined) {
+        delete process.env.XPC_SERVICE_NAME;
+      } else {
+        process.env.XPC_SERVICE_NAME = originalXpcService;
+      }
+      if (originalLaunchdLabel === undefined) {
+        delete process.env.OPENCLAW_LAUNCHD_LABEL;
+      } else {
+        process.env.OPENCLAW_LAUNCHD_LABEL = originalLaunchdLabel;
+      }
+    }
+  });
+
   it("falls back to the synchronous launchctl restart path when no detached helper is available", async () => {
     const env = createDefaultLaunchdEnv();
     vi.mocked(prepareRestartScript).mockResolvedValueOnce(null);
