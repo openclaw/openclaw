@@ -326,7 +326,9 @@ function shouldRequireConnectedForRecovery(channel: ChannelId): boolean {
 function shouldSkipDeliveryRecoveryReadinessPreflight(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return isTruthyEnvValue(env.OPENCLAW_SKIP_CHANNELS) || isTruthyEnvValue(env.OPENCLAW_SKIP_PROVIDERS);
+  return (
+    isTruthyEnvValue(env.OPENCLAW_SKIP_CHANNELS) || isTruthyEnvValue(env.OPENCLAW_SKIP_PROVIDERS)
+  );
 }
 
 function formatRecoveryTarget(target: PendingDeliveryRecoveryTarget): string {
