@@ -13,9 +13,8 @@ import { ButtonStyle, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
-import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
+import { createOperatorApprovalsGatewayClient } from "../../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
@@ -27,11 +26,7 @@ import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../../security/safe-regex.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -408,31 +403,10 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
-    const { url: gatewayUrl, urlSource } = buildGatewayConnectionDetails({
+    this.gatewayClient = await createOperatorApprovalsGatewayClient({
       config: this.opts.cfg,
-      url: this.opts.gatewayUrl,
-    });
-    const gatewayUrlOverrideSource =
-      urlSource === "cli --url"
-        ? "cli"
-        : urlSource === "env OPENCLAW_GATEWAY_URL"
-          ? "env"
-          : undefined;
-    const auth = await resolveGatewayConnectionAuth({
-      config: this.opts.cfg,
-      env: process.env,
-      urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
-      urlOverrideSource: gatewayUrlOverrideSource,
-    });
-
-    this.gatewayClient = new GatewayClient({
-      url: gatewayUrl,
-      token: auth.token,
-      password: auth.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      gatewayUrl: this.opts.gatewayUrl,
       clientDisplayName: "Discord Exec Approvals",
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.approvals"],
       onEvent: (evt) => this.handleGatewayEvent(evt),
       onHelloOk: () => {
         logDebug("discord exec approvals: connected to gateway");
