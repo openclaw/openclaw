@@ -110,6 +110,22 @@ describe("web search provider config", () => {
   });
 });
 
+describe("agents.defaults.subagents.allowAgents", () => {
+  it("accepts allowAgents in subagent defaults", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["*"],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
