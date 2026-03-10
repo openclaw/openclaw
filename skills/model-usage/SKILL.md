@@ -28,7 +28,7 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
+Linux note: if CodexBar CLI is not available on your machine yet, export cost JSON from a supported machine and run this skill script locally with `--input /path/to/cost.json`.
 
 ## Quick start
 

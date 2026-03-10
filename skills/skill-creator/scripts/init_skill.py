@@ -3,7 +3,7 @@
 Skill Initializer - Creates a new skill from template
 
 Usage:
-    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples]
+    init_skill.py <skill-name> --path <path> [--description "..."] [--resources scripts,references,assets] [--examples]
 
 Examples:
     init_skill.py my-new-skill --path skills/public
@@ -252,7 +252,15 @@ def create_resource_dirs(skill_dir, skill_name, skill_title, resources, include_
                 print("[OK] Created assets/")
 
 
-def init_skill(skill_name, path, resources, include_examples):
+def normalize_description(description):
+    """Normalize optional description input for SKILL frontmatter."""
+    if description is None:
+        return None
+    trimmed = description.strip()
+    return trimmed or None
+
+
+def init_skill(skill_name, path, resources, include_examples, description=None):
     """
     Initialize a new skill directory with template SKILL.md.
 
@@ -283,7 +291,18 @@ def init_skill(skill_name, path, resources, include_examples):
 
     # Create SKILL.md from template
     skill_title = title_case_skill_name(skill_name)
-    skill_content = SKILL_TEMPLATE.format(skill_name=skill_name, skill_title=skill_title)
+    description_value = normalize_description(description)
+    if description_value:
+        skill_content = SKILL_TEMPLATE.format(
+            skill_name=skill_name,
+            skill_title=skill_title,
+        ).replace(
+            "[TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]",
+            description_value,
+            1,
+        )
+    else:
+        skill_content = SKILL_TEMPLATE.format(skill_name=skill_name, skill_title=skill_title)
 
     skill_md_path = skill_dir / "SKILL.md"
     try:
@@ -329,6 +348,11 @@ def main():
         help="Comma-separated list: scripts,references,assets",
     )
     parser.add_argument(
+        "--description",
+        default="",
+        help="Optional SKILL frontmatter description to prefill and reduce TODO scaffolding.",
+    )
+    parser.add_argument(
         "--examples",
         action="store_true",
         help="Create example files inside the selected resource directories",
@@ -366,7 +390,7 @@ def main():
         print("   Resources: none (create as needed)")
     print()
 
-    result = init_skill(skill_name, path, resources, args.examples)
+    result = init_skill(skill_name, path, resources, args.examples, args.description)
 
     if result:
         sys.exit(0)

@@ -14,6 +14,13 @@ export type ToolPolicyPipelineStep = {
   stripPluginOnlyAllowlist?: boolean;
 };
 
+export type ToolPolicyPipelineTraceEntry = {
+  label: string;
+  applied: boolean;
+  beforeCount: number;
+  afterCount: number;
+};
+
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
   profile?: string;
@@ -68,6 +75,15 @@ export function applyToolPolicyPipeline(params: {
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
 }): AnyAgentTool[] {
+  return applyToolPolicyPipelineWithTrace(params).tools;
+}
+
+export function applyToolPolicyPipelineWithTrace(params: {
+  tools: AnyAgentTool[];
+  toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
+  warn: (message: string) => void;
+  steps: ToolPolicyPipelineStep[];
+}): { tools: AnyAgentTool[]; trace: ToolPolicyPipelineTraceEntry[] } {
   const coreToolNames = new Set(
     params.tools
       .filter((tool) => !params.toolMeta(tool))
@@ -81,8 +97,16 @@ export function applyToolPolicyPipeline(params: {
   });
 
   let filtered = params.tools;
+  const trace: ToolPolicyPipelineTraceEntry[] = [];
   for (const step of params.steps) {
+    const beforeCount = filtered.length;
     if (!step.policy) {
+      trace.push({
+        label: step.label,
+        applied: false,
+        beforeCount,
+        afterCount: beforeCount,
+      });
       continue;
     }
 
@@ -103,6 +127,12 @@ export function applyToolPolicyPipeline(params: {
 
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
+    trace.push({
+      label: step.label,
+      applied: true,
+      beforeCount,
+      afterCount: filtered.length,
+    });
   }
-  return filtered;
+  return { tools: filtered, trace };
 }

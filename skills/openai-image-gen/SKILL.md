@@ -45,6 +45,7 @@ python3 {baseDir}/scripts/gen.py --count 16 --model gpt-image-1
 python3 {baseDir}/scripts/gen.py --prompt "ultra-detailed studio photo of a lobster astronaut" --count 4
 python3 {baseDir}/scripts/gen.py --size 1536x1024 --quality high --out-dir ./out/images
 python3 {baseDir}/scripts/gen.py --model gpt-image-1.5 --background transparent --output-format webp
+python3 {baseDir}/scripts/gen.py --model gpt-image-1 --stream --moderation low
 
 # DALL-E 3 (note: count is automatically limited to 1)
 python3 {baseDir}/scripts/gen.py --model dall-e-3 --quality hd --size 1792x1024 --style vivid
@@ -82,7 +83,8 @@ Different models support different parameter values. The script automatically se
 - **GPT image models** support additional parameters:
   - `--background`: `transparent`, `opaque`, or `auto` (default)
   - `--output-format`: `png` (default), `jpeg`, or `webp`
-  - Note: `stream` and `moderation` are available via API but not yet implemented in this script
+  - `--stream`: enables streaming responses
+  - `--moderation`: `low` or `auto`
 - **dall-e-3** has a `--style` parameter: `vivid` (hyper-real, dramatic) or `natural` (more natural looking)
 
 ## Output

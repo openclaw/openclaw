@@ -7,6 +7,7 @@ import {
 } from "../agents/pi-tools.policy.js";
 import {
   applyToolPolicyPipeline,
+  applyToolPolicyPipelineWithTrace,
   buildDefaultToolPolicyPipelineSteps,
 } from "../agents/tool-policy-pipeline.js";
 import {
@@ -197,6 +198,12 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   const action = typeof body.action === "string" ? body.action.trim() : undefined;
+  const dryRunRaw = body.dryRun;
+  if (dryRunRaw !== undefined && typeof dryRunRaw !== "boolean") {
+    sendInvalidRequest(res, "tools.invoke dryRun must be a boolean");
+    return true;
+  }
+  const dryRun = dryRunRaw === true;
 
   const argsRaw = body.args;
   const args =
@@ -267,28 +274,31 @@ export async function handleToolsInvokeHttpRequest(
     ]),
   });
 
-  const subagentFiltered = applyToolPolicyPipeline({
+  const policySteps = [
+    ...buildDefaultToolPolicyPipelineSteps({
+      profilePolicy: profilePolicyWithAlsoAllow,
+      profile,
+      providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+      providerProfile,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      agentId,
+    }),
+    { policy: subagentPolicy, label: "subagent tools.allow" },
+  ];
+
+  const subagentPolicyResult = applyToolPolicyPipelineWithTrace({
     // oxlint-disable-next-line typescript/no-explicit-any
     tools: allTools as any,
     // oxlint-disable-next-line typescript/no-explicit-any
     toolMeta: (tool) => getPluginToolMeta(tool as any),
     warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        agentId,
-      }),
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-    ],
+    steps: policySteps,
   });
+  const subagentFiltered = subagentPolicyResult.tools;
 
   // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
   const gatewayToolsCfg = cfg.gateway?.tools;
@@ -317,6 +327,38 @@ export async function handleToolsInvokeHttpRequest(
       action,
       args,
     });
+    if (dryRun) {
+      const parameters = (tool as { parameters?: unknown }).parameters;
+      const schemaObj =
+        parameters && typeof parameters === "object"
+          ? (parameters as { properties?: Record<string, unknown>; required?: unknown })
+          : undefined;
+      const parameterKeys = schemaObj?.properties ? Object.keys(schemaObj.properties) : [];
+      const requiredKeys = Array.isArray(schemaObj?.required)
+        ? schemaObj.required.filter((entry): entry is string => typeof entry === "string")
+        : [];
+      sendJson(res, 200, {
+        ok: true,
+        dryRun: true,
+        result: {
+          tool: toolName,
+          sessionKey,
+          args: toolArgs,
+          policyTrace: {
+            initialToolCount: allTools.length,
+            afterPolicyCount: subagentFiltered.length,
+            afterGatewayDenyCount: gatewayFiltered.length,
+            steps: subagentPolicyResult.trace,
+          },
+          toolSchema: {
+            hasSchema: Boolean(parameters),
+            parameterKeys,
+            requiredKeys,
+          },
+        },
+      });
+      return true;
+    }
     // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });

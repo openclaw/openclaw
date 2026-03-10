@@ -373,11 +373,13 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 
 ### Future Events
 
-Planned event types:
+Available lifecycle event types:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
-- **`agent:error`**: When an agent encounters an error
+- **`session:start`**: emitted when a session is created/re-created during reset flows.
+- **`session:end`**: emitted when a session is reset or deleted.
+- **`agent:error`**: emitted when agent reply dispatch fails with an exception.
+
+These events are emitted through the same internal hook event pipeline (`type:action`) as other hook events.
 
 ## Creating Custom Hooks
 
