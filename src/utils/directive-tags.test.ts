@@ -76,7 +76,7 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toContain("    return 1");
   });
 
-  test("strips audio tag and resolves reply_to_current with currentMessageId", () => {
+  test("strips reply_to_current tag and resolves replyToId from currentMessageId", () => {
     const result = parseInlineDirectives("[[reply_to_current]] hello", {
       currentMessageId: "msg-42",
     });
