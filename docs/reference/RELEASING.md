@@ -19,6 +19,31 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set (SPARKLE_PRIVATE_KEY_FILE should live in `~/.profile`).
 - Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
 
+## Versioning
+
+Current OpenClaw releases use date-based versioning.
+
+- Stable release version: `YYYY.M.D`
+  - Git tag: `vYYYY.M.D`
+  - Examples from repo history: `v2026.2.26`, `v2026.3.8`
+- Beta prerelease version: `YYYY.M.D-beta.N`
+  - Git tag: `vYYYY.M.D-beta.N`
+  - Examples from repo history: `v2026.2.15-beta.1`, `v2026.3.8-beta.1`
+- Use the same version string everywhere, minus the leading `v` where Git tags are not used:
+  - `package.json`: `2026.3.8`
+  - Git tag: `v2026.3.8`
+  - GitHub release title: `openclaw 2026.3.8`
+- Do not zero-pad month or day. Use `2026.3.8`, not `2026.03.08`.
+- Stable and beta are npm dist-tags, not separate release lines:
+  - `latest` = stable
+  - `beta` = prerelease/testing
+- Dev is the moving head of `main`, not a normal git-tagged release.
+
+Historical note:
+
+- Older tags such as `v2026.1.11-1`, `v2026.2.6-3`, and `v2.0.0-beta2` exist in repo history.
+- Treat those as legacy tag patterns. New releases should use `vYYYY.M.D` for stable and `vYYYY.M.D-beta.N` for beta.
+
 1. **Version & metadata**
 
 - [ ] Bump `package.json` version (e.g., `2026.1.29`).
