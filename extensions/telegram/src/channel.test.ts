@@ -193,6 +193,7 @@ describe("telegramPlugin duplicate token guard", () => {
     });
 
     expect(probeTelegram).toHaveBeenCalledWith("token-ops", 5000, {
+      accountId: "ops",
       proxyUrl: "http://127.0.0.1:8888",
       network: {
         autoSelectFamily: false,

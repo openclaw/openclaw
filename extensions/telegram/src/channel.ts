@@ -439,6 +439,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getTelegramRuntime().channel.telegram.probeTelegram(account.token, timeoutMs, {
+        accountId: account.accountId,
         proxyUrl: account.config.proxy,
         network: account.config.network,
       }),
@@ -532,6 +533,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       let telegramBotLabel = "";
       try {
         const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
+          accountId: account.accountId,
           proxyUrl: account.config.proxy,
           network: account.config.network,
         });

@@ -137,6 +137,9 @@ function buildTelegramConnectOptions(params: {
 }
 
 function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
+  // We need this classification before dispatch to decide whether sticky IPv4 fallback
+  // can safely arm. EnvHttpProxyAgent does not expose route decisions (proxy vs direct
+  // NO_PROXY bypass), so we mirror undici's parsing/matching behavior for this host.
   // Match EnvHttpProxyAgent behavior (undici):
   // - lower-case no_proxy takes precedence over NO_PROXY
   // - entries split by comma or whitespace

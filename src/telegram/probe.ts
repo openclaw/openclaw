@@ -22,6 +22,7 @@ export type TelegramProbe = BaseProbeResult & {
 export type TelegramProbeOptions = {
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
+  accountId?: string;
 };
 
 const probeFetcherCache = new Map<string, typeof fetch>();
@@ -48,12 +49,14 @@ function shouldUseProbeFetcherCache(): boolean {
 }
 
 function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions): string {
+  const cacheIdentity = options?.accountId?.trim() || token;
+  const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
   const proxyKey = options?.proxyUrl?.trim() ?? "";
   const autoSelectFamily = options?.network?.autoSelectFamily;
   const autoSelectFamilyKey =
     typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
   const dnsResultOrderKey = options?.network?.dnsResultOrder ?? "default";
-  return `${token}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}`;
+  return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}`;
 }
 
 function setCachedProbeFetcher(cacheKey: string, fetcher: typeof fetch): typeof fetch {

@@ -244,4 +244,32 @@ describe("probeTelegram retry logic", () => {
 
     expect(resolveTelegramFetch).toHaveBeenCalledTimes(2);
   });
+
+  it("reuses probe fetcher cache across token rotation when accountId is stable", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-old`, timeoutMs, {
+      accountId: "main",
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-new`, timeoutMs, {
+      accountId: "main",
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
+  });
 });
