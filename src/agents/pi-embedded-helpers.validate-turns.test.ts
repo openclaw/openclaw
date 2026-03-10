@@ -580,8 +580,16 @@ describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
       {
         role: "user",
         content: [
-          { type: "toolResult", toolUseId: "tool-1", content: [{ type: "text", text: "Result 1" }] },
-          { type: "toolResult", toolUseId: "tool-2", content: [{ type: "text", text: "Result 2" }] },
+          {
+            type: "toolResult",
+            toolUseId: "tool-1",
+            content: [{ type: "text", text: "Result 1" }],
+          },
+          {
+            type: "toolResult",
+            toolUseId: "tool-2",
+            content: [{ type: "text", text: "Result 2" }],
+          },
           { type: "toolResult", toolUseId: "tool-3", content: [{ type: "text", text: "Orphan" }] },
           { type: "text", text: "Done" },
         ],
@@ -664,8 +672,9 @@ describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
 
   it("strips orphaned tool_result after dangling tool_use is stripped", () => {
     // Scenario: assistant has tool_use with non-Anthropic ID, user has matching tool_result.
-    // stripDanglingAnthropicToolUses strips the tool_use (no matching result with that ID in user),
-    // then stripOrphanedAnthropicToolResults strips the now-orphaned tool_result.
+    // stripDanglingAnthropicToolUses strips tool-B's tool_use (no matching result in user).
+    // stripOrphanedAnthropicToolResults preserves tool-A's tool_result (tool-A still valid).
+    // Net result: only tool-A round-trip survives.
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -678,7 +687,11 @@ describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
       {
         role: "user",
         content: [
-          { type: "toolResult", toolUseId: "tool-A", content: [{ type: "text", text: "Result A" }] },
+          {
+            type: "toolResult",
+            toolUseId: "tool-A",
+            content: [{ type: "text", text: "Result A" }],
+          },
           // tool-B result is missing, so tool-B tool_use gets stripped by stripDanglingAnthropicToolUses
           { type: "text", text: "Done" },
         ],
@@ -690,9 +703,7 @@ describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
     expect(result).toHaveLength(3);
     // tool-A preserved in both assistant and user
     const assistantContent = (result[1] as { content?: unknown[] }).content;
-    expect(assistantContent).toEqual([
-      { type: "toolUse", id: "tool-A", name: "test", input: {} },
-    ]);
+    expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-A", name: "test", input: {} }]);
     const userContent = (result[2] as { content?: unknown[] }).content;
     expect(userContent).toEqual([
       { type: "toolResult", toolUseId: "tool-A", content: [{ type: "text", text: "Result A" }] },
@@ -715,5 +726,7 @@ describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
     expect(() => validateAnthropicTurns(msgs)).not.toThrow();
     const result = validateAnthropicTurns(msgs);
     expect(result).toHaveLength(2);
+    // Non-array content must be preserved as-is, not replaced with []
+    expect((result[1] as { content: unknown }).content).toBe("legacy-content");
   });
 });

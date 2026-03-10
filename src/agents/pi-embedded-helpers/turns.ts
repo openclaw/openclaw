@@ -231,7 +231,11 @@ function stripOrphanedAnthropicToolResults(messages: AgentMessage[]): AgentMessa
     }
 
     // Filter out tool_result blocks that don't have matching tool_use
-    const originalContent = Array.isArray(userMsg.content) ? userMsg.content : [];
+    if (!Array.isArray(userMsg.content)) {
+      result.push(msg);
+      continue;
+    }
+    const originalContent = userMsg.content;
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
