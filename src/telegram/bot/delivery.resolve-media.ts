@@ -126,6 +126,10 @@ async function downloadAndSaveTelegramFile(params: {
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    // Use TRUSTED_ENV_PROXY mode to respect proxy environment variables.
+    // The SSRF guard would otherwise create a pinned dispatcher that overrides
+    // any proxy configuration, breaking media downloads behind a proxy.
+    useEnvProxy: true,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(

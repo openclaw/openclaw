@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { EnvHttpProxyAgent } from "undici";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchRemoteMedia } from "./fetch.js";
 
 function makeStream(chunks: Uint8Array[]) {
@@ -97,5 +98,60 @@ describe("fetchRemoteMedia", () => {
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  describe("useEnvProxy option", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("uses EnvHttpProxyAgent dispatcher when useEnvProxy is true and proxy env is set", async () => {
+      vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+      const lookupFn = vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+      ]) as unknown as LookupFn;
+
+      let observedDispatcher: unknown;
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedDispatcher = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+        return new Response(makeStream([new Uint8Array([1, 2, 3])]), { status: 200 });
+      });
+
+      await fetchRemoteMedia({
+        url: "https://api.telegram.org/file/bot123/photos/file.jpg",
+        fetchImpl,
+        lookupFn,
+        maxBytes: 1024,
+        useEnvProxy: true,
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(observedDispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    });
+
+    it("uses pinned dispatcher when useEnvProxy is false (default)", async () => {
+      vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+      const lookupFn = vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+      ]) as unknown as LookupFn;
+
+      let observedDispatcher: unknown;
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedDispatcher = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+        return new Response(makeStream([new Uint8Array([1, 2, 3])]), { status: 200 });
+      });
+
+      await fetchRemoteMedia({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn,
+        maxBytes: 1024,
+        // useEnvProxy not set (defaults to false/strict mode)
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(observedDispatcher).toBeDefined();
+      expect(observedDispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    });
   });
 });
