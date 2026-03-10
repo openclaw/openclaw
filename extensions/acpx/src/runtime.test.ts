@@ -127,6 +127,32 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--approve-all");
   });
 
+  it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const resumeSessionId = "sid-resume-123";
+    const sessionKey = "agent:codex:acp:resume";
+    const handle = await runtime.ensureSession({
+      sessionKey,
+      agent: "codex",
+      mode: "persistent",
+      resumeSessionId,
+    });
+
+    expect(handle.backend).toBe("acpx");
+    expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    expect(logs.some((entry) => entry.kind === "ensure")).toBe(false);
+    const resumeEntry = logs.find(
+      (entry) => entry.kind === "new" && String(entry.sessionName ?? "") === sessionKey,
+    );
+    expect(resumeEntry).toBeDefined();
+    const resumeArgs = (resumeEntry?.args as string[]) ?? [];
+    const resumeFlagIndex = resumeArgs.indexOf("--resume-session");
+    expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
+  });
+
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
 
