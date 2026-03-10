@@ -1,9 +1,18 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+
+vi.mock("../../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-test-sessions.json"),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+  };
+});
 
 function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
   const replyToMode = overrides?.replyToMode ?? "all";
