@@ -813,7 +813,7 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  it("routes non-default account DMs via per-account fallback session key", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -842,7 +842,10 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    // Named-account DMs are not dropped; they get a per-account session key.
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload?.AccountId).toBe("opie");
   });
 
   it("applies group mention overrides and fallback behavior", async () => {

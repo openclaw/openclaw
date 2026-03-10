@@ -119,6 +119,17 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
     }
+    // 429 rate-limit: Telegram explicitly rejected the request — message was NOT delivered.
+    const retryAfter = (candidate as { parameters?: { retry_after?: unknown } })?.parameters
+      ?.retry_after;
+    if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
+      return true;
+    }
+    // grammY wraps network failures that occurred before delivery in an envelope message.
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
+      return true;
+    }
   }
   return false;
 }
