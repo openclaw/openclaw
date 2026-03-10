@@ -23,10 +23,15 @@ export async function ensureLoaded(
     skipRecompute?: boolean;
   },
 ) {
-  // Fast path: store is already in memory. Other callers (add, list, run, …)
-  // trust the in-memory copy to avoid a stat syscall on every operation.
+  // Fast path: keep the in-memory store unless the backing file changed.
+  // This lets live cron instances recover from manual jobs.json edits without
+  // requiring a gateway restart, while still avoiding a full file read when the
+  // store has not changed.
   if (state.store && !opts?.forceReload) {
-    return;
+    const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+    if (fileMtimeMs === state.storeFileMtimeMs) {
+      return;
+    }
   }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
