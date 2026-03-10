@@ -9,6 +9,7 @@ const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const clearDevicePairingMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
+const logErrorMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -52,7 +53,10 @@ class MockWebSocket {
     }
   }
 
-  close(_code?: number, _reason?: string): void {}
+  close(code?: number, reason?: string): void {
+    // Actually trigger close handlers to simulate real WebSocket behavior
+    this.emitClose(code ?? 1000, reason ?? "");
+  }
 
   send(data: string): void {
     this.sent.push(data);
@@ -104,10 +108,13 @@ vi.mock("../logger.js", async (importOriginal) => {
   return {
     ...actual,
     logDebug: (...args: unknown[]) => logDebugMock(...args),
+    logError: (...args: unknown[]) => logErrorMock(...args),
   };
 });
 
-const { GatewayClient } = await import("./client.js");
+// Import after mocks to avoid circular dependency
+const { GatewayClient, GATEWAY_PARSE_ERROR_CLOSE_CODE, GATEWAY_PARSE_ERROR_CLOSE_REASON } =
+  await import("./client.js");
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -253,6 +260,7 @@ describe("GatewayClient close handling", () => {
     clearDevicePairingMock.mockClear();
     clearDevicePairingMock.mockResolvedValue(true);
     logDebugMock.mockClear();
+    logErrorMock.mockClear();
   });
 
   it("clears stale token on device token mismatch close", () => {
@@ -456,6 +464,262 @@ describe("GatewayClient connect auth payload", () => {
       token: "explicit-device-token",
       deviceToken: "explicit-device-token",
     });
+    client.stop();
+  });
+});
+
+describe("GatewayClient handleMessage parse errors", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+    logDebugMock.mockClear();
+    logErrorMock.mockClear();
+  });
+
+  function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce },
+      }),
+    );
+  }
+
+  it("handles valid JSON event frames normally", () => {
+    const onEvent = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onEvent,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "tick",
+        payload: {},
+      }),
+    );
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "tick",
+      }),
+    );
+    expect(logDebugMock).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("handles valid JSON response frames normally", () => {
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onClose,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    // Simulate a successful response
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: "test-id",
+        ok: true,
+        payload: { result: "success" },
+      }),
+    );
+
+    expect(logDebugMock).not.toHaveBeenCalled();
+    // Should not close on valid response
+    expect(onClose).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("logs parse errors for non-JSON messages in non-PROBE mode", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      mode: "backend", // Not PROBE mode
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitMessage("not valid json");
+
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("gateway client parse error"),
+    );
+    expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("not valid json"));
+    client.stop();
+  });
+
+  it("handles truncated long messages in parse error logs", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      mode: "backend",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    const longMessage = "x".repeat(500);
+    ws.emitMessage(longMessage);
+
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("gateway client parse error"),
+    );
+    // Should be truncated to 300 chars + "..."
+    expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("xxx..."));
+    client.stop();
+  });
+
+  it("triggers immediate failure in PROBE mode on parse failure", () => {
+    const onConnectError = vi.fn();
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      mode: "probe", // PROBE mode
+      onConnectError,
+      onClose,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    // First, complete the handshake so we're in a state where messages are processed
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    // Now send invalid JSON
+    ws.emitMessage("not valid json");
+
+    // Should trigger onConnectError with descriptive message
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Failed to parse JSON message from gateway"),
+      }),
+    );
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("not valid json"),
+      }),
+    );
+    // Should close the connection with parse error code
+    expect(onClose).toHaveBeenCalledWith(
+      GATEWAY_PARSE_ERROR_CLOSE_CODE,
+      GATEWAY_PARSE_ERROR_CLOSE_REASON,
+    );
+    client.stop();
+  });
+
+  it("prevents reconnection after parse error in PROBE mode", () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const onClose = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        mode: "probe",
+        onConnectError,
+        onClose,
+      });
+
+      client.start();
+      const initialWsCount = wsInstances.length;
+      const ws = getLatestWs();
+      ws.emitOpen();
+      emitConnectChallenge(ws);
+
+      // Trigger parse error
+      ws.emitMessage("not valid json");
+
+      // Verify close was called
+      expect(onClose).toHaveBeenCalledWith(
+        GATEWAY_PARSE_ERROR_CLOSE_CODE,
+        GATEWAY_PARSE_ERROR_CLOSE_REASON,
+      );
+
+      // The client should be marked as closed, preventing reconnection
+      // We verify this by checking that no new WebSocket instances are created
+      // after the parse error (scheduleReconnect would create a new one)
+      const afterParseErrorWsCount = wsInstances.length;
+
+      // Wait a bit to see if reconnection would happen
+      vi.advanceTimersByTime(2000);
+
+      const afterTimeoutWsCount = wsInstances.length;
+
+      // Should not have created new WebSocket instances
+      expect(afterTimeoutWsCount).toBe(initialWsCount);
+      expect(afterParseErrorWsCount).toBe(initialWsCount);
+
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("includes box-drawing characters in error message for debugging", () => {
+    const onConnectError = vi.fn();
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      mode: "probe",
+      onConnectError,
+      onClose,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    // First, complete the handshake
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    // Simulate the actual issue: box-drawing characters from doctor output
+    const boxDrawingMessage = "│ Config invalid";
+    ws.emitMessage(boxDrawingMessage);
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("│ Config invalid"),
+      }),
+    );
+    expect(onClose).toHaveBeenCalledWith(
+      GATEWAY_PARSE_ERROR_CLOSE_CODE,
+      GATEWAY_PARSE_ERROR_CLOSE_REASON,
+    );
+    client.stop();
+  });
+
+  it("flushes pending requests with parse error in PROBE mode", async () => {
+    const onConnectError = vi.fn();
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      mode: "probe",
+      onConnectError,
+      onClose,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    // Make a request that will be pending
+    const requestPromise = client.request("health");
+
+    // Trigger parse error before response
+    ws.emitMessage("not valid json");
+
+    // The pending request should be rejected with the parse error
+    await expect(requestPromise).rejects.toThrow("Failed to parse JSON message from gateway");
+
+    expect(onClose).toHaveBeenCalledWith(
+      GATEWAY_PARSE_ERROR_CLOSE_CODE,
+      GATEWAY_PARSE_ERROR_CLOSE_REASON,
+    );
     client.stop();
   });
 });

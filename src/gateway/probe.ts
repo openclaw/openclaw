@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
+import {
+  GATEWAY_PARSE_ERROR_CLOSE_CODE,
+  GATEWAY_PARSE_ERROR_CLOSE_REASON,
+  GatewayClient,
+} from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
 
 export type GatewayProbeAuth = {
@@ -38,6 +42,7 @@ export async function probeGateway(opts: {
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
+  let sawParseError = false;
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -62,9 +67,33 @@ export async function probeGateway(opts: {
       instanceId,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
+        // Track if we've seen a parse error to enable fast-fail on close
+        if (err.message.includes("Failed to parse JSON message from gateway")) {
+          sawParseError = true;
+        }
       },
       onClose: (code, reason) => {
         close = { code, reason };
+        // In PROBE mode, if we've already seen a parse error via onConnectError,
+        // any subsequent close should immediately fail the probe, regardless of
+        // the close code or reason. This handles cases where the connection closes
+        // with code 1006 (abnormal closure) or empty reason after the parse error.
+        // Otherwise, we still check for the explicit parse error close.
+        if (
+          sawParseError ||
+          (code === GATEWAY_PARSE_ERROR_CLOSE_CODE && reason === GATEWAY_PARSE_ERROR_CLOSE_REASON)
+        ) {
+          settle({
+            ok: false,
+            connectLatencyMs,
+            error: connectError ?? `gateway protocol error: ${reason}`,
+            close,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          });
+        }
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
