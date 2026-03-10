@@ -139,11 +139,12 @@ describe("fetchBrowserJson loopback auth", () => {
   });
 
   it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
-    const text = vi.fn(async () => "max concurrent sessions exceeded");
-    const cancel = vi.fn(async () => {});
+    const response = new Response("max concurrent sessions exceeded", { status: 429 });
+    const text = vi.spyOn(response, "text");
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, status: 429, text, body: { cancel } }) as Response),
+      vi.fn(async () => response),
     );
 
     const thrown = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/").catch(
