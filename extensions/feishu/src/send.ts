@@ -90,30 +90,46 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
+  const card = parsed as Record<string, unknown>;
+
+  // Handle raw_card_content format from API: contains json_card field
+  if (card.json_card) {
+    try {
+      const jsonCard = JSON.parse(card.json_card as string);
+      return extractTextFromCard(jsonCard) || "[Interactive Card]";
+    } catch {
+      return "[Interactive Card]";
+    }
   }
 
-  const texts: string[] = [];
-  for (const element of candidate.elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
+  // Simple extraction from regular card structure
+  return extractTextFromCard(parsed) || "[Interactive Card]";
+}
+
+function extractTextFromCard(obj: unknown): string {
+  if (typeof obj === "string") return obj;
+  if (!obj || typeof obj !== "object") return "";
+  if (Array.isArray(obj)) return obj.map(extractTextFromCard).filter(Boolean).join("\n");
+
+  const o = obj as Record<string, unknown>;
+  const fields = ["text", "content", "title", "label"];
+  for (const f of fields) {
+    if (typeof o[f] === "string") return o[f] as string;
+    // Handle nested text object: { text: { content: "..." } }
+    if (o[f] && typeof o[f] === "object") {
+      const nested = o[f] as Record<string, unknown>;
+      if (typeof nested.content === "string") return nested.content;
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+  // Recurse into containers - collect from all, don't early-return
+  const parts: string[] = [];
+  for (const f of ["elements", "actions", "header", "body"]) {
+    if (o[f]) {
+      const result = extractTextFromCard(o[f]);
+      if (result) parts.push(result);
+    }
+  }
+  return parts.join("\n");
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
@@ -177,6 +193,7 @@ export async function getMessageFeishu(params: {
   try {
     const response = (await client.im.message.get({
       path: { message_id: messageId },
+      params: { card_msg_content_type: "raw_card_content" } as any,
     })) as {
       code?: number;
       msg?: string;
