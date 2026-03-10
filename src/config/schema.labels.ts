@@ -118,6 +118,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.attachOnly": "Browser Attach-only Mode",
   "browser.cdpPortRangeStart": "Browser CDP Port Range Start",
   "browser.defaultProfile": "Browser Default Profile",
+  "browser.relayBindHost": "Browser Relay Bind Address",
   "browser.profiles": "Browser Profiles",
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",
@@ -220,6 +221,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.qveris.toolId": "QVeris Web Search Tool ID",
   "tools.web.search.qveris.apiKey": "QVeris Web Search API Key", // pragma: allowlist secret
   "tools.web.search.qveris.baseUrl": "QVeris Web Search Base URL",
+  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Web Search Model",
   "tools.web.search.grok.inlineCitations": "Grok Inline Citations",
@@ -231,14 +233,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.qveris.executeTimeoutSeconds": "QVeris Execute Timeout (sec)",
   "tools.qveris.maxResponseSize": "QVeris Max Response Size",
   "tools.qveris.searchLimit": "QVeris Search Limit",
-  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
-  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
-  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
+  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
+  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
+  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
@@ -469,6 +471,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
+  "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -664,6 +667,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.modelId": "Talk Model ID",
   "talk.outputFormat": "Talk Output Format",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
+  "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.responsePrefix": "Outbound Response Prefix",
@@ -729,6 +733,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
+  "channels.telegram.execApprovals": "Telegram Exec Approvals",
+  "channels.telegram.execApprovals.enabled": "Telegram Exec Approvals Enabled",
+  "channels.telegram.execApprovals.approvers": "Telegram Exec Approval Approvers",
+  "channels.telegram.execApprovals.agentFilter": "Telegram Exec Approval Agent Filter",
+  "channels.telegram.execApprovals.sessionFilter": "Telegram Exec Approval Session Filter",
+  "channels.telegram.execApprovals.target": "Telegram Exec Approval Target",
   "channels.telegram.threadBindings.enabled": "Telegram Thread Binding Enabled",
   "channels.telegram.threadBindings.idleHours": "Telegram Thread Binding Idle Timeout (hours)",
   "channels.telegram.threadBindings.maxAgeHours": "Telegram Thread Binding Max Age (hours)",

@@ -52,6 +52,10 @@ async function stopGatewayIfRunning(runtime: RuntimeEnv) {
   }
 }
 
+function logBackupRecommendation(runtime: RuntimeEnv) {
+  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
+}
+
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
@@ -118,6 +122,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     resolveCleanupPlanFromDisk();
 
   if (scope !== "config") {
+    logBackupRecommendation(runtime);
     if (dryRun) {
       runtime.log("[dry-run] stop gateway service");
     } else {

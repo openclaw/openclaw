@@ -51,6 +51,7 @@ jobs:
               },
               {
                 label: "r: no-ci-pr",
+                close: true,
                 message:
                   "Please don't make PRs for test failures on main.\n\n" +
                   "The team is aware of those and will handle them directly on the codebase, not only fixing the tests but also investigating what the root cause is. Having to sift through test-fix-PRs (including some that have been out of date for weeks...) on top of that doesn't help. There are already way too many PRs for humans to manage; please don't make the flood worse.\n\n" +
@@ -261,6 +262,8 @@ jobs:
             };
 
             const triggerLabel = "trigger-response";
+            const activePrLimitLabel = "r: too-many-prs";
+            const activePrLimitOverrideLabel = "r: too-many-prs-override";
             const target = context.payload.issue ?? context.payload.pull_request;
             if (!target) {
               return;
@@ -446,6 +449,10 @@ jobs:
                 state_reason: "not_planned",
               });
               return;
+            }
+
+            if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
+              labelSet.delete(activePrLimitLabel);
             }
 
             const rule = rules.find((item) => labelSet.has(item.label));

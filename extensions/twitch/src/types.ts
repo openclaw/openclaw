@@ -10,9 +10,9 @@ import type {
   ChannelCapabilities,
   ChannelGatewayContext,
   ChannelLogSink,
-  ChannelMeta,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
+  ChannelMeta,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelPlugin,
@@ -22,7 +22,7 @@ import type {
   OpenClawConfig,
   OutboundDeliveryResult,
   RuntimeEnv,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/twitch";
 
 // ============================================================================
 // Twitch-Specific Types

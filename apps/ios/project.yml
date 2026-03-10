@@ -25,6 +25,15 @@ schemes:
     test:
       targets:
         - OpenClawTests
+        - OpenClawLogicTests
+  OpenClawLogicTests:
+    shared: true
+    build:
+      targets:
+        OpenClawLogicTests: all
+    test:
+      targets:
+        - OpenClawLogicTests
 
 targets:
   OpenClaw:
@@ -98,7 +107,7 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.3.8"
+        CFBundleShortVersionString: "2026.3.9"
         CFBundleVersion: "20260308"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -117,8 +126,11 @@ targets:
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
+        NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
+        NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         NSSupportsLiveActivities: true
+        ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -156,7 +168,7 @@ targets:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Share
-        CFBundleShortVersionString: "2026.3.8"
+        CFBundleShortVersionString: "2026.3.9"
         CFBundleVersion: "20260308"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
@@ -193,7 +205,7 @@ targets:
       path: ActivityWidget/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Activity
-        CFBundleShortVersionString: "2026.3.8"
+        CFBundleShortVersionString: "2026.3.9"
         CFBundleVersion: "20260308"
         NSSupportsLiveActivities: true
         NSExtension:
@@ -219,7 +231,7 @@ targets:
       path: WatchApp/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.8"
+        CFBundleShortVersionString: "2026.3.9"
         CFBundleVersion: "20260308"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKWatchKitApp: true
@@ -244,7 +256,7 @@ targets:
       path: WatchExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.8"
+        CFBundleShortVersionString: "2026.3.9"
         CFBundleVersion: "20260308"
         NSExtension:
           NSExtensionAttributes:
@@ -259,6 +271,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Tests
+        excludes:
+          - Logic
     dependencies:
       - target: OpenClaw
       - package: Swabble
@@ -279,5 +293,31 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.3.8"
+        CFBundleShortVersionString: "2026.3.9"
+        CFBundleVersion: "20260308"
+
+  OpenClawLogicTests:
+    type: bundle.unit-test
+    platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: Tests/Logic
+    dependencies:
+      - package: OpenClawKit
+    settings:
+      base:
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.logic-tests
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: Tests/Info.plist
+      properties:
+        CFBundleDisplayName: OpenClawLogicTests
+        CFBundleShortVersionString: "2026.3.9"
         CFBundleVersion: "20260308"

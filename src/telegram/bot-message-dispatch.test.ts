@@ -140,6 +140,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   async function dispatchWithContext(params: {
     context: TelegramMessageContext;
+    cfg?: Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
     bot?: Bot;
@@ -148,7 +149,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchTelegramMessage({
       context: params.context,
       bot,
-      cfg: {},
+      cfg: params.cfg ?? {},
       runtime: createRuntime(),
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
@@ -209,6 +210,48 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      cfg: {
+        channels: {
+          telegram: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["123"],
+              target: "dm",
+            },
+          },
+        },
+      },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
+          }),
+        ],
+      }),
+    );
+    const deliveredPayload = (deliverReplies.mock.calls[0]?.[0] as { replies?: Array<unknown> })
+      ?.replies?.[0] as { channelData?: unknown } | undefined;
+    expect(deliveredPayload?.channelData).toBeUndefined();
   });
 
   it("uses 30-char preview debounce for legacy block stream mode", async () => {
@@ -1171,7 +1214,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("uses message preview transport for DM reasoning lane when answer preview lane is active", async () => {
+  it("uses message preview transport for all DM lanes when streaming is active", async () => {
     setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -1190,7 +1233,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "auto",
+        previewTransport: "message",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
@@ -1201,9 +1244,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("materializes DM answer draft final without sending a duplicate final message", async () => {
-    const answerDraftStream = createTestDraftStream({ previewMode: "draft" });
-    answerDraftStream.materialize.mockResolvedValue(321);
+  it("finalizes DM answer preview in place without materializing or sending a duplicate", async () => {
+    const answerDraftStream = createDraftStream(321);
     const reasoningDraftStream = createDraftStream(111);
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
@@ -1222,12 +1264,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "auto",
+        previewTransport: "message",
       }),
     );
-    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      321,
+      "Checking the directory...",
+      expect.any(Object),
+    );
   });
 
   it("keeps reasoning and answer streaming in separate preview lanes", async () => {

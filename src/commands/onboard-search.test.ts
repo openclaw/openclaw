@@ -286,7 +286,7 @@ describe("setupSearch", () => {
   it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["qveris", "perplexity", "brave", "gemini", "grok", "kimi"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "qveris"]);
   });
 
   it("sets provider for qveris and stores key", async () => {

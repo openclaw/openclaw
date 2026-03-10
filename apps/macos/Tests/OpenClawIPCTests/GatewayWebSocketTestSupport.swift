@@ -83,9 +83,9 @@ enum GatewayWebSocketTestSupport {
     }
 }
 
-private extension NSLock {
+extension NSLock {
     @inline(__always)
-    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+    fileprivate func withLock<T>(_ body: () throws -> T) rethrows -> T {
         self.lock(); defer { self.unlock() }
         return try body()
     }
@@ -129,7 +129,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         _ = (closeCode, reason)
-        let handler = self.lock.withLock { () -> (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)? in
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
             self._state = .canceling
             self.cancelCount += 1
             defer { self.pendingReceiveHandler = nil }
