@@ -180,7 +180,7 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toBeUndefined();
   });
 
-  it("preserves literal marker-shaped headers in inline provider models", () => {
+  it("drops SecretRef marker headers in inline provider models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         headers: {
@@ -196,8 +196,6 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Static": "tenant-a",
     });
   });
@@ -245,7 +243,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("preserves literal marker-shaped provider headers in fallback models", () => {
+  it("drops SecretRef marker provider headers in fallback models", () => {
     const cfg = {
       models: {
         providers: {
@@ -266,8 +264,6 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Custom-Auth": "token-123",
     });
   });
