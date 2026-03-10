@@ -1,11 +1,32 @@
+import os from "node:os";
 import path from "node:path";
 import { resolveGatewayProfileSuffix } from "./constants.js";
 
 const windowsAbsolutePath = /^[a-zA-Z]:[\\/]/;
 const windowsUncPath = /^\\\\/;
 
+function resolveSudoUserHome(env: Record<string, string | undefined>): string | undefined {
+  const sudoUser = env.SUDO_USER?.trim();
+  if (!sudoUser || sudoUser === "root") {
+    return undefined;
+  }
+  try {
+    const info = os.userInfo({ username: sudoUser });
+    const homedir = info.homedir.trim();
+    return homedir || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
+  const sudoUserHome = resolveSudoUserHome(env);
+  // Under sudo, HOME is often /root even though systemd --user runs as SUDO_USER.
+  // Prefer the sudo caller's home so unit file writes and systemctl scope match.
+  if (sudoUserHome && (!home || home === "/root" || home === "/var/root")) {
+    return sudoUserHome;
+  }
   if (!home) {
     throw new Error("Missing HOME");
   }
