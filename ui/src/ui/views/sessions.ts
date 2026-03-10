@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
+import { tr } from "../i18n.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 
@@ -113,7 +114,7 @@ export function renderSessions(props: SessionsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Sessions</div>
+          <div class="card-title">${tr("sessions.title.page", "Sessions")}</div>
           <div class="card-sub">Active session keys and per-session overrides.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>

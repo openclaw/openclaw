@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
 import type { CronFormState } from "../ui-types.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import { tr } from "../i18n.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 
@@ -63,7 +64,7 @@ export function renderCron(props: CronProps) {
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
-        <div class="card-title">Scheduler</div>
+        <div class="card-title">${tr("cron.title.scheduler", "Scheduler")}</div>
         <div class="card-sub">Gateway-owned cron scheduler status.</div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
@@ -90,7 +91,7 @@ export function renderCron(props: CronProps) {
       </div>
 
       <div class="card">
-        <div class="card-title">New Job</div>
+        <div class="card-title">${tr("cron.title.newJob", "New Job")}</div>
         <div class="card-sub">Create a scheduled wakeup or agent run.</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
@@ -273,7 +274,7 @@ export function renderCron(props: CronProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Jobs</div>
+      <div class="card-title">${tr("cron.title.jobs", "Jobs")}</div>
       <div class="card-sub">All scheduled jobs stored in the gateway.</div>
       ${
         props.jobs.length === 0
@@ -289,7 +290,7 @@ export function renderCron(props: CronProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Run history</div>
+      <div class="card-title">${tr("cron.title.runHistory", "Run history")}</div>
       <div class="card-sub">Latest runs for ${selectedRunTitle}.</div>
       ${
         props.runsJobId == null

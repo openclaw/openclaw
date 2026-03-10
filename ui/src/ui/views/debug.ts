@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { EventLogEntry } from "../app-events.ts";
+import { tr } from "../i18n.ts";
 import { formatEventPayload } from "../presenter.ts";
 
 export type DebugProps = {
@@ -37,7 +38,7 @@ export function renderDebug(props: DebugProps) {
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Snapshots</div>
+            <div class="card-title">${tr("debug.title.snapshots", "Snapshots")}</div>
             <div class="card-sub">Status, health, and heartbeat data.</div>
           </div>
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -69,7 +70,7 @@ export function renderDebug(props: DebugProps) {
       </div>
 
       <div class="card">
-        <div class="card-title">Manual RPC</div>
+        <div class="card-title">${tr("debug.title.manualRpc", "Manual RPC")}</div>
         <div class="card-sub">Send a raw gateway method with JSON params.</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
@@ -109,7 +110,7 @@ export function renderDebug(props: DebugProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Models</div>
+      <div class="card-title">${tr("debug.title.models", "Models")}</div>
       <div class="card-sub">Catalog from models.list.</div>
       <pre class="code-block" style="margin-top: 12px;">${JSON.stringify(
         props.models ?? [],
@@ -119,7 +120,7 @@ export function renderDebug(props: DebugProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Event Log</div>
+      <div class="card-title">${tr("debug.title.eventLog", "Event Log")}</div>
       <div class="card-sub">Latest gateway events.</div>
       ${
         props.eventLog.length === 0

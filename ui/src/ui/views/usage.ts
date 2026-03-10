@@ -1,5 +1,6 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { tr } from "../i18n.ts";
 import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "../usage-helpers.ts";
 import { usageStylesString } from "./usageStyles.ts";
 import {
@@ -188,7 +189,7 @@ function renderUsageMosaic(
       <div class="card usage-mosaic">
         <div class="usage-mosaic-header">
           <div>
-            <div class="usage-mosaic-title">Activity by Time</div>
+            <div class="usage-mosaic-title">${tr("usage.title.activityByTime", "Activity by Time")}</div>
             <div class="usage-mosaic-sub">Estimates require session timestamps.</div>
           </div>
           <div class="usage-mosaic-total">${formatTokens(0)} tokens</div>
@@ -205,7 +206,7 @@ function renderUsageMosaic(
     <div class="card usage-mosaic">
       <div class="usage-mosaic-header">
         <div>
-          <div class="usage-mosaic-title">Activity by Time</div>
+          <div class="usage-mosaic-title">${tr("usage.title.activityByTime", "Activity by Time")}</div>
           <div class="usage-mosaic-sub">
             Estimated from session spans (first/last activity). Time zone: ${timeZone === "utc" ? "UTC" : "Local"}.
           </div>
@@ -1001,7 +1002,7 @@ function renderDailyChartCompact(
   if (!daily.length) {
     return html`
       <div class="daily-chart-compact">
-        <div class="sessions-panel-title">Daily Usage</div>
+        <div class="sessions-panel-title">${tr("usage.title.dailyUsage", "Daily Usage")}</div>
         <div class="muted" style="padding: 20px; text-align: center">No data</div>
       </div>
     `;
@@ -1032,7 +1033,11 @@ function renderDailyChartCompact(
             By Type
           </button>
         </div>
-        <div class="card-title">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
+        <div class="card-title">${
+          isTokenMode
+            ? tr("usage.title.dailyTokenUsage", "Daily Token Usage")
+            : tr("usage.title.dailyCostUsage", "Daily Cost Usage")
+        }</div>
       </div>
       <div class="daily-chart">
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
@@ -1308,7 +1313,7 @@ function renderUsageInsights(
 
   return html`
     <section class="card" style="margin-top: 16px;">
-      <div class="card-title">Usage Overview</div>
+      <div class="card-title">${tr("usage.title.usageOverview", "Usage Overview")}</div>
       <div class="usage-summary-grid">
         <div class="usage-summary-card">
           <div class="usage-summary-title">
@@ -1520,7 +1525,7 @@ function renderSessionsCard(
   return html`
     <div class="card sessions-card">
       <div class="sessions-card-header">
-        <div class="card-title">Sessions</div>
+        <div class="card-title">${tr("usage.title.sessions", "Sessions")}</div>
         <div class="sessions-card-count">
           ${sessions.length} shown${totalSessions !== sessions.length ? ` · ${totalSessions} total` : ""}
         </div>
@@ -2828,14 +2833,14 @@ export function renderUsage(props: UsageProps) {
     <style>${usageStylesString}</style>
 
     <section class="usage-page-header">
-      <div class="usage-page-title">Usage</div>
+      <div class="usage-page-title">${tr("usage.title.page", "Usage")}</div>
       <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
     </section>
 
     <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
       <div class="usage-header-row">
         <div class="usage-header-title">
-          <div class="card-title" style="margin: 0;">Filters</div>
+          <div class="card-title" style="margin: 0;">${tr("usage.title.filters", "Filters")}</div>
           ${
             props.loading
               ? html`

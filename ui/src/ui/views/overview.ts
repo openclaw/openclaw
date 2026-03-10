@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewayHelloOk } from "../gateway.ts";
 import type { UiSettings } from "../storage.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import { tr } from "../i18n.ts";
 import { formatNextRun } from "../presenter.ts";
 
 export type OverviewProps = {
@@ -122,7 +123,7 @@ export function renderOverview(props: OverviewProps) {
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
-        <div class="card-title">Gateway Access</div>
+        <div class="card-title">${tr("overview.title.gatewayAccess", "Gateway Access")}</div>
         <div class="card-sub">Where the dashboard connects and how it authenticates.</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
@@ -178,7 +179,7 @@ export function renderOverview(props: OverviewProps) {
       </div>
 
       <div class="card">
-        <div class="card-title">Snapshot</div>
+        <div class="card-title">${tr("overview.title.snapshot", "Snapshot")}</div>
         <div class="card-sub">Latest gateway handshake information.</div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
@@ -239,7 +240,7 @@ export function renderOverview(props: OverviewProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Notes</div>
+      <div class="card-title">${tr("overview.title.notes", "Notes")}</div>
       <div class="card-sub">Quick reminders for remote control setups.</div>
       <div class="note-grid" style="margin-top: 14px;">
         <div>
