@@ -1720,7 +1720,58 @@ describe("compaction-safeguard emergency fallback", () => {
     });
 
     try {
-      await expect(compactionHandler(mockEvent, mockContext)).rejects.toThrow("AbortError");
+      await expect(compactionHandler(mockEvent, mockContext)).rejects.toThrow(abortError);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("re-throws non-AbortError when signal is aborted (e.g. TimeoutError)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const timeoutError = new Error("request timed out");
+    timeoutError.name = "TimeoutError";
+    const spy = vi.spyOn(compactionModule, "summarizeInStages").mockRejectedValue(timeoutError);
+
+    const compactionHandler = createCompactionHandler();
+
+    const abortController = new AbortController();
+    abortController.abort(timeoutError);
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-timeout-abort",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: abortController.signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("sk-test"),
+    });
+
+    try {
+      await expect(compactionHandler(mockEvent, mockContext)).rejects.toThrow("request timed out");
     } finally {
       spy.mockRestore();
     }

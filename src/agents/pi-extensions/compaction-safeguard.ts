@@ -970,8 +970,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       };
     } catch (error) {
       // Re-throw abort errors so signal cancellation doesn't trigger emergency fallback.
-      // Check both DOMException (native AbortSignal) and plain Error (polyfills/manual) variants.
-      if (error instanceof Error && error.name === "AbortError") {
+      // Check signal state first (covers all abort reasons including TimeoutError),
+      // then fall back to name check for cases where signal is unavailable.
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
         throw error;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
