@@ -83,7 +83,36 @@ Map every token from the active scheme to the corresponding CSS custom property 
 
 ### Step 8: Include chatbot widget
 
-Add a script tag to include `assets/chatbot-widget.js` in the generated HTML. This module provides the floating chatbot UI, WebSocket connection to Gateway, and message handling. Do not recreate chatbot functionality manually.
+**IMPORTANT**: The chatbot JavaScript (`assets/chatbot-widget.js`) must be **inlined** in the generated HTML, not referenced as an external script. This is required because Canvas host serves HTML from a specific directory, and external script paths may not resolve.
+
+Inline the full content of `assets/chatbot-widget.js` inside a `<script>` tag in the HTML `<body>`. Then add an initialization call:
+
+```html
+<script>
+  // [Full content of assets/chatbot-widget.js inlined here]
+</script>
+<script>
+  HMIChatbot.init({ sessionId: 'hmi-' + Date.now() });
+</script>
+```
+
+The chatbot module auto-detects the environment:
+- **Canvas mode**: Uses the native bridge (`openclawSendUserAction`) injected by Canvas host. User actions are sent to the OpenClaw agent. The agent responds by calling `canvas action:eval` with `openclawHMIResponse({content: '...', customization: {...}})`.
+- **Browser mode**: Falls back to WebSocket connection to Gateway.
+
+### Step 8b: Handle chatbot responses (Canvas mode)
+
+When the chatbot sends a user action via Canvas bridge, you (the agent) will receive the action. Process the request per the Chatbot DIY Handling section below, then respond by running:
+
+```
+canvas action:eval node:<node-id> code:"openclawHMIResponse({content: 'Your response text', customization: {styleDirection: 'sporty'}})"
+```
+
+For design scheme uploads, the file content arrives in the action context. Parse it, validate against the schema, save to `~/.openclaw/hmi-schemes/`, then respond with the parsed scheme:
+
+```
+canvas action:eval node:<node-id> code:"openclawHMIResponse({content: 'Design scheme applied!', scheme: <parsed-scheme-json>})"
+```
 
 ### Step 9: Output the complete HTML file
 
@@ -192,7 +221,12 @@ Example guardrail responses:
 canvas action:present node:<node-id> target:hmi-dashboard.html
 ```
 
-Write generated HTML to the Canvas-served directory. The page renders in WKWebView (macOS/iOS) or WebView (Android). The chatbot WebSocket connects to Gateway automatically. User preferences are persisted via Gateway.
+Write generated HTML to the Canvas-served directory. The page renders in WKWebView (macOS/iOS) or WebView (Android). The Canvas host automatically injects a native bridge (`openclawSendUserAction`) into the HTML. The chatbot widget detects this bridge and uses it for all communication — no WebSocket needed.
+
+**Communication flow in Canvas mode:**
+1. User types in chatbot → `openclawSendUserAction({name: 'hmi-chatbot-customize', context: {content: 'user text', ...}})` → sent to OpenClaw agent
+2. Agent processes request with LLM → responds via `canvas action:eval node:<id> code:"openclawHMIResponse({content: '...', customization: {...}})"` → chatbot displays response
+3. For design scheme uploads: file content is included in the action context → agent parses and responds with scheme JSON
 
 ### Browser Mode (for preview and demo)
 
@@ -218,4 +252,4 @@ Consult these bundled files during generation. Do not guess at specs when the re
 | `references/component-catalog.md` | Widget specs: HTML templates, CSS classes, states, theme tokens | When generating any widget -- always consult, never guess |
 | `references/customization-dimensions.md` | 10-dimension customization spec with guardrails | When processing any chatbot DIY request |
 | `references/html-template.md` | HTML page skeleton structure | As the base template for every generated page |
-| `assets/chatbot-widget.js` | Chatbot JavaScript module (WebSocket, UI, message handling) | Include via script tag in every generated page |
+| `assets/chatbot-widget.js` | Chatbot JavaScript module (Canvas bridge + WebSocket fallback, UI, message handling) | **Inline** the full content in a script tag in every generated page. Exposes `openclawHMIResponse()` for receiving agent responses in Canvas mode. |
