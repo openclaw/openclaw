@@ -35,7 +35,7 @@ export type PluginConfigUiHint = {
   placeholder?: string;
 };
 
-export type PluginKind = "memory";
+export type PluginKind = "memory" | "context-engine";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -186,6 +186,12 @@ export type PluginCommandHandler = (
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
   name: string;
+  /**
+   * Optional native-command aliases for slash/menu surfaces.
+   * `default` applies to all native providers unless a provider-specific
+   * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
+   */
+  nativeNames?: Partial<Record<string, string>> & { default?: string };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -285,6 +291,11 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  registerContextEngine: (
+    id: string,
+    factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

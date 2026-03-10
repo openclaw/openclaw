@@ -16,7 +16,11 @@ import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.j
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "../config/sessions.js";
 import type { DmPolicy } from "../config/types.base.js";
 import type {
   TelegramDirectConfig,
@@ -44,12 +48,14 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   evaluateTelegramGroupBaseAccess,
@@ -257,8 +263,21 @@ export const registerTelegramHandlers = ({
         replyMedia,
       );
     },
-    onError: (err) => {
+    onError: (err, items) => {
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+      const chatId = items[0]?.msg.chat.id;
+      if (chatId != null) {
+        const threadId = items[0]?.msg.message_thread_id;
+        void bot.api
+          .sendMessage(
+            chatId,
+            "Something went wrong while processing your message. Please try again.",
+            threadId != null ? { message_thread_id: threadId } : undefined,
+          )
+          .catch((sendErr) => {
+            logVerbose(`telegram: error fallback send failed: ${String(sendErr)}`);
+          });
+      }
     },
   });
 
@@ -268,9 +287,10 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     messageThreadId?: number;
     resolvedThreadId?: number;
+    senderId?: string | number;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof loadSessionStore>[string];
+    sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
     model?: string;
   } => {
     const resolvedThreadId =
@@ -279,26 +299,20 @@ export const registerTelegramHandlers = ({
         isForum: params.isForum,
         messageThreadId: params.messageThreadId,
       });
-    const peerId = params.isGroup
-      ? buildTelegramGroupPeerId(params.chatId, resolvedThreadId)
-      : String(params.chatId);
-    const parentPeer = buildTelegramParentPeer({
+    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
+    const topicThreadId = resolvedThreadId ?? dmThreadId;
+    const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+    const { route } = resolveTelegramConversationRoute({
+      cfg,
+      accountId,
+      chatId: params.chatId,
       isGroup: params.isGroup,
       resolvedThreadId,
-      chatId: params.chatId,
-    });
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "telegram",
-      accountId,
-      peer: {
-        kind: params.isGroup ? "group" : "direct",
-        id: peerId,
-      },
-      parentPeer,
+      replyThreadId: topicThreadId,
+      senderId: params.senderId,
+      topicAgentId: topicConfig?.agentId,
     });
     const baseSessionKey = route.sessionKey;
-    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const threadKeys =
       dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
@@ -306,7 +320,7 @@ export const registerTelegramHandlers = ({
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
     const store = loadSessionStore(storePath);
-    const entry = store[sessionKey];
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
@@ -995,7 +1009,7 @@ export const registerTelegramHandlers = ({
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
     // These have no media and no text content to process.
-    const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
+    const hasText = Boolean(getTelegramTextParts(msg).text.trim());
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
       return;
@@ -1179,7 +1193,15 @@ export const registerTelegramHandlers = ({
       // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
       const modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
-        const modelData = await buildModelsProviderData(cfg);
+        const sessionState = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          messageThreadId,
+          resolvedThreadId,
+          senderId,
+        });
+        const modelData = await buildModelsProviderData(cfg, sessionState.agentId);
         const { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
@@ -1238,14 +1260,15 @@ export const registerTelegramHandlers = ({
           const safePage = Math.max(1, Math.min(page, totalPages));
 
           // Resolve current model from session (prefer overrides)
-          const sessionState = resolveTelegramSessionState({
+          const currentSessionState = resolveTelegramSessionState({
             chatId,
             isGroup,
             isForum,
             messageThreadId,
             resolvedThreadId,
+            senderId,
           });
-          const currentModel = sessionState.model;
+          const currentModel = currentSessionState.model;
 
           const buttons = buildModelsKeyboard({
             provider,
@@ -1259,8 +1282,8 @@ export const registerTelegramHandlers = ({
             provider,
             total: models.length,
             cfg,
-            agentDir: resolveAgentDir(cfg, sessionState.agentId),
-            sessionEntry: sessionState.sessionEntry,
+            agentDir: resolveAgentDir(cfg, currentSessionState.agentId),
+            sessionEntry: currentSessionState.sessionEntry,
           });
           await editMessageWithButtons(text, buttons);
           return;

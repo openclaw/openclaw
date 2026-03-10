@@ -198,6 +198,50 @@ const PluginEntrySchema = z
   })
   .strict();
 
+const TalkProviderEntrySchema = z
+  .object({
+    voiceId: z.string().optional(),
+    voiceAliases: z.record(z.string(), z.string()).optional(),
+    modelId: z.string().optional(),
+    outputFormat: z.string().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+  })
+  .catchall(z.unknown());
+
+const TalkSchema = z
+  .object({
+    provider: z.string().optional(),
+    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    voiceId: z.string().optional(),
+    voiceAliases: z.record(z.string(), z.string()).optional(),
+    modelId: z.string().optional(),
+    outputFormat: z.string().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    interruptOnSpeech: z.boolean().optional(),
+    silenceTimeoutMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((talk, ctx) => {
+    const provider = talk.provider?.trim().toLowerCase();
+    const providers = talk.providers ? Object.keys(talk.providers) : [];
+
+    if (provider && providers.length > 0 && !(provider in talk.providers!)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: `talk.provider must match a key in talk.providers (missing "${provider}")`,
+      });
+    }
+
+    if (!provider && providers.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: "talk.provider is required when talk.providers defines multiple providers",
+      });
+    }
+  });
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -354,7 +398,9 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
-                driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                driver: z
+                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("extension")])
+                  .optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
@@ -365,6 +411,7 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        relayBindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
       })
       .strict()
       .optional(),
@@ -462,6 +509,12 @@ export const OpenClawSchema = z
     media: z
       .object({
         preserveFilenames: z.boolean().optional(),
+        ttlHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24 * 7)
+          .optional(),
       })
       .strict()
       .optional(),
@@ -479,7 +532,7 @@ export const OpenClawSchema = z
             maxAttempts: z.number().int().min(0).max(10).optional(),
             backoffMs: z.array(z.number().int().nonnegative()).min(1).max(10).optional(),
             retryOn: z
-              .array(z.enum(["rate_limit", "network", "timeout", "server_error"]))
+              .array(z.enum(["rate_limit", "overloaded", "network", "timeout", "server_error"]))
               .min(1)
               .optional(),
           })
@@ -603,32 +656,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
-    talk: z
-      .object({
-        provider: z.string().optional(),
-        providers: z
-          .record(
-            z.string(),
-            z
-              .object({
-                voiceId: z.string().optional(),
-                voiceAliases: z.record(z.string(), z.string()).optional(),
-                modelId: z.string().optional(),
-                outputFormat: z.string().optional(),
-                apiKey: SecretInputSchema.optional().register(sensitive),
-              })
-              .catchall(z.unknown()),
-          )
-          .optional(),
-        voiceId: z.string().optional(),
-        voiceAliases: z.record(z.string(), z.string()).optional(),
-        modelId: z.string().optional(),
-        outputFormat: z.string().optional(),
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        interruptOnSpeech: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    talk: TalkSchema.optional(),
     gateway: z
       .object({
         port: z.number().int().positive().optional(),
@@ -869,6 +897,7 @@ export const OpenClawSchema = z
         slots: z
           .object({
             memory: z.string().optional(),
+            contextEngine: z.string().optional(),
           })
           .strict()
           .optional(),

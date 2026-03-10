@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
+  buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
+  prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -133,9 +135,15 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe("minimal");
   });
 
-  it("uses full mode for cron sessions", () => {
-    expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
-    expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
+  it("uses minimal mode for cron sessions", () => {
+    expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("minimal");
+    expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("minimal");
+  });
+
+  it("uses full mode for regular and undefined sessions", () => {
+    expect(resolvePromptModeForSession(undefined)).toBe("full");
+    expect(resolvePromptModeForSession("agent:main")).toBe("full");
+    expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
   });
 });
 
@@ -180,7 +188,6 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
-
 describe("wrapStreamFnTrimToolCallNames", () => {
   function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
     result: () => Promise<unknown>;
@@ -277,6 +284,76 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const result = await stream.result();
 
     expect(finalToolCall.name).toBe("exec");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("maps provider-prefixed tool names to allowed canonical tools", async () => {
+    const partialToolCall = { type: "toolCall", name: " functions.read " };
+    const messageToolCall = { type: "toolCall", name: " functions.write " };
+    const finalToolCall = { type: "toolCall", name: " tools/exec " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("write");
+    expect(finalToolCall.name).toBe("exec");
+  });
+
+  it("normalizes toolUse and functionCall names before dispatch", async () => {
+    const partialToolCall = { type: "toolUse", name: " functions.read " };
+    const messageToolCall = { type: "functionCall", name: " functions.exec " };
+    const finalToolCall = { type: "toolUse", name: " tools/write " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("exec");
+    expect(finalToolCall.name).toBe("write");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("preserves multi-segment tool suffixes when dropping provider prefixes", async () => {
+    const finalToolCall = { type: "toolCall", name: " functions.graph.search " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["graph.search", "search"]));
+    const result = await stream.result();
+
+    expect(finalToolCall.name).toBe("graph.search");
     expect(result).toBe(finalMessage);
   });
 
@@ -443,7 +520,7 @@ describe("wrapOllamaCompatNumCtx", () => {
     let payloadSeen: Record<string, unknown> | undefined;
     const baseFn = vi.fn((_model, _context, options) => {
       const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, _model);
       payloadSeen = payload;
       return {} as never;
     });
@@ -546,5 +623,121 @@ describe("decodeHtmlEntitiesInObject", () => {
   it("decodes numeric character references", () => {
     expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
     expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
+  });
+});
+describe("prependSystemPromptAddition", () => {
+  it("prepends context-engine addition to the system prompt", () => {
+    const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+      systemPromptAddition: "extra behavior",
+    });
+
+    expect(result).toBe("extra behavior\n\nbase system");
+  });
+
+  it("returns the original system prompt when no addition is provided", () => {
+    const result = prependSystemPromptAddition({
+      systemPrompt: "base system",
+    });
+
+    expect(result).toBe("base system");
+  });
+});
+
+describe("buildAfterTurnRuntimeContext", () => {
+  it("uses primary model when compaction.model is not set", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                model: "openrouter/anthropic/claude-sonnet-4-5",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
+    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
+    expect(legacy).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+    });
+  });
+  it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        authProfileId: "openai:p1",
+        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      authProfileId: "openai:p1",
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
   });
 });

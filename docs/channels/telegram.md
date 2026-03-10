@@ -232,10 +232,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ## Feature reference
 
 <AccordionGroup>
-  <Accordion title="Live stream preview (native drafts + message edits)">
+  <Accordion title="Live stream preview (message edits)">
     OpenClaw can stream partial replies in real time:
 
-    - direct chats: Telegram native draft streaming via `sendMessageDraft`
+    - direct chats: preview message + `editMessageText`
     - groups/topics: preview message + `editMessageText`
 
     Requirement:
@@ -244,11 +244,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
-    Telegram enabled `sendMessageDraft` for all bots in Bot API 9.5 (March 1, 2026).
-
     For text-only replies:
 
-    - DM: OpenClaw updates the draft in place (no extra preview message)
+    - DM: OpenClaw keeps the same preview message and performs a final edit in place (no second message)
     - group/topic: OpenClaw keeps the same preview message and performs a final edit in place (no second message)
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
@@ -724,7 +722,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Limits, retry, and CLI targets">
     - `channels.telegram.textChunkLimit` default is 4000.
     - `channels.telegram.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
-    - `channels.telegram.mediaMaxMb` (default 5) caps inbound Telegram media download/processing size.
+    - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound Telegram media size.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies).
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
     - DM history controls:
@@ -804,7 +802,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 ```yaml
 channels:
   telegram:
-    proxy: socks5://user:pass@proxy-host:1080
+    proxy: socks5://<user>:<password>@proxy-host:1080
 ```
 
     - Node 22+ defaults to `autoSelectFamily=true` (except WSL2) and `dnsResultOrder=ipv4first`.
@@ -872,8 +870,8 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). In DMs, `partial` uses native `sendMessageDraft` when available.
-- `channels.telegram.mediaMaxMb`: inbound Telegram media download/processing cap (MB).
+- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). Telegram preview streaming uses a single preview message that is edited in place.
+- `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.

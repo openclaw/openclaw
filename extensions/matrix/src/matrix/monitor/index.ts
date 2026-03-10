@@ -1,7 +1,7 @@
 import {
-  createLoggerBackedRuntime,
   GROUP_POLICY_BLOCKED_LABEL,
   mergeAllowlist,
+  resolveRuntimeEnv,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   summarizeMapping,
@@ -241,11 +241,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   }
 
   const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
-  const runtime: RuntimeEnv =
-    opts.runtime ??
-    createLoggerBackedRuntime({
-      logger,
-    });
+  const runtime: RuntimeEnv = resolveRuntimeEnv({
+    runtime: opts.runtime,
+    logger,
+  });
   const logVerboseMessage = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
       return;

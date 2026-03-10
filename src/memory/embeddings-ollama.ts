@@ -2,6 +2,7 @@ import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
@@ -28,14 +29,11 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 }
 
 function normalizeOllamaModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_OLLAMA_EMBEDDING_MODEL;
-  }
-  if (trimmed.startsWith("ollama/")) {
-    return trimmed.slice("ollama/".length);
-  }
-  return trimmed;
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    prefixes: ["ollama/"],
+  });
 }
 
 function resolveOllamaApiBase(configuredBaseUrl?: string): string {

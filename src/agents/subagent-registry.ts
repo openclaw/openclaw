@@ -8,10 +8,15 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { ensureContextEnginesInitialized } from "../context-engine/init.js";
+import { resolveContextEngine } from "../context-engine/registry.js";
+import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   captureSubagentCompletionReply,
@@ -54,6 +59,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
+const log = createSubsystemLogger("agents/subagent-registry");
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
@@ -303,6 +309,28 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
     endedAt: params.endedAt,
     error: params.error,
   });
+}
+
+async function notifyContextEngineSubagentEnded(params: {
+  childSessionKey: string;
+  reason: SubagentEndReason;
+  workspaceDir?: string;
+}) {
+  try {
+    const cfg = loadConfig();
+    ensureRuntimePluginsLoaded({
+      config: cfg,
+      workspaceDir: params.workspaceDir,
+    });
+    ensureContextEnginesInitialized();
+    const engine = await resolveContextEngine(cfg);
+    if (!engine.onSubagentEnded) {
+      return;
+    }
+    await engine.onSubagentEnded(params);
+  } catch (err) {
+    log.warn("context-engine onSubagentEnded failed (best-effort)", { err });
+  }
 }
 
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
@@ -690,6 +718,11 @@ async function sweepSubagentRuns() {
       continue;
     }
     clearPendingLifecycleError(runId);
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: entry.childSessionKey,
+      reason: "swept",
+      workspaceDir: entry.workspaceDir,
+    });
     subagentRuns.delete(runId);
     mutated = true;
     // Archive/purge is terminal for the run record; remove any retained attachments too.
@@ -894,9 +927,8 @@ async function finalizeSubagentCleanup(
     return;
   }
 
-  // Allow retry on the next wake if announce was deferred or failed.
-  // Applies to both keep/delete cleanup modes so delete-runs are only removed
-  // after a successful announce (or terminal give-up).
+  // Keep both cleanup modes retryable after deferred/failed announce.
+  // Delete-mode is finalized only after announce succeeds or give-up triggers.
   entry.cleanupHandled = false;
   // Clear the in-flight resume marker so the scheduled retry can run again.
   resumedRuns.delete(runId);
@@ -936,11 +968,21 @@ function completeCleanupBookkeeping(params: {
 }) {
   if (params.cleanup === "delete") {
     clearPendingLifecycleError(params.runId);
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: params.entry.childSessionKey,
+      reason: "deleted",
+      workspaceDir: params.entry.workspaceDir,
+    });
     subagentRuns.delete(params.runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(params.runId);
     return;
   }
+  void notifyContextEngineSubagentEnded({
+    childSessionKey: params.entry.childSessionKey,
+    reason: "completed",
+    workspaceDir: params.entry.workspaceDir,
+  });
   params.entry.cleanupCompletedAt = params.completedAt;
   persistSubagentRuns();
   retryDeferredCompletedAnnounces(params.runId);
@@ -1111,6 +1153,7 @@ export function registerSubagentRun(params: {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  workspaceDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
@@ -1139,6 +1182,7 @@ export function registerSubagentRun(params: {
     spawnMode,
     label: params.label,
     model: params.model,
+    workspaceDir: params.workspaceDir,
     runTimeoutSeconds,
     createdAt: now,
     startedAt: now,
@@ -1248,6 +1292,14 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 
 export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
+  const entry = subagentRuns.get(runId);
+  if (entry) {
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: entry.childSessionKey,
+      reason: "released",
+      workspaceDir: entry.workspaceDir,
+    });
+  }
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();

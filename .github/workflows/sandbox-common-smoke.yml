@@ -48,7 +48,7 @@ jobs:
 
           BASE_IMAGE="openclaw-sandbox-smoke-base:bookworm-slim" \
             TARGET_IMAGE="openclaw-sandbox-common-smoke:bookworm-slim" \
-            PACKAGES="ca-certificates" \
+            PACKAGES="ca-certificates curl unzip" \
             INSTALL_PNPM=0 \
             INSTALL_BUN=0 \
             INSTALL_BREW=0 \
