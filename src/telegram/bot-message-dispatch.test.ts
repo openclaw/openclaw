@@ -906,6 +906,63 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps the active preview when an archived final edit target is missing", async () => {
+    let answerMessageId: number | undefined;
+    let answerDraftParams:
+      | {
+          onSupersededPreview?: (preview: { messageId: number; textSnapshot: string }) => void;
+        }
+      | undefined;
+    const answerDraftStream = {
+      update: vi.fn().mockImplementation((text: string) => {
+        if (text.includes("Message B")) {
+          answerMessageId = 1002;
+        }
+      }),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => answerMessageId),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+      forceNewMessage: vi.fn().mockImplementation(() => {
+        answerMessageId = undefined;
+      }),
+    };
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce((params) => {
+        answerDraftParams = params as typeof answerDraftParams;
+        return answerDraftStream;
+      })
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        answerDraftParams?.onSupersededPreview?.({
+          messageId: 1001,
+          textSnapshot: "Message A partial",
+        });
+
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockRejectedValue(new Error("400: Bad Request: message to edit not found"));
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it.each(["partial", "block"] as const)(
     "keeps finalized text preview when the next assistant message is media-only (%s mode)",
     async (streamMode) => {

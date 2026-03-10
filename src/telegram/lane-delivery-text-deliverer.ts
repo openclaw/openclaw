@@ -401,6 +401,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return "preview-finalized";
       }
       if (finalized === "retained") {
+        params.previewDispositionByLane.answer = "retained";
         return "preview-retained";
       }
     }
