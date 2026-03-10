@@ -24,12 +24,14 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   if (prev === next) {
     return [];
   }
-  if (isPlainObject(prev) && isPlainObject(next)) {
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  if (isPlainObject(prev) || isPlainObject(next)) {
+    const prevObject = isPlainObject(prev) ? prev : {};
+    const nextObject = isPlainObject(next) ? next : {};
+    const keys = new Set([...Object.keys(prevObject), ...Object.keys(nextObject)]);
     const paths: string[] = [];
     for (const key of keys) {
-      const prevValue = prev[key];
-      const nextValue = next[key];
+      const prevValue = prevObject[key];
+      const nextValue = nextObject[key];
       if (prevValue === undefined && nextValue === undefined) {
         continue;
       }

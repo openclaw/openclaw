@@ -82,6 +82,34 @@ describe("diffConfigPaths", () => {
     };
     expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
   });
+
+  it("reports added agent list object fields at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
+  });
+
+  it("reports removed agent list object fields at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -233,6 +261,25 @@ describe("buildGatewayReloadPlan", () => {
       {
         agents: {
           list: [{ id: "default", apps: ["terminal", "ide"] }],
+        },
+      },
+    );
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(changedPaths).toContain("agents.list.0.apps");
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.apps");
+  });
+
+  it("requires gateway restart when adding an agent entry with app selections", () => {
+    const changedPaths = diffConfigPaths(
+      {
+        agents: {
+          list: [],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "default", apps: ["terminal"] }],
         },
       },
     );

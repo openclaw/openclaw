@@ -194,4 +194,48 @@ describe("agents apps commands", () => {
       "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide",
     );
   });
+
+  it("does not remove managed cache files while another registry alias still points at the same source", async () => {
+    const sharedSource =
+      "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide";
+    loadConfigMock.mockReturnValue({
+      apps: {
+        registry: {
+          ide: { source: sharedSource },
+          editor: { source: sharedSource },
+        },
+      },
+      agents: {
+        defaults: {
+          apps: ["ide", "editor"],
+        },
+      },
+    });
+
+    await agentsAppsUninstallCommand({ name: "ide" }, runtime);
+
+    expect(writeConfigFileMock).toHaveBeenCalledWith({
+      apps: {
+        registry: {
+          editor: {
+            source: sharedSource,
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          apps: ["editor"],
+        },
+        list: [],
+      },
+    });
+    expect(cleanupManagedAotuiAppArtifactsMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      [
+        "Uninstalled Agent App ide.",
+        "No managed cached artifacts removed.",
+        "Restart the gateway to apply the change.",
+      ].join("\n"),
+    );
+  });
 });

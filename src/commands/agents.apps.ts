@@ -186,7 +186,9 @@ export async function agentsAppsUninstallCommand(
 
   const next = pruneAgentApp(cfg, opts.name);
   await writeConfigFile(next);
-  const cleanedManagedArtifacts = await cleanupManagedAotuiAppArtifacts(entry.source);
+  const cleanedManagedArtifacts = stillReferencesAgentAppSource(next, entry.source)
+    ? false
+    : await cleanupManagedAotuiAppArtifacts(entry.source);
 
   const lines = [
     `Uninstalled Agent App ${opts.name}.`,
@@ -206,6 +208,10 @@ export async function agentsAppsUninstallCommand(
     },
     lines.join("\n"),
   );
+}
+
+function stillReferencesAgentAppSource(cfg: OpenClawConfig, source: string): boolean {
+  return Object.values(cfg.apps?.registry ?? {}).some((entry) => entry?.source === source);
 }
 
 function applyAgentAppSelection(
