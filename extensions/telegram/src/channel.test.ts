@@ -57,18 +57,38 @@ function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: strin
   const probeTelegram = vi.fn(async () =>
     params?.probeOk ? { ok: true, bot: { username: params.botUsername ?? "bot" } } : { ok: false },
   );
+  const collectUnmentionedGroupIds = vi.fn(() => ({
+    groupIds: [] as string[],
+    unresolvedGroups: 0,
+    hasWildcardUnmentionedGroups: false,
+  }));
+  const auditGroupMembership = vi.fn(async () => ({
+    ok: true,
+    checkedGroups: 0,
+    unresolvedGroups: 0,
+    hasWildcardUnmentionedGroups: false,
+    groups: [],
+    elapsedMs: 0,
+  }));
   setTelegramRuntime({
     channel: {
       telegram: {
         monitorTelegramProvider,
         probeTelegram,
+        collectUnmentionedGroupIds,
+        auditGroupMembership,
       },
     },
     logging: {
       shouldLogVerbose: () => false,
     },
   } as unknown as PluginRuntime);
-  return { monitorTelegramProvider, probeTelegram };
+  return {
+    monitorTelegramProvider,
+    probeTelegram,
+    collectUnmentionedGroupIds,
+    auditGroupMembership,
+  };
 }
 
 describe("telegramPlugin duplicate token guard", () => {
@@ -147,6 +167,85 @@ describe("telegramPlugin duplicate token guard", () => {
         webhookPort: 9876,
       }),
     );
+  });
+
+  it("passes account proxy and network settings into Telegram probes", async () => {
+    const { probeTelegram } = installGatewayRuntime({
+      probeOk: true,
+      botUsername: "opsbot",
+    });
+
+    const cfg = createCfg();
+    cfg.channels!.telegram!.accounts!.ops = {
+      ...cfg.channels!.telegram!.accounts!.ops,
+      proxy: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    };
+    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+
+    await telegramPlugin.status!.probeAccount!({
+      account,
+      timeoutMs: 5000,
+      cfg,
+    });
+
+    expect(probeTelegram).toHaveBeenCalledWith("token-ops", 5000, {
+      accountId: "ops",
+      proxyUrl: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+  });
+
+  it("passes account proxy and network settings into Telegram membership audits", async () => {
+    const { collectUnmentionedGroupIds, auditGroupMembership } = installGatewayRuntime({
+      probeOk: true,
+      botUsername: "opsbot",
+    });
+
+    collectUnmentionedGroupIds.mockReturnValue({
+      groupIds: ["-100123"],
+      unresolvedGroups: 0,
+      hasWildcardUnmentionedGroups: false,
+    });
+
+    const cfg = createCfg();
+    cfg.channels!.telegram!.accounts!.ops = {
+      ...cfg.channels!.telegram!.accounts!.ops,
+      proxy: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+      groups: {
+        "-100123": { requireMention: false },
+      },
+    };
+    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+
+    await telegramPlugin.status!.auditAccount!({
+      account,
+      timeoutMs: 5000,
+      probe: { ok: true, bot: { id: 123 }, elapsedMs: 1 },
+      cfg,
+    });
+
+    expect(auditGroupMembership).toHaveBeenCalledWith({
+      token: "token-ops",
+      botId: 123,
+      groupIds: ["-100123"],
+      proxyUrl: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+      timeoutMs: 5000,
+    });
   });
 
   it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
