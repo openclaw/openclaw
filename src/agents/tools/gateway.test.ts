@@ -117,18 +117,21 @@ describe("resolveGatewayTarget – env URL override classification", () => {
     expect(resolveGatewayTarget()).toBe("local");
   });
 
-  it("classifies loopback env URL on non-local port as 'remote' even without remote config (SSH tunnel, different port)", () => {
-    // ssh -N -L 9000:remote-host:9000 with gateway.mode=local (default): the loopback port
-    // (9000) differs from the local gateway port (18789) so it cannot be the local gateway.
+  it("classifies loopback env URL on non-local port as 'local' without remote config (local gateway on custom port)", () => {
+    // ws://127.0.0.1:9000 with no non-loopback remote URL configured: cannot prove this is
+    // an SSH tunnel — it may simply be a local gateway on a custom port. Preserve "local"
+    // so deliveryContext is not suppressed and heartbeat wake-up routing stays correct.
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:9000";
     setConfig({});
-    expect(resolveGatewayTarget()).toBe("remote");
+    expect(resolveGatewayTarget()).toBe("local");
   });
 
-  it("classifies loopback env URL on non-local port as 'remote' even when mode=remote but no remote.url (SSH tunnel, different port)", () => {
+  it("classifies loopback env URL on non-local port as 'local' when mode=remote but no remote.url (no tunnel evidence)", () => {
+    // mode=remote without a non-loopback remote.url is insufficient to prove SSH tunnel;
+    // treat as local gateway on custom port.
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:9000";
     setConfig({ gateway: { mode: "remote" } });
-    expect(resolveGatewayTarget()).toBe("remote");
+    expect(resolveGatewayTarget()).toBe("local");
   });
 
   it("classifies loopback env URL as 'local' when mode=remote but remote.url is a loopback address (local-only setup)", () => {
@@ -233,15 +236,23 @@ describe("resolveGatewayTarget – explicit gatewayUrl override", () => {
     expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:18789" })).toBe("remote");
   });
 
-  it("returns 'remote' for loopback explicit gatewayUrl on non-local port (SSH tunnel, no remote config)", () => {
-    // ssh -N -L 9000:remote-host:9000 with no remote config: loopback on port 9000 ≠ 18789
-    // so it cannot be the local gateway — must be a tunnel endpoint → classify as "remote".
+  it("returns 'local' for loopback explicit gatewayUrl on non-local port without remote config (local gateway on custom port)", () => {
+    // ws://127.0.0.1:9000 with no non-loopback remote URL: cannot distinguish SSH tunnel
+    // from local gateway on a custom port — preserve "local" so deliveryContext is kept.
     setConfig({});
-    expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:9000" })).toBe("remote");
+    expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:9000" })).toBe("local");
   });
 
-  it("returns 'remote' for loopback explicit gatewayUrl on non-local port (SSH tunnel, mode=remote no remote.url)", () => {
+  it("returns 'local' for loopback explicit gatewayUrl on non-local port when mode=remote but no remote.url (no tunnel evidence)", () => {
+    // mode=remote without a non-loopback remote.url cannot prove SSH tunnel; treat as local.
     setConfig({ gateway: { mode: "remote" } });
-    expect(resolveGatewayTarget({ gatewayUrl: "ws://localhost:9000" })).toBe("remote");
+    expect(resolveGatewayTarget({ gatewayUrl: "ws://localhost:9000" })).toBe("local");
+  });
+
+  it("returns 'remote' for loopback explicit gatewayUrl on non-local port when mode=remote with non-loopback remote.url (SSH tunnel)", () => {
+    // With a non-loopback remote URL configured, a custom-port loopback is unambiguously
+    // an SSH tunnel endpoint — classify as "remote" to suppress deliveryContext.
+    setConfig({ gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } } });
+    expect(resolveGatewayTarget({ gatewayUrl: "ws://127.0.0.1:9000" })).toBe("remote");
   });
 });
