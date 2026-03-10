@@ -1075,6 +1075,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-responses",
       provider: "openai",
       id: "gpt-5",
+      baseUrl: "https://api.openai.com/v1",
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1082,6 +1083,25 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
     expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("defaults OpenAI transport to SSE for non-OpenAI baseUrl", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "http://localhost:1234/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
   it("lets runtime options override OpenAI default transport", () => {
