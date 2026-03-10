@@ -29,119 +29,20 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 ## Fork Customizations (`sypherin/openclaw`)
 
-This fork ([sypherin/openclaw](https://github.com/sypherin/openclaw)) extends upstream with the following changes, regularly synced with [openclaw/openclaw](https://github.com/openclaw/openclaw).
+This fork ([sypherin/openclaw](https://github.com/sypherin/openclaw)) extends upstream with custom patches, regularly synced with [openclaw/openclaw](https://github.com/openclaw/openclaw).
 
-### NVIDIA NIM Model Support
+**Key additions:** NVIDIA NIM multi-model support (Qwen, GLM, Kimi, DeepSeek, MiniMax), security hardening (25+ patches), smart model routing, `<think>` tag stripping, fixFlattenedMarkdown, FLUX.1-dev image gen, Gemini TTS, QMD memory tweaks, credential redaction.
 
-Added compatibility for NVIDIA NIM models that upstream doesn't natively support:
+See **[LOCAL_PATCHES.md](LOCAL_PATCHES.md)** for full details on all custom modifications and merge history.
 
-- **Qwen3.5-397B-A17B** — primary model via NVIDIA NIM with content-aware routing (tool_heavy/reasoning/code tasks)
-- **GLM-5 / GLM-4.7** (THUDM) — empty tool call filter strips garbage `tool_calls` arrays; assistant content forced to plain string to prevent JSON mimicking; now used as fallback for simple tasks
-- **Kimi K2.5** (Moonshot) — reasoning-to-text fallback promotes thinking blocks when no text content is returned
-- **DeepSeek V3.2** — added to model registry via NVIDIA NIM
-- **QwQ-32B**, **Qwen3-Coder-Next** — local model support via llama.cpp and Lemonade
-
-Key changes:
-
-- `feat: add pi-ai post-install patch script for NVIDIA model compat` — patches `@mariozechner/pi-ai` openai-completions.js across all installed versions with 7 fixes (plain string content, empty tool call filter, reasoning fallback, 120s per-request timeout, Kimi K2.5 tool call ID normalization, text-to-tool-call fallback parser, strip `reasoning_content` from history). Run `scripts/apply-pi-ai-patches.sh` after `pnpm install`.
-- **GLM5 `<tool_call>` XML strip** — GLM5 sometimes emits tool invocations as `<tool_call>` XML tags in text instead of using proper function calling. Added `stripGlmToolCallXml()` to the response processing chain (both batch and streaming paths) alongside existing Minimax strip.
-- `fix: hook loading + remove custom NVIDIA stream routing` — removed custom `nvidia-reasoning-stream` StreamFn routing so all non-Ollama models use standard `streamSimple`, which properly forwards `tools`/`tool_choice` params to the API.
-- **Qwen3 `/no_think` directive** — auto-injects `/no_think` into system prompt when model name contains "qwen", reducing false safety refusals and improving tool call reliability.
-
-### Security Hardening
-
-- **Prompt injection guardrails** — detection layer wired into the agent flow to catch injection attempts in inbound messages
-- **RateLimiter memory leak fix** — patched leak in the rate limiter and replaced empty `catch` blocks with proper logging
-- **Security tests** — added test coverage for security-critical paths
-- **Malicious hook removal** — removed `soul-evil` hook and blocked it from the fork
-- **Non-admin status redaction** — sensitive status details are now redacted for non-admin scopes
-- **SSRF IPv6 transition bypass block** — prevents SSRF via IPv6 transition address bypasses (upstream)
-- **Path traversal prevention (OC-06)** — confines config `$include` resolution to top-level config directory (upstream)
-- **Sandbox env sanitization** — sanitizes environment variables before Docker launch (upstream)
-- **SafeBins path trust hardening** — extracted trust resolver with stricter path validation (upstream)
-- **Cron webhook SSRF guard** — guards cron webhook delivery against SSRF (upstream)
-- **Telegram command sanitization** — sanitizes native command names for Telegram API (upstream)
-- **ReDoS prevention** — rewrote external-content suspicious pattern regexes with bounded quantifiers and added input length cap to prevent catastrophic backtracking
-- **FTS5 injection hardening** — strips FTS reserved tokens (`AND`, `OR`, `NOT`, `NEAR`) and caps token count in hybrid memory search queries
-- **Browser eval sandbox hardening** — blocks indirect API access patterns (`window["..."]`, `Reflect.get`, `new Proxy`, dynamic `import()`) in the eval security validator
-- **Cross-protocol WebSocket hijacking (CSWSH) protection** — origin check now validates protocol compatibility (HTTPS↔WSS, HTTP↔WS) with loopback exemption for local dev
-- **Canvas capability TTL reduction** — reduced from 10 min to 5 min to shrink the window for token reuse
-- **Error path credential redaction** — wrapped error serialization in gateway, hooks loader, and plugins loader through `redactSensitiveText()` to prevent leaking secrets in logs
-- **Dangerous config startup warnings** — gateway now logs security warnings at startup when `dangerouslyDisableDeviceAuth`, `allowInsecureAuth`, or empty `trusted-proxy.allowUsers` are detected
-- **Browser eval deep hardening** — blocked `eval()`, `Function()` constructor, `String.fromCharCode` API name reconstruction, prototype chain abuse (`constructor.constructor`), `setTimeout`/`setInterval` with string/Function args, `document.domain` assignment, `window.location` writes, `Object.getOwnPropertyNames(window)` introspection, and `localStorage`/`sessionStorage` read access (token exfiltration prevention)
-- **Explicit gateway method scopes** — replaced prefix-based admin scope matching with explicit method-to-scope entries; prefix fallback now emits runtime warnings for unclassified methods
-- **Plugin install code scan enforcement** — critical code pattern findings now block plugin installation (was warn-only); `--force` flag available for explicit override
-- **Slack menu token entropy** — replaced `Math.random()` with `crypto.randomBytes(8)` for external arg menu tokens
-- **Cron tool invoke denial** — cron tool denied on `/tools/invoke` by default to prevent unauthenticated cron scheduling
-- **Trusted-proxy auth fix** — includes `trusted-proxy` in `sharedAuthOk` check for consistent auth gating
-
-### Hook System Fixes
-
-- **`__exportAll` circular dependency fix** (`fix-hook-circular-deps.sh`) — post-build patch that handles multiple `pi-embedded` chunks and dynamic export aliases across all subdirectories (`dist/`, `plugin-sdk/`, `bundled/`). Fixes `boot-md` and `session-memory` hooks failing with `"__exportAll is not a function"`. Also integrated into `run-node.mjs` so the fix runs automatically on dev builds (not just `pnpm build`). Related upstream issue: [#13662](https://github.com/openclaw/openclaw/issues/13662)
-- **Plugin SDK alias fix** — prefers source `plugin-sdk` alias to avoid `jiti` circular import crash
-
-### Stability & Bug Fixes
-
-- **LLM rate limit circuit breaker** — replaced retry loop with circuit breaker pattern + failover notifications
-- **`<think>` tag leakage** — prevented thinking block content from leaking into streamed output
-- **Thinking text leak filter** (`normalize-reply.ts`) — strips leaked chain-of-thought from outbound messages before channel delivery. Catches XML-wrapped thinking blocks (`<think>`, `<thinking>`, `<reasoning>`, etc.) and leading meta-commentary patterns that weaker models (e.g. GLM 4.7) sometimes dump into the text field instead of keeping in the `thinking` content block.
-- **Browser tab-not-found error fix** (`client-fetch.ts`, `browser-tool.ts`) — replaced misleading "Can't reach browser control service. Restart gateway." error with actionable recovery instructions when a browser tab reference becomes stale. Extended tab-not-found handler to all browser profiles (not just chrome).
-- **Browser argument sanitization** (`browser-tool.ts`) — detects and recovers from XML-in-JSON argument corruption where weaker models emit `action: "snapshot<arg_key>compact</arg_key><arg_value>true"`. Regex-based sanitizer extracts the real action name and embedded parameters.
-- **Android cleartext config** — fixed cleartext traffic configuration for Android gateway
-- **Merge conflict resolution** — clean merges maintained across 10 upstream syncs (Jan 30 — Feb 24)
-- **Slug generator model fix** — `llm-slug-generator` hook now reads the primary model from config (`agents.defaults.model.primary`) instead of falling back to hardcoded `anthropic/claude-opus-4-6`, which caused 401 errors when no Anthropic key is configured
-- **Discord reasoning tag strip** — strips `<reasoning>`/`<thinking>` tags from partial stream previews in Discord delivery
-- **Matrix reasoning-only filter** — skips reasoning-only messages (no user-visible text) in Matrix reply delivery
-- **Reasoning payload suppression** — suppresses reasoning payloads from the generic channel dispatch path so they don't leak to channels that don't support them
-- **Feishu topic session binding** — passes `parentPeer` for topic session binding inheritance in Feishu channel
-- **TUI disconnect guard** — guards `sendMessage` when TUI is disconnected and resets `readyPromise` on close
-- **fixFlattenedMarkdown broadened** — handles more flattened output patterns from weaker models
-- **OpenRouter 'auto' model fix** — skips reasoning effort injection for OpenRouter's `auto` routing model
-- **Orphaned tool result repair** — repairs orphaned tool results for OpenAI after history truncation
-- **Cron embedded error handling** — treats embedded error payloads as run failures instead of silently succeeding
-
-### Smart Model Routing & Context Optimization
-
-- **Content-aware model routing** (`smart-routing.ts`) — classifies inbound messages as `simple`, `tool_heavy`, `reasoning`, or `code` and pre-routes to the best model before the sequential fallback chain. Configurable via `agents.defaults.model.routing` in `openclaw.json`.
-- **Heartbeat transcript pruning** (`heartbeat-pruning.ts`) — strips `HEARTBEAT_OK` poll/ack pairs from session history to save context tokens.
-- **Per-tool softTrim context pruning** — tool-specific `maxChars`/`headChars`/`tailChars` overrides in `agents.defaults.contextPruning.toolOverrides` (e.g., tighter limits for `exec` and `web_fetch`, more generous for `read`).
-- **Instructor pattern for tool errors** — enriches tool call error results with `expected_params`, `required_params`, and `retry_hint` to help models self-correct on retry.
-
-### Anthropic Model Support (upstream cherry-picks)
-
-- **Sonnet 4.6 support** — `anthropic/claude-sonnet-4-6` with forward-compat fallback
-- **1M context beta header** — opt-in via model `params.context1m: true` (maps to `anthropic-beta: context-1m-2025-08-07`)
-
-### Subagent Fixes (upstream cherry-picks)
-
-- **24 subagent reliability fixes** — completion delivery, sticky reply threading, read-tool overflow guards, retry backoff, OriginatingTo fallback routing, deterministic announce, correct model display in sessions list
-- **Configurable default `runTimeoutSeconds`** — subagent spawns now respect `agents.defaults.runTimeoutSeconds` config
-
-### Skills Routing (upstream cherry-picks)
-
-- **"Use when / Don't use when" routing blocks** — conditional skill activation boundaries
-- **Improved skill descriptions** — routing logic integrated into descriptions
-- **Compact skill paths** — `~`-prefixed paths to reduce prompt tokens
-
-### Additional Features
-
-- **Himalaya email skill** — OAuth2 email integration via [himalaya](https://github.com/pimalaya/himalaya) with draft save support
-- **Instagram posting skill** — `late-api` skill for automated Instagram posting
-- **Configurable heartbeat session** — customizable heartbeat interval
-- **Discord `allowBots` config** — option to allow bot messages in Discord channels ([#802](https://github.com/sypherin/openclaw/pull/802))
-- **Docker cache optimization** — dependency layer caching for faster rebuilds ([#605](https://github.com/sypherin/openclaw/pull/605))
-- **Auto-reply multilingual stop triggers** — normalized stop matching with multilingual trigger support (upstream)
-
-### Upstream Sync
-
-This fork tracks `upstream/main` and merges regularly. Last sync: **2026-02-24** (full merge of 845 commits: auto-reply multilingual stop triggers, `allowFrom` id-only default breaking change, reasoning payload channel suppression, configurable subagent timeout, cron tool invoke denial, prompt caching docs, release 2026.2.23).
+Last upstream sync: **2026-03-11** (908 commits — strip leaked control tokens, telegram chunking, cron stagger on restart, bootstrap file protection, Alibaba Bailian onboarding, 19 conflict resolution).
 
 ```bash
 # To sync with upstream
-git fetch upstream
-git merge upstream/main
+git fetch upstream && git merge upstream/main
 pnpm install && pnpm build
 ./scripts/apply-pi-ai-patches.sh  # re-apply NVIDIA patches
+systemctl --user restart openclaw-gateway
 ```
 
 ---
