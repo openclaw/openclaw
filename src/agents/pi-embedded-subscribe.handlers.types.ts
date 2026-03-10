@@ -77,6 +77,8 @@ export type EmbeddedPiSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   lastAssistant?: AgentMessage;
+  lastProviderProgressAtMs?: number;
+  lastProviderProgressPhase?: "agent_start" | "tool_result" | "stall_warning";
 };
 
 export type EmbeddedPiSubscribeContext = {
@@ -133,6 +135,8 @@ export type EmbeddedPiSubscribeContext = {
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
+  | "provider"
+  | "modelId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolResult"
@@ -155,6 +159,8 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "successfulCronAdds"
+  | "lastProviderProgressAtMs"
+  | "lastProviderProgressPhase"
 >;
 
 export type ToolHandlerContext = {

@@ -9,6 +9,10 @@ import type {
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
+  maybeWarnProviderStall,
+  noteProviderProgress,
+} from "./pi-embedded-subscribe.provider-stall.js";
+import {
   extractMessagingToolSend,
   extractToolErrorMessage,
   extractToolResultMediaPaths,
@@ -215,6 +219,7 @@ export async function handleToolExecutionStart(
 
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+  maybeWarnProviderStall(ctx, { phase: "before_tool", toolName, toolCallId });
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
@@ -426,6 +431,7 @@ export async function handleToolExecutionEnd(
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+  noteProviderProgress(ctx, "tool_result");
 
   emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
