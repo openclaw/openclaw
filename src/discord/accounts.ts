@@ -68,6 +68,20 @@ export function resolveDiscordAccount(params: {
   };
 }
 
+export function resolveDiscordMaxLinesPerMessage(params: {
+  cfg: OpenClawConfig;
+  discordConfig?: DiscordAccountConfig | null;
+  accountId?: string | null;
+}): number | undefined {
+  if (typeof params.discordConfig?.maxLinesPerMessage === "number") {
+    return params.discordConfig.maxLinesPerMessage;
+  }
+  return resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).config.maxLinesPerMessage;
+}
+
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {
   return listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
