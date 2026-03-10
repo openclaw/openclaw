@@ -4,7 +4,7 @@ import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thi
 import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
-const REASONING_LEVELS = ["on", "off"];
+const REASONING_LEVELS = ["on", "off", "stream"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full"];
@@ -83,7 +83,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "reasoning",
-      description: "Set reasoning on/off",
+      description: "Set reasoning on/off/stream",
       getArgumentCompletions: reasoningCompletions,
     },
     {
@@ -143,7 +143,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
     "/verbose <on|off>",
-    "/reasoning <on|off>",
+    "/reasoning <on|off|stream>",
     "/usage <off|tokens|full>",
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
