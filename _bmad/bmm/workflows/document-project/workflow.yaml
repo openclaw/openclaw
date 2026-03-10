@@ -1,0 +1,22 @@
+# Document Project Workflow Configuration
+name: "document-project"
+version: "1.2.0"
+description: 'Document brownfield projects for AI context. Use when the user says "document this project" or "generate project docs"'
+author: "BMad"
+
+# Critical variables
+config_source: "{project-root}/_bmad/bmm/config.yaml"
+project_knowledge: "{config_source}:project_knowledge"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+document_output_language: "{config_source}:document_output_language"
+user_skill_level: "{config_source}:user_skill_level"
+date: system-generated
+
+# Module path and component files
+installed_path: "{project-root}/_bmad/bmm/workflows/document-project"
+instructions: "{installed_path}/instructions.md"
+validation: "{installed_path}/checklist.md"
+
+# Required data files - CRITICAL for project type detection and documentation requirements
+documentation_requirements_csv: "{installed_path}/documentation-requirements.csv"

@@ -1,0 +1,103 @@
+# OpenClaw Memory Infrastructure
+# Episodes store (pgvector) + Mem0 server (Qdrant-backed) + Ollama (local inference)
+#
+# Usage:
+#   docker compose -f docker-compose.memory.yml up -d
+#
+# Fully self-hosted — no external API keys required.
+# Ollama provides embeddings (nomic-embed-text) and LLM (llama3.1:8b).
+
+name: openclaw-memory
+
+services:
+  # -- Ollama for local embeddings + LLM --
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+    networks:
+      - memory_net
+
+  # -- Postgres + pgvector for the episodes table --
+  episodes-db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    shm_size: "128mb"
+    environment:
+      POSTGRES_USER: openclaw
+      POSTGRES_PASSWORD: openclaw_memory
+      POSTGRES_DB: openclaw_episodes
+    ports:
+      - "5433:5432"
+    volumes:
+      - episodes_pgdata:/var/lib/postgresql/data
+      - ./memory/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openclaw -d openclaw_episodes"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memory_net
+
+  # -- Qdrant vector database for Mem0 --
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memory_net
+
+  # -- Mem0 REST API server --
+  mem0:
+    build:
+      context: ./memory
+      dockerfile: Dockerfile.mem0
+    restart: unless-stopped
+    ports:
+      - "8420:8000"
+    env_file:
+      - .env.memory
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      OLLAMA_HOST: ollama
+      OLLAMA_PORT: "11434"
+      HISTORY_DB_PATH: /app/history/history.db
+    volumes:
+      - mem0_history:/app/history
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - memory_net
+
+volumes:
+  episodes_pgdata:
+  qdrant_data:
+  mem0_history:
+  ollama_data:
+
+networks:
+  memory_net:
+    driver: bridge

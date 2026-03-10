@@ -28,6 +28,7 @@ import {
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
+  getPluginCommandSpecs,
   listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
@@ -410,6 +411,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
       }
 
+      // Collect plugin commands available now (may be empty if other plugins haven't loaded yet)
+      const collectPluginCommands = (): import("./slash-commands.js").MattermostCommandSpec[] => {
+        try {
+          const specs: import("./slash-commands.js").MattermostCommandSpec[] = [];
+          const pluginCommands = getPluginCommandSpecs();
+          for (const spec of pluginCommands) {
+            const name = typeof spec.name === "string" ? spec.name.trim() : "";
+            if (!name) continue;
+            specs.push({
+              trigger: name,
+              description: spec.description || `Run plugin command ${name}`,
+              autoComplete: true,
+              autoCompleteHint: "[args]",
+              originalName: name,
+            });
+          }
+          return specs;
+        } catch (err) {
+          runtime.error?.(`mattermost: failed to list plugin commands: ${String(err)}`);
+          return [];
+        }
+      };
+
+      commandsToRegister.push(...collectPluginCommands());
+
       // Deduplicate by trigger
       const seen = new Set<string>();
       const dedupedCommands = commandsToRegister.filter((cmd) => {
@@ -474,6 +500,60 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${slashCallbackUrl})`,
         );
       }
+
+      // Deferred plugin command registration: other plugins may not have loaded yet
+      // when this monitor starts. Re-check after a delay and register any new ones.
+      const registeredTriggers = new Set(allRegistered.map((cmd) => cmd.trigger));
+      setTimeout(async () => {
+        try {
+          const latePluginCommands = collectPluginCommands().filter(
+            (cmd) => !registeredTriggers.has(cmd.trigger),
+          );
+          if (latePluginCommands.length === 0) return;
+
+          runtime.log?.(
+            `mattermost: registering ${latePluginCommands.length} deferred plugin command(s): ${latePluginCommands.map((c) => `/${c.trigger}`).join(", ")}`,
+          );
+
+          const lateTriggerMap = new Map<string, string>();
+          for (const cmd of latePluginCommands) {
+            if (cmd.originalName) lateTriggerMap.set(cmd.trigger, cmd.originalName);
+          }
+
+          for (const team of teams) {
+            try {
+              const registered = await registerSlashCommands({
+                client,
+                teamId: team.id,
+                creatorUserId: botUserId,
+                callbackUrl,
+                commands: latePluginCommands,
+                log: (msg) => runtime.log?.(msg),
+              });
+
+              // Merge new tokens into the active slash command handler
+              const newTokens = registered.map((cmd) => cmd.token).filter(Boolean);
+              if (newTokens.length > 0) {
+                activateSlashCommands({
+                  account,
+                  commandTokens: [...allRegistered.map((c) => c.token).filter(Boolean), ...newTokens],
+                  registeredCommands: [...allRegistered, ...registered],
+                  triggerMap: new Map([...triggerMap, ...lateTriggerMap]),
+                  api: { cfg, runtime },
+                  log: (msg) => runtime.log?.(msg),
+                });
+              }
+              allRegistered.push(...registered);
+            } catch (err) {
+              runtime.error?.(
+                `mattermost: deferred plugin command registration failed for team ${team.id}: ${String(err)}`,
+              );
+            }
+          }
+        } catch (err) {
+          runtime.error?.(`mattermost: deferred plugin command registration error: ${String(err)}`);
+        }
+      }, 5_000);
     } catch (err) {
       runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
     }

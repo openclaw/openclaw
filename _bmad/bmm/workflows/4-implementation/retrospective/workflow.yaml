@@ -1,0 +1,52 @@
+# Retrospective - Epic Completion Review Workflow
+name: "retrospective"
+description: 'Post-epic review to extract lessons and assess success. Use when the user says "run a retrospective" or "lets retro the epic [epic]"'
+
+config_source: "{project-root}/_bmad/bmm/config.yaml"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+user_skill_level: "{config_source}:user_skill_level"
+document_output_language: "{config_source}:document_output_language"
+date: system-generated
+planning_artifacts: "{config_source}:planning_artifacts"
+implementation_artifacts: "{config_source}:implementation_artifacts"
+project_context: "**/project-context.md"
+
+installed_path: "{project-root}/_bmad/bmm/workflows/4-implementation/retrospective"
+template: false
+instructions: "{installed_path}/instructions.md"
+
+required_inputs:
+  - agent_manifest: "{project-root}/_bmad/_config/agent-manifest.csv"
+
+# Smart input file references - handles both whole docs and sharded docs
+# Priority: Whole document first, then sharded version
+# Strategy: SELECTIVE LOAD - only load the completed epic and relevant retrospectives
+input_file_patterns:
+  epics:
+    description: "The completed epic for retrospective"
+    whole: "{planning_artifacts}/*epic*.md"
+    sharded_index: "{planning_artifacts}/*epic*/index.md"
+    sharded_single: "{planning_artifacts}/*epic*/epic-{{epic_num}}.md"
+    load_strategy: "SELECTIVE_LOAD"
+  previous_retrospective:
+    description: "Previous epic's retrospective (optional)"
+    pattern: "{implementation_artifacts}/**/epic-{{prev_epic_num}}-retro-*.md"
+    load_strategy: "SELECTIVE_LOAD"
+  architecture:
+    description: "System architecture for context"
+    whole: "{planning_artifacts}/*architecture*.md"
+    sharded: "{planning_artifacts}/*architecture*/*.md"
+    load_strategy: "FULL_LOAD"
+  prd:
+    description: "Product requirements for context"
+    whole: "{planning_artifacts}/*prd*.md"
+    sharded: "{planning_artifacts}/*prd*/*.md"
+    load_strategy: "FULL_LOAD"
+  document_project:
+    description: "Brownfield project documentation (optional)"
+    sharded: "{planning_artifacts}/*.md"
+    load_strategy: "INDEX_GUIDED"
+
+# Required files
+sprint_status_file: "{implementation_artifacts}/sprint-status.yaml"

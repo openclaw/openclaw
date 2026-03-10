@@ -1,0 +1,8 @@
+name,displayName,description,module,path,standalone
+"editorial-review-prose","Editorial Review - Prose","Clinical copy-editor that reviews text for communication issues. Use when user says review for prose or improve the prose","core","_bmad/core/tasks/editorial-review-prose.xml","true"
+"editorial-review-structure","Editorial Review - Structure","Structural editor that proposes cuts, reorganization, and simplification while preserving comprehension. Use when user requests structural review or editorial review of structure","core","_bmad/core/tasks/editorial-review-structure.xml","true"
+"help","help","Analyzes what is done and the users query and offers advice on what to do next. Use if user says what should I do next or what do I do now","core","_bmad/core/tasks/help.md","true"
+"index-docs","Index Docs","Generates or updates an index.md to reference all docs in the folder. Use if user requests to create or update an index of all files in a specific folder","core","_bmad/core/tasks/index-docs.xml","true"
+"review-adversarial-general","Adversarial Review (General)","Perform a Cynical Review and produce a findings report. Use when the user requests a critical review of something","core","_bmad/core/tasks/review-adversarial-general.xml","true"
+"review-edge-case-hunter","Edge Case Hunter Review","Walk every branching path and boundary condition in content, report only unhandled edge cases. Orthogonal to adversarial review - method-driven not attitude-driven.","core","_bmad/core/tasks/review-edge-case-hunter.xml","true"
+"shard-doc","Shard Document","Splits large markdown documents into smaller, organized files based on level 2 (default) sections. Use if the user says perform shard document","core","_bmad/core/tasks/shard-doc.xml","true"

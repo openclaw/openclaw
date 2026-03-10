@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Project Scan Report Schema",
+  "description": "State tracking file for document-project workflow resumability",
+  "type": "object",
+  "required": ["workflow_version", "timestamps", "mode", "scan_level", "completed_steps", "current_step"],
+  "properties": {
+    "workflow_version": {
+      "type": "string",
+      "description": "Version of document-project workflow",
+      "example": "1.2.0"
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["started", "last_updated"],
+      "properties": {
+        "started": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when workflow started"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of last state update"
+        },
+        "completed": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when workflow completed (if finished)"
+        }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["initial_scan", "full_rescan", "deep_dive"],
+      "description": "Workflow execution mode"
+    },
+    "scan_level": {
+      "type": "string",
+      "enum": ["quick", "deep", "exhaustive"],
+      "description": "Scan depth level (deep_dive mode always uses exhaustive)"
+    },
+    "project_root": {
+      "type": "string",
+      "description": "Absolute path to project root directory"
+    },
+    "project_knowledge": {
+      "type": "string",
+      "description": "Absolute path to project knowledge folder"
+    },
+    "completed_steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "status"],
+        "properties": {
+          "step": {
+            "type": "string",
+            "description": "Step identifier (e.g., 'step_1', 'step_2')"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "partial", "failed"]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outputs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Files written during this step"
+          },
+          "summary": {
+            "type": "string",
+            "description": "1-2 sentence summary of step outcome"
+          }
+        }
+      }
+    },
+    "current_step": {
+      "type": "string",
+      "description": "Current step identifier for resumption"
+    },
+    "findings": {
+      "type": "object",
+      "description": "High-level summaries only (detailed findings purged after writing)",
+      "properties": {
+        "project_classification": {
+          "type": "object",
+          "properties": {
+            "repository_type": { "type": "string" },
+            "parts_count": { "type": "integer" },
+            "primary_language": { "type": "string" },
+            "architecture_type": { "type": "string" }
+          }
+        },
+        "technology_stack": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "part_id": { "type": "string" },
+              "tech_summary": { "type": "string" }
+            }
+          }
+        },
+        "batches_completed": {
+          "type": "array",
+          "description": "For deep/exhaustive scans: subfolders processed",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "files_scanned": { "type": "integer" },
+              "summary": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "outputs_generated": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of all output files generated"
+    },
+    "resume_instructions": {
+      "type": "string",
+      "description": "Instructions for resuming from current_step"
+    },
+    "validation_status": {
+      "type": "object",
+      "properties": {
+        "last_validated": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "validation_errors": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "deep_dive_targets": {
+      "type": "array",
+      "description": "Track deep-dive areas analyzed (for deep_dive mode)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "target_name": { "type": "string" },
+          "target_path": { "type": "string" },
+          "files_analyzed": { "type": "integer" },
+          "output_file": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

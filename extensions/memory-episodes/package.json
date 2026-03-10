@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/memory-episodes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mid-term episodic memory with session summaries and custom memory commands",
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.13.0",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

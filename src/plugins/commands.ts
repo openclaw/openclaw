@@ -17,11 +17,28 @@ type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
 };
 
-// Registry of plugin commands
-const pluginCommands: Map<string, RegisteredPluginCommand> = new Map();
+// Registry of plugin commands — shared via global symbol so all module instances
+// (including jiti-loaded extensions) access the same Map.
+const PLUGIN_COMMANDS_KEY = Symbol.for("openclaw.pluginCommands");
+const PLUGIN_COMMANDS_LOCK_KEY = Symbol.for("openclaw.pluginCommandsLocked");
+
+type GlobalWithPluginCommands = typeof globalThis & {
+  [key: symbol]: Map<string, RegisteredPluginCommand> | boolean | undefined;
+};
+
+const g = globalThis as GlobalWithPluginCommands;
+if (!g[PLUGIN_COMMANDS_KEY]) {
+  g[PLUGIN_COMMANDS_KEY] = new Map<string, RegisteredPluginCommand>();
+}
+const pluginCommands = g[PLUGIN_COMMANDS_KEY] as Map<string, RegisteredPluginCommand>;
 
 // Lock to prevent modifications during command execution
-let registryLocked = false;
+function isRegistryLocked(): boolean {
+  return (g[PLUGIN_COMMANDS_LOCK_KEY] as boolean) ?? false;
+}
+function setRegistryLocked(locked: boolean): void {
+  g[PLUGIN_COMMANDS_LOCK_KEY] = locked;
+}
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
@@ -110,7 +127,7 @@ export function registerPluginCommand(
   command: OpenClawPluginCommandDefinition,
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (registryLocked) {
+  if (isRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
@@ -283,7 +300,7 @@ export async function executePluginCommand(params: {
   };
 
   // Lock registry during execution to prevent concurrent modifications
-  registryLocked = true;
+  setRegistryLocked(true);
   try {
     const result = await command.handler(ctx);
     logVerbose(
@@ -296,7 +313,7 @@ export async function executePluginCommand(params: {
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
-    registryLocked = false;
+    setRegistryLocked(false);
   }
 }
 

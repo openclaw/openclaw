@@ -1,0 +1,13 @@
+domain,signals,complexity_level,suggested_workflow,web_searches
+e_commerce,"shopping,cart,checkout,payment,products,store",medium,standard,"ecommerce architecture patterns, payment processing, inventory management"
+fintech,"banking,payment,trading,finance,money,investment",high,enhanced,"financial security, PCI compliance, trading algorithms, fraud detection"
+healthcare,"medical,diagnostic,clinical,patient,hospital,health",high,enhanced,"HIPAA compliance, medical data security, FDA regulations, health tech"
+social,"social network,community,users,friends,posts,sharing",high,advanced,"social graph algorithms, feed ranking, notification systems, privacy"
+education,"learning,course,student,teacher,training,academic",medium,standard,"LMS architecture, progress tracking, assessment systems, video streaming"
+productivity,"productivity,workflow,tasks,management,business,tools",medium,standard,"collaboration patterns, real-time editing, notification systems, integration"
+media,"content,media,video,audio,streaming,broadcast",high,advanced,"CDN architecture, video encoding, streaming protocols, content delivery"
+iot,"IoT,sensors,devices,embedded,smart,connected",high,advanced,"device communication, real-time data processing, edge computing, security"
+government,"government,civic,public,admin,policy,regulation",high,enhanced,"accessibility standards, security clearance, data privacy, audit trails"
+process_control,"industrial automation,process control,PLC,SCADA,DCS,HMI,operational technology,control system,cyberphysical,MES,instrumentation,I&C,P&ID",high,advanced,"industrial process control architecture, SCADA system design, OT cybersecurity architecture, real-time control systems"
+building_automation,"building automation,BAS,BMS,HVAC,smart building,fire alarm,fire protection,fire suppression,life safety,elevator,DDC,access control,sequence of operations,commissioning",high,advanced,"building automation architecture, BACnet integration patterns, smart building design, building management system security"
+gaming,"game,gaming,multiplayer,real-time,interactive,entertainment",high,advanced,"real-time multiplayer, game engine architecture, matchmaking, leaderboards"

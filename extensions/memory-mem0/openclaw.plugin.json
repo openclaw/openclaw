@@ -1,0 +1,76 @@
+{
+  "id": "memory-mem0",
+  "name": "Mem0 Memory",
+  "description": "Long-term semantic memory via a self-hosted Mem0 REST API",
+  "version": "1.0.0",
+  "kind": "memory",
+  "author": "Serenichron",
+  "configSchema": {
+    "baseUrl": {
+      "type": "string",
+      "default": "http://127.0.0.1:8420",
+      "description": "Mem0 REST API base URL"
+    },
+    "userId": {
+      "type": "string",
+      "default": "openclaw",
+      "description": "Default user ID for memory storage (overridden by session context when available)"
+    },
+    "autoCapture": {
+      "type": "boolean",
+      "default": true,
+      "description": "Automatically capture conversation context after agent execution"
+    },
+    "autoRecall": {
+      "type": "boolean",
+      "default": true,
+      "description": "Automatically inject relevant memories before agent execution"
+    },
+    "recallLimit": {
+      "type": "number",
+      "default": 5,
+      "description": "Maximum memories to recall per query"
+    },
+    "recallThreshold": {
+      "type": "number",
+      "default": 0.4,
+      "description": "Minimum relevance score for auto-recall (0.0-1.0)"
+    }
+  },
+  "tools": [
+    {
+      "name": "memory_recall",
+      "description": "Search long-term memory for relevant facts and context"
+    },
+    {
+      "name": "memory_store",
+      "description": "Store a new fact or context in long-term memory"
+    },
+    {
+      "name": "memory_list",
+      "description": "List all stored long-term memories for the current user"
+    },
+    {
+      "name": "memory_forget",
+      "description": "Delete a specific memory by ID"
+    }
+  ],
+  "cliCommands": [
+    {
+      "name": "mem0 search <query>",
+      "description": "Search long-term memory"
+    },
+    {
+      "name": "mem0 list",
+      "description": "List all stored memories"
+    },
+    {
+      "name": "mem0 forget <id>",
+      "description": "Delete a memory by ID"
+    },
+    {
+      "name": "mem0 health",
+      "description": "Check Mem0 server health"
+    }
+  ]
+}

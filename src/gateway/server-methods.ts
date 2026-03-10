@@ -97,6 +97,11 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...browserHandlers,
 };
 
+// Expose handlers on globalThis so plugins (running in-process via jiti)
+// can call gateway methods like sessions.list / sessions.reset directly.
+(globalThis as Record<symbol, unknown>)[Symbol.for("openclaw.gatewayHandlers")] =
+  coreGatewayHandlers;
+
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {

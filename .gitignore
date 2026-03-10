@@ -90,6 +90,7 @@ USER.md
 .serena/
 
 # Agent credentials and memory (NEVER COMMIT)
+.env.memory
 /memory/
 .agent/*.json
 !.agent/workflows/
