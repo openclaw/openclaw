@@ -1163,6 +1163,27 @@ describe("resolveOutboundSessionRoute", () => {
     });
   });
 
+  it("strips explicit chat prefixes in fallback session routing", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "custom" as never,
+      agentId: "main",
+      target: "chat:ops",
+      resolvedTarget: {
+        to: "chat:ops",
+        kind: "group",
+        source: "normalized",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:custom:group:ops",
+      from: "custom:group:ops",
+      to: "channel:ops",
+      chatType: "group",
+    });
+  });
+
   it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
     const userId = "dthcxgoxhifn3pwh65cut3ud3w";
     const route = await resolveOutboundSessionRoute({

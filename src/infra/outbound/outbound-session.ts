@@ -74,7 +74,7 @@ function stripProviderPrefix(raw: string, channel: string): string {
 }
 
 function stripKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
+  return raw.replace(/^(user|channel|group|chat|conversation|room|dm):/i, "").trim();
 }
 
 function inferPeerKind(params: {
