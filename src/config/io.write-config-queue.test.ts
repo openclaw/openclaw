@@ -124,7 +124,12 @@ describe("config write serialization", () => {
       let blockedFinalRename = false;
 
       const renameSpy = vi.spyOn(fsSync.promises, "rename").mockImplementation(async (from, to) => {
-        if (!blockedFinalRename && from.endsWith(".tmp") && to === configPath) {
+        if (
+          !blockedFinalRename &&
+          typeof from === "string" &&
+          from.endsWith(".tmp") &&
+          to === configPath
+        ) {
           blockedFinalRename = true;
           renameEntered.resolve();
           await allowRename.promise;

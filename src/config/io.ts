@@ -1481,9 +1481,15 @@ export async function writeConfigFile(
   // (e.g. setRuntimeConfigSnapshot) while waiting in the write queue.
   const capturedRuntimeSnapshot = runtimeConfigSnapshot;
   const capturedSourceSnapshot = runtimeConfigSourceSnapshot;
+  const capturedRefreshHandler = runtimeConfigSnapshotRefreshHandler;
   const hadBothSnapshots = Boolean(capturedRuntimeSnapshot && capturedSourceSnapshot);
 
   return enqueueConfigWrite(async () => {
+    const matchesCapturedRuntimeContext = (): boolean =>
+      runtimeConfigSnapshot === capturedRuntimeSnapshot &&
+      runtimeConfigSourceSnapshot === capturedSourceSnapshot &&
+      runtimeConfigSnapshotRefreshHandler === capturedRefreshHandler;
+
     let nextCfg = cfg;
     if (hadBothSnapshots) {
       const runtimePatch = createMergePatch(capturedRuntimeSnapshot!, cfg);
@@ -1497,16 +1503,15 @@ export async function writeConfigFile(
     });
     // Keep the last-known-good runtime snapshot active until the specialized refresh path
     // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
-    const refreshHandler = runtimeConfigSnapshotRefreshHandler;
-    if (refreshHandler) {
+    if (capturedRefreshHandler && matchesCapturedRuntimeContext()) {
       try {
-        const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
+        const refreshed = await capturedRefreshHandler.refresh({ sourceConfig: nextCfg });
         if (refreshed) {
           return;
         }
       } catch (error) {
         try {
-          refreshHandler.clearOnRefreshFailure?.();
+          capturedRefreshHandler.clearOnRefreshFailure?.();
         } catch {
           // Keep the original refresh failure as the surfaced error.
         }
@@ -1517,14 +1522,14 @@ export async function writeConfigFile(
         );
       }
     }
-    if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
+    if (hadBothSnapshots && matchesCapturedRuntimeContext()) {
       // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
       // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
       const fresh = io.loadConfig();
       setRuntimeConfigSnapshot(fresh, nextCfg);
       return;
     }
-    if (capturedRuntimeSnapshot) {
+    if (capturedRuntimeSnapshot && matchesCapturedRuntimeContext()) {
       clearRuntimeConfigSnapshot();
     }
     // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
