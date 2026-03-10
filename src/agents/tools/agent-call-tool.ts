@@ -312,6 +312,39 @@ export function createAgentCallTool(opts?: {
         } as AgentCallResult);
       }
 
+      // Skill declaration validation
+      const { getAgentSkillDeclaration, listAgentSkills } =
+        require("../agent-scope.js") as typeof import("../agent-scope.js");
+      const { generateSkillPrompt, validateSkillInput } =
+        require("../../config/types.a2a-skills.js") as typeof import("../../config/types.a2a-skills.js");
+
+      const skillDeclaration = getAgentSkillDeclaration(cfg, targetAgentId, skill);
+      if (!skillDeclaration) {
+        const availableSkills = listAgentSkills(cfg, targetAgentId);
+        const skillNames = availableSkills.map((s) => s.name).join(", ") || "none";
+        logAudit("skill_not_found", { agent: targetAgentId, skill, available: skillNames });
+        return jsonResult({
+          status: "error",
+          error: `Agent '${targetAgentId}' has no skill '${skill}'. Available: ${skillNames}`,
+        } as AgentCallResult);
+      }
+
+      // Validate input against skill schema
+      if (skillDeclaration.input) {
+        const validation = validateSkillInput(input, skillDeclaration.input);
+        if (!validation.valid) {
+          logAudit("input_validation_failed", {
+            agent: targetAgentId,
+            skill,
+            errors: validation.errors,
+          });
+          return jsonResult({
+            status: "error",
+            error: `Input validation failed: ${validation.errors.join("; ")}`,
+          } as AgentCallResult);
+        }
+      }
+
       // Fix 7: Security audit logging for invocation
       logAudit("invocation", { requester: requesterAgentId, target: targetAgentId, skill });
 
@@ -340,6 +373,12 @@ export function createAgentCallTool(opts?: {
         targetSessionKey,
       });
 
+      // Add skill declaration context if available
+      const skillPrompt = skillDeclaration
+        ? generateSkillPrompt(skillDeclaration, input)
+        : undefined;
+      const fullAgentContext = skillPrompt ? `${agentContext}\n\n${skillPrompt}` : agentContext;
+
       // Fire-and-forget mode (timeout=0)
       if (timeoutSeconds === 0) {
         try {
@@ -352,7 +391,7 @@ export function createAgentCallTool(opts?: {
               deliver: false,
               channel: INTERNAL_MESSAGE_CHANNEL,
               lane: AGENT_LANE_NESTED,
-              extraSystemPrompt: agentContext,
+              extraSystemPrompt: fullAgentContext,
               inputProvenance: {
                 kind: "tool_invocation" as const,
                 sourceSessionKey: requesterSessionKey,
@@ -389,7 +428,7 @@ export function createAgentCallTool(opts?: {
             deliver: false,
             channel: INTERNAL_MESSAGE_CHANNEL,
             lane: AGENT_LANE_NESTED,
-            extraSystemPrompt: agentContext,
+            extraSystemPrompt: fullAgentContext,
             inputProvenance: {
               kind: "tool_invocation" as const,
               sourceSessionKey: requesterSessionKey,
