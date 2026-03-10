@@ -686,9 +686,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.qveris.timeoutSeconds":
     "Deprecated: use searchTimeoutSeconds / executeTimeoutSeconds instead. Fallback timeout in seconds for QVeris tool requests.",
   "tools.qveris.searchTimeoutSeconds":
-    "Timeout in seconds for qveris_search requests (default: 5). Search is a lightweight index lookup.",
+    "Timeout in seconds for qveris_discover requests (default: 5). Discovery is a lightweight index lookup.",
   "tools.qveris.executeTimeoutSeconds":
-    "Timeout in seconds for qveris_execute requests (default: 60). Long-running tools (image/video generation) may need 60-120s.",
+    "Timeout in seconds for qveris_invoke requests (default: 60). Long-running tools (image/video generation) may need 60-120s.",
   "tools.qveris.maxResponseSize": "Max response size in bytes for QVeris tool calls.",
   "tools.qveris.searchLimit": "Max number of tools to search when using QVeris.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",

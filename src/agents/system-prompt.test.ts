@@ -158,30 +158,31 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
-  it("includes QVeris routing section when qveris_search is in toolNames", () => {
+  it("includes QVeris routing section when qveris_discover is in toolNames", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["qveris_search", "qveris_execute"],
+      toolNames: ["qveris_discover", "qveris_invoke"],
     });
 
     expect(prompt).toContain("## Tool Routing: QVeris vs Local vs Web");
-    expect(prompt).toContain("NEVER search QVeris for local tasks");
+    expect(prompt).toContain("NEVER discover QVeris tools for local tasks");
     expect(prompt).toContain("sample_parameters");
-    expect(prompt).toContain("error_type");
+    expect(prompt).toContain("error recovery");
     expect(prompt).toContain("anti-patterns");
   });
 
-  it("includes qveris_get_by_ids step when tool is available", () => {
+  it("includes qveris_inspect step when tool is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["qveris_search", "qveris_execute", "qveris_get_by_ids"],
+      toolNames: ["qveris_discover", "qveris_invoke", "qveris_inspect"],
     });
 
-    expect(prompt).toContain("qveris_get_by_ids");
+    expect(prompt).toContain("qveris_inspect");
     expect(prompt).toContain("Previously used a QVeris tool");
+    expect(prompt).toContain("recover discovery_id");
   });
 
-  it("omits QVeris routing section when qveris_search is not available", () => {
+  it("omits QVeris routing section when qveris_discover is not available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["web_search", "read"],
@@ -194,7 +195,7 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       promptMode: "minimal",
-      toolNames: ["qveris_search", "qveris_execute"],
+      toolNames: ["qveris_discover", "qveris_invoke"],
     });
 
     expect(prompt).not.toContain("## Tool Routing: QVeris vs Local vs Web");

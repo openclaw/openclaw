@@ -67,41 +67,52 @@ function buildQverisSection(params: { isMinimal: boolean; availableTools: Set<st
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("qveris_search")) {
+  if (!params.availableTools.has("qveris_discover")) {
     return [];
   }
-  const hasGetByIds = params.availableTools.has("qveris_get_by_ids");
+  const hasInspect = params.availableTools.has("qveris_inspect");
   return [
     "## Tool Routing: QVeris vs Local vs Web",
     "",
-    "Before calling qveris_search, classify the task:",
+    "qveris_discover finds TOOLS (API endpoints/services), not data. Classify the task first:",
     "",
     "1. **Local operation?** (read files, check config, session status, run commands)",
-    "   -> Use local tools (read, exec, session_status). NEVER search QVeris for local tasks.",
+    "   -> Use local tools (read, exec, session_status). NEVER discover QVeris tools for local tasks.",
     "2. **Need a specific web page or article content?**",
     "   -> Use web_search or web_fetch directly. QVeris indexes API tools, not web pages.",
     "3. **Need structured real-time data?** (prices, metrics, exchange rates, weather, financials)",
-    "   -> Use qveris_search. Describe the CAPABILITY needed, not the task.",
+    "   -> Use qveris_discover with a capability query, then qveris_invoke. Domain examples:",
+    '   Financial: "stock price real-time API", "forex exchange rate API", "crypto market data"',
+    '   Weather: "weather forecast API", "air quality index API"',
+    '   News: "news headlines API", "trending topics API"',
     "4. **Need an external service capability?** (image generation, OCR, TTS, translation, geocoding)",
-    "   -> Use qveris_search. Search for the tool type, not the specific input.",
-    ...(hasGetByIds
+    "   -> Use qveris_discover, then qveris_invoke. Domain examples:",
+    '   Generation: "text to image generation API", "text to speech API"',
+    '   Analysis: "OCR text extraction API", "image classification API"',
+    '   Location: "geocoding API", "route navigation API"',
+    ...(hasInspect
       ? [
           "5. **Previously used a QVeris tool for this type of task?**",
-          "   -> Use qveris_get_by_ids with the known tool_id to verify availability, then execute directly.",
+          "   -> Use qveris_inspect with the known tool_id to verify availability and recover discovery_id. If qveris_inspect returns discovery_id, invoke directly; otherwise run qveris_discover again first.",
         ]
       : []),
-    `${hasGetByIds ? "6" : "5"}. **None of the above?**`,
-    "   -> Do NOT use qveris_search. Use web_search for general research or report the limitation.",
+    `${hasInspect ? "6" : "5"}. **None of the above?**`,
+    "   -> Do NOT use qveris_discover. Use web_search for general research or report the limitation.",
     "",
-    "qveris_search anti-patterns (NEVER do these):",
+    "qveris_discover anti-patterns (NEVER do these):",
     "- Searching for software configuration or setup instructions",
     "- Searching for documentation, tutorials, or how-to guides",
-    "- Passing natural language task descriptions as search queries",
-    "- Using non-English search queries (always use English)",
+    "- Passing natural language task descriptions or questions as discovery queries",
+    "- Using non-English discovery queries (always use English)",
     "",
-    "After qveris_search: evaluate results by success_rate (prefer >= 0.9) and avg_execution_time_ms. If results look irrelevant (wrong domain, unrelated tools), abandon and fall back to web_search.",
-    "Execute with qveris_execute, using sample_parameters from search results as your parameter template. If execution fails, check error_type: for parameter errors, fix and retry; for HTTP/timeout errors, try an alternative tool.",
-    "Do not fabricate data when both qveris_search and web_search fail — report the gap honestly.",
+    "After qveris_discover: evaluate results by success_rate (prefer >= 0.9) and avg_execution_time_ms. If results look irrelevant (wrong domain, unrelated tools), abandon and fall back to web_search.",
+    "Invoke with qveris_invoke, using sample_parameters from qveris_discover or qveris_inspect as your parameter template.",
+    "",
+    "qveris_invoke error recovery (follow in order):",
+    "- **Attempt 1 — Fix params**: Read error_type and detail. Check required params are present with correct types (strings quoted, numbers unquoted, dates ISO 8601). Fix and retry.",
+    "- **Attempt 2 — Simplify**: Drop all optional params. Use well-known/standard values (e.g. common ticker symbols, major cities). Retry.",
+    "- **Attempt 3 — Switch tool**: Go back to the qveris_discover results and select the next-best alternative tool by success_rate. Invoke with new params.",
+    "- **After 3 failures**: Report which tools were tried, what errors occurred. Fall back to web_search for data needs. Never fabricate data.",
     "",
   ];
 }
@@ -314,17 +325,18 @@ export function buildAgentSystemPrompt(params: {
     switch_model:
       'Switch the AI model for this session. When the user asks to change/switch models (e.g. "use kimi", "switch to sonnet", "切换模型"), call this tool with the model name. Accepts aliases, partial names, or full provider/model. model=default resets. Takes effect from the next message.',
     image: "Analyze an image with the configured image model",
-    qveris_search:
+    qveris_discover:
       "Discover third-party API tools for structured data or external capabilities. " +
+      "Returns tool candidates, not data. " +
       "Use for: real-time data APIs, external services (image gen, OCR, TTS), geo APIs. " +
       "NOT for: local operations, documentation, config help, general web content. " +
-      "Query must describe a tool capability in English, not a task goal.",
-    qveris_execute:
-      "Execute a discovered QVeris tool. Requires tool_id and search_id from a prior qveris_search or qveris_get_by_ids. " +
+      "Query must describe a tool capability in English, not a task goal or question.",
+    qveris_invoke:
+      "Invoke a discovered QVeris tool. Requires tool_id and discovery_id from qveris_discover or qveris_inspect. " +
       "Pass params as JSON in params_to_tool using sample_parameters as template.",
-    qveris_get_by_ids:
-      "Look up known QVeris tools by ID without a full search. " +
-      "Use when you already have a tool_id from a previous search or session context.",
+    qveris_inspect:
+      "Inspect known QVeris tools by ID without a full discovery. " +
+      "Use when you already have a tool_id from a previous discovery or session context; returns discovery_id when the session knows it.",
   };
 
   const toolOrder = [
@@ -339,9 +351,9 @@ export function buildAgentSystemPrompt(params: {
     "process",
     "web_search",
     "web_fetch",
-    "qveris_search",
-    "qveris_execute",
-    "qveris_get_by_ids",
+    "qveris_discover",
+    "qveris_invoke",
+    "qveris_inspect",
     "browser",
     "canvas",
     "nodes",

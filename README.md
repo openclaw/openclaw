@@ -175,22 +175,22 @@ Runtime: **Node ≥22**.
 
 QVerisBot exposes three QVeris tools to the agent, with built-in routing guidance to prevent misuse:
 
-| Tool                | When to use                                                                                                                                                                                                                                                     |
-| :------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qveris_search`     | Discover tools by **capability type** — real-time data APIs (prices, weather, financials), external service capabilities (image generation, OCR, TTS, translation), geo/location APIs. **Not for** local file reads, software config, or documentation lookups. |
-| `qveris_execute`    | Execute a tool returned by `qveris_search` or verified by `qveris_get_by_ids`. Pass parameters as JSON using `sample_parameters` from the search result as a template.                                                                                          |
-| `qveris_get_by_ids` | Re-verify a **known** tool ID without a full search — use when the agent has already found a good tool in this session. Skips the search round-trip and returns the current parameter schema.                                                                   |
+| Tool              | When to use                                                                                                                                                                                                                                                     |
+| :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qveris_discover` | Discover tools by **capability type** — real-time data APIs (prices, weather, financials), external service capabilities (image generation, OCR, TTS, translation), geo/location APIs. **Not for** local file reads, software config, or documentation lookups. |
+| `qveris_invoke`   | Invoke a tool returned by `qveris_discover` or by `qveris_inspect` when a `discovery_id` is available. Pass parameters as JSON using `sample_parameters` from the tool metadata as a template.                                                                  |
+| `qveris_inspect`  | Re-verify a **known** tool ID without a full discovery — use when the agent has already found a good tool in this session. Skips the discovery round-trip, returns the current parameter schema, and returns `discovery_id` when the session knows it.          |
 
-The agent follows a routing decision tree before calling `qveris_search`:
+The agent follows a routing decision tree before calling `qveris_discover`:
 
 1. **Local operation?** (read files, check config, session status) → use local tools, skip QVeris
 2. **Need a web page or article?** → use `web_search` / `web_fetch` directly
-3. **Need structured real-time data?** → `qveris_search("weather forecast API")` — describe the capability, not the task
-4. **Need an external service capability?** → `qveris_search("text to image generation API")`
-5. **Already used a QVeris tool this session?** → `qveris_get_by_ids` with the known ID, then execute directly
+3. **Need structured real-time data?** → `qveris_discover("weather forecast API")` — describe the capability, not the task
+4. **Need an external service capability?** → `qveris_discover("text to image generation API")`
+5. **Already used a QVeris tool this session?** → `qveris_inspect` with the known ID to recover `discovery_id`; if it returns one, invoke directly, otherwise rediscover first
 6. **None of the above?** → do not call QVeris; use `web_search` or report the limitation
 
-A session-scoped **Tool Rolodex** tracks successfully executed tools. After a tool is used, it is annotated as `previously_used` in future search results and listed under `session_known_tools`, so the agent reuses verified tools instead of re-discovering them from scratch.
+A session-scoped **Tool Rolodex** tracks successfully invoked tools. After a tool is used, it is annotated as `previously_used` in future discovery results and listed under `session_known_tools` with its reusable `discovery_id` when known, so the agent can re-verify and reuse proven tools instead of re-discovering them from scratch.
 
 ### What can you build with QVeris?
 
@@ -426,7 +426,7 @@ QVerisBot is built on OpenClaw. For deep architecture, channel internals, platfo
 - **Bot migration (cross-OS):** see [Migrating Your Bot](#migrating-your-bot) above — `qverisbot migrate export|import|doctor`
 - **QVeris AI integrations:** https://qveris.ai/integrations
 - **QVeris dashboard / API keys:** https://qveris.ai/dashboard
-- **QVeris tool routing:** see [How the agent uses QVeris tools](#how-the-agent-uses-qveris-tools) above — `qveris_search`, `qveris_execute`, `qveris_get_by_ids`
+- **QVeris tool routing:** see [How the agent uses QVeris tools](#how-the-agent-uses-qveris-tools) above — `qveris_discover`, `qveris_invoke`, `qveris_inspect`
 
 ## About QVerisBot
 

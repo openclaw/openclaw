@@ -627,9 +627,9 @@ export type ToolsConfig = {
      * Kept for backwards compatibility; overridden by the specific fields when present.
      */
     timeoutSeconds?: number;
-    /** Timeout in seconds for qveris_search requests (default: 5). */
+    /** Timeout in seconds for qveris_discover requests (default: 5). */
     searchTimeoutSeconds?: number;
-    /** Timeout in seconds for qveris_execute requests (default: 60). */
+    /** Timeout in seconds for qveris_invoke requests (default: 60). */
     executeTimeoutSeconds?: number;
     /** Max response size in bytes (default: 20480). */
     maxResponseSize?: number;

@@ -9,13 +9,13 @@ import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 // ============================================================================
 
 const DEFAULT_QVERIS_BASE_URL = "https://qveris.ai/api/v1";
-const DEFAULT_SEARCH_TIMEOUT_SECONDS = 5;
-const DEFAULT_EXECUTE_TIMEOUT_SECONDS = 60;
+const DEFAULT_DISCOVER_TIMEOUT_SECONDS = 5;
+const DEFAULT_INVOKE_TIMEOUT_SECONDS = 60;
 const DEFAULT_MAX_RESPONSE_SIZE = 20480;
-const DEFAULT_SEARCH_LIMIT = 10;
+const DEFAULT_DISCOVER_LIMIT = 10;
 
-// Short-TTL cache for search results — avoids redundant API calls within a session
-const DEFAULT_SEARCH_CACHE_TTL_MS = 90_000; // 90 seconds
+// Short-TTL cache for discover results — avoids redundant API calls within a session
+const DEFAULT_DISCOVER_CACHE_TTL_MS = 90_000; // 90 seconds
 
 // ============================================================================
 // Types
@@ -23,8 +23,8 @@ const DEFAULT_SEARCH_CACHE_TTL_MS = 90_000; // 90 seconds
 
 type QverisConfig = NonNullable<OpenClawConfig["tools"]>["qveris"];
 
-/** Search result parameter from QVeris API */
-interface QverisSearchResultParam {
+/** Discovery result parameter from QVeris API */
+interface QverisDiscoverResultParam {
   name: string;
   type: string;
   required: boolean;
@@ -34,36 +34,36 @@ interface QverisSearchResultParam {
   };
 }
 
-/** Example format from QVeris search API */
-interface QverisSearchResultExamples {
+/** Example format from QVeris discovery API */
+interface QverisDiscoverResultExamples {
   sample_parameters?: Record<string, unknown>;
 }
 
-/** Search result tool from QVeris API */
-interface QverisSearchResultTool {
+/** Discovery result tool from QVeris API */
+interface QverisDiscoverResultTool {
   tool_id: string;
   name: string;
   description: string;
-  params?: QverisSearchResultParam[];
+  params?: QverisDiscoverResultParam[];
   provider_description?: string;
   stats?: {
     avg_execution_time_ms?: number;
     success_rate?: number;
   };
-  examples?: QverisSearchResultExamples;
+  examples?: QverisDiscoverResultExamples;
 }
 
-/** QVeris search API response */
-interface QverisSearchResponse {
+/** QVeris discover API response */
+interface QverisDiscoverResponse {
   query: string;
   total: number;
-  results: QverisSearchResultTool[];
-  search_id: string;
+  results: QverisDiscoverResultTool[];
+  search_id: string; // backend field name; exposed to model as discovery_id
   elapsed_time_ms?: number;
 }
 
-/** QVeris tool execution response */
-interface QverisExecutionResponse {
+/** QVeris tool invocation response */
+interface QverisInvocationResponse {
   execution_id: string;
   result: {
     data?: unknown;
@@ -83,10 +83,13 @@ interface QverisExecutionResponse {
 /** Structured error returned to the model instead of throwing */
 interface QverisErrorResult {
   success: false;
-  error_type: "timeout" | "http_error" | "network_error" | "json_parse_error";
+  error_type: "timeout" | "http_error" | "network_error" | "json_parse_error" | "rate_limited";
   status?: number;
   detail: string;
   retry_hint?: string;
+  retry_after_seconds?: number;
+  recovery_step?: "fix_params" | "simplify" | "switch_tool";
+  attempt_number?: number;
 }
 
 // ============================================================================
@@ -101,7 +104,6 @@ function resolveQverisEnabled(params: { config?: QverisConfig; sandboxed?: boole
   if (typeof params.config?.enabled === "boolean") {
     return params.config.enabled;
   }
-  // Enabled by default if API key is present
   return Boolean(resolveQverisApiKey(params.config));
 }
 
@@ -116,22 +118,20 @@ function resolveQverisBaseUrl(config?: QverisConfig): string {
   return config?.baseUrl?.trim() || DEFAULT_QVERIS_BASE_URL;
 }
 
-function resolveSearchTimeoutSeconds(config?: QverisConfig): number {
-  // searchTimeoutSeconds takes precedence; fall back to legacy timeoutSeconds
-  return config?.searchTimeoutSeconds ?? config?.timeoutSeconds ?? DEFAULT_SEARCH_TIMEOUT_SECONDS;
+function resolveDiscoverTimeoutSeconds(config?: QverisConfig): number {
+  return config?.searchTimeoutSeconds ?? config?.timeoutSeconds ?? DEFAULT_DISCOVER_TIMEOUT_SECONDS;
 }
 
-function resolveExecuteTimeoutSeconds(config?: QverisConfig): number {
-  // executeTimeoutSeconds takes precedence; fall back to legacy timeoutSeconds
-  return config?.executeTimeoutSeconds ?? config?.timeoutSeconds ?? DEFAULT_EXECUTE_TIMEOUT_SECONDS;
+function resolveInvokeTimeoutSeconds(config?: QverisConfig): number {
+  return config?.executeTimeoutSeconds ?? config?.timeoutSeconds ?? DEFAULT_INVOKE_TIMEOUT_SECONDS;
 }
 
 function resolveMaxResponseSize(config?: QverisConfig): number {
   return config?.maxResponseSize ?? DEFAULT_MAX_RESPONSE_SIZE;
 }
 
-function resolveSearchLimit(config?: QverisConfig): number {
-  return config?.searchLimit ?? DEFAULT_SEARCH_LIMIT;
+function resolveDiscoverLimit(config?: QverisConfig): number {
+  return config?.searchLimit ?? DEFAULT_DISCOVER_LIMIT;
 }
 
 // ============================================================================
@@ -143,7 +143,6 @@ function resolveSearchLimit(config?: QverisConfig): number {
  * so the model receives a consistent error format rather than an exception trace.
  */
 export function classifyQverisError(err: unknown): QverisErrorResult {
-  // AbortError from AbortController timeout
   if (err instanceof DOMException && err.name === "AbortError") {
     return {
       success: false,
@@ -152,7 +151,6 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
       retry_hint: "Increase timeout_seconds or retry with a simpler query.",
     };
   }
-  // Node fetch AbortError arrives as a plain Error with name === 'AbortError'
   if (err instanceof Error && err.name === "AbortError") {
     return {
       success: false,
@@ -162,10 +160,24 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
     };
   }
   if (err instanceof Error) {
-    // Preserve HTTP status codes encoded in the message from qverisSearch/qverisExecute
     const httpMatch = err.message.match(/\((\d{3})\)/);
     if (httpMatch) {
       const status = Number(httpMatch[1]);
+
+      // Rate-limit: parse Retry-After encoded by the API client
+      if (status === 429) {
+        const retryMatch = err.message.match(/\[retry-after:(\d+)]/);
+        const waitSeconds = retryMatch ? Number(retryMatch[1]) : 10;
+        return {
+          success: false,
+          error_type: "rate_limited",
+          status: 429,
+          detail: err.message.replace(/\s*\[retry-after:\d+]/, ""),
+          retry_after_seconds: waitSeconds,
+          retry_hint: `Rate limited. Wait ${waitSeconds}s before retrying.`,
+        };
+      }
+
       const isClientError = status >= 400 && status < 500;
       return {
         success: false,
@@ -173,7 +185,7 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
         status,
         detail: err.message,
         retry_hint: isClientError
-          ? "Check tool_id, search_id, and params_to_tool structure."
+          ? "Check tool_id, discovery_id (from qveris_discover or qveris_inspect), and params_to_tool structure."
           : "QVeris service error — retry in a moment.",
       };
     }
@@ -193,18 +205,18 @@ export function classifyQverisError(err: unknown): QverisErrorResult {
 }
 
 // ============================================================================
-// In-Memory Search Cache
+// In-Memory Discover Cache
 // ============================================================================
 
-interface SearchCacheEntry {
+interface DiscoverCacheEntry {
   value: ReturnType<typeof jsonResult>;
   expiresAt: number;
 }
 
-function makeSearchCache() {
-  const store = new Map<string, SearchCacheEntry>();
+function makeDiscoverCache() {
+  const store = new Map<string, DiscoverCacheEntry>();
 
-  function read(key: string): SearchCacheEntry["value"] | undefined {
+  function read(key: string): DiscoverCacheEntry["value"] | undefined {
     const entry = store.get(key);
     if (!entry) {
       return undefined;
@@ -216,7 +228,7 @@ function makeSearchCache() {
     return entry.value;
   }
 
-  function write(key: string, value: SearchCacheEntry["value"], ttlMs: number) {
+  function write(key: string, value: DiscoverCacheEntry["value"], ttlMs: number) {
     store.set(key, { value, expiresAt: Date.now() + ttlMs });
   }
 
@@ -227,14 +239,23 @@ function makeSearchCache() {
 // API Client
 // ============================================================================
 
-async function qverisSearch(params: {
+/** Encode Retry-After into the error message so classifyQverisError can parse it */
+function buildApiError(label: string, res: Response, detail: string): Error {
+  const retryAfter = res.headers.get("Retry-After");
+  const retryTag = retryAfter ? ` [retry-after:${retryAfter}]` : "";
+  return new Error(
+    `QVeris ${label} failed (${res.status}): ${detail || res.statusText}${retryTag}`,
+  );
+}
+
+async function qverisDiscover(params: {
   query: string;
   sessionId: string;
   limit: number;
   apiKey: string;
   baseUrl: string;
   timeoutSeconds: number;
-}): Promise<QverisSearchResponse> {
+}): Promise<QverisDiscoverResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), params.timeoutSeconds * 1000);
 
@@ -255,16 +276,16 @@ async function qverisSearch(params: {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`QVeris search failed (${res.status}): ${detail || res.statusText}`);
+      throw buildApiError("discover", res, detail);
     }
 
-    return (await res.json()) as QverisSearchResponse;
+    return (await res.json()) as QverisDiscoverResponse;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-async function qverisExecute(params: {
+async function qverisInvoke(params: {
   toolId: string;
   searchId: string;
   sessionId: string;
@@ -273,7 +294,7 @@ async function qverisExecute(params: {
   apiKey: string;
   baseUrl: string;
   timeoutSeconds: number;
-}): Promise<QverisExecutionResponse> {
+}): Promise<QverisInvocationResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), params.timeoutSeconds * 1000);
 
@@ -298,10 +319,10 @@ async function qverisExecute(params: {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`QVeris execute failed (${res.status}): ${detail || res.statusText}`);
+      throw buildApiError("invoke", res, detail);
     }
 
-    return (await res.json()) as QverisExecutionResponse;
+    return (await res.json()) as QverisInvocationResponse;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -309,7 +330,7 @@ async function qverisExecute(params: {
 
 /** QVeris get-by-ids API response */
 interface QverisGetByIdsResponse {
-  tools: QverisSearchResultTool[];
+  tools: QverisDiscoverResultTool[];
 }
 
 async function qverisGetByIds(params: {
@@ -323,22 +344,24 @@ async function qverisGetByIds(params: {
   const timeoutId = setTimeout(() => controller.abort(), params.timeoutSeconds * 1000);
 
   try {
+    const requestBody = {
+      tool_ids: params.toolIds,
+      session_id: params.sessionId,
+    };
+
     const res = await fetch(`${params.baseUrl}/tools/get-by-ids`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${params.apiKey}`,
       },
-      body: JSON.stringify({
-        tool_ids: params.toolIds,
-        session_id: params.sessionId,
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`QVeris get-by-ids failed (${res.status}): ${detail || res.statusText}`);
+      throw buildApiError("inspect", res, detail);
     }
 
     return (await res.json()) as QverisGetByIdsResponse;
@@ -348,7 +371,7 @@ async function qverisGetByIds(params: {
 }
 
 // ============================================================================
-// Session Tool Rolodex — remembers successfully executed tools for the session
+// Session Tool Rolodex — remembers successfully invoked tools for the session
 // ============================================================================
 
 interface RolodexEntry {
@@ -358,6 +381,7 @@ interface RolodexEntry {
   successCount: number;
   lastUsedAt: number;
   discoveryQuery: string;
+  discoveryId?: string;
 }
 
 function makeToolRolodex() {
@@ -365,12 +389,13 @@ function makeToolRolodex() {
 
   function record(
     toolId: string,
-    meta: { name: string; description: string; discoveryQuery: string },
+    meta: { name: string; description: string; discoveryQuery: string; discoveryId?: string },
   ) {
     const existing = store.get(toolId);
     if (existing) {
       existing.successCount += 1;
       existing.lastUsedAt = Date.now();
+      existing.discoveryId = meta.discoveryId ?? existing.discoveryId;
     } else {
       store.set(toolId, {
         toolId,
@@ -379,6 +404,7 @@ function makeToolRolodex() {
         successCount: 1,
         lastUsedAt: Date.now(),
         discoveryQuery: meta.discoveryQuery,
+        discoveryId: meta.discoveryId,
       });
     }
   }
@@ -387,37 +413,48 @@ function makeToolRolodex() {
     return store.get(toolId);
   }
 
-  function getSummary(): Array<{ tool_id: string; name: string; uses: number }> {
+  function getSummary(): Array<{
+    tool_id: string;
+    name: string;
+    uses: number;
+    discovery_id?: string;
+  }> {
     return Array.from(store.values()).map((e) => ({
       tool_id: e.toolId,
       name: e.name,
       uses: e.successCount,
+      ...(e.discoveryId ? { discovery_id: e.discoveryId } : {}),
     }));
   }
 
   return { record, lookup, getSummary };
 }
 
-// Track which search returned which tool_id so we can populate rolodex on execute
-interface SearchResultMeta {
+// Track which discovery returned which tool_id so we can populate rolodex on invoke
+interface DiscoverResultMeta {
   name: string;
   description: string;
   query: string;
 }
 
-function makeSearchResultTracker() {
-  const store = new Map<string, SearchResultMeta>();
+function makeDiscoverResultTracker() {
+  const store = new Map<string, DiscoverResultMeta>();
 
   function trackResults(
     query: string,
     tools: Array<{ tool_id: string; name: string; description: string }>,
   ) {
     for (const tool of tools) {
-      store.set(tool.tool_id, { name: tool.name, description: tool.description, query });
+      const existing = store.get(tool.tool_id);
+      store.set(tool.tool_id, {
+        name: tool.name,
+        description: tool.description,
+        query: query === "(inspect)" ? (existing?.query ?? query) : query,
+      });
     }
   }
 
-  function getMeta(toolId: string): SearchResultMeta | undefined {
+  function getMeta(toolId: string): DiscoverResultMeta | undefined {
     return store.get(toolId);
   }
 
@@ -428,13 +465,14 @@ function makeSearchResultTracker() {
 // Tool Schemas
 // ============================================================================
 
-const QverisSearchSchema = Type.Object({
+const QverisDiscoverSchema = Type.Object({
   query: Type.String({
     description:
-      "Capability-oriented search query in English. " +
+      "Capability-oriented discovery query in English. " +
+      "This discovers TOOLS (APIs/services), not data — results are tool candidates with metadata. " +
       "GOOD: 'weather forecast API', 'web page content extraction', 'stock price real-time data'. " +
-      "BAD: 'check OpenClaw config', 'how to set up OpenRouter', 'ACP protocol documentation'. " +
-      "Describe the type of API tool you need, not your end task.",
+      "BAD: 'what is the weather in Beijing', 'AAPL stock price today', 'ACP protocol documentation'. " +
+      "Describe the type of API tool you need, not your end task or question.",
   }),
   limit: Type.Optional(
     Type.Number({
@@ -445,17 +483,28 @@ const QverisSearchSchema = Type.Object({
   ),
 });
 
-const QverisExecuteSchema = Type.Object({
+const QverisInvokeSchema = Type.Object({
   tool_id: Type.String({
-    description: "The ID of the tool to execute. Must come from a previous qveris_search call.",
-  }),
-  search_id: Type.String({
     description:
-      "The search_id from the qveris_search response that returned this tool. Required for linking execution to the original search.",
+      "The ID of the tool to invoke. Must come from a previous qveris_discover or qveris_inspect call.",
   }),
+  discovery_id: Type.Optional(
+    Type.String({
+      description:
+        "The discovery_id from qveris_discover or qveris_inspect. " +
+        "Required unless this session already knows the discovery_id for the tool_id from a prior discovery/inspect.",
+    }),
+  ),
   params_to_tool: Type.String({
     description:
-      'JSON dictionary of parameters to pass to the tool. IMPORTANT: Use the sample_parameters from the qveris_search results as your template — copy its structure and replace values with the actual data needed. Example: \'{"city": "London", "units": "metric"}\'.',
+      "JSON dictionary of parameters to pass to the tool. " +
+      "IMPORTANT: Use sample_parameters from the qveris_discover results as your template. " +
+      "Common mistakes to avoid: " +
+      '(1) numbers must be unquoted (limit: 10, not "10"); ' +
+      "(2) dates must be ISO 8601 (2025-01-15, not 01/15/2025); " +
+      '(3) use identifiers not natural language (symbol: "AAPL", not "Apple stock price"); ' +
+      "(4) never omit required params listed in the discovery results. " +
+      'Example: \'{"city": "London", "units": "metric"}\'.',
   }),
   max_response_size: Type.Optional(
     Type.Number({
@@ -466,18 +515,18 @@ const QverisExecuteSchema = Type.Object({
   timeout_seconds: Type.Optional(
     Type.Number({
       description:
-        "Override timeout in seconds for this execution. Short tasks (data queries, search): default 10s. Long tasks (image/video generation, multimodal processing): set 60-120s. Default: 60.",
+        "Override timeout in seconds for this invocation. Short tasks (data queries): default 10s. Long tasks (image/video generation, multimodal processing): set 60-120s. Default: 60.",
       minimum: 1,
       maximum: 300,
     }),
   ),
 });
 
-const QverisGetByIdsSchema = Type.Object({
+const QverisInspectSchema = Type.Object({
   tool_ids: Type.String({
     description:
-      "Comma-separated list of QVeris tool IDs to look up (e.g. 'jina_ai.reader.execute.v1.b2ef8fda,openweathermap.weather.execute.v1'). " +
-      "Use tool IDs from a previous qveris_search or from session context to verify availability and get current parameter schemas.",
+      "Comma-separated list of QVeris tool IDs to inspect (e.g. 'jina_ai.reader.execute.v1.b2ef8fda,openweathermap.weather.execute.v1'). " +
+      "Use tool IDs from a previous qveris_discover or from session context to verify availability and get current parameter schemas.",
   }),
 });
 
@@ -502,20 +551,27 @@ export function createQverisTools(options?: {
   }
 
   const baseUrl = resolveQverisBaseUrl(config);
-  const searchTimeoutSeconds = resolveSearchTimeoutSeconds(config);
-  const executeTimeoutSeconds = resolveExecuteTimeoutSeconds(config);
+  const discoverTimeoutSeconds = resolveDiscoverTimeoutSeconds(config);
+  const invokeTimeoutSeconds = resolveInvokeTimeoutSeconds(config);
   const maxResponseSize = resolveMaxResponseSize(config);
-  const searchLimit = resolveSearchLimit(config);
+  const discoverLimit = resolveDiscoverLimit(config);
 
-  const searchCache = makeSearchCache();
+  const discoverCache = makeDiscoverCache();
   const rolodex = makeToolRolodex();
-  const searchTracker = makeSearchResultTracker();
+  const discoverTracker = makeDiscoverResultTracker();
+
+  // Per-tool invoke failure counter for progressive recovery hints
+  const invokeFailureCount = new Map<string, number>();
 
   const sessionId = options?.agentSessionKey ?? `clawdbot-${Date.now()}-${randomUUID()}`;
 
-  // Helper: format a QVeris tool for model consumption
-  function formatToolForModel(tool: QverisSearchResultTool) {
+  function resolveKnownDiscoveryId(toolId: string): string | undefined {
+    return rolodex.lookup(toolId)?.discoveryId;
+  }
+
+  function formatToolForModel(tool: QverisDiscoverResultTool) {
     const entry = rolodex.lookup(tool.tool_id);
+    const discoveryId = resolveKnownDiscoveryId(tool.tool_id);
     return {
       tool_id: tool.tool_id,
       name: tool.name,
@@ -531,47 +587,48 @@ export function createQverisTools(options?: {
         ? { sample_parameters: tool.examples.sample_parameters }
         : undefined,
       stats: tool.stats,
+      ...(discoveryId ? { discovery_id: discoveryId } : {}),
       ...(entry ? { previously_used: true, session_uses: entry.successCount } : {}),
     };
   }
 
-  const searchTool: AnyAgentTool = {
-    label: "QVeris Search",
-    name: "qveris_search",
+  const discoverTool: AnyAgentTool = {
+    label: "QVeris Discover",
+    name: "qveris_discover",
     description:
-      "Search for third-party API tools by capability type. " +
-      "Returns tools for: real-time data APIs (prices, weather, metrics), external services (image gen, OCR, TTS, translation), and geo/location APIs. " +
+      "Discover third-party API tools by capability type. " +
+      "Returns TOOL CANDIDATES with metadata (not data results). " +
+      "Use for: real-time data APIs (prices, weather, metrics), external services (image gen, OCR, TTS, translation), and geo/location APIs. " +
       "NOT for: local operations, documentation/tutorials, software configuration, or general web content. " +
-      "Describe the TOOL CAPABILITY you need in English (e.g. 'weather forecast API'), not your task goal.",
-    parameters: QverisSearchSchema,
+      "Describe the TOOL CAPABILITY you need in English (e.g. 'weather forecast API'), not your task goal or question.",
+    parameters: QverisDiscoverSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true }) ?? searchLimit;
+      const limit = readNumberParam(params, "limit", { integer: true }) ?? discoverLimit;
       const normalizedLimit = Math.min(Math.max(1, limit), 100);
 
       const cacheKey = `${query}:${normalizedLimit}`;
-      const cached = searchCache.read(cacheKey);
+      const cached = discoverCache.read(cacheKey);
       if (cached) {
         return { ...cached, cached: true } as ReturnType<typeof jsonResult>;
       }
 
-      let result: QverisSearchResponse;
+      let result: QverisDiscoverResponse;
       try {
-        result = await qverisSearch({
+        result = await qverisDiscover({
           query,
           sessionId,
           limit: normalizedLimit,
           apiKey,
           baseUrl,
-          timeoutSeconds: searchTimeoutSeconds,
+          timeoutSeconds: discoverTimeoutSeconds,
         });
       } catch (err) {
         return jsonResult(classifyQverisError(err));
       }
 
-      // Track search results so the rolodex can be populated on execute
-      searchTracker.trackResults(
+      discoverTracker.trackResults(
         query,
         result.results.map((t) => ({
           tool_id: t.tool_id,
@@ -584,31 +641,48 @@ export function createQverisTools(options?: {
       const payload = jsonResult({
         query: result.query,
         total: result.total,
-        search_id: result.search_id,
+        discovery_id: result.search_id,
         elapsed_time_ms: result.elapsed_time_ms,
         results: result.results.map(formatToolForModel),
         ...(knownTools.length > 0 ? { session_known_tools: knownTools } : {}),
       });
 
-      searchCache.write(cacheKey, payload, DEFAULT_SEARCH_CACHE_TTL_MS);
+      discoverCache.write(cacheKey, payload, DEFAULT_DISCOVER_CACHE_TTL_MS);
       return payload;
     },
   };
 
-  const executeTool: AnyAgentTool = {
-    label: "QVeris Execute",
-    name: "qveris_execute",
+  const invokeTool: AnyAgentTool = {
+    label: "QVeris Invoke",
+    name: "qveris_invoke",
     description:
-      "Execute a specific third-party tool with provided parameters. The tool_id and search_id must come from a previous qveris_search or qveris_get_by_ids call. Pass parameters to the tool through params_to_tool as a JSON string.",
-    parameters: QverisExecuteSchema,
+      "Invoke a discovered third-party tool with provided parameters. " +
+      "tool_id is required; discovery_id should come from qveris_discover or qveris_inspect. " +
+      "Pass parameters to the tool through params_to_tool as a JSON string.",
+    parameters: QverisInvokeSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const toolId = readStringParam(params, "tool_id", { required: true });
-      const searchId = readStringParam(params, "search_id", { required: true });
+      // Accept discovery_id (new) or search_id (legacy); fall back to session-known IDs.
+      const discoveryId =
+        readStringParam(params, "discovery_id") ||
+        readStringParam(params, "search_id") ||
+        resolveKnownDiscoveryId(toolId);
       const paramsToToolRaw = readStringParam(params, "params_to_tool", { required: true });
       const maxSize =
         readNumberParam(params, "max_response_size", { integer: true }) ?? maxResponseSize;
       const timeoutOverride = readNumberParam(params, "timeout_seconds");
+
+      if (!discoveryId) {
+        return jsonResult({
+          success: false,
+          error_type: "json_parse_error",
+          detail:
+            "Missing discovery_id for qveris_invoke. Run qveris_discover first, or call qveris_inspect for a previously used tool so the session rolodex can provide the discovery_id.",
+          retry_hint:
+            "Pass discovery_id from qveris_discover/qveris_inspect. If the tool was not previously used in this session, rediscover it to obtain one.",
+        } satisfies QverisErrorResult);
+      }
 
       let toolParams: Record<string, unknown>;
       try {
@@ -619,57 +693,94 @@ export function createQverisTools(options?: {
           error_type: "json_parse_error",
           detail: `Invalid JSON in params_to_tool: ${parseError instanceof Error ? parseError.message : "Unknown parse error"}`,
           retry_hint:
-            "Use sample_parameters from the qveris_search result as a template and ensure valid JSON.",
+            "Use sample_parameters from the qveris_discover result as a template and ensure valid JSON.",
         } satisfies QverisErrorResult);
       }
 
-      let result: QverisExecutionResponse;
+      let result: QverisInvocationResponse;
       try {
-        result = await qverisExecute({
+        result = await qverisInvoke({
           toolId,
-          searchId,
+          searchId: discoveryId,
           sessionId,
           parameters: toolParams,
           maxResponseSize: maxSize,
           apiKey,
           baseUrl,
-          timeoutSeconds: timeoutOverride ?? executeTimeoutSeconds,
+          timeoutSeconds: timeoutOverride ?? invokeTimeoutSeconds,
         });
       } catch (err) {
-        return jsonResult(classifyQverisError(err));
+        const failCount = (invokeFailureCount.get(toolId) ?? 0) + 1;
+        invokeFailureCount.set(toolId, failCount);
+        const recoveryStep =
+          failCount === 1 ? "fix_params" : failCount === 2 ? "simplify" : "switch_tool";
+        const classified = classifyQverisError(err);
+        return jsonResult({
+          ...classified,
+          recovery_step: recoveryStep,
+          attempt_number: failCount,
+        });
       }
 
-      // Record successful executions in the session rolodex
       if (result.success) {
-        const meta = searchTracker.getMeta(toolId);
+        invokeFailureCount.delete(toolId);
+        const meta = discoverTracker.getMeta(toolId);
         if (meta) {
           rolodex.record(toolId, {
             name: meta.name,
             description: meta.description,
             discoveryQuery: meta.query,
+            discoveryId,
           });
         }
+      } else {
+        // Track failures reported by the QVeris backend (success: false in response body)
+        const failCount = (invokeFailureCount.get(toolId) ?? 0) + 1;
+        invokeFailureCount.set(toolId, failCount);
+        const recoveryStep =
+          failCount === 1 ? "fix_params" : failCount === 2 ? "simplify" : "switch_tool";
+        return jsonResult({
+          execution_id: result.execution_id,
+          success: false,
+          elapsed_time_ms: result.elapsed_time_ms,
+          error_message: result.error_message,
+          cost: result.cost ?? result.credits_used,
+          recovery_step: recoveryStep,
+          attempt_number: failCount,
+        });
       }
+
+      const resultData = result.result;
+      const isTruncated = Boolean(
+        resultData?.truncated_content || resultData?.full_content_file_url,
+      );
 
       return jsonResult({
         execution_id: result.execution_id,
-        success: result.success,
+        success: true,
         elapsed_time_ms: result.elapsed_time_ms,
-        result: result.result,
-        error_message: result.error_message,
+        result: resultData,
         cost: result.cost ?? result.credits_used,
+        ...(isTruncated
+          ? {
+              truncated: true,
+              truncation_hint:
+                "Response was truncated. Increase max_response_size for full data, " +
+                "or use full_content_file_url if available.",
+            }
+          : {}),
       });
     },
   };
 
-  const getByIdsTool: AnyAgentTool = {
-    label: "QVeris Get By IDs",
-    name: "qveris_get_by_ids",
+  const inspectTool: AnyAgentTool = {
+    label: "QVeris Inspect",
+    name: "qveris_inspect",
     description:
-      "Look up known QVeris tools by their IDs without a full search. " +
-      "Use when you already have a tool_id from a previous qveris_search or session context and want to verify availability and get current parameter schemas. " +
-      "Returns tool details including params, sample_parameters, and stats.",
-    parameters: QverisGetByIdsSchema,
+      "Inspect known QVeris tools by their IDs without a full discovery. " +
+      "Use when you already have a tool_id from a previous qveris_discover or session context and want to verify availability, recover discovery_id when known, and get current parameter schemas. " +
+      "Returns tool details including params, sample_parameters, stats, and discovery_id when the session knows it.",
+    parameters: QverisInspectSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const toolIdsRaw = readStringParam(params, "tool_ids", { required: true });
@@ -694,15 +805,14 @@ export function createQverisTools(options?: {
           sessionId,
           apiKey,
           baseUrl,
-          timeoutSeconds: searchTimeoutSeconds,
+          timeoutSeconds: discoverTimeoutSeconds,
         });
       } catch (err) {
         return jsonResult(classifyQverisError(err));
       }
 
-      // Track returned tools so they can be recorded in rolodex on execute
-      searchTracker.trackResults(
-        "(get-by-ids)",
+      discoverTracker.trackResults(
+        "(inspect)",
         result.tools.map((t) => ({
           tool_id: t.tool_id,
           name: t.name,
@@ -710,15 +820,31 @@ export function createQverisTools(options?: {
         })),
       );
 
+      const tools = result.tools.map(formatToolForModel);
+      const resolvedDiscoveryIds = Array.from(
+        new Set(
+          tools
+            .map((tool) => tool.discovery_id)
+            .filter((v): v is string => typeof v === "string" && v.length > 0),
+        ),
+      );
+
       return jsonResult({
         tool_ids_requested: toolIds,
+        ...(resolvedDiscoveryIds.length === 1 ? { discovery_id: resolvedDiscoveryIds[0] } : {}),
         tools_found: result.tools.length,
-        tools: result.tools.map(formatToolForModel),
+        tools,
+        ...(resolvedDiscoveryIds.length === 0
+          ? {
+              invoke_hint:
+                "No discovery_id is known for these tool_ids in this session. If you need to invoke one, run qveris_discover first to obtain a discovery_id.",
+            }
+          : {}),
       });
     },
   };
 
-  return [searchTool, executeTool, getByIdsTool];
+  return [discoverTool, invokeTool, inspectTool];
 }
 
 /**
