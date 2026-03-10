@@ -6,6 +6,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { shouldSuppressLocalDiscordExecApprovalPrompt } from "../../discord/exec-approvals.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -365,6 +366,16 @@ export async function dispatchReplyFromConfig(params: {
     let blockCount = 0;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
+      if (
+        normalizeMessageChannel(ctx.Surface ?? ctx.Provider) === "discord" &&
+        shouldSuppressLocalDiscordExecApprovalPrompt({
+          cfg,
+          accountId: ctx.AccountId,
+          payload,
+        })
+      ) {
+        return null;
+      }
       if (shouldSendToolSummaries) {
         return payload;
       }
