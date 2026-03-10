@@ -118,22 +118,23 @@ describe("createGatewayPluginRequestHandler", () => {
     const exactPluginHandler = vi.fn(async () => false);
     const prefixGatewayHandler = vi.fn(async () => true);
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
+      getRegistry: () =>
+        createTestRegistry({
+          httpRoutes: [
+            createRoute({
+              path: "/plugin/secure/report",
+              match: "exact",
+              auth: "plugin",
+              handler: exactPluginHandler,
+            }),
+            createRoute({
+              path: "/plugin/secure",
+              match: "prefix",
+              auth: "gateway",
+              handler: prefixGatewayHandler,
+            }),
+          ],
+        }),
       log: createPluginLog(),
     });
 
@@ -155,22 +156,23 @@ describe("createGatewayPluginRequestHandler", () => {
     const exactPluginHandler = vi.fn(async () => false);
     const prefixGatewayHandler = vi.fn(async () => true);
     const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
+      getRegistry: () =>
+        createTestRegistry({
+          httpRoutes: [
+            createRoute({
+              path: "/plugin/secure/report",
+              match: "exact",
+              auth: "plugin",
+              handler: exactPluginHandler,
+            }),
+            createRoute({
+              path: "/plugin/secure",
+              match: "prefix",
+              auth: "gateway",
+              handler: prefixGatewayHandler,
+            }),
+          ],
+        }),
       log: createPluginLog(),
     });
 
