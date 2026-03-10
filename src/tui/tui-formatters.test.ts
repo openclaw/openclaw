@@ -134,6 +134,21 @@ Assistant body`,
     expect(text).toContain("Assistant body");
   });
 
+  it("strips relevant-memories scaffolding from assistant string content", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [
+        "Visible",
+        "<relevant-memories>",
+        "internal-only",
+        "</relevant-memories>",
+        "Still visible",
+      ].join("\n"),
+    });
+
+    expect(text).toBe("Visible\nStill visible");
+  });
+
   it("does not strip metadata-like blocks that are not a leading prefix", () => {
     const text = extractTextFromMessage({
       role: "user",
@@ -191,6 +206,23 @@ describe("extractContentFromMessage", () => {
     });
 
     expect(text).toBe("hello");
+  });
+
+  it("strips relevant-memories scaffolding from assistant text blocks", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: ["Visible", "<relevant-memories>", "internal-only", "</relevant-memories>"].join(
+            "\n",
+          ),
+        },
+        { type: "text", text: "Still visible" },
+      ],
+    });
+
+    expect(text).toBe("Visible\nStill visible");
   });
 
   it("renders error text when stopReason is error and content is not an array", () => {

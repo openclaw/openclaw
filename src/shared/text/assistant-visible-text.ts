@@ -32,6 +32,13 @@ function stripRelevantMemoriesTags(text: string): string {
     }
 
     lastIndex = idx + match[0].length;
+    if (!inMemoryBlock) {
+      if (result.endsWith("\r\n") && text.slice(lastIndex, lastIndex + 2) === "\r\n") {
+        lastIndex += 2;
+      } else if (result.endsWith("\n") && text[lastIndex] === "\n") {
+        lastIndex += 1;
+      }
+    }
   }
 
   if (!inMemoryBlock) {

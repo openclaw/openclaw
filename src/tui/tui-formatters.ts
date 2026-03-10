@@ -1,5 +1,6 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -153,6 +154,10 @@ export function sanitizeRenderableText(text: string): string {
   return applyRtlIsolation(tokenSafe);
 }
 
+function sanitizeAssistantRenderableText(text: string): string {
+  return sanitizeRenderableText(stripAssistantInternalScaffolding(text)).trimEnd();
+}
+
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
@@ -222,6 +227,7 @@ function collectSanitizedBlockStrings(params: {
   content: unknown;
   blockType: "text" | "thinking";
   valueKey: "text" | "thinking";
+  isAssistant?: boolean;
 }): string[] {
   if (!Array.isArray(params.content)) {
     return [];
@@ -233,7 +239,10 @@ function collectSanitizedBlockStrings(params: {
     }
     const rec = block as Record<string, unknown>;
     if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
-      parts.push(sanitizeRenderableText(rec[params.valueKey] as string));
+      const text = rec[params.valueKey] as string;
+      parts.push(
+        params.isAssistant ? sanitizeAssistantRenderableText(text) : sanitizeRenderableText(text),
+      );
     }
   }
   return parts;
@@ -256,6 +265,7 @@ export function extractThinkingFromMessage(message: unknown): string {
     content,
     blockType: "thinking",
     valueKey: "thinking",
+    isAssistant: resolved.record.role === "assistant",
   });
   return parts.join("\n").trim();
 }
@@ -272,13 +282,18 @@ export function extractContentFromMessage(message: unknown): string {
   const { record, content } = resolved;
 
   if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
+    const sanitized =
+      record.role === "assistant"
+        ? sanitizeAssistantRenderableText(content)
+        : sanitizeRenderableText(content);
+    return sanitized.trim();
   }
 
   const parts = collectSanitizedBlockStrings({
     content,
     blockType: "text",
     valueKey: "text",
+    isAssistant: record.role === "assistant",
   });
   if (parts.length > 0) {
     return parts.join("\n").trim();
@@ -286,9 +301,16 @@ export function extractContentFromMessage(message: unknown): string {
   return formatAssistantErrorFromRecord(record);
 }
 
-function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
+function extractTextBlocks(
+  content: unknown,
+  opts?: { includeThinking?: boolean; isAssistant?: boolean },
+): string {
   if (typeof content === "string") {
-    return sanitizeRenderableText(content).trim();
+    const sanitized =
+      opts?.isAssistant === true
+        ? sanitizeAssistantRenderableText(content)
+        : sanitizeRenderableText(content);
+    return sanitized.trim();
   }
   if (!Array.isArray(content)) {
     return "";
@@ -298,6 +320,7 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     content,
     blockType: "text",
     valueKey: "text",
+    isAssistant: opts?.isAssistant,
   });
   const thinkingParts =
     opts?.includeThinking === true
@@ -305,6 +328,7 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
           content,
           blockType: "thinking",
           valueKey: "thinking",
+          isAssistant: opts?.isAssistant,
         })
       : [];
 
@@ -323,7 +347,10 @@ export function extractTextFromMessage(
   if (!record) {
     return "";
   }
-  const text = extractTextBlocks(record.content, opts);
+  const text = extractTextBlocks(record.content, {
+    ...opts,
+    isAssistant: record.role === "assistant",
+  });
   if (text) {
     if (record.role === "user") {
       return stripLeadingInboundMetadata(text);
