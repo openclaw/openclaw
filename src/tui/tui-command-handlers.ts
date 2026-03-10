@@ -110,10 +110,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return;
       }
 
-      // Partition models: show configured/authenticated providers first
-      // Note: agentDir not passed — agent-scoped auth credentials are not checked.
-      // CommandHandlerContext doesn't expose agentDir yet; thread it through when available.
-      const hasAuth = createProviderAuthChecker({ cfg: loadConfig() });
+      // Partition models: show configured/authenticated providers first.
+      // Skip partitioning in remote mode (--url) because loadConfig() returns
+      // local auth which doesn't reflect the remote gateway's credentials.
+      const hasAuth = opts.url ? () => false : createProviderAuthChecker({ cfg: loadConfig() });
       const items = partitionModelItems(models, hasAuth);
 
       const selector = createSearchableSelectList(items, 9);
