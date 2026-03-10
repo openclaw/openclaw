@@ -1,11 +1,11 @@
 import { parseArgs } from "node:util";
+import type { Locale, TranslationMap } from "../ui/src/i18n/lib/types.ts";
 import { de } from "../ui/src/i18n/locales/de.ts";
 import { en } from "../ui/src/i18n/locales/en.ts";
 import { es } from "../ui/src/i18n/locales/es.ts";
 import { pt_BR } from "../ui/src/i18n/locales/pt-BR.ts";
 import { zh_CN } from "../ui/src/i18n/locales/zh-CN.ts";
 import { zh_TW } from "../ui/src/i18n/locales/zh-TW.ts";
-import type { Locale, TranslationMap } from "../ui/src/i18n/lib/types.ts";
 
 type LocaleRegistry = Record<Locale, TranslationMap>;
 
