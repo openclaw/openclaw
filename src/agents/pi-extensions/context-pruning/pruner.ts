@@ -266,6 +266,19 @@ export function pruneContextMessages(params: {
   const prunableToolIndexes: number[] = [];
   let next: AgentMessage[] | null = null;
 
+  // Collect image-containing tool result indexes so we can protect only the
+  // most recent ones and allow older image results to be pruned (#41789).
+  const MAX_PROTECTED_IMAGE_RESULTS = 3;
+  const imageToolIndexes: number[] = [];
+  for (let i = pruneStartIndex; i < cutoffIndex; i++) {
+    const msg = messages[i];
+    if (msg?.role === "toolResult" && isToolPrunable(msg.toolName) && hasImageBlocks(msg.content)) {
+      imageToolIndexes.push(i);
+    }
+  }
+  // Only the N most recent image results are protected; older ones are prunable.
+  const protectedImageIndexes = new Set(imageToolIndexes.slice(-MAX_PROTECTED_IMAGE_RESULTS));
+
   for (let i = pruneStartIndex; i < cutoffIndex; i++) {
     const msg = messages[i];
     if (!msg || msg.role !== "toolResult") {
@@ -274,7 +287,7 @@ export function pruneContextMessages(params: {
     if (!isToolPrunable(msg.toolName)) {
       continue;
     }
-    if (hasImageBlocks(msg.content)) {
+    if (hasImageBlocks(msg.content) && protectedImageIndexes.has(i)) {
       continue;
     }
     prunableToolIndexes.push(i);
