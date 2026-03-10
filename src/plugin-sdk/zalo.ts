@@ -49,6 +49,7 @@ export {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
+export { resolveNeverReply } from "../config/group-policy.js";
 export type { GroupPolicy, MarkdownTableMode } from "../config/types.js";
 export type { SecretInput } from "../config/types.secrets.js";
 export {

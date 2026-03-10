@@ -1365,6 +1365,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
   "channels.defaults.groupPolicy":
     'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
+  "channels.defaults.neverReply":
+    "When true, the bot passively observes group conversations without replying, even when mentioned. Group messages are stored as pending context but never trigger an agent run. DMs continue to work normally. Resolved per-account, per-channel, then defaults.",
   "channels.defaults.heartbeat":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
   "channels.defaults.heartbeat.showOk":

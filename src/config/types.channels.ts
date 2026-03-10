@@ -20,6 +20,7 @@ export type ChannelHeartbeatVisibilityConfig = {
 
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
+  neverReply?: boolean;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
