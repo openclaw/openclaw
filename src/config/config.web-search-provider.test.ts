@@ -136,6 +136,21 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts parallel provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "parallel",
+        providerConfig: {
+          apiKey: "test-key", // pragma: allowlist secret
+          baseUrl: "https://api.parallel.ai",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects invalid brave mode config values", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
@@ -159,6 +174,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.PARALLEL_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
@@ -193,6 +209,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {
     process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("auto-detects parallel when only PARALLEL_API_KEY is set", () => {
+    process.env.PARALLEL_API_KEY = "test-parallel-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("parallel");
   });
 
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {
