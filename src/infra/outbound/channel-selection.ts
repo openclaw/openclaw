@@ -132,9 +132,20 @@ export async function resolveMessageChannelSelection(params: {
       }
       throw new Error(`Channel is unavailable: ${String(normalized)}`);
     }
+    const configured = await listConfiguredMessageChannels(params.cfg);
+    if (!configured.includes(normalized as MessageChannelId)) {
+      // Channel is known but not configured — fall back to tool-context channel
+      // so agents don't fan out to providers absent from the config (#42080).
+      const fallback = resolveKnownChannel(params.fallbackChannel);
+      if (fallback && configured.includes(fallback)) {
+        return { channel: fallback, configured, source: "tool-context-fallback" };
+      }
+      const hint = configured.length > 0 ? ` Configured channels: ${configured.join(", ")}.` : "";
+      throw new Error(`Channel "${normalized}" is not configured.${hint}`);
+    }
     return {
       channel: availableExplicit,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured,
       source: "explicit",
     };
   }
