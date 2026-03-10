@@ -48,6 +48,12 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  force: Type.Optional(
+    Type.Boolean({
+      description:
+        "Break-glass override that skips the drain wait and restarts immediately. Use only when the gateway is stuck and a normal graceful restart cannot complete.",
+    }),
+  ),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -95,10 +101,14 @@ export function createGatewayTool(opts?: {
             : undefined;
         const reason =
           typeof params.reason === "string" && params.reason.trim()
-            ? params.reason.trim().slice(0, 200)
+            ? params.reason
+                .trim()
+                .replace(/[\r\n]+/g, " ")
+                .slice(0, 200)
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const force = params.force === true;
         // Extract channel + threadId for routing after restart
         // Supports both :thread: (most channels) and :topic: (Telegram)
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -122,11 +132,13 @@ export function createGatewayTool(opts?: {
           // ignore: sentinel is best-effort
         }
         log.info(
-          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
+          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"}, force=${force})`,
         );
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          force,
+          maxWaitMs: 0,
         });
         return jsonResult(scheduled);
       }
