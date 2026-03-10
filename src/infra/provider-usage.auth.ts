@@ -45,7 +45,7 @@ function resolveZaiApiKey(): string | undefined {
   const key =
     resolveUsableCustomProviderApiKey({ cfg, provider: "zai" })?.apiKey ??
     resolveUsableCustomProviderApiKey({ cfg, provider: "z-ai" })?.apiKey;
-  if (key?.trim()) {
+  if (key) {
     return key;
   }
 
