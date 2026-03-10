@@ -410,14 +410,14 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
             <div
               style={{
                 padding: "8px 12px",
-                background: "var(--info-subtle)",
-                color: "var(--info)",
+                background: "var(--ok-subtle)",
+                color: "var(--ok)",
                 borderRadius: "var(--radius-md)",
                 fontSize: 11,
                 lineHeight: 1.5,
               }}
             >
-              <strong>⚠️ Coming Soon:</strong> Tool execution will be available in a future update.
+              <strong>✅ Available:</strong> Tool execution is ready to use
             </div>
           </>
         )}
@@ -462,14 +462,14 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
             <div
               style={{
                 padding: "8px 12px",
-                background: "var(--info-subtle)",
-                color: "var(--info)",
+                background: "var(--ok-subtle)",
+                color: "var(--ok)",
                 borderRadius: "var(--radius-md)",
                 fontSize: 11,
                 lineHeight: 1.5,
               }}
             >
-              <strong>⚠️ Coming Soon:</strong> Remote invoke will be available in a future update.
+              <strong>✅ Available:</strong> Remote invoke is ready to use
             </div>
           </>
         )}
@@ -488,44 +488,30 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
             </div>
 
             <div style={styles.field}>
-              <span style={styles.label}>Voice</span>
-              <select
-                style={styles.select}
-                value={(data.voiceId as string) || ""}
-                onChange={(e) => handleChange("voiceId", e.target.value)}
-              >
-                <option value="">-- Select voice --</option>
-                <option value="rachel">Rachel (Professional)</option>
-                <option value="adam">Adam (Deep)</option>
-                <option value="bella">Bella (British)</option>
-                <option value="josh">Josh (American)</option>
-              </select>
-            </div>
-
-            <div style={styles.field}>
               <span style={styles.label}>Provider</span>
               <select
                 style={styles.select}
                 value={(data.ttsProvider as string) || ""}
                 onChange={(e) => handleChange("ttsProvider", e.target.value)}
               >
-                <option value="elevenlabs">ElevenLabs</option>
+                <option value="">Auto (use default)</option>
                 <option value="openai">OpenAI</option>
-                <option value="azure">Azure TTS</option>
+                <option value="elevenlabs">ElevenLabs</option>
+                <option value="edge">Edge TTS</option>
               </select>
             </div>
 
             <div
               style={{
                 padding: "8px 12px",
-                background: "var(--info-subtle)",
-                color: "var(--info)",
+                background: "var(--ok-subtle)",
+                color: "var(--ok)",
                 borderRadius: "var(--radius-md)",
                 fontSize: 11,
                 lineHeight: 1.5,
               }}
             >
-              <strong>⚠️ Coming Soon:</strong> TTS conversion will be available in a future update.
+              <strong>✅ Available:</strong> TTS conversion is ready to use
             </div>
           </>
         )}
@@ -577,20 +563,15 @@ return input.toUpperCase();`}
             <div
               style={{
                 padding: "8px 12px",
-                background: "var(--warning-subtle)",
-                color: "var(--warning)",
+                background: "var(--ok-subtle)",
+                color: "var(--ok)",
                 borderRadius: "var(--radius-md)",
                 fontSize: 11,
                 lineHeight: 1.5,
               }}
             >
-              <strong>⚠️ Security Review Required:</strong> Custom JS execution needs security audit
-              before enabling.
-              <br />
-              <br />
-              <strong>Available variables:</strong>
-              <br />• <code>input</code> - Output from previous step
-              <br />• <code>variables</code> - Custom workflow variables
+              <strong>✅ Available:</strong> Secure JS execution with sandbox (5s timeout, 100KB
+              limit)
             </div>
           </>
         )}
