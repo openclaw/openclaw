@@ -118,6 +118,7 @@ export function createMqttHooksService(params: {
   let client: MqttClientLike | null = null;
   let startupRetainedGuard = true;
   let startupRetainedGuardTimer: ReturnType<typeof setTimeout> | null = null;
+  let hasConnectedOnce = false;
   let stopped = true;
   let queue = createMessageQueue({
     concurrency: params.pluginConfig.runtime.maxConcurrentMessages,
@@ -142,6 +143,7 @@ export function createMqttHooksService(params: {
       }
       stopped = false;
       startupRetainedGuard = true;
+      hasConnectedOnce = false;
 
       const clientFactory = params.clientFactory ?? createDefaultMqttClientFactory();
       const dedupe = createMqttMessageDedupe(params.pluginConfig.runtime.dedupeWindowMs);
@@ -178,9 +180,12 @@ export function createMqttHooksService(params: {
         return;
       }
 
-      const subscribeAll = async () => {
+      const subscribeAll = async (armStartupRetainedGuard: boolean) => {
         for (const subscription of activeSubscriptions) {
           await subscribeTopic(client as MqttClientLike, subscription.topic, subscription.qos);
+        }
+        if (!armStartupRetainedGuard) {
+          return;
         }
         clearStartupGuardTimer();
         startupRetainedGuardTimer = setTimeout(() => {
@@ -195,12 +200,14 @@ export function createMqttHooksService(params: {
         ctx.logger.info(
           `mqtt-hooks: connected to ${brokerLabel} with ${activeSubscriptions.length} subscription(s)`,
         );
-        void subscribeAll().catch((err) => {
+        const armStartupRetainedGuard = !hasConnectedOnce;
+        hasConnectedOnce = true;
+        void subscribeAll(armStartupRetainedGuard).catch((err) => {
           ctx.logger.warn(`mqtt-hooks: subscribe failed: ${String(err)}`);
         });
       });
       client.on("reconnect", () => {
-        ctx.logger.info(`mqtt-hooks: reconnecting to ${brokerLabel}`);
+        ctx.logger.warn(`mqtt-hooks: reconnecting to ${brokerLabel}`);
       });
       client.on("offline", () => {
         ctx.logger.warn(`mqtt-hooks: broker offline ${brokerLabel}`);

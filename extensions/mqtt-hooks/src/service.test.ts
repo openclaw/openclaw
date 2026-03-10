@@ -241,4 +241,41 @@ describe("createMqttHooksService", () => {
 
     expect(fakeClient.closed).toBe(true);
   });
+
+  it("logs reconnect attempts as warnings", async () => {
+    const fakeClient = new FakeMqttClient();
+    const logger = createLogger();
+    const service = createMqttHooksService({
+      pluginConfig: resolveMqttHooksPluginConfig({
+        broker: { url: "mqtt://broker.local:1883" },
+        subscriptions: [
+          {
+            id: "alerts",
+            topic: "home/alerts/#",
+            qos: 1,
+            action: "wake",
+          },
+        ],
+      }),
+      clientFactory: () => fakeClient as never,
+    });
+
+    await service.start({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+
+    fakeClient.emit("reconnect");
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("mqtt-hooks: reconnecting to"),
+    );
+
+    await service.stop?.({
+      config: {},
+      stateDir: "/tmp/openclaw-state",
+      logger,
+    });
+  });
 });
