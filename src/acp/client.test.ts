@@ -119,7 +119,7 @@ describe("resolveAcpClientSpawnEnv", () => {
       {
         OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
         GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
-        HF_TOKEN: "hf-secret",
+        HF_TOKEN: "hf-secret", // pragma: allowlist secret
         OPENCLAW_API_KEY: "keep-me",
         PATH: "/usr/bin",
       },
@@ -138,7 +138,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     const env = resolveAcpClientSpawnEnv({
       OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
       GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
-      HF_TOKEN: "hf-secret",
+      HF_TOKEN: "hf-secret", // pragma: allowlist secret
       OPENCLAW_API_KEY: "keep-me",
     });
 
