@@ -2,6 +2,7 @@ import { MediaFetchError, fetchRemoteMedia } from "../../media/fetch.js";
 import { getFileExtension, normalizeMimeType } from "../../media/mime.js";
 import { extractPdfContent } from "../../media/pdf-extract.js";
 import type { SlackFile } from "../types.js";
+import { extractOfficeOpenXmlText } from "./file-content-office.js";
 import { MAX_SLACK_MEDIA_FILES, SLACK_MEDIA_SSRF_POLICY, createSlackMediaFetch } from "./media.js";
 
 export type SlackFileContentIssueReason =
@@ -31,6 +32,9 @@ const DEFAULT_PER_FILE_TEXT_CHARS = 8000;
 const DEFAULT_TOTAL_TEXT_CHARS = 24000;
 const JSON_MIME = "application/json";
 const PDF_MIME = "application/pdf";
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const TEXT_MIME_PREFIX = "text/";
 const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".json", ".csv"]);
 
@@ -109,6 +113,25 @@ async function extractTextFromBuffer(params: {
       return null;
     }
     return clampChars(normalized, params.maxChars);
+  }
+
+  if (
+    mimeType === DOCX_MIME ||
+    mimeType === XLSX_MIME ||
+    mimeType === PPTX_MIME ||
+    getFileExtension(params.fileName) === ".docx" ||
+    getFileExtension(params.fileName) === ".xlsx" ||
+    getFileExtension(params.fileName) === ".pptx"
+  ) {
+    const officeText = await extractOfficeOpenXmlText({
+      buffer: params.buffer,
+      mimeType,
+      fileName: params.fileName,
+    });
+    if (!officeText) {
+      return null;
+    }
+    return clampChars(officeText, params.maxChars);
   }
 
   if (!isTextSupported({ mimeType, fileName: params.fileName })) {
