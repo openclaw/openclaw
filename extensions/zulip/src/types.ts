@@ -45,6 +45,38 @@ export type ZulipGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
+export type ZulipThreadBindingsConfig = {
+  /** Enable Zulip topic-bound session routing and lifecycle. */
+  enabled?: boolean;
+  /** Inactivity window in hours for topic-bound sessions. Set 0 to disable. */
+  idleHours?: number;
+  /** Hard max age in hours for topic-bound sessions. Set 0 to disable. */
+  maxAgeHours?: number;
+};
+
+export type ZulipExecApprovalTarget = "dm" | "session" | "both" | "stream";
+
+export type ZulipExecApprovalConfig = {
+  /** Enable transport-owned exec approval prompts for this Zulip account. */
+  enabled?: boolean;
+  /** Zulip user IDs allowed to approve requests and, for DM mode, notified directly. */
+  approvers?: Array<string | number>;
+  /** Only handle approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only handle approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+  /** Collapse resolved/expired messages to a short status update when possible.
+   * Zulip currently edits message content instead of deleting the original widget message.
+   */
+  cleanupAfterResolve?: boolean;
+  /** Where to send approval prompts. Default: "dm". */
+  target?: ZulipExecApprovalTarget;
+  /** Shared approval stream when target="stream". */
+  stream?: string;
+  /** Shared approval topic when target="stream". Default: "exec-approvals". */
+  topic?: string;
+};
+
 export type ZulipXCaseConfig = {
   /** Enable x.com/twitter.com case triage workflow. */
   enabled?: boolean;
@@ -139,6 +171,10 @@ export type ZulipAccountConfig = {
   >;
   /** Enable ocform interactive widget support (requires lionroot-zulip fork). */
   widgetsEnabled?: boolean;
+  /** Topic-bound session lifecycle overrides. */
+  threadBindings?: ZulipThreadBindingsConfig;
+  /** Transport-owned exec approval prompts. */
+  execApprovals?: ZulipExecApprovalConfig;
   /** X/Twitter command-post triage workflow. */
   xcase?: ZulipXCaseConfig;
 };

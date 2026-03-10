@@ -7,6 +7,8 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
+  type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import { resolveChannelGroupToolsPolicy } from "../../../src/config/group-policy.js";
@@ -19,8 +21,11 @@ import {
   type ResolvedZulipAccount,
 } from "./zulip/accounts.js";
 import { normalizeZulipBaseUrl } from "./zulip/client.js";
+import { readZulipComponentSpec } from "./zulip/components.js";
+import { listZulipDirectoryGroups, listZulipDirectoryPeers } from "./zulip/directory.js";
 import { monitorZulipProvider } from "./zulip/monitor.js";
 import { probeZulip } from "./zulip/probe.js";
+import { sendZulipComponentMessage } from "./zulip/send-components.js";
 import { sendMessageZulip } from "./zulip/send.js";
 
 const meta = {
@@ -50,6 +55,104 @@ function formatAllowEntry(entry: string): string {
   }
   return trimmed.replace(/^(zulip|user):/i, "").toLowerCase();
 }
+
+function listConfiguredZulipAccounts(cfg: Parameters<typeof listZulipAccountIds>[0]) {
+  return listZulipAccountIds(cfg)
+    .map((accountId) => resolveZulipAccount({ cfg, accountId }))
+    .filter((account) => account.enabled)
+    .filter((account) =>
+      Boolean(account.botEmail?.trim() && account.botApiKey?.trim() && account.baseUrl?.trim()),
+    );
+}
+
+const zulipMessageActions: ChannelMessageActionAdapter = {
+  listActions: ({ cfg }) => {
+    const actions: ChannelMessageActionName[] = [];
+    if (listConfiguredZulipAccounts(cfg).length > 0) {
+      actions.push("send");
+    }
+    return actions;
+  },
+  supportsAction: ({ action }) => action === "send",
+  supportsButtons: ({ cfg }) =>
+    listConfiguredZulipAccounts(cfg).some((account) => account.config.widgetsEnabled === true),
+  handleAction: async ({ action, params, cfg, accountId }) => {
+    if (action !== "send") {
+      throw new Error(`Unsupported Zulip action: ${action}`);
+    }
+
+    const to =
+      typeof params.to === "string"
+        ? params.to.trim()
+        : typeof params.target === "string"
+          ? params.target.trim()
+          : "";
+    if (!to) {
+      throw new Error("Zulip send requires a target (to).");
+    }
+
+    const message = typeof params.message === "string" ? params.message : "";
+    const replyToTopic = typeof params.replyTo === "string" ? params.replyTo : undefined;
+    const mediaUrl =
+      typeof params.media === "string"
+        ? params.media.trim() || undefined
+        : typeof params.path === "string"
+          ? params.path.trim() || undefined
+          : typeof params.filePath === "string"
+            ? params.filePath.trim() || undefined
+            : undefined;
+    const resolvedAccountId = accountId || undefined;
+    const rawButtons = Array.isArray(params.buttons) ? params.buttons : undefined;
+    const sessionKey = typeof params.__sessionKey === "string" ? params.__sessionKey : undefined;
+    const agentId = typeof params.__agentId === "string" ? params.__agentId : undefined;
+
+    if (rawButtons?.length && (!sessionKey || !agentId)) {
+      console.warn(
+        "[zulip] send action requested buttons without sessionKey/agentId; degrading to markdown text",
+      );
+    }
+
+    const result =
+      rawButtons && rawButtons.length > 0
+        ? await sendZulipComponentMessage(
+            to,
+            message,
+            readZulipComponentSpec({
+              heading: typeof params.heading === "string" ? params.heading : undefined,
+              buttons: rawButtons,
+            }),
+            {
+              cfg,
+              accountId: resolvedAccountId,
+              replyToTopic,
+              mediaUrl,
+              sessionKey,
+              agentId,
+            },
+          )
+        : await sendMessageZulip(to, message, {
+            cfg,
+            accountId: resolvedAccountId,
+            replyToTopic,
+            mediaUrl,
+          });
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            ok: true,
+            channel: "zulip",
+            messageId: result.messageId,
+            target: result.target,
+          }),
+        },
+      ],
+      details: {},
+    };
+  },
+};
 
 export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
   id: "zulip",
@@ -152,6 +255,14 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         senderE164,
       }),
   },
+  actions: zulipMessageActions,
+  directory: {
+    self: async () => null,
+    listPeers: async (params) => listZulipDirectoryPeers(params),
+    listPeersLive: async (params) => listZulipDirectoryPeers(params),
+    listGroups: async (params) => listZulipDirectoryGroups(params),
+    listGroupsLive: async (params) => listZulipDirectoryGroups(params),
+  },
   messaging: {
     normalizeTarget: (raw) => raw.trim(),
     targetResolver: {
@@ -166,7 +277,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         const lastColon = trimmed.lastIndexOf(":");
         return lastColon > 0 && lastColon < trimmed.length - 1;
       },
-      hint: "<stream:NAME:topic:TOPIC|stream:NAME:TOPIC|dm:USER_ID>",
+      hint: "<stream:NAME:topic:TOPIC|stream:NAME:TOPIC|dm:USER_ID|dm:EMAIL>",
     },
   },
   outbound: {
@@ -180,7 +291,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         return {
           ok: false,
           error: new Error(
-            "Delivering to Zulip requires --to <stream:NAME:topic:TOPIC|dm:USER_ID>",
+            "Delivering to Zulip requires --to <stream:NAME:topic:TOPIC|dm:USER_ID|dm:EMAIL>",
           ),
         };
       }

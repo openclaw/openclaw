@@ -57,17 +57,36 @@ function createForwarder(params: {
   return { deliver, forwarder };
 }
 
-function makeSessionCfg(options: { discordExecApprovalsEnabled?: boolean } = {}): OpenClawConfig {
+function makeSessionCfg(
+  options: {
+    discordExecApprovalsEnabled?: boolean;
+    zulipExecApprovalsEnabled?: boolean;
+  } = {},
+): OpenClawConfig {
   return {
-    ...(options.discordExecApprovalsEnabled
+    ...(options.discordExecApprovalsEnabled || options.zulipExecApprovalsEnabled
       ? {
           channels: {
-            discord: {
-              execApprovals: {
-                enabled: true,
-                approvers: ["123"],
-              },
-            },
+            ...(options.discordExecApprovalsEnabled
+              ? {
+                  discord: {
+                    execApprovals: {
+                      enabled: true,
+                      approvers: ["123"],
+                    },
+                  },
+                }
+              : {}),
+            ...(options.zulipExecApprovalsEnabled
+              ? {
+                  zulip: {
+                    execApprovals: {
+                      enabled: true,
+                      approvers: [123],
+                    },
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -239,6 +258,82 @@ describe("exec approval forwarder", () => {
       expectedAccepted: false,
       expectedDeliveryCount: 0,
     });
+  });
+
+  it("skips zulip forwarding when zulip exec approvals handler is enabled", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({
+      cfg: makeSessionCfg({ zulipExecApprovalsEnabled: true }),
+      resolveSessionTarget: () => ({ channel: "zulip", to: "stream:ops:topic:deploy" }),
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("skips resolved fallback forwarding for zulip when zulip exec approvals handler is enabled", async () => {
+    const { deliver, forwarder } = createForwarder({
+      cfg: makeSessionCfg({ zulipExecApprovalsEnabled: true }),
+      resolveSessionTarget: () => ({ channel: "zulip", to: "stream:ops:topic:deploy" }),
+    });
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "zulip:123",
+      ts: 2000,
+      request: baseRequest.request,
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("does not skip zulip forwarding when zulip sessionFilter excludes the request", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      channels: {
+        zulip: {
+          execApprovals: {
+            enabled: true,
+            approvers: [123],
+            sessionFilter: ["agent:other:"],
+          },
+        },
+      },
+      approvals: { exec: { enabled: true, mode: "session" } },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "zulip", to: "stream:ops:topic:deploy" }),
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("does not skip zulip forwarding when zulip agentFilter excludes the request", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      channels: {
+        zulip: {
+          execApprovals: {
+            enabled: true,
+            approvers: [123],
+            agentFilter: ["other-agent"],
+          },
+        },
+      },
+      approvals: { exec: { enabled: true, mode: "session" } },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "zulip", to: "stream:ops:topic:deploy" }),
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("prefers turn-source routing over stale session last route", async () => {

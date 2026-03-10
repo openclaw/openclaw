@@ -24,6 +24,11 @@ import {
   shouldAckReaction as shouldAckReactionGate,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
+import {
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingsEnabled,
+} from "../../../../src/channels/thread-bindings-policy.js";
 import { resolveReplyFormattingMode } from "../../../../src/lionroot/config/reply-formatting.js";
 import { formatReplyForChannel } from "../../../../src/lionroot/infra/format-reply.js";
 import { getZulipRuntime } from "../runtime.js";
@@ -46,13 +51,19 @@ import {
   type ZulipMessage,
   type ZulipSubmessageEvent,
 } from "./client.js";
-import {
-  resolveZulipComponentEntry,
-  registerZulipComponentEntries,
-} from "./components-registry.js";
-import { formatZulipComponentEventText } from "./components.js";
+import { resolveZulipComponentEntry, removeZulipComponentEntry } from "./components-registry.js";
+import { formatZulipComponentEventText, readZulipComponentSpec } from "./components.js";
 import { createZulipDraftStream, type ZulipDraftTarget } from "./draft-stream.js";
+import { ZulipExecApprovalHandler } from "./exec-approvals.js";
+import { resolveZulipModelPickerCallbackAction } from "./model-picker.js";
+import { logZulipResolutionSummary, resolveZulipUserInputs } from "./resolve-users.js";
+import { sendZulipComponentMessage } from "./send-components.js";
 import { sendMessageZulip } from "./send.js";
+import {
+  createZulipTopicBindingManager,
+  resolveZulipTopicConversationId,
+  resolveZulipTopicSessionBinding,
+} from "./topic-bindings.js";
 
 const OPENCLAW_STATE_DIR =
   process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
@@ -618,6 +629,13 @@ export async function resolveZulipTopicContext(params: {
     threadLabel,
     isFirstTopicTurn,
   };
+}
+
+export function resolveZulipComponentReplyTarget(params: {
+  replyTo?: string;
+  senderId: number;
+}): string {
+  return params.replyTo?.trim() || `dm:${params.senderId}`;
 }
 
 type XCaseStatus = "open" | "in_progress" | "noaction" | "moved" | "error";
@@ -1222,12 +1240,81 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
   const botName = botUser.full_name || botEmail;
   runtime.log?.(`zulip connected as ${botName} (id=${botUserId})`);
 
+  const resolvedConfigAllowFrom = await resolveZulipUserInputs({
+    client,
+    inputs: account.config.allowFrom ?? [],
+  }).catch((error) => {
+    runtime.error?.(`zulip allowFrom resolution failed: ${String(error)}`);
+    return [];
+  });
+  const resolvedConfigGroupAllowFrom = await resolveZulipUserInputs({
+    client,
+    inputs: account.config.groupAllowFrom ?? [],
+  }).catch((error) => {
+    runtime.error?.(`zulip groupAllowFrom resolution failed: ${String(error)}`);
+    return [];
+  });
+  logZulipResolutionSummary({
+    label: "zulip allowFrom",
+    resolutions: resolvedConfigAllowFrom,
+    runtime,
+  });
+  logZulipResolutionSummary({
+    label: "zulip groupAllowFrom",
+    resolutions: resolvedConfigGroupAllowFrom,
+    runtime,
+  });
+
+  const execApprovalsHandler = account.config.execApprovals?.enabled
+    ? new ZulipExecApprovalHandler({
+        client,
+        accountId: account.accountId,
+        config: account.config.execApprovals,
+        cfg,
+        runtime,
+        widgetsEnabled: account.config.widgetsEnabled === true,
+      })
+    : null;
+  const topicBindingsEnabled = resolveThreadBindingsEnabled({
+    channelEnabledRaw: account.config.threadBindings?.enabled,
+    sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
+  });
+  const topicBindingsManager = topicBindingsEnabled
+    ? createZulipTopicBindingManager({
+        accountId: account.accountId,
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
+          channelIdleHoursRaw: account.config.threadBindings?.idleHours,
+          sessionIdleHoursRaw: cfg.session?.threadBindings?.idleHours,
+        }),
+        maxAgeMs: resolveThreadBindingMaxAgeMs({
+          channelMaxAgeHoursRaw: account.config.threadBindings?.maxAgeHours,
+          sessionMaxAgeHoursRaw: cfg.session?.threadBindings?.maxAgeHours,
+        }),
+      })
+    : null;
+
   const logger = core.logging.getChildLogger({ module: "zulip" });
   const logVerbose = (msg: string) => {
     if (core.logging.shouldLogVerbose()) {
       logger.debug?.(msg);
     }
   };
+
+  const resolvedAllowFromEntries = resolvedConfigAllowFrom.flatMap((entry) =>
+    [entry.id, entry.email].filter((value): value is string => Boolean(value)),
+  );
+  const resolvedGroupAllowFromEntries = resolvedConfigGroupAllowFrom.flatMap((entry) =>
+    [entry.id, entry.email].filter((value): value is string => Boolean(value)),
+  );
+
+  const canonicalConfigAllowFrom = normalizeAllowList([
+    ...(account.config.allowFrom ?? []),
+    ...resolvedAllowFromEntries,
+  ]);
+  const canonicalConfigGroupAllowFrom = normalizeAllowList([
+    ...(account.config.groupAllowFrom ?? []),
+    ...resolvedGroupAllowFromEntries,
+  ]);
 
   const mediaMaxBytes =
     resolveChannelMediaMaxBytes({
@@ -1478,6 +1565,43 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
           deliver: async (payload: ReplyPayload) => {
             const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
             const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+            const interactiveSpec = (() => {
+              const raw = payload.channelData?.zulip;
+              if (!raw) {
+                return null;
+              }
+              try {
+                return readZulipComponentSpec(raw);
+              } catch (err) {
+                logVerbose(
+                  `zulip: invalid xcase widget payload, falling back to text: ${String(err)}`,
+                );
+                return null;
+              }
+            })();
+            if (interactiveSpec) {
+              const firstMediaUrl = mediaUrls[0];
+              const res = await sendZulipComponentMessage(targetTo, text, interactiveSpec, {
+                cfg,
+                accountId: deliverAccountId,
+                sessionKey: ctxPayload.SessionKey,
+                agentId: expertAgentId,
+                mediaUrl: firstMediaUrl,
+              });
+              if (!firstMessageId) {
+                firstMessageId = res.messageId;
+              }
+              lastMessageId = res.messageId;
+              for (const mediaUrl of mediaUrls.slice(1)) {
+                const mediaRes = await sendMessageZulip(targetTo, "", {
+                  cfg,
+                  accountId: deliverAccountId,
+                  mediaUrl,
+                });
+                lastMessageId = mediaRes.messageId;
+              }
+              return;
+            }
             if (mediaUrls.length === 0) {
               const chunkMode = core.channel.text.resolveChunkMode(cfg, "zulip", account.accountId);
               const chunks = core.channel.text.chunkMarkdownTextWithMode(
@@ -1586,8 +1710,9 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       return;
     }
 
-    // Resolve the component entry from registry
-    const entry = resolveZulipComponentEntry({ id: buttonId, consume: !data.reusable });
+    // Resolve the component entry from registry without consuming first so
+    // unauthorized clicks on shared widgets do not burn the button.
+    const entry = resolveZulipComponentEntry({ id: buttonId, consume: false });
     if (!entry) {
       runtime.log?.(`zulip: ocform callback for unknown/expired button '${buttonId}', ignoring`);
       return;
@@ -1601,12 +1726,172 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       }
     }
 
-    // If reusable, re-register entry so it can be used again
-    if (entry.reusable) {
-      registerZulipComponentEntries({
-        entries: [entry],
-        messageId: entry.messageId,
+    const sessionKey = entry.sessionKey;
+    const agentId = entry.agentId;
+    const componentChatType = entry.chatType ?? "channel";
+    const replyTarget = resolveZulipComponentReplyTarget({
+      replyTo: entry.replyTo,
+      senderId: event.sender_id,
+    });
+
+    const approvalResult = execApprovalsHandler
+      ? await execApprovalsHandler.handleCallback({
+          callbackData: entry.callbackData,
+          senderId: event.sender_id,
+        })
+      : { handled: false, consume: false };
+    if (approvalResult.handled) {
+      if (approvalResult.consume && !entry.reusable) {
+        removeZulipComponentEntry(entry.id);
+      }
+      return;
+    }
+
+    const modelPickerAction = await resolveZulipModelPickerCallbackAction({
+      cfg,
+      callbackData: entry.callbackData,
+      agentId,
+      sessionKey,
+    });
+    if (modelPickerAction) {
+      const consumeModelPickerEntry = () => {
+        if (!entry.reusable) {
+          removeZulipComponentEntry(entry.id);
+        }
+      };
+      if (modelPickerAction.kind === "render") {
+        await sendZulipComponentMessage(
+          replyTarget,
+          modelPickerAction.render.text,
+          modelPickerAction.render.spec,
+          {
+            cfg,
+            accountId: entry.accountId,
+            sessionKey,
+            agentId,
+          },
+        );
+        consumeModelPickerEntry();
+        return;
+      }
+      if (modelPickerAction.kind === "text") {
+        await sendMessageZulip(replyTarget, modelPickerAction.text, {
+          cfg,
+          accountId: entry.accountId,
+        });
+        consumeModelPickerEntry();
+        return;
+      }
+      runtime.log?.(
+        `zulip: model picker selection from user ${event.sender_id}: ${modelPickerAction.commandText} (message ${event.message_id})`,
+      );
+      const inboundBody = core.channel.reply.formatInboundEnvelope({
+        channel: "Zulip",
+        from: `user:${event.sender_id}`,
+        body: modelPickerAction.commandText,
+        chatType: componentChatType,
+        sender: { name: `user:${event.sender_id}`, id: String(event.sender_id) },
       });
+
+      const ctxPayload = core.channel.reply.finalizeInboundContext({
+        Body: inboundBody,
+        RawBody: modelPickerAction.commandText,
+        CommandBody: modelPickerAction.commandText,
+        From: `zulip:ocform:${event.sender_id}`,
+        To: entry.replyTo ?? `ocform:${event.message_id}`,
+        SessionKey: sessionKey,
+        AccountId: entry.accountId,
+        ChatType: componentChatType,
+        ConversationLabel: entry.replyTo ?? `ocform callback (message ${event.message_id})`,
+        SenderName: `user:${event.sender_id}`,
+        SenderId: String(event.sender_id),
+        Provider: "zulip" as const,
+        Surface: "zulip" as const,
+        MessageSid: `ocform:${event.submessage_id}`,
+        WasMentioned: true,
+        CommandAuthorized: true,
+        OriginatingChannel: "zulip" as const,
+        OriginatingTo: entry.replyTo ?? `ocform:${event.message_id}`,
+      });
+
+      const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "zulip", entry.accountId, {
+        fallbackLimit: account.textChunkLimit ?? 10000,
+      });
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "zulip",
+        accountId: entry.accountId,
+      });
+      const prefixContext = createReplyPrefixContext({ cfg, agentId });
+
+      const { dispatcher, replyOptions, markDispatchIdle } =
+        core.channel.reply.createReplyDispatcherWithTyping({
+          responsePrefix: prefixContext.responsePrefix,
+          responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
+          deliver: async (payload: ReplyPayload) => {
+            const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+            const chunkMode = core.channel.text.resolveChunkMode(cfg, "zulip", entry.accountId);
+            const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
+            const interactiveSpec = (() => {
+              const raw = payload.channelData?.zulip;
+              if (!raw) {
+                return null;
+              }
+              try {
+                return readZulipComponentSpec(raw);
+              } catch (err) {
+                logVerbose(
+                  `zulip: invalid ocform reply widget payload, falling back to text: ${String(err)}`,
+                );
+                return null;
+              }
+            })();
+            if (interactiveSpec) {
+              await sendZulipComponentMessage(replyTarget, text, interactiveSpec, {
+                cfg,
+                accountId: entry.accountId,
+                sessionKey,
+                agentId,
+              });
+              return;
+            }
+            for (const chunk of chunks.length > 0 ? chunks : [text]) {
+              if (!chunk) {
+                continue;
+              }
+              await sendMessageZulip(replyTarget, chunk, {
+                cfg,
+                accountId: entry.accountId,
+              });
+            }
+          },
+          onError: (err, info) => {
+            runtime.error?.(`zulip ocform ${info.kind} reply failed: ${String(err)}`);
+          },
+        });
+
+      try {
+        await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            onModelSelected: prefixContext.onModelSelected,
+          },
+        });
+        consumeModelPickerEntry();
+      } finally {
+        markDispatchIdle();
+      }
+      return;
+    }
+
+    if (!entry.reusable) {
+      removeZulipComponentEntry(entry.id);
     }
 
     const label = typeof data.label === "string" ? data.label : entry.label;
@@ -1614,6 +1899,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       label,
       buttonId,
       senderName: `user:${event.sender_id}`,
+      callbackData: entry.callbackData,
     });
 
     runtime.log?.(
@@ -1623,14 +1909,12 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     // Dispatch the callback as an inbound message to the agent session.
     // Use the session key stored in the registry entry so the callback
     // lands in the same conversation that created the widget.
-    const sessionKey = entry.sessionKey;
-    const agentId = entry.agentId;
 
     const inboundBody = core.channel.reply.formatInboundEnvelope({
       channel: "Zulip",
       from: `user:${event.sender_id}`,
       body: eventText,
-      chatType: "channel",
+      chatType: componentChatType,
       sender: { name: `user:${event.sender_id}`, id: String(event.sender_id) },
     });
 
@@ -1639,11 +1923,11 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       RawBody: eventText,
       CommandBody: eventText,
       From: `zulip:ocform:${event.sender_id}`,
-      To: `ocform:${event.message_id}`,
+      To: entry.replyTo ?? `ocform:${event.message_id}`,
       SessionKey: sessionKey,
       AccountId: entry.accountId,
-      ChatType: "channel",
-      ConversationLabel: `ocform callback (message ${event.message_id})`,
+      ChatType: componentChatType,
+      ConversationLabel: entry.replyTo ?? `ocform callback (message ${event.message_id})`,
       SenderName: `user:${event.sender_id}`,
       SenderId: String(event.sender_id),
       Provider: "zulip" as const,
@@ -1652,7 +1936,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       WasMentioned: true,
       CommandAuthorized: true,
       OriginatingChannel: "zulip" as const,
-      OriginatingTo: `ocform:${event.message_id}`,
+      OriginatingTo: entry.replyTo ?? `ocform:${event.message_id}`,
     });
 
     const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "zulip", entry.accountId, {
@@ -1674,13 +1958,35 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
           const chunkMode = core.channel.text.resolveChunkMode(cfg, "zulip", entry.accountId);
           const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
+          const interactiveSpec = (() => {
+            const raw = payload.channelData?.zulip;
+            if (!raw) {
+              return null;
+            }
+            try {
+              return readZulipComponentSpec(raw);
+            } catch (err) {
+              logVerbose(
+                `zulip: invalid ocform reply widget payload, falling back to text: ${String(err)}`,
+              );
+              return null;
+            }
+          })();
+          if (interactiveSpec) {
+            await sendZulipComponentMessage(replyTarget, text, interactiveSpec, {
+              cfg,
+              accountId: entry.accountId,
+              sessionKey,
+              agentId,
+            });
+            return;
+          }
           for (const chunk of chunks.length > 0 ? chunks : [text]) {
             if (!chunk) {
               continue;
             }
-            // Reply in the same stream/topic as the original widget message
-            // by using sendMessageZulip with the session-derived target
-            await sendMessageZulip(`dm:${event.sender_id}`, chunk, {
+            await sendMessageZulip(replyTarget, chunk, {
+              cfg,
               accountId: entry.accountId,
             });
           }
@@ -1762,8 +2068,8 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const groupPolicy =
       account.config.groupPolicy ?? cfg.channels?.defaults?.groupPolicy ?? "allowlist";
-    const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-    const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
+    const configAllowFrom = canonicalConfigAllowFrom;
+    const configGroupAllowFrom = canonicalConfigGroupAllowFrom;
     const storeAllowFrom = normalizeAllowList(
       await core.channel.pairing
         .readAllowFromStore({ channel: "zulip", accountId: account.accountId })
@@ -1887,8 +2193,26 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       },
     });
 
-    const sessionKey = kind === "dm" ? route.sessionKey : `${route.sessionKey}:topic:${topic}`;
-    const historyKey = kind === "dm" ? null : sessionKey;
+    const topicConversationId =
+      kind !== "dm" && sName ? resolveZulipTopicConversationId({ stream: sName, topic }) : null;
+    const existingTopicBinding =
+      kind !== "dm" && topicBindingsManager && topicConversationId
+        ? topicBindingsManager.getByConversationId(topicConversationId)
+        : undefined;
+    if (existingTopicBinding && topicConversationId) {
+      topicBindingsManager?.touchConversation(
+        topicConversationId,
+        msg.timestamp ? msg.timestamp * 1000 : undefined,
+      );
+    }
+    let sessionKey =
+      kind === "dm"
+        ? route.sessionKey
+        : (existingTopicBinding?.targetSessionKey ?? `${route.sessionKey}:topic:${topic}`);
+    const historyKey =
+      kind === "dm"
+        ? null
+        : (existingTopicBinding?.targetSessionKey ?? topicConversationId ?? sessionKey);
     const sessionCfg = cfg.session;
     const storePath = core.channel.session.resolveStorePath(sessionCfg?.store, {
       agentId: route.agentId,
@@ -2388,6 +2712,24 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       return;
     }
 
+    if (
+      kind !== "dm" &&
+      sName &&
+      topicBindingsManager &&
+      topicConversationId &&
+      !existingTopicBinding
+    ) {
+      const resolvedTopicBinding = await resolveZulipTopicSessionBinding({
+        accountId: account.accountId,
+        stream: sName,
+        topic,
+        routeSessionKey: route.sessionKey,
+        agentId: route.agentId,
+        touchAt: msg.timestamp ? msg.timestamp * 1000 : undefined,
+      });
+      sessionKey = resolvedTopicBinding.sessionKey;
+    }
+
     core.channel.activity.record({
       channel: "zulip",
       accountId: account.accountId,
@@ -2589,6 +2931,20 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const rawText = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
           const text = formatReplyForChannel(rawText, formattingMode);
+          const interactiveSpec = (() => {
+            const raw = payload.channelData?.zulip;
+            if (!raw) {
+              return null;
+            }
+            try {
+              return readZulipComponentSpec(raw);
+            } catch (err) {
+              logVerbose(
+                `zulip: invalid reply widget payload, falling back to text: ${String(err)}`,
+              );
+              return null;
+            }
+          })();
 
           if (draftStream && isFinal) {
             await flushDraft();
@@ -2625,6 +2981,22 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
             if (!finalizedViaPreviewMessage) {
               await draftStream.stop();
             }
+          }
+
+          if (interactiveSpec) {
+            const firstMediaUrl = mediaUrls[0];
+            await sendZulipComponentMessage(to, text, interactiveSpec, {
+              cfg,
+              accountId: account.accountId,
+              sessionKey,
+              agentId: route.agentId,
+              mediaUrl: firstMediaUrl,
+            });
+            for (const mediaUrl of mediaUrls.slice(1)) {
+              await sendMessageZulip(to, "", { cfg, accountId: account.accountId, mediaUrl });
+            }
+            runtime.log?.(`delivered reply to ${to}`);
+            return;
           }
 
           if (mediaUrls.length === 0) {
@@ -2891,7 +3263,13 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     }
   };
 
-  await pollLoop();
+  await execApprovalsHandler?.start();
+  try {
+    await pollLoop();
+  } finally {
+    topicBindingsManager?.stop();
+    await execApprovalsHandler?.stop();
+  }
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

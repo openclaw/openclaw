@@ -147,6 +147,61 @@ function shouldSkipDiscordForwarding(
   return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
 }
 
+function shouldSkipZulipForwarding(params: {
+  target: ExecApprovalForwardTarget;
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest;
+}): boolean {
+  const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
+  if (channel !== "zulip") {
+    return false;
+  }
+  const zulip = params.cfg.channels?.zulip as
+    | {
+        execApprovals?: {
+          enabled?: boolean;
+          approvers?: Array<string | number>;
+          agentFilter?: string[];
+          sessionFilter?: string[];
+        };
+        accounts?: Record<
+          string,
+          {
+            execApprovals?: {
+              enabled?: boolean;
+              approvers?: Array<string | number>;
+              agentFilter?: string[];
+              sessionFilter?: string[];
+            };
+          }
+        >;
+      }
+    | undefined;
+  if (!zulip) {
+    return false;
+  }
+  const account = resolveChannelAccountConfig(zulip.accounts, params.target.accountId);
+  const execApprovals = account?.execApprovals ?? zulip.execApprovals;
+  if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
+    return false;
+  }
+  if (execApprovals.agentFilter?.length) {
+    const agentId =
+      params.request.request.agentId ??
+      parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
+    if (!agentId || !execApprovals.agentFilter.includes(agentId)) {
+      return false;
+    }
+  }
+  if (execApprovals.sessionFilter?.length) {
+    const sessionKey = params.request.request.sessionKey;
+    if (!sessionKey || !matchSessionFilter(sessionKey, execApprovals.sessionFilter)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   if (!command.includes("\n") && !command.includes("`")) {
     return { inline: true, text: `\`${command}\`` };
@@ -351,7 +406,11 @@ export function createExecApprovalForwarder(
       config,
       request,
       resolveSessionTarget,
-    }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
+    }).filter(
+      (target) =>
+        !shouldSkipDiscordForwarding(target, cfg) &&
+        !shouldSkipZulipForwarding({ target, cfg, request }),
+    );
 
     if (filteredTargets.length === 0) {
       return false;
@@ -416,7 +475,11 @@ export function createExecApprovalForwarder(
           config,
           request,
           resolveSessionTarget,
-        }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
+        }).filter(
+          (target) =>
+            !shouldSkipDiscordForwarding(target, cfg) &&
+            !shouldSkipZulipForwarding({ target, cfg, request }),
+        );
       }
     }
     if (!targets || targets.length === 0) {

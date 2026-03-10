@@ -30,6 +30,11 @@ export type ModelsProviderData = {
   resolvedDefault: { provider: string; model: string };
 };
 
+export type ModelsSessionEntry = Pick<
+  SessionEntry,
+  "authProfileOverride" | "modelProvider" | "model"
+>;
+
 /**
  * Build provider/model data from config and catalog.
  * Exported for reuse by callback handlers.
@@ -186,7 +191,7 @@ function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ModelsSessionEntry;
 }): string {
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
@@ -205,7 +210,7 @@ export function formatModelsAvailableHeader(params: {
   total: number;
   cfg: OpenClawConfig;
   agentDir?: string;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ModelsSessionEntry;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
@@ -223,7 +228,7 @@ export async function resolveModelsCommandReply(params: {
   currentModel?: string;
   agentId?: string;
   agentDir?: string;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: ModelsSessionEntry;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
@@ -235,11 +240,12 @@ export async function resolveModelsCommandReply(params: {
 
   const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
   const isTelegram = params.surface === "telegram";
+  const isZulip = params.surface === "zulip";
 
   // Provider list (no provider specified)
   if (!provider) {
     // For Telegram: show buttons if there are providers
-    if (isTelegram && providers.length > 0) {
+    if ((isTelegram || isZulip) && providers.length > 0) {
       const providerInfos: ProviderInfo[] = providers.map((p) => ({
         id: p,
         count: byProvider.get(p)?.size ?? 0,
@@ -248,7 +254,9 @@ export async function resolveModelsCommandReply(params: {
       const text = "Select a provider:";
       return {
         text,
-        channelData: { telegram: { buttons } },
+        channelData: isTelegram
+          ? { telegram: { buttons } }
+          : { zulip: { heading: "Model Providers", buttons } },
       };
     }
 
@@ -266,6 +274,19 @@ export async function resolveModelsCommandReply(params: {
   }
 
   if (!byProvider.has(provider)) {
+    if ((isTelegram || isZulip) && providers.length > 0) {
+      const providerInfos: ProviderInfo[] = providers.map((p) => ({
+        id: p,
+        count: byProvider.get(p)?.size ?? 0,
+      }));
+      const buttons = buildProviderKeyboard(providerInfos);
+      return {
+        text: `Unknown provider: ${provider}\n\nSelect a provider:`,
+        channelData: isTelegram
+          ? { telegram: { buttons } }
+          : { zulip: { heading: "Model Providers", buttons } },
+      };
+    }
     const lines: string[] = [
       `Unknown provider: ${provider}`,
       "",
@@ -297,7 +318,7 @@ export async function resolveModelsCommandReply(params: {
   }
 
   // For Telegram: use button-based model list with inline keyboard pagination
-  if (isTelegram) {
+  if (isTelegram || isZulip) {
     const telegramPageSize = getModelsPageSize();
     const totalPages = calculateTotalPages(total, telegramPageSize);
     const safePage = Math.max(1, Math.min(page, totalPages));
@@ -320,7 +341,9 @@ export async function resolveModelsCommandReply(params: {
     });
     return {
       text,
-      channelData: { telegram: { buttons } },
+      channelData: isTelegram
+        ? { telegram: { buttons } }
+        : { zulip: { heading: `${provider} models`, buttons } },
     };
   }
 

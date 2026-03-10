@@ -17,6 +17,8 @@ export type ZulipButtonStyle = "primary" | "secondary" | "success" | "danger";
 export type ZulipComponentButtonSpec = {
   /** Button label text */
   label: string;
+  /** Optional callback payload preserved in the registry/inbound event text. */
+  callbackData?: string;
   /** Visual style */
   style?: ZulipButtonStyle;
   /** If true, button can be clicked multiple times */
@@ -80,8 +82,10 @@ export function buildZulipWidgetContent(params: {
   sessionKey: string;
   agentId: string;
   accountId: string;
+  replyTo?: string;
+  chatType?: "channel" | "direct";
 }): ZulipComponentBuildResult {
-  const { spec, sessionKey, agentId, accountId } = params;
+  const { spec, sessionKey, agentId, accountId, replyTo, chatType } = params;
 
   if (!spec.buttons || spec.buttons.length === 0) {
     throw new Error("ocform spec must have at least one button");
@@ -110,6 +114,9 @@ export function buildZulipWidgetContent(params: {
       sessionKey,
       agentId,
       accountId,
+      callbackData: btn.callbackData,
+      replyTo,
+      chatType,
       reusable: btn.reusable,
       allowedUsers: btn.allowedUsers,
     });
@@ -142,14 +149,17 @@ export function readZulipComponentSpec(raw: unknown): ZulipComponentSpec {
     throw new Error("Component spec must have a 'buttons' array");
   }
 
+  const rawButtons = obj.buttons.flatMap((button) => (Array.isArray(button) ? button : [button]));
   const buttons: ZulipComponentButtonSpec[] = [];
-  for (const btn of obj.buttons) {
+  for (const btn of rawButtons) {
     if (!btn || typeof btn !== "object") {
       throw new Error("Each button must be an object");
     }
     const b = btn as Record<string, unknown>;
-    if (typeof b.label !== "string" || b.label.trim().length === 0) {
-      throw new Error("Each button must have a non-empty 'label' string");
+    const label =
+      typeof b.label === "string" ? b.label : typeof b.text === "string" ? b.text : undefined;
+    if (!label || label.trim().length === 0) {
+      throw new Error("Each button must have a non-empty 'label' or 'text' string");
     }
     const style = typeof b.style === "string" ? (b.style as ZulipButtonStyle) : undefined;
     const validStyles = new Set(["primary", "secondary", "success", "danger"]);
@@ -160,7 +170,13 @@ export function readZulipComponentSpec(raw: unknown): ZulipComponentSpec {
     }
 
     buttons.push({
-      label: b.label,
+      label,
+      callbackData:
+        typeof b.callbackData === "string"
+          ? b.callbackData
+          : typeof b.callback_data === "string"
+            ? b.callback_data
+            : undefined,
       style,
       reusable: typeof b.reusable === "boolean" ? b.reusable : undefined,
       allowedUsers: Array.isArray(b.allowedUsers) ? b.allowedUsers : undefined,
@@ -177,6 +193,8 @@ export function formatZulipComponentEventText(params: {
   label: string;
   buttonId: string;
   senderName: string;
+  callbackData?: string;
 }): string {
-  return `Clicked '${params.label}' (button_id: ${params.buttonId})`;
+  const callbackSuffix = params.callbackData ? `, callback_data: ${params.callbackData}` : "";
+  return `Clicked '${params.label}' (button_id: ${params.buttonId}${callbackSuffix})`;
 }

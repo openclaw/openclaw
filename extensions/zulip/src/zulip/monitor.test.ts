@@ -5,6 +5,7 @@ import {
   buildZulipAgentBody,
   formatZulipTopicHistoryBody,
   processZulipUploads,
+  resolveZulipComponentReplyTarget,
   resolveZulipTopicContext,
 } from "./monitor.js";
 
@@ -410,5 +411,25 @@ describe("resolveZulipTopicContext", () => {
     expect(result.isFirstTopicTurn).toBe(true);
     expect(result.threadHistoryBody).toBeUndefined();
     expect(verboseLog).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveZulipComponentReplyTarget", () => {
+  it("prefers the originating reply target when present", () => {
+    expect(
+      resolveZulipComponentReplyTarget({
+        replyTo: "stream:ops:topic:deploy",
+        senderId: 42,
+      }),
+    ).toBe("stream:ops:topic:deploy");
+  });
+
+  it("falls back to DM for legacy entries without reply routing", () => {
+    expect(
+      resolveZulipComponentReplyTarget({
+        replyTo: undefined,
+        senderId: 42,
+      }),
+    ).toBe("dm:42");
   });
 });

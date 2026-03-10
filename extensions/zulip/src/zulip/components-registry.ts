@@ -16,8 +16,14 @@ export type ZulipComponentEntry = {
   agentId: string;
   /** Zulip account ID */
   accountId: string;
+  /** Optional logical callback payload */
+  callbackData?: string;
   /** Zulip message ID the widget was attached to */
   messageId?: number;
+  /** Canonical Zulip target for follow-up replies (stream/topic or dm ids). */
+  replyTo?: string;
+  /** Chat type for the originating widget conversation. */
+  chatType?: "channel" | "direct";
   /** If true, entry is not consumed on resolve (reusable button) */
   reusable?: boolean;
   /** Restrict to specific Zulip user IDs */
@@ -78,6 +84,10 @@ export function resolveZulipComponentEntry(params: {
     componentEntries.delete(params.id);
   }
   return entry;
+}
+
+export function removeZulipComponentEntry(id: string): void {
+  componentEntries.delete(id);
 }
 
 export function clearZulipComponentEntries(): void {

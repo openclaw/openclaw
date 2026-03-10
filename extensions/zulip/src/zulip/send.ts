@@ -1,14 +1,18 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { getZulipRuntime } from "../runtime.js";
-import { resolveZulipAccount } from "./accounts.js";
+import { resolveZulipAccount, type ResolvedZulipAccount } from "./accounts.js";
 import {
   createZulipClient,
+  fetchZulipStreams,
   normalizeZulipBaseUrl,
   sendZulipDirectMessage,
   sendZulipStreamMessage,
   uploadZulipFile,
 } from "./client.js";
+import { resolveZulipUserInputs } from "./resolve-users.js";
 
 export type ZulipSendOpts = {
+  cfg?: OpenClawConfig;
   accountId?: string;
   mediaUrl?: string;
   replyToTopic?: string;
@@ -19,12 +23,16 @@ export type ZulipSendResult = {
   target: string;
 };
 
-type ZulipTarget =
+export type ZulipTarget =
   | { kind: "stream"; stream: string; topic: string }
   | { kind: "dm"; userIds: number[] };
 
-const STREAM_NAME_CACHE_TTL_MS = 5 * 60 * 1000;
-const streamNameCache = new Map<string, { names: string[]; expiresAt: number }>();
+type ParsedZulipTarget =
+  | ZulipTarget
+  | {
+      kind: "dm-pending";
+      identities: string[];
+    };
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -64,44 +72,6 @@ function resolveConfiguredStreamName(stream: string, streams?: Record<string, un
   return matches.length === 1 ? (matches[0] ?? stream) : stream;
 }
 
-function buildStreamNameCacheKey(params: { baseUrl: string; botEmail: string }): string {
-  return `${params.baseUrl}::${params.botEmail.toLowerCase()}`;
-}
-
-async function listAvailableStreamNames(params: {
-  client: ReturnType<typeof createZulipClient>;
-}): Promise<string[]> {
-  const cacheKey = buildStreamNameCacheKey({
-    baseUrl: params.client.baseUrl,
-    botEmail: params.client.botEmail,
-  });
-  const cached = streamNameCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.names;
-  }
-
-  let response: { streams?: Array<{ name?: string }> } | null = null;
-  try {
-    response = await params.client.request<{ streams?: Array<{ name?: string }> }>("/streams");
-  } catch {
-    response = null;
-  }
-  const names = (response?.streams ?? [])
-    .map((stream) => stream.name?.trim())
-    .filter((name): name is string => Boolean(name));
-
-  if (names.length === 0) {
-    return [];
-  }
-
-  streamNameCache.set(cacheKey, {
-    names,
-    expiresAt: Date.now() + STREAM_NAME_CACHE_TTL_MS,
-  });
-
-  return names;
-}
-
 async function resolveStreamNameForSend(params: {
   stream: string;
   accountStreams?: Record<string, unknown>;
@@ -113,7 +83,9 @@ async function resolveStreamNameForSend(params: {
     return resolvedFromConfig;
   }
 
-  const liveNames = await listAvailableStreamNames({ client: params.client });
+  const liveNames = (await fetchZulipStreams(params.client))
+    .map((stream) => stream.name?.trim())
+    .filter((name): name is string => Boolean(name));
   if (liveNames.length === 0) {
     return resolvedFromConfig;
   }
@@ -147,7 +119,7 @@ function parseLegacyStreamTopic(raw: string): { stream: string; topic: string } 
  * - "dm:12345" or "dm:12345,67890" → direct message
  * - "zulip:stream:general:topic:hello" → stream message
  */
-function parseZulipTarget(raw: string): ZulipTarget {
+export function parseZulipTarget(raw: string): ParsedZulipTarget {
   const trimmed = raw.trim().replace(/^zulip:/i, "");
   if (!trimmed) {
     throw new Error("Recipient is required for Zulip sends");
@@ -172,15 +144,21 @@ function parseZulipTarget(raw: string): ZulipTarget {
   }
 
   if (trimmed.toLowerCase().startsWith("dm:")) {
-    const ids = trimmed
+    const identities = trimmed
       .slice("dm:".length)
       .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !isNaN(n));
-    if (ids.length === 0) {
-      throw new Error("Zulip DM target requires user IDs");
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (identities.length === 0) {
+      throw new Error("Zulip DM target requires user IDs or emails");
     }
-    return { kind: "dm", userIds: ids };
+    if (identities.every((identity) => /^\d+$/.test(identity))) {
+      return {
+        kind: "dm",
+        userIds: identities.map((identity) => Number.parseInt(identity, 10)),
+      };
+    }
+    return { kind: "dm-pending", identities };
   }
 
   const legacy = parseLegacyStreamTopic(trimmed);
@@ -189,8 +167,35 @@ function parseZulipTarget(raw: string): ZulipTarget {
   }
 
   throw new Error(
-    `Unrecognized Zulip target: ${raw}. Use "stream:NAME:topic:TOPIC" or "dm:USER_ID"`,
+    `Unrecognized Zulip target: ${raw}. Use "stream:NAME:topic:TOPIC" or "dm:USER_ID|EMAIL"`,
   );
+}
+
+async function resolvePendingDmTarget(params: {
+  identities: string[];
+  client: ReturnType<typeof createZulipClient>;
+}): Promise<Extract<ZulipTarget, { kind: "dm" }>> {
+  const resolutions = await resolveZulipUserInputs({
+    client: params.client,
+    inputs: params.identities,
+  });
+  const unresolved = resolutions.filter((entry) => !entry.resolved || !entry.id);
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Unable to resolve Zulip DM target(s): ${unresolved.map((entry) => entry.input).join(", ")}`,
+    );
+  }
+  const userIds = Array.from(
+    new Set(
+      resolutions
+        .map((entry) => Number.parseInt(entry.id!, 10))
+        .filter((value) => Number.isFinite(value) && value > 0),
+    ),
+  );
+  if (userIds.length === 0) {
+    throw new Error("Zulip DM target requires user IDs or resolvable emails");
+  }
+  return { kind: "dm", userIds };
 }
 
 function parseBareStreamTarget(raw: string, replyToTopic?: string): ZulipTarget | undefined {
@@ -209,14 +214,54 @@ function parseBareStreamTarget(raw: string, replyToTopic?: string): ZulipTarget 
   return { kind: "stream", stream, topic };
 }
 
-export async function sendMessageZulip(
+export async function resolveZulipTargetForSend(params: {
+  to: string;
+  replyToTopic?: string;
+  accountStreams?: Record<string, unknown>;
+  client: ReturnType<typeof createZulipClient>;
+}): Promise<ZulipTarget> {
+  let parsedTarget: ParsedZulipTarget;
+  try {
+    parsedTarget = parseZulipTarget(params.to);
+  } catch (error) {
+    const fallback = parseBareStreamTarget(params.to, params.replyToTopic);
+    if (!fallback) {
+      throw error;
+    }
+    parsedTarget = fallback;
+  }
+  if (parsedTarget.kind === "stream") {
+    return {
+      ...parsedTarget,
+      stream: await resolveStreamNameForSend({
+        stream: parsedTarget.stream,
+        accountStreams: params.accountStreams,
+        client: params.client,
+      }),
+    };
+  }
+  if (parsedTarget.kind === "dm-pending") {
+    return await resolvePendingDmTarget({
+      identities: parsedTarget.identities,
+      client: params.client,
+    });
+  }
+  return parsedTarget;
+}
+
+export async function resolveZulipSendContext(
   to: string,
-  text: string,
   opts: ZulipSendOpts = {},
-): Promise<ZulipSendResult> {
+): Promise<{
+  core: ReturnType<typeof getZulipRuntime>;
+  cfg: OpenClawConfig;
+  account: ResolvedZulipAccount;
+  client: ReturnType<typeof createZulipClient>;
+  target: ZulipTarget;
+  baseUrl: string;
+}> {
   const core = getZulipRuntime();
-  const logger = core.logging.getChildLogger({ module: "zulip" });
-  const cfg = core.config.loadConfig();
+  const cfg = opts.cfg ?? core.config.loadConfig();
   const account = resolveZulipAccount({ cfg, accountId: opts.accountId });
 
   const botEmail = account.botEmail?.trim();
@@ -230,27 +275,23 @@ export async function sendMessageZulip(
   }
 
   const client = createZulipClient({ baseUrl, botEmail, botApiKey });
-  let parsedTarget: ZulipTarget;
-  try {
-    parsedTarget = parseZulipTarget(to);
-  } catch (error) {
-    const fallback = parseBareStreamTarget(to, opts.replyToTopic);
-    if (!fallback) {
-      throw error;
-    }
-    parsedTarget = fallback;
-  }
-  const target: ZulipTarget =
-    parsedTarget.kind === "stream"
-      ? {
-          ...parsedTarget,
-          stream: await resolveStreamNameForSend({
-            stream: parsedTarget.stream,
-            accountStreams: account.config.streams,
-            client,
-          }),
-        }
-      : parsedTarget;
+  const target = await resolveZulipTargetForSend({
+    to,
+    replyToTopic: opts.replyToTopic,
+    accountStreams: account.config.streams,
+    client,
+  });
+
+  return { core, cfg, account, client, target, baseUrl };
+}
+
+export async function sendMessageZulip(
+  to: string,
+  text: string,
+  opts: ZulipSendOpts = {},
+): Promise<ZulipSendResult> {
+  const { core, account, client, target, baseUrl } = await resolveZulipSendContext(to, opts);
+  const logger = core.logging.getChildLogger({ module: "zulip" });
 
   let message = text?.trim() ?? "";
 

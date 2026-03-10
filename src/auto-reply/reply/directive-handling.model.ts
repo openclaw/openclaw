@@ -200,7 +200,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
   surface?: string;
-  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
+  sessionEntry?: Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -231,6 +231,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
     const reply = await resolveModelsCommandReply({
       cfg: params.cfg,
       commandBodyNormalized: "/models",
+      surface: params.surface,
+      agentId: params.activeAgentId,
+      sessionEntry: params.sessionEntry,
     });
     return reply ?? { text: "No models available." };
   }
@@ -243,11 +246,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
     });
     const current = modelRefs.selected.label;
     const isTelegram = params.surface === "telegram";
+    const isZulip = params.surface === "zulip";
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
 
-    if (isTelegram) {
+    if (isTelegram || isZulip) {
       const buttons = buildBrowseProvidersButton();
       return {
         text: [
@@ -260,7 +264,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ]
           .filter(Boolean)
           .join("\n"),
-        channelData: { telegram: { buttons } },
+        channelData: isTelegram
+          ? { telegram: { buttons } }
+          : { zulip: { heading: "Model Picker", buttons } },
       };
     }
 

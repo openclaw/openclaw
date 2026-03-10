@@ -86,6 +86,14 @@ export type ZulipSubmessageEvent = {
   content: string;
 };
 
+const DIRECTORY_CACHE_TTL_MS = 5 * 60 * 1000;
+const userCache = new Map<string, { users: ZulipUser[]; expiresAt: number }>();
+const streamCache = new Map<string, { streams: ZulipStream[]; expiresAt: number }>();
+
+function buildDirectoryCacheKey(client: Pick<ZulipClient, "baseUrl" | "botEmail">): string {
+  return `${client.baseUrl}::${client.botEmail.toLowerCase()}`;
+}
+
 export function normalizeZulipBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -168,6 +176,48 @@ export async function fetchZulipMe(client: ZulipClient): Promise<ZulipUser> {
     "/users/me",
   );
   return data;
+}
+
+export async function fetchZulipUsers(client: ZulipClient): Promise<ZulipUser[]> {
+  const cacheKey = buildDirectoryCacheKey(client);
+  const cached = userCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.users;
+  }
+  const data = await client.request<{ result: string; members?: ZulipUser[]; users?: ZulipUser[] }>(
+    "/users",
+  );
+  const users = (data.members ?? data.users ?? []).filter((user): user is ZulipUser =>
+    Boolean(user?.user_id && user.email?.trim()),
+  );
+  userCache.set(cacheKey, { users, expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS });
+  return users;
+}
+
+export async function fetchZulipUserByEmail(
+  client: ZulipClient,
+  email: string,
+): Promise<ZulipUser | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const users = await fetchZulipUsers(client);
+  return users.find((user) => user.email.trim().toLowerCase() === normalized) ?? null;
+}
+
+export async function fetchZulipStreams(client: ZulipClient): Promise<ZulipStream[]> {
+  const cacheKey = buildDirectoryCacheKey(client);
+  const cached = streamCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.streams;
+  }
+  const data = await client.request<{ result: string; streams?: ZulipStream[] }>("/streams");
+  const streams = (data.streams ?? []).filter((stream): stream is ZulipStream =>
+    Boolean(stream?.stream_id && stream.name?.trim()),
+  );
+  streamCache.set(cacheKey, { streams, expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS });
+  return streams;
 }
 
 /** Register a long-poll event queue for message events. */

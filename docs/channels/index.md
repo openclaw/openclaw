@@ -33,6 +33,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
+- [Zulip](/channels/zulip) — Zulip bot API; DMs, stream topics, draft streaming, and button widgets via the Zulip plugin.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).
 

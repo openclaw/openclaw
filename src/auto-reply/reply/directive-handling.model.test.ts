@@ -13,6 +13,7 @@ import {
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
@@ -81,6 +82,31 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("shows browse button for /model summary on Zulip", async () => {
+    const directives = parseInlineDirectives("/model");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+
+    const reply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      surface: "zulip",
+    });
+
+    expect(reply?.channelData?.zulip).toEqual({
+      heading: "Model Picker",
+      buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
+    });
+  });
+
   it("shows active runtime model when different from selected model", async () => {
     const directives = parseInlineDirectives("/model");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
@@ -105,6 +131,36 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("Current: fireworks/minimax-m2p5 (selected)");
     expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
+  });
+
+  it("returns provider buttons for /model list on Zulip", async () => {
+    const directives = parseInlineDirectives("/model list");
+    const cfg = {
+      commands: { text: true },
+      agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
+    } as unknown as OpenClawConfig;
+
+    const reply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [
+        { provider: "anthropic", id: "claude-opus-4-5" },
+        { provider: "openai", id: "gpt-4.1" },
+      ],
+      resetModelOverride: false,
+      surface: "zulip",
+    });
+
+    expect(reply?.channelData?.zulip).toMatchObject({
+      heading: "Model Providers",
+    });
   });
 
   it("auto-applies closest match for typos", () => {

@@ -15,6 +15,21 @@ const ZulipTopicSchema = z
   .strict()
   .optional();
 
+const ZulipStreamSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+  })
+  .strict();
+
+const ZulipThreadBindingsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    idleHours: z.number().min(0).optional(),
+    maxAgeHours: z.number().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
 const ZulipXCaseRouteSchema = z
   .object({
     expertAgentId: z.string().min(1).optional(),
@@ -78,6 +93,30 @@ const ZulipGroupSchema = z
   .strict()
   .optional();
 
+const ZulipExecApprovalSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    approvers: z.array(z.union([z.string(), z.number()])).optional(),
+    agentFilter: z.array(z.string().min(1)).optional(),
+    sessionFilter: z.array(z.string().min(1)).optional(),
+    cleanupAfterResolve: z.boolean().optional(),
+    target: z.enum(["dm", "session", "both", "stream"]).optional(),
+    stream: z.string().min(1).optional(),
+    topic: z.string().min(1).optional().default("exec-approvals"),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.target === "stream" && !value.stream?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["stream"],
+        message:
+          'channels.zulip.execApprovals.target="stream" requires channels.zulip.execApprovals.stream',
+      });
+    }
+  })
+  .optional();
+
 const ZulipAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -102,6 +141,10 @@ const ZulipAccountSchemaBase = z
     draftStreamingThrottleMs: z.number().int().min(250).max(5000).optional(),
     groups: z.record(z.string().min(1), ZulipGroupSchema).optional(),
     topic: ZulipTopicSchema,
+    streams: z.record(z.string().min(1), ZulipStreamSchema).optional(),
+    widgetsEnabled: z.boolean().optional(),
+    threadBindings: ZulipThreadBindingsSchema,
+    execApprovals: ZulipExecApprovalSchema,
     xcase: ZulipXCaseSchema,
   })
   .strict();
