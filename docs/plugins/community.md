@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Adaptive Cards** — Native structured UI for AI responses. Registers an `adaptive_card` tool that lets the agent emit interactive Adaptive Cards (v1.5) with status dashboards, option pickers, forms, and data tables. Cards render natively on iOS (SwiftUI), Android (Jetpack Compose), Teams (Bot Framework), and web. Non-card channels receive auto-generated fallback text. Zero configuration required.
+  npm: `@vikrantsingh01/openclaw-adaptive-cards`
+  repo: `https://github.com/VikrantSingh01/openclaw-adaptive-cards`
+  install: `openclaw plugins install @vikrantsingh01/openclaw-adaptive-cards`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
