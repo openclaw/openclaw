@@ -263,4 +263,24 @@ describe("agents helpers", () => {
     const home = result.config.agents?.list?.find((a) => a.id === "home");
     expect(home?.tools?.agentToAgent?.allow).toEqual(["ops"]);
   });
+
+  it("does not mutate the input config when scrubbing per-agent outbound A2A allowlists", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "work", tools: { agentToAgent: { allow: ["home"] } } },
+          { id: "home", tools: { agentToAgent: { allow: ["work", "ops"] } } },
+        ],
+      },
+      bindings: [],
+      tools: { agentToAgent: { enabled: true, allow: ["work", "home", "ops"] } },
+    };
+    const before = structuredClone(cfg);
+
+    const result = pruneAgentConfig(cfg, "work");
+
+    expect(cfg).toEqual(before);
+    const home = result.config.agents?.list?.find((a) => a.id === "home");
+    expect(home?.tools?.agentToAgent?.allow).toEqual(["ops"]);
+  });
 });

@@ -174,7 +174,25 @@ export function pruneAgentConfig(
 } {
   const id = normalizeAgentId(agentId);
   const agents = listAgentEntries(cfg);
-  const nextAgentsList = agents.filter((entry) => normalizeAgentId(entry.id) !== id);
+  const nextAgentsList = agents
+    .filter((entry) => normalizeAgentId(entry.id) !== id)
+    .map((agent) => {
+      const perAgentAllow = agent.tools?.agentToAgent?.allow;
+      if (!Array.isArray(perAgentAllow)) {
+        return agent;
+      }
+      const filtered = perAgentAllow.filter((entry) => entry !== id);
+      return {
+        ...agent,
+        tools: {
+          ...agent.tools,
+          agentToAgent: {
+            ...agent.tools.agentToAgent,
+            allow: filtered.length > 0 ? filtered : [],
+          },
+        },
+      };
+    });
   const nextAgents = nextAgentsList.length > 0 ? nextAgentsList : undefined;
 
   const bindings = cfg.bindings ?? [];
@@ -182,15 +200,6 @@ export function pruneAgentConfig(
 
   const allow = cfg.tools?.agentToAgent?.allow ?? [];
   const filteredAllow = allow.filter((entry) => entry !== id);
-
-  // Scrub the deleted agent from per-agent outbound A2A allowlists.
-  for (const agent of nextAgents ?? []) {
-    const perAgentAllow = agent.tools?.agentToAgent?.allow;
-    if (Array.isArray(perAgentAllow)) {
-      const filtered = perAgentAllow.filter((entry) => entry !== id);
-      agent.tools!.agentToAgent!.allow = filtered.length > 0 ? filtered : [];
-    }
-  }
 
   const nextAgentsConfig = cfg.agents
     ? { ...cfg.agents, list: nextAgents }
