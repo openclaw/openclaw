@@ -844,9 +844,14 @@ export async function compactEmbeddedPiSessionDirect(
           // rather than compacting an already-compacted transcript a second time.
           let backgroundResult: Awaited<ReturnType<typeof session.compact>> | undefined;
           try {
-            backgroundResult = await (backgroundCompact as ReturnType<typeof session.compact>);
+            // Bound the settle wait so a stuck provider cannot hold the session lock
+            // past its maxHoldMs budget. Re-use the retry timeout as a reasonable ceiling.
+            backgroundResult = await compactWithSafetyTimeout(
+              () => backgroundCompact as ReturnType<typeof session.compact>,
+              EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
+            );
           } catch {
-            // Cancelled or failed; proceed to retry below.
+            // Cancelled, failed, or timed out; proceed to retry below.
           }
           backgroundCompact = undefined;
           if (backgroundResult != null) {
