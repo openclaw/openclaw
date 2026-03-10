@@ -244,36 +244,40 @@ async function promptWebToolsConfig(
     const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
     const envVarNames = entry.envKeys.join(" / ");
 
-    const keyInput = guardCancel(
-      await text({
-        message: keyConfigured
-          ? envAvailable
-            ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
-            : `${entry.label} API key (leave blank to keep current)`
-          : envAvailable
-            ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
-            : `${entry.label} API key`,
-        placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
-      }),
-      runtime,
-    );
-    const key = String(keyInput ?? "").trim();
-
-    if (key || existingKey) {
-      const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
-      nextSearch = { ...applied.tools?.web?.search };
-    } else if (keyConfigured || envAvailable) {
+    if (providerChoice === "duckduckgo") {
       nextSearch = { ...nextSearch };
     } else {
-      note(
-        [
-          "No key stored yet — web_search won't work until a key is available.",
-          `Store a key here or set ${envVarNames} in the Gateway environment.`,
-          `Get your API key at: ${entry.signupUrl}`,
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n"),
-        "Web search",
+      const keyInput = guardCancel(
+        await text({
+          message: keyConfigured
+            ? envAvailable
+              ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
+              : `${entry.label} API key (leave blank to keep current)`
+            : envAvailable
+              ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
+              : `${entry.label} API key`,
+          placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+        }),
+        runtime,
       );
+      const key = String(keyInput ?? "").trim();
+
+      if (key || existingKey) {
+        const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
+        nextSearch = { ...applied.tools?.web?.search };
+      } else if (keyConfigured || envAvailable) {
+        nextSearch = { ...nextSearch };
+      } else {
+        note(
+          [
+            "No key stored yet — web_search won't work until a key is available.",
+            `Store a key here or set ${envVarNames} in the Gateway environment.`,
+            `Get your API key at: ${entry.signupUrl}`,
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Web search",
+        );
+      }
     }
   }
 

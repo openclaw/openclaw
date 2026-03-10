@@ -163,6 +163,17 @@ describe("setupSearch", () => {
     }
   });
 
+  it("accepts duckduckgo without prompting for an API key", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter, notes } = createPrompter({
+      selectValue: "duckduckgo",
+      textValue: "",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
+    expect(notes.some((n) => n.message.includes("No API key stored"))).toBe(false);
+  });
+
   it("keeps existing key when user leaves input blank", async () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
@@ -283,9 +294,9 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "duckduckgo", "gemini", "grok", "kimi", "perplexity"]);
   });
 });
