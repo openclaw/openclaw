@@ -85,8 +85,12 @@ describe("Feishu monitor health lifecycle", () => {
       setStatus,
     });
 
-    // Let microtasks settle so start() is called
-    await new Promise((r) => setTimeout(r, 50));
+    // Wait for start() to be called and setStatus to fire
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ connected: true, mode: "websocket" }),
+      );
+    });
 
     try {
       // setStatus should have been called with connected: true and mode: websocket
@@ -124,8 +128,10 @@ describe("Feishu monitor health lifecycle", () => {
       setStatus,
     });
 
-    // Let microtasks settle
-    await new Promise((r) => setTimeout(r, 50));
+    // Wait for connection to establish
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenCalled();
+    });
 
     try {
       // Reset to isolate event-driven calls
@@ -174,7 +180,9 @@ describe("Feishu monitor health lifecycle", () => {
       setStatus,
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenCalled();
+    });
 
     try {
       const callsBefore = setStatus.mock.calls.length;
@@ -196,6 +204,37 @@ describe("Feishu monitor health lifecycle", () => {
     }
   });
 
+  it("reports connected:false on abort", async () => {
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      botOpenId: "bot_test",
+      botName: "TestBot",
+    });
+
+    const abortController = new AbortController();
+    const setStatus = vi.fn();
+
+    const monitorPromise = monitorFeishuProvider({
+      config: buildSingleAccountConfig("websocket"),
+      abortSignal: abortController.signal,
+      setStatus,
+    });
+
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
+    });
+
+    // Abort and verify disconnect is reported
+    abortController.abort();
+    await monitorPromise;
+
+    const disconnectCall = setStatus.mock.calls.find(
+      (c: unknown[]) => (c[0] as Record<string, unknown>).connected === false,
+    );
+    expect(disconnectCall).toBeDefined();
+    expect((disconnectCall![0] as Record<string, unknown>).accountId).toBeDefined();
+  });
+
   it("does not call setStatus when callback is not provided", async () => {
     probeFeishuMock.mockResolvedValue({
       ok: true,
@@ -210,7 +249,10 @@ describe("Feishu monitor health lifecycle", () => {
       abortSignal: abortController.signal,
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    // Give the monitor a tick to start
+    await vi.waitFor(() => {
+      expect(feishuClientMockModule.createFeishuWSClient).toHaveBeenCalled();
+    });
 
     abortController.abort();
     await monitorPromise;
