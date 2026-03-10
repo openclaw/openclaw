@@ -222,6 +222,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
+  // Accumulates all text that has been successfully flushed into the Slack
+  // stream message. Used to reconstruct a complete fallback reply if the
+  // stream fails mid-turn or stopSlackStream fails at finalization — so the
+  // user always receives the full answer, not just the most recent chunk.
+  let streamedText = "";
   let lastStreamPayload: ReplyPayload | null = null;
   let usedReplyThreadTs: string | undefined;
 
@@ -250,8 +255,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
-    // Track the last payload so the stream finalizer can fall back to normal
-    // delivery if stopSlackStream fails after all content has been streamed.
+    // Track the last payload for metadata (thread ts, media, etc.) and
+    // accumulate its text so a mid-stream failure can re-deliver the complete
+    // answer rather than only the failing chunk.
     lastStreamPayload = payload;
 
     const text = payload.text.trim();
@@ -277,6 +283,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           teamId: ctx.teamId,
           userId: message.user,
         });
+        // Record text that is now live in the Slack stream message.
+        streamedText = text;
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
         return;
@@ -286,6 +294,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         session: streamSession,
         text: "\n" + text,
       });
+      // Record text that was successfully appended to the stream message.
+      streamedText += "\n" + text;
     } catch (err) {
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
@@ -317,7 +327,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
       }
 
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+      // Re-deliver the full content: everything already in the stream message
+      // plus the current payload that failed to append. Using only `payload`
+      // here would drop all previously-streamed text.
+      const fallbackText = streamedText ? `${streamedText}\n${text}` : text;
+      await deliverNormally(
+        { ...payload, text: fallbackText },
+        streamSession?.threadTs ?? plannedThreadTs,
+      );
     }
   };
 
@@ -514,10 +531,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           );
         }
       }
-      // Fall back to normal delivery so the user gets a response even when
-      // the stream could not be finalized.
-      if (lastStreamPayload) {
-        await deliverNormally(lastStreamPayload, finalStream.threadTs);
+      // Fall back to normal delivery with the full accumulated streamed text
+      // so the user receives the complete answer even when stop() fails.
+      if (lastStreamPayload && streamedText) {
+        await deliverNormally(
+          { ...lastStreamPayload, text: streamedText },
+          finalStream.threadTs,
+        );
       }
     }
   }
