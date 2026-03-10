@@ -7,7 +7,7 @@ x-i18n:
   generated_at: "2026-02-04T17:53:40Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: fc8babf7885ef91d526795051376d928599c4cf8aff75400138a0d7d9fa3b75f
+  source_hash: 0d167684402482da3162add3aeb4e184bb867a2578cc858a5ca27a918a985155
   source_path: index.md
   workflow: 15
 ---
@@ -96,7 +96,7 @@ Gateway 网关是会话、路由和渠道连接的唯一事实来源。
     浏览器仪表板，用于聊天、配置、会话和节点管理。
   </Card>
   <Card title="移动节点" icon="smartphone">
-    配对 iOS 和 Android 节点，支持 Canvas、摄像头、语音及设备操作等工作流。
+    配对 iOS 和 Android 节点，支持 Canvas、摄像头和语音等工作流。
   </Card>
 </Columns>
 
