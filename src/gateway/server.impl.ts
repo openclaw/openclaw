@@ -21,7 +21,9 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { listDiscordAccountIds } from "../discord/accounts.js";
 import {
+  evictPersistentState as evictDiscordPersistentState,
   markStable as markDiscordStable,
   requestCleanRestart as requestDiscordCleanRestart,
 } from "../discord/monitor/provider.lifecycle.js";
@@ -1045,6 +1047,13 @@ export async function startGatewayServer(
               reason: "reload",
               activate: true,
             });
+            // Snapshot discord account IDs before the reload so we can evict
+            // persistent state for any accounts that are removed from config.
+            // Use the runtime snapshot (not cfgAtStart) to capture the currently
+            // running set, which may have already changed since startup.
+            const prevDiscordAccountIds = plan.restartChannels.has("discord")
+              ? Object.keys(getRuntimeSnapshot().channelAccounts["discord"] ?? {})
+              : [];
             try {
               await applyHotReload(plan, prepared.config);
             } catch (err) {
@@ -1054,6 +1063,15 @@ export async function startGatewayServer(
                 clearSecretsRuntimeSnapshot();
               }
               throw err;
+            }
+            // Evict persistent state for discord accounts no longer in the new config.
+            if (prevDiscordAccountIds.length > 0) {
+              const nextDiscordAccountIds = new Set(listDiscordAccountIds(prepared.config));
+              for (const id of prevDiscordAccountIds) {
+                if (!nextDiscordAccountIds.has(id)) {
+                  evictDiscordPersistentState(id);
+                }
+              }
             }
           },
           onRestart: async (plan, nextConfig) => {

@@ -47,6 +47,15 @@ export function markStable(accountId: string): void {
   }
 }
 
+/**
+ * Remove the persistent state for an account that has been fully removed from
+ * config.  Call this whenever a Discord account is permanently deleted so the
+ * module-level Map does not grow unboundedly in long-running gateway processes.
+ */
+export function evictPersistentState(accountId: string): void {
+  persistentStates.delete(accountId);
+}
+
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
   client: Client;
