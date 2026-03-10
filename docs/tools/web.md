@@ -162,7 +162,26 @@ If no base URL is set, OpenClaw chooses a default based on the API key source:
 
 SearXNG is a free, self-hosted metasearch engine that aggregates results from multiple sources. It requires no API key and offers full privacy control.
 
-### Basic setup
+### Docker setup (recommended)
+
+OpenClaw includes a SearXNG service in `docker-compose.yml`. When you run `./docker-setup.sh`, the SearXNG container is automatically started with the correct configuration.
+
+The default configuration in `docker-compose.yml` mounts a custom `settings.yml` that enables JSON format:
+
+```yaml
+searxng:
+  image: searxng/searxng:latest
+  container_name: searxng
+  ports:
+    - "127.0.0.1:8888:8080"
+  volumes:
+    - ./scripts/searxng-config/settings.yml:/etc/searxng/settings.yml:ro
+  restart: unless-stopped
+```
+
+### Manual setup
+
+If you want to run SearXNG manually:
 
 1. Set up your SearXNG instance (see [SearXNG documentation](https://docs.searxng.org/))
 2. Enable JSON format in your SearXNG `settings.yml`:
