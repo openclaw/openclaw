@@ -1077,10 +1077,12 @@ export async function startGatewayServer(
               // explicit accounts are configured.  When configured, listDiscordAccountIds
               // correctly resolves the active account set (including the implicit "default"
               // for the single-account token shape).  When not configured, use an empty
-              // set so all previous entries are evicted.
+              // set so all previous entries are evicted.  Also covers the env-var-only
+              // path where DISCORD_BOT_TOKEN is set but no config key is present.
               const hasDiscordConfig = !!(
                 prepared.config.channels?.discord?.token ||
-                listConfiguredDiscordAccountIds(prepared.config).length > 0
+                listConfiguredDiscordAccountIds(prepared.config).length > 0 ||
+                process.env.DISCORD_BOT_TOKEN
               );
               const nextDiscordAccountIds = new Set(
                 hasDiscordConfig ? listDiscordAccountIds(prepared.config) : [],
