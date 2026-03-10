@@ -35,6 +35,7 @@ export type AcpxPluginConfig = {
   command?: string;
   expectedVersion?: string;
   cwd?: string;
+  agentCommand?: string;
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
   strictWindowsCmdWrapper?: boolean;
@@ -49,6 +50,7 @@ export type ResolvedAcpxPluginConfig = {
   allowPluginLocalInstall: boolean;
   installCommand: string;
   cwd: string;
+  agentCommand?: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   strictWindowsCmdWrapper: boolean;
@@ -121,6 +123,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     "command",
     "expectedVersion",
     "cwd",
+    "agentCommand",
     "permissionMode",
     "nonInteractivePermissions",
     "strictWindowsCmdWrapper",
@@ -150,6 +153,14 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
   const cwd = value.cwd;
   if (cwd !== undefined && (typeof cwd !== "string" || cwd.trim() === "")) {
     return { ok: false, message: "cwd must be a non-empty string" };
+  }
+
+  const agentCommand = value.agentCommand;
+  if (
+    agentCommand !== undefined &&
+    (typeof agentCommand !== "string" || agentCommand.trim() === "")
+  ) {
+    return { ok: false, message: "agentCommand must be a non-empty string" };
   }
 
   const permissionMode = value.permissionMode;
@@ -219,6 +230,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       command: typeof command === "string" ? command.trim() : undefined,
       expectedVersion: typeof expectedVersion === "string" ? expectedVersion.trim() : undefined,
       cwd: typeof cwd === "string" ? cwd.trim() : undefined,
+      agentCommand: typeof agentCommand === "string" ? agentCommand.trim() : undefined,
       permissionMode: typeof permissionMode === "string" ? permissionMode : undefined,
       nonInteractivePermissions:
         typeof nonInteractivePermissions === "string" ? nonInteractivePermissions : undefined,
@@ -270,6 +282,7 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
         command: { type: "string" },
         expectedVersion: { type: "string" },
         cwd: { type: "string" },
+        agentCommand: { type: "string" },
         permissionMode: {
           type: "string",
           enum: [...ACPX_PERMISSION_MODES],
@@ -345,6 +358,7 @@ export function resolveAcpxPluginConfig(params: {
     allowPluginLocalInstall,
     installCommand,
     cwd,
+    agentCommand: normalized.agentCommand?.trim() || undefined,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,

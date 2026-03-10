@@ -665,6 +665,10 @@ export class AcpxRuntime implements AcpRuntime {
     agent: string;
     cwd: string;
   }): Promise<string | null> {
+    // Config-driven agent command overrides the default acpx subcommand.
+    if (this.config.agentCommand) {
+      return this.config.agentCommand;
+    }
     if (Object.keys(this.config.mcpServers).length === 0) {
       return null;
     }
