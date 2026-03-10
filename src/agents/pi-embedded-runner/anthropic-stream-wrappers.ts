@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { normalizeProviderId } from "../model-selection.js";
 import {
   requiresOpenAiCompatibleAnthropicToolPayload,
   usesOpenAiFunctionAnthropicToolSchema,
@@ -69,6 +70,12 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
     return true;
   }
 
+  // Kimi Coding's Anthropic endpoint expects native tool framing.
+  // Ignore stale compat overrides so the old OpenAI-function rewrite cannot regress.
+  if (typeof model.provider === "string" && normalizeProviderId(model.provider) === "kimi-coding") {
+    return false;
+  }
+
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
     return false;
   }
@@ -85,6 +92,9 @@ function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
 }): boolean {
   if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
     return true;
+  }
+  if (typeof model.provider === "string" && normalizeProviderId(model.provider) === "kimi-coding") {
+    return false;
   }
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
     return false;
@@ -104,6 +114,9 @@ function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
     usesOpenAiStringModeAnthropicToolChoice(model.provider)
   ) {
     return true;
+  }
+  if (typeof model.provider === "string" && normalizeProviderId(model.provider) === "kimi-coding") {
+    return false;
   }
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
     return false;
