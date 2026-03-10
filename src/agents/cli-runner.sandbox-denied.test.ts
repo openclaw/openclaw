@@ -36,24 +36,26 @@ describe("detectSandboxDenied", () => {
     expect(detectSandboxDenied(records)).toBe(true);
   });
 
-  it("detects tool-call output reporting sandbox denial", () => {
+  it("detects tool-call output reporting sandbox denial with error signal", () => {
     const records = [
       {
         item: {
           type: "tool_call_output",
           text: "sandbox policy: write to /workspace/TEST_RO.md denied",
+          status: "failed",
         },
       },
     ];
     expect(detectSandboxDenied(records)).toBe(true);
   });
 
-  it("detects command action with sandbox blocked status", () => {
+  it("detects command action with sandbox blocked status and non-zero exit", () => {
     const records = [
       {
         item: {
           type: "command_execution",
           text: "write denied by sandbox read-only filesystem",
+          exit_code: 1,
         },
       },
     ];
@@ -121,12 +123,25 @@ describe("detectSandboxDenied", () => {
     expect(detectSandboxDenied(records)).toBe(true);
   });
 
-  it("flags short tool output with sandbox denial", () => {
+  it("does not flag short tool output without error signal", () => {
     const records = [
       {
         item: {
           type: "tool_call_output",
           text: "sandbox policy: write to /workspace/file denied",
+        },
+      },
+    ];
+    expect(detectSandboxDenied(records)).toBe(false);
+  });
+
+  it("flags short tool output with error status", () => {
+    const records = [
+      {
+        item: {
+          type: "tool_call_output",
+          text: "sandbox policy: write to /workspace/file denied",
+          status: "error",
         },
       },
     ];
@@ -165,6 +180,7 @@ describe("parseCliJsonl sandbox detection", () => {
         item: {
           type: "tool_call_output",
           text: "sandbox policy: write to /workspace/TEST_RO.md denied",
+          status: "error",
         },
       }),
       JSON.stringify({ usage: { input_tokens: 80, output_tokens: 20 } }),
@@ -198,8 +214,12 @@ describe("detectSandboxDeniedInText", () => {
     ).toBe(true);
   });
 
-  it("detects sandbox denied phrasing", () => {
-    expect(detectSandboxDeniedInText("The operation was sandbox denied")).toBe(true);
+  it("does not flag vague sandbox mentions in discussion text", () => {
+    expect(detectSandboxDeniedInText("The operation was sandbox denied")).toBe(false);
+  });
+
+  it("detects write denied by sandbox in text", () => {
+    expect(detectSandboxDeniedInText("write denied by sandbox read-only filesystem")).toBe(true);
   });
 
   it("does not flag normal text output", () => {

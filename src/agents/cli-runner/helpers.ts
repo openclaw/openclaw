@@ -206,16 +206,22 @@ const SANDBOX_DENIED_RE =
   /sandbox.policy|sandbox.denied|sandbox.*read.only|read.only.*sandbox|write.*denied.*sandbox|sandbox.*blocked|permission denied.*sandbox/i;
 
 /**
+ * Stricter regex for text-mode sandbox detection.  Requires patterns that look
+ * like actual error messages (e.g. "sandbox policy: write denied") rather than
+ * discussion of sandbox concepts.  This avoids false positives when resumed
+ * Codex output merely discusses sandbox behavior.
+ */
+const SANDBOX_DENIED_TEXT_RE =
+  /sandbox policy:\s*\S+ denied|permission denied.*sandbox|write.*denied.*sandbox|read.only.*sandbox/i;
+
+/**
  * Detect sandbox-denied signals in raw text output (used for resume text-mode).
  *
- * This is intentionally coarser than `detectSandboxDenied` since text output
- * lacks structured item types.  We scan the entire output for the same denial
- * patterns.  False positives are possible but acceptable because a resumed
- * Codex session that mentions sandbox denial in its raw output very likely
- * experienced an actual denial.
+ * Uses a stricter regex than the structured JSONL detector to avoid false
+ * positives from agents discussing sandbox concepts in their output.
  */
 export function detectSandboxDeniedInText(text: string): boolean {
-  return SANDBOX_DENIED_RE.test(text);
+  return SANDBOX_DENIED_TEXT_RE.test(text);
 }
 
 /**
@@ -272,9 +278,7 @@ export function detectSandboxDenied(records: Record<string, unknown>[]): boolean
         item.status === "failed" ||
         item.status === "denied" ||
         (typeof item.exit_code === "number" && item.exit_code !== 0);
-      // Short tool output (<500 chars) with denial keywords is almost certainly
-      // a real denial, not a coincidental match in a long log.
-      if (hasErrorSignal || item.text.length < 500) {
+      if (hasErrorSignal) {
         return true;
       }
     }
