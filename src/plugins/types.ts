@@ -673,7 +673,7 @@ export type PluginHookBeforeMessageWriteResult = {
 // before_context_send hook
 /**
  * Context for the before_context_send hook.
- * 
+ *
  * This hook runs inside pi-agent-core's synchronous `context` event.
  * The ExtensionContext provides limited metadata; we expose what's available.
  */

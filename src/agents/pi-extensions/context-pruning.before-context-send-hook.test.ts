@@ -1,8 +1,8 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { resetGlobalPluginRegistry } from "../../plugins/registry.js";
@@ -78,13 +78,10 @@ describe("before_context_send hook", () => {
     const messages: AgentMessage[] = [makeUser("hello"), makeAssistant("hi")];
 
     // No pruning runtime set, no hooks registered → should return undefined
-    const result = handler(
-      { messages },
-      {
-        model: undefined,
-        sessionManager: {},
-      } as unknown as ExtensionContext,
-    );
+    const result = handler({ messages }, {
+      model: undefined,
+      sessionManager: {},
+    } as unknown as ExtensionContext);
 
     expect(result).toBeUndefined();
   });
@@ -146,13 +143,10 @@ describe("before_context_send hook", () => {
         makeAssistant("ok"),
       ];
 
-      const result = handler(
-        { messages },
-        {
-          model: undefined,
-          sessionManager: {},
-        } as unknown as ExtensionContext,
-      );
+      const result = handler({ messages }, {
+        model: undefined,
+        sessionManager: {},
+      } as unknown as ExtensionContext);
 
       expect(result).toBeDefined();
       expect(result?.messages).toHaveLength(3);
@@ -234,13 +228,10 @@ describe("before_context_send hook", () => {
 
       const messages: AgentMessage[] = [makeUser("hello"), makeAssistant("hi")];
 
-      const result = handler(
-        { messages },
-        {
-          model: undefined,
-          sessionManager: {},
-        } as unknown as ExtensionContext,
-      );
+      const result = handler({ messages }, {
+        model: undefined,
+        sessionManager: {},
+      } as unknown as ExtensionContext);
 
       expect(result).toBeDefined();
       expect(result?.messages).toHaveLength(2);

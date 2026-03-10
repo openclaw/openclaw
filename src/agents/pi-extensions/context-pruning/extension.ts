@@ -1,16 +1,16 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { createHookRunner } from "../../../plugins/hooks.js";
+import { getGlobalPluginRegistry } from "../../../plugins/registry.js";
 import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
-import { getGlobalPluginRegistry } from "../../../plugins/registry.js";
-import { createHookRunner } from "../../../plugins/hooks.js";
 
 export default function contextPruningExtension(api: ExtensionAPI): void {
   api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
     const runtime = getContextPruningRuntime(ctx.sessionManager);
-    
+
     // Start with the original messages
     let messages = event.messages;
-    
+
     // Apply context pruning if runtime is configured
     if (runtime) {
       let shouldPrune = true;
