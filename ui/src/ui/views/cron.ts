@@ -485,6 +485,13 @@ function ensureTimelineTimer() {
     return;
   }
   _timelineRefreshTimer = setInterval(() => {
+    // Stop the interval when the cron timeline is no longer in the DOM
+    // (i.e. the user has navigated away from the Cron page).
+    if (!document.querySelector(".cron-timeline-card")) {
+      clearInterval(_timelineRefreshTimer!);
+      _timelineRefreshTimer = null;
+      return;
+    }
     const host = document.querySelector("openclaw-app");
     if (host && "requestUpdate" in host) {
       (host as unknown as { requestUpdate: () => void }).requestUpdate();
