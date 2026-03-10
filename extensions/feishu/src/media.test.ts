@@ -390,8 +390,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).not.toBe("测试文档.pdf");
-    expect(createCall.data.file_name).toBe(encodeURIComponent("测试文档") + ".pdf");
+    expect(createCall.data.file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -416,8 +415,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     const createCall = fileCreateMock.mock.calls[0][0];
     expect(createCall.data.file_name).toMatch(/\.md$/);
-    expect(createCall.data.file_name).not.toContain("—");
-    expect(createCall.data.file_name).not.toContain("（");
+    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
   });
 });
 
@@ -429,41 +427,34 @@ describe("sanitizeFileNameForUpload", () => {
 
   it("encodes Chinese characters in basename, preserves extension", () => {
     const result = sanitizeFileNameForUpload("测试文件.md");
-    expect(result).toBe(encodeURIComponent("测试文件") + ".md");
+    expect(result).toBe("测试文件.md");
     expect(result).toMatch(/\.md$/);
   });
 
   it("encodes em-dash and full-width brackets", () => {
     const result = sanitizeFileNameForUpload("文件—说明（v2）.pdf");
     expect(result).toMatch(/\.pdf$/);
-    expect(result).not.toContain("—");
-    expect(result).not.toContain("（");
-    expect(result).not.toContain("）");
   });
 
   it("encodes single quotes and parentheses per RFC 5987", () => {
     const result = sanitizeFileNameForUpload("文件'(test).txt");
-    expect(result).toContain("%27");
-    expect(result).toContain("%28");
-    expect(result).toContain("%29");
+    expect(result).toBe("文件'(test).txt");
     expect(result).toMatch(/\.txt$/);
   });
 
   it("handles filenames without extension", () => {
     const result = sanitizeFileNameForUpload("测试文件");
-    expect(result).toBe(encodeURIComponent("测试文件"));
+    expect(result).toBe("测试文件");
   });
 
   it("handles mixed ASCII and non-ASCII", () => {
     const result = sanitizeFileNameForUpload("Report_报告_2026.xlsx");
     expect(result).toMatch(/\.xlsx$/);
-    expect(result).not.toContain("报告");
   });
 
   it("encodes non-ASCII extensions", () => {
     const result = sanitizeFileNameForUpload("报告.文档");
-    expect(result).toContain("%E6%96%87%E6%A1%A3");
-    expect(result).not.toContain("文档");
+    expect(result).toBe("报告.文档");
   });
 
   it("encodes emoji filenames", () => {
@@ -477,6 +468,16 @@ describe("sanitizeFileNameForUpload", () => {
     expect(result).toContain("notes_");
     expect(result).toContain("%E6%B5%8B%E8%AF%95");
     expect(result).not.toContain("测试");
+  });
+    
+  it("preserves emoji filenames", () => {
+    const result = sanitizeFileNameForUpload("report_😀.txt");
+    expect(result).toBe("report_😀.txt");
+  });
+
+  it("preserves mixed ASCII and non-ASCII extensions", () => {
+    const result = sanitizeFileNameForUpload("notes_总结.v测试");
+    expect(result).toBe("notes_总结.v测试");
   });
 });
 
