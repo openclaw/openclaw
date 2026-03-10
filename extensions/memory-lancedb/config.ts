@@ -14,6 +14,17 @@ export type MemoryConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  /**
+   * Optional namespace for memory isolation.
+   *
+   * - Leave unset (default): each agent is automatically scoped to its own ID.
+   *   Entries stored by "finn" are only recalled by "finn".
+   * - Set to a shared value (e.g. "shared"): multiple agents using the same
+   *   namespace value will share a memory pool.
+   * - Set to "global": disables scoping entirely — all agents share one pool
+   *   (equivalent to the behavior before this feature was added).
+   */
+  namespace?: string;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -97,7 +108,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "namespace"],
       "memory config",
     );
 
@@ -118,6 +129,9 @@ export const memoryConfigSchema = {
       throw new Error("captureMaxChars must be between 100 and 10000");
     }
 
+    const namespace =
+      typeof cfg.namespace === "string" && cfg.namespace.trim() ? cfg.namespace.trim() : undefined;
+
     return {
       embedding: {
         provider: "openai",
@@ -131,6 +145,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      namespace,
     };
   },
   uiHints: {
@@ -175,6 +190,12 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    namespace: {
+      label: "Memory Namespace",
+      help: 'Scope memories per agent. Leave blank = auto per-agent isolation (recommended for multi-agent setups). Set to a shared value to let agents share a pool. Set to "global" to disable scoping (old behavior).',
+      placeholder: "my-agent",
+      advanced: true,
     },
   },
 };
