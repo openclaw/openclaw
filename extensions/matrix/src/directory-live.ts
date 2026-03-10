@@ -38,14 +38,22 @@ async function fetchMatrixJson<T>(params: {
   method?: "GET" | "POST";
   body?: unknown;
 }): Promise<T> {
-  const res = await fetch(`${params.homeserver}${params.path}`, {
-    method: params.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${params.accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: params.body ? JSON.stringify(params.body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${params.homeserver}${params.path}`, {
+      method: params.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: params.body ? JSON.stringify(params.body) : undefined,
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Matrix API ${params.path} failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Matrix API ${params.path} failed (${res.status}): ${text || "unknown error"}`);
