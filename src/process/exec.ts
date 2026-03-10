@@ -36,7 +36,11 @@ function escapeForCmdExe(arg: string): string {
 }
 
 function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+  const cmdLine = [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+  // Switch console codepage to UTF-8 before running the command so that
+  // multi-byte characters (e.g. Chinese) are emitted as UTF-8 instead of the
+  // system's default codepage (often GBK/cp936 on Chinese Windows).
+  return `chcp 65001 >nul && ${cmdLine}`;
 }
 
 /**
