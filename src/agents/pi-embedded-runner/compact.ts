@@ -611,6 +611,14 @@ export async function compactEmbeddedPiSessionDirect(
       });
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
+      let chunkProgressFired = false;
+      let compactionEndEmitted = false;
+      const emitCompactionEndOnce = () => {
+        if (chunkProgressFired && !compactionEndEmitted) {
+          compactionEndEmitted = true;
+          emitAgentEvent({ runId, stream: "compaction", data: { phase: "end" } });
+        }
+      };
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
@@ -618,6 +626,7 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
         onChunkProgress: (current, total) => {
+          chunkProgressFired = true;
           emitAgentEvent({
             runId,
             stream: "compaction",
@@ -817,6 +826,7 @@ export async function compactEmbeddedPiSessionDirect(
             return backgroundCompact as ReturnType<typeof session.compact>;
           });
           backgroundCompact = undefined; // settled cleanly
+          emitCompactionEndOnce();
         } catch (firstErr) {
           const isTimeout =
             firstErr instanceof Error &&
@@ -829,33 +839,48 @@ export async function compactEmbeddedPiSessionDirect(
           // Abort the timed-out first compact so it skips replaceMessages() (see comment above).
           session.abortCompaction();
           // Await the first compact settling before retrying; abortCompaction() signals it to stop
-          // but the promise may not resolve immediately. Swallow the "Compaction cancelled"
-          // rejection to avoid an unhandled-rejection crash.
-          await backgroundCompact?.catch(() => {});
-          backgroundCompact = undefined;
-          // Timeout: truncate oversized tool results (large DOM responses) to reduce context,
-          // then retry with a shorter safety timeout.
-          log.warn(
-            `[compaction] initial compaction timed out after ${EMBEDDED_COMPACTION_TIMEOUT_MS / 1000}s; ` +
-              `truncating oversized tool results and retrying (diagId=${diagId})`,
-          );
-          const contextWindowTokens = ctxInfo.tokens;
-          const { messages: reducedMessages, truncatedCount } =
-            truncateOversizedToolResultsInMessages(session.messages, contextWindowTokens);
-          if (truncatedCount > 0) {
-            log.info(
-              `[compaction] pre-retry: truncated ${truncatedCount} oversized tool result(s) ` +
-                `to reduce context before retry (diagId=${diagId})`,
-            );
-            session.agent.replaceMessages(reducedMessages);
+          // but the promise may not resolve immediately.
+          // If it settled successfully just past the timeout boundary, use that result directly
+          // rather than compacting an already-compacted transcript a second time.
+          let backgroundResult: Awaited<ReturnType<typeof session.compact>> | undefined;
+          try {
+            backgroundResult = await (backgroundCompact as ReturnType<typeof session.compact>);
+          } catch {
+            // Cancelled or failed; proceed to retry below.
           }
-          // Retry with shorter timeout. If this also times out, the error propagates to the
-          // outer catch which returns fail("Compaction timed out").
-          retried = true;
-          result = await compactWithSafetyTimeout(
-            () => session.compact(params.customInstructions),
-            EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
-          );
+          backgroundCompact = undefined;
+          if (backgroundResult != null) {
+            log.info(
+              `[compaction] timed-out first compact settled successfully; using its result (diagId=${diagId})`,
+            );
+            result = backgroundResult;
+            emitCompactionEndOnce();
+          } else {
+            // Timeout: truncate oversized tool results (large DOM responses) to reduce context,
+            // then retry with a shorter safety timeout.
+            log.warn(
+              `[compaction] initial compaction timed out after ${EMBEDDED_COMPACTION_TIMEOUT_MS / 1000}s; ` +
+                `truncating oversized tool results and retrying (diagId=${diagId})`,
+            );
+            const contextWindowTokens = ctxInfo.tokens;
+            const { messages: reducedMessages, truncatedCount } =
+              truncateOversizedToolResultsInMessages(session.messages, contextWindowTokens);
+            if (truncatedCount > 0) {
+              log.info(
+                `[compaction] pre-retry: truncated ${truncatedCount} oversized tool result(s) ` +
+                  `to reduce context before retry (diagId=${diagId})`,
+              );
+              session.agent.replaceMessages(reducedMessages);
+            }
+            // Retry with shorter timeout. If this also times out, the error propagates to the
+            // outer catch which returns fail("Compaction timed out").
+            retried = true;
+            result = await compactWithSafetyTimeout(
+              () => session.compact(params.customInstructions),
+              EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
+            );
+            emitCompactionEndOnce();
+          }
         }
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -945,6 +970,9 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
+        // Fallback: clear the UI toast if a non-timeout error interrupted compaction
+        // after progress events had already fired.
+        emitCompactionEndOnce();
         await flushPendingToolResultsAfterIdle({
           agent: session?.agent,
           sessionManager,
