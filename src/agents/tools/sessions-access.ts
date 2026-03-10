@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -51,8 +55,10 @@ export function resolveSandboxSessionToolsVisibility(
   agentId?: string,
 ): "spawned" | "all" {
   if (agentId) {
-    const override = cfg.agents?.list?.find((entry) => entry.id === agentId)?.sandbox
-      ?.sessionToolsVisibility;
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const override = cfg.agents?.list?.find(
+      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
+    )?.sandbox?.sessionToolsVisibility;
     if (override === "spawned" || override === "all") {
       return override;
     }

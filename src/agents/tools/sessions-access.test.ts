@@ -95,6 +95,26 @@ describe("sandbox session-tools context", () => {
     expect(resolveSandboxSessionToolsVisibility(cfg, "tony")).toBe("all");
   });
 
+  it("matches per-agent overrides case-insensitively", () => {
+    const cfg = {
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "Tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveSandboxSessionToolsVisibility(cfg, "tony")).toBe("all");
+  });
+
+  it("falls back to default when agentId is not found in agents.list", () => {
+    const cfg = {
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveSandboxSessionToolsVisibility(cfg, "unknown-agent")).toBe("spawned");
+  });
+
   it("restricts non-subagent sandboxed sessions to spawned visibility", () => {
     const cfg = {
       tools: { sessions: { visibility: "all" } },
