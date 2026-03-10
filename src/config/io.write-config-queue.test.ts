@@ -1,9 +1,33 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
-import { clearConfigCache, loadConfig, writeConfigFile } from "./io.js";
+import { clearConfigCache, createConfigIO, loadConfig, writeConfigFile } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function waitForPersistedSecret(configPath: string, expectedSecret: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const raw = await fs.readFile(configPath, "utf-8");
+    const parsed = JSON.parse(raw) as {
+      commands?: { ownerDisplaySecret?: string };
+    };
+    if (parsed.commands?.ownerDisplaySecret === expectedSecret) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out waiting for ownerDisplaySecret persistence");
+}
 
 /**
  * These tests verify that concurrent config writes are serialized by the
@@ -81,45 +105,55 @@ describe("config write serialization", () => {
 
       const initialConfig: OpenClawConfig = {
         gateway: { mode: "local", port: 18789 },
+        commands: { ownerDisplay: "hash" },
       };
       await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf-8");
 
       // Write 1: adds gateway auth.
-      const baseCfg = loadConfig();
-      clearConfigCache();
       const cfg1: OpenClawConfig = {
-        ...baseCfg,
         gateway: {
-          ...baseCfg.gateway,
+          ...initialConfig.gateway,
           auth: { mode: "token" as const },
         },
+        commands: initialConfig.commands,
       };
 
-      // Write 2 mirrors the fixed ownerDisplaySecret pattern: it re-loads
-      // the config FRESH right before writing, so it sees write 1's output.
-      // Both go through module-level writeConfigFile which is queued.
-      const write1 = writeConfigFile(cfg1);
-      const write2 = (async () => {
-        // This loadConfig() won't execute until write1 releases the queue
-        // because writeConfigFile enqueues the entire operation.
-        // However, since loadConfig is called BEFORE writeConfigFile
-        // (which is when the queue is entered), we need the actual
-        // ownerDisplaySecret pattern where the load happens inside the
-        // enqueueConfigWrite call. For this test, we verify that
-        // sequential writes preserve data.
-        await write1; // Wait for write1 to complete
-        clearConfigCache();
-        const freshCfg = loadConfig();
-        await writeConfigFile({
-          ...freshCfg,
-          commands: {
-            ...freshCfg.commands,
-            ownerDisplaySecret: "test-secret-value", // pragma: allowlist secret
-          },
-        });
-      })();
+      const renameEntered = createDeferred();
+      const allowRename = createDeferred();
+      const originalRename = fsSync.promises.rename.bind(fsSync.promises);
+      let blockedFinalRename = false;
 
-      await Promise.all([write1, write2]);
+      const renameSpy = vi.spyOn(fsSync.promises, "rename").mockImplementation(async (from, to) => {
+        if (!blockedFinalRename && from.endsWith(".tmp") && to === configPath) {
+          blockedFinalRename = true;
+          renameEntered.resolve();
+          await allowRename.promise;
+        }
+        return await originalRename(from, to);
+      });
+
+      try {
+        // Block the first write inside the queue, then trigger the real
+        // ownerDisplaySecret auto-persist flow while that write is still pending.
+        const write1 = writeConfigFile(cfg1);
+        await renameEntered.promise;
+
+        const io = createConfigIO({
+          env: {} as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: { warn: () => {}, error: () => {} },
+        });
+        const cfg = io.loadConfig();
+        const secret = cfg.commands?.ownerDisplaySecret;
+
+        expect(secret).toMatch(/^[a-f0-9]{64}$/);
+
+        allowRename.resolve();
+        await write1;
+        await waitForPersistedSecret(configPath, secret ?? "");
+      } finally {
+        renameSpy.mockRestore();
+      }
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
         string,
@@ -133,7 +167,8 @@ describe("config write serialization", () => {
       expect(gateway?.mode).toBe("local");
       expect(gateway?.port).toBe(18789);
       expect(gateway?.auth).toEqual({ mode: "token" });
-      expect(commands?.ownerDisplaySecret).toBe("test-secret-value"); // pragma: allowlist secret
+      expect(commands?.ownerDisplay).toBe("hash");
+      expect(commands?.ownerDisplaySecret).toMatch(/^[a-f0-9]{64}$/);
     });
   });
 });
