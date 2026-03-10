@@ -227,11 +227,14 @@ export function stripDowngradedToolCallText(text: string): string {
 /**
  * Strip multi-tool JSON payloads emitted by some model providers as text content.
  * Certain providers (e.g. Minimax, DeepSeek) may emit parallel tool-call plans
- * as raw JSON in assistant text blocks, for example:
- *   {"tool_uses":[{"recipient_name":"functions.feishu_bitable_app","parameters":{...}},...]}
+ * as raw JSON in assistant text blocks. These take the form:
+ *   `tool_uses` array with `recipient_name` and `parameters` fields.
  * These are internal orchestration payloads that must never reach the user.
  * See: https://github.com/openclaw/openclaw/issues/41435
  */
+// 60-char lookahead is intentionally tight — target providers always emit "tool_uses" first.
+const TOOL_USES_LOOKAHEAD = 60;
+
 export function stripMultiToolCallJsonPayload(text: string): string {
   if (!text) {
     return text;
@@ -254,9 +257,6 @@ export function stripMultiToolCallJsonPayload(text: string): string {
     }
 
     // Lightweight check: "tool_uses": must appear near the start of the object.
-    // 60 chars is intentionally tight — target providers always emit this key first
-    // (e.g. `{"tool_uses":[...]}`), so a small window avoids scanning unrelated objects.
-    const TOOL_USES_LOOKAHEAD = 60;
     const lookAhead = text.slice(startIdx, startIdx + TOOL_USES_LOOKAHEAD);
     if (!/"tool_uses"\s*:/.test(lookAhead)) {
       result += text.slice(cursor, startIdx + 1);
