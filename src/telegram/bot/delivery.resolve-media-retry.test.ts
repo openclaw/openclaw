@@ -5,6 +5,7 @@ import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
+const resolveTelegramFetch = vi.fn();
 
 vi.mock("../../media/store.js", () => ({
   saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
@@ -12,6 +13,10 @@ vi.mock("../../media/store.js", () => ({
 
 vi.mock("../../media/fetch.js", () => ({
   fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
+}));
+
+vi.mock("../fetch.js", () => ({
+  resolveTelegramFetch: (...args: unknown[]) => resolveTelegramFetch(...args),
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -164,6 +169,10 @@ describe("resolveMedia getFile retry", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();
+    resolveTelegramFetch.mockReset();
+    resolveTelegramFetch.mockImplementation(
+      (fetchImpl?: typeof fetch) => fetchImpl ?? globalThis.fetch,
+    );
   });
 
   afterEach(() => {
@@ -200,6 +209,32 @@ describe("resolveMedia getFile retry", () => {
     ).rejects.toThrow("download failed");
 
     expect(getFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves Telegram media downloads through the Telegram fetch wrapper", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
+    const rawFetch = vi.fn();
+    const wrappedFetch = vi.fn();
+    const network = { autoSelectFamily: false, dnsResultOrder: "ipv4first" } as const;
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      fileName: "file_0.oga",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+    resolveTelegramFetch.mockReturnValueOnce(wrappedFetch);
+
+    await resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN, rawFetch, network);
+
+    expect(resolveTelegramFetch).toHaveBeenCalledWith(rawFetch, { network });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchImpl: wrappedFetch,
+      }),
+    );
   });
 
   it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {

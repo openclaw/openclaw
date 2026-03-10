@@ -1,9 +1,11 @@
 import { GrammyError } from "grammy";
+import type { TelegramNetworkConfig } from "../../config/types.telegram.js";
 import { logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { resolveTelegramFetch } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -92,8 +94,11 @@ async function resolveTelegramFileWithRetry(
   }
 }
 
-function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
-  const fetchImpl = proxyFetch ?? globalThis.fetch;
+function resolveRequiredFetchImpl(
+  proxyFetch?: typeof fetch,
+  network?: TelegramNetworkConfig,
+): typeof fetch {
+  const fetchImpl = resolveTelegramFetch(proxyFetch, { network });
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
@@ -135,6 +140,7 @@ async function resolveStickerMedia(params: {
   maxBytes: number;
   token: string;
   proxyFetch?: typeof fetch;
+  network?: TelegramNetworkConfig;
 }): Promise<
   | {
       path: string;
@@ -145,7 +151,7 @@ async function resolveStickerMedia(params: {
   | null
   | undefined
 > {
-  const { msg, ctx, maxBytes, token, proxyFetch } = params;
+  const { msg, ctx, maxBytes, token, proxyFetch, network } = params;
   if (!msg.sticker) {
     return undefined;
   }
@@ -165,15 +171,10 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
-    const fetchImpl = proxyFetch ?? globalThis.fetch;
-    if (!fetchImpl) {
-      logVerbose("telegram: fetch not available for sticker download");
-      return null;
-    }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      fetchImpl,
+      fetchImpl: resolveRequiredFetchImpl(proxyFetch, network),
       maxBytes,
     });
 
@@ -230,6 +231,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  network?: TelegramNetworkConfig,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -243,6 +245,7 @@ export async function resolveMedia(
     maxBytes,
     token,
     proxyFetch,
+    network,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -263,7 +266,7 @@ export async function resolveMedia(
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,
     token,
-    fetchImpl: resolveRequiredFetchImpl(proxyFetch),
+    fetchImpl: resolveRequiredFetchImpl(proxyFetch, network),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
   });
