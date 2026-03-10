@@ -394,7 +394,6 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      depth: 2,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
