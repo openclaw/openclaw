@@ -8,10 +8,11 @@
  * @date 2026-03-09
  */
 
-import { validateChainConfig } from "../src/config-validator";
-import { AsyncWriteQueue } from "../src/memory/chain/async-queue";
-import { CircuitBreaker } from "../src/memory/chain/circuit-breaker";
-import type { AsyncWriteTask } from "../src/memory/chain/types";
+import { describe, it, expect } from "vitest";
+import { validateChainConfig } from "../../../src/config-validator.js";
+import { AsyncWriteQueue } from "../../../src/memory/chain/async-queue.js";
+import { CircuitBreaker } from "../../../src/memory/chain/circuit-breaker.js";
+import type { AsyncWriteTask } from "../../../src/memory/chain/types.js";
 
 describe("Integration Tests", () => {
   describe("Circuit Breaker", () => {

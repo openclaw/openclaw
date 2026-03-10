@@ -11,6 +11,8 @@
  * 运行方式：在 OpenClaw 根目录执行 npm run test:e2e
  */
 
+import { describe, it, expect } from "vitest";
+
 describe("E2E: Plugin Compatibility", () => {
   // 这些测试需要 OpenClaw 环境，暂时跳过
   // 在实际 OpenClaw 仓库中会启用

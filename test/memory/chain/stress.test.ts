@@ -13,6 +13,8 @@
  * @date 2026-03-09
  */
 
+import { describe, it, expect } from "vitest";
+
 /**
  * @slow 标记说明
  *
