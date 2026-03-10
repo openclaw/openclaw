@@ -15,8 +15,32 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+const POLL_CLEANUP_TIMEOUT_MS = 10_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
+
+async function awaitWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => void,
+): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+          onTimeout();
+          resolve(undefined);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 type TelegramPollingSessionOpts = {
   token: string;
@@ -250,8 +274,16 @@ export class TelegramPollingSession {
     } finally {
       clearInterval(watchdog);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await stopRunner();
-      await stopBot();
+      await awaitWithTimeout(stopRunner(), POLL_CLEANUP_TIMEOUT_MS, () => {
+        this.opts.log(
+          `[telegram] runner.stop() did not finish within ${formatDurationPrecise(POLL_CLEANUP_TIMEOUT_MS)}; continuing with restart.`,
+        );
+      });
+      await awaitWithTimeout(stopBot(), POLL_CLEANUP_TIMEOUT_MS, () => {
+        this.opts.log(
+          `[telegram] bot.stop() did not finish within ${formatDurationPrecise(POLL_CLEANUP_TIMEOUT_MS)}; continuing with restart.`,
+        );
+      });
       this.#activeRunner = undefined;
       if (this.#activeFetchAbort === fetchAbortController) {
         this.#activeFetchAbort = undefined;

@@ -574,6 +574,94 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
+  it("continues restart when runner.stop hangs during watchdog cleanup", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    let running = true;
+    let releaseTask: (() => void) | undefined;
+    const stop = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          running = false;
+          releaseTask?.();
+        }),
+    );
+
+    runSpy
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () =>
+            new Promise<void>((resolve) => {
+              releaseTask = resolve;
+            }),
+          stop,
+          isRunning: () => running,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: async () => {
+            abort.abort();
+          },
+        }),
+      );
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    vi.advanceTimersByTime(120_000);
+    vi.advanceTimersByTime(10_000);
+    await monitor;
+
+    expect(stop).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("continues restart when bot.stop hangs during watchdog cleanup", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    let running = true;
+    let releaseTask: (() => void) | undefined;
+    const stop = vi.fn(async () => {
+      running = false;
+      releaseTask?.();
+    });
+
+    runSpy
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () =>
+            new Promise<void>((resolve) => {
+              releaseTask = resolve;
+            }),
+          stop,
+          isRunning: () => running,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: async () => {
+            abort.abort();
+          },
+        }),
+      );
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    const firstBotStop = createdBotStops[0];
+    firstBotStop.mockImplementationOnce(() => new Promise<void>(() => {}));
+
+    vi.advanceTimersByTime(120_000);
+    vi.advanceTimersByTime(10_000);
+    await monitor;
+
+    expect(firstBotStop).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("confirms persisted offset with Telegram before starting runner", async () => {
     readTelegramUpdateOffsetSpy.mockResolvedValueOnce(549076203);
     const abort = new AbortController();
