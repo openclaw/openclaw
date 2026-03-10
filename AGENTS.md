@@ -147,6 +147,7 @@
 
 - `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
+- **Commit immediately after making changes** — do not leave modified/new files uncommitted. Uncommitted files are lost on `git clean`, merges, or branch switches. Commit each logical change as you go.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
 - PR submission template (canonical): `.github/pull_request_template.md`
