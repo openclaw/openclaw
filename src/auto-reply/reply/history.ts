@@ -33,7 +33,7 @@ export type HistoryEntry = {
   timestamp?: number;
   messageId?: string;
   mediaPaths?: string[];
-  mediaTypes?: string[];
+  mediaTypes?: (string | undefined)[];
 };
 
 export function buildHistoryContext(params: {

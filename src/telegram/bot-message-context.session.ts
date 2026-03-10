@@ -173,8 +173,17 @@ export async function buildTelegramInboundContextPayload(params: {
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: primaryCtx.me?.username?.toLowerCase(),
   });
+  // Snapshot the history array to avoid races: appendHistoryEntry mutates the live
+  // array in groupHistories, so concurrent messages during the touchMediaFiles await
+  // could append/shift entries and create inconsistent context.
   const historyEntries =
-    isGroup && historyKey && historyLimit > 0 ? (groupHistories.get(historyKey) ?? []) : [];
+    isGroup && historyKey && historyLimit > 0
+      ? [...(groupHistories.get(historyKey) ?? [])].map((e) => ({
+          ...e,
+          mediaPaths: e.mediaPaths ? [...e.mediaPaths] : undefined,
+          mediaTypes: e.mediaTypes ? [...e.mediaTypes] : undefined,
+        }))
+      : [];
   const inboundHistory =
     historyEntries.length > 0
       ? historyEntries.map((entry) => ({
