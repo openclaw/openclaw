@@ -30,6 +30,7 @@ export const mockedGlobalHookRunner = {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+  initializeGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("../auth-profiles.js", () => ({
@@ -77,6 +78,7 @@ vi.mock("../pi-embedded-helpers.js", () => ({
   }),
   isFailoverAssistantError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),
+  isLikelySSEParseError: vi.fn(() => false),
   parseImageSizeError: vi.fn(() => null),
   parseImageDimensionError: vi.fn(() => null),
   isRateLimitAssistantError: vi.fn(() => false),
@@ -143,6 +145,7 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../utils/message-channel.js", () => ({
   isMarkdownCapableMessageChannel: vi.fn(() => true),
+  INTERNAL_MESSAGE_CHANNEL: "internal",
 }));
 
 vi.mock("../agent-paths.js", () => ({

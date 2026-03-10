@@ -47,6 +47,7 @@ import {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isLikelySSEParseError,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
@@ -747,6 +748,8 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      const MAX_SSE_PARSE_RETRIES = 3;
+      let sseParseRetries = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1221,6 +1224,17 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            // SSE parse error retry — 反向代理截断 SSE 行时触发，重试即可恢复
+            if (
+              sseParseRetries < MAX_SSE_PARSE_RETRIES &&
+              isLikelySSEParseError(errorText, { streamingContext: true })
+            ) {
+              sseParseRetries++;
+              log.warn(
+                `SSE parse error detected (attempt ${sseParseRetries}/${MAX_SSE_PARSE_RETRIES}); retrying for ${provider}/${modelId}`,
+              );
+              continue;
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             const promptProfileFailureReason =
               resolveAuthProfileFailureReason(promptFailoverReason);
@@ -1348,6 +1362,22 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
             );
+          }
+
+          // SSE parse error retry — assistant 错误分支
+          if (
+            !aborted &&
+            lastAssistant?.stopReason === "error" &&
+            sseParseRetries < MAX_SSE_PARSE_RETRIES &&
+            isLikelySSEParseError(lastAssistant.errorMessage ?? "", {
+              streamingContext: true,
+            })
+          ) {
+            sseParseRetries++;
+            log.warn(
+              `SSE parse error in assistant response (attempt ${sseParseRetries}/${MAX_SSE_PARSE_RETRIES}); retrying for ${provider}/${modelId}`,
+            );
+            continue;
           }
 
           // Rotate on timeout to try another account/model path in this turn,
