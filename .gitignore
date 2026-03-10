@@ -74,7 +74,9 @@ apps/ios/*.mobileprovision
 .local/
 docs/.local/
 IDENTITY.md
+!workspace/IDENTITY.md
 USER.md
+!workspace/USER.md
 .tgz
 .idea
 
