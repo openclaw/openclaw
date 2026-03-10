@@ -63,7 +63,7 @@ function createOpenAICodexTemplateModel(id: string): Model<Api> {
     name: id,
     provider: "openai-codex",
     api: "openai-codex-responses",
-    baseUrl: "https://chatgpt.com/backend-api",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
     input: ["text", "image"],
     reasoning: true,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -362,7 +362,7 @@ describe("resolveForwardCompatModel", () => {
     const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
     expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
     expect(model?.api).toBe("openai-codex-responses");
-    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
+    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
     expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });

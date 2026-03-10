@@ -5,7 +5,7 @@ const OPENAI_CODEX_MODEL = {
   id: "gpt-5.4",
   name: "GPT-5.4",
   api: "openai-codex-responses",
-  baseUrl: "https://chatgpt.com/backend-api",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
   input: ["text"],
   contextWindow: 1_050_000,
   maxTokens: 128000,

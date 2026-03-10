@@ -54,7 +54,7 @@ describe("config secret refs schema", () => {
       models: {
         providers: {
           "openai-codex": {
-            baseUrl: "https://chatgpt.com/backend-api",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
             api: "openai-codex-responses",
             models: [{ id: "gpt-5.3-codex", name: "gpt-5.3-codex" }],
           },

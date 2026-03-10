@@ -52,7 +52,7 @@ describe("openai-codex implicit provider", () => {
 
         const providers = await resolveImplicitProvidersForTest({ agentDir });
         expect(providers?.["openai-codex"]).toMatchObject({
-          baseUrl: "https://chatgpt.com/backend-api",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           api: "openai-codex-responses",
           models: [],
         });
@@ -99,7 +99,7 @@ describe("openai-codex implicit provider", () => {
           providers: Record<string, { baseUrl?: string; api?: string }>;
         }>();
         expect(parsed.providers["openai-codex"]).toMatchObject({
-          baseUrl: "https://chatgpt.com/backend-api",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           api: "openai-codex-responses",
         });
       });
@@ -118,7 +118,7 @@ describe("openai-codex implicit provider", () => {
             {
               providers: {
                 "openai-codex": {
-                  baseUrl: "https://chatgpt.com/backend-api",
+                  baseUrl: "https://chatgpt.com/backend-api/codex",
                   api: "openai-codex-responses",
                   models: [],
                 },
@@ -147,7 +147,7 @@ describe("openai-codex implicit provider", () => {
           providers: Record<string, { baseUrl?: string; api?: string }>;
         }>();
         expect(parsed.providers["openai-codex"]).toMatchObject({
-          baseUrl: "https://chatgpt.com/backend-api",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           api: "openai-codex-responses",
         });
       });
