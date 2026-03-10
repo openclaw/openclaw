@@ -14,6 +14,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "steipete/tap/goplaces",
               "bins": ["goplaces"],
               "label": "Install goplaces (brew)",

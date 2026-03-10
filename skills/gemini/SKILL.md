@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "gemini-cli",
               "bins": ["gemini"],
               "label": "Install Gemini CLI (brew)",

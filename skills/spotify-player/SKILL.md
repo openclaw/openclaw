@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "spogo",
               "tap": "steipete/tap",
               "bins": ["spogo"],
@@ -21,6 +22,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "spotify_player",
               "bins": ["spotify_player"],
               "label": "Install spotify_player (brew)",
