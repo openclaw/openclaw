@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+}));
+
 import type { OpenClawConfig } from "../config/config.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
