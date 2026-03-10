@@ -113,6 +113,7 @@ export const de: TranslationMap = {
     disconnected: "Verbindung zum Gateway getrennt.",
     refreshTitle: "Chat-Daten aktualisieren",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
+    toolsToggle: "Tool-Aufrufe ein-/ausblenden",
     focusToggle: "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
     hideCronSessions: "Cron-Sitzungen ausblenden",
     showCronSessions: "Cron-Sitzungen anzeigen",

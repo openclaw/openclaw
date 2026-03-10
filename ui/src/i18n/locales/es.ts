@@ -112,6 +112,7 @@ export const es: TranslationMap = {
     disconnected: "Desconectado de la puerta de enlace.",
     refreshTitle: "Actualizar datos del chat",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
+    toolsToggle: "Alternar visibilidad de llamadas a herramientas",
     focusToggle: "Alternar modo de enfoque (ocultar barra lateral + cabecera)",
     hideCronSessions: "Ocultar sesiones de cron",
     showCronSessions: "Mostrar sesiones de cron",

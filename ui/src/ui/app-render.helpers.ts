@@ -137,6 +137,7 @@ export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showTools = state.onboarding ? true : state.settings.chatShowTools;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   // Refresh icon
   const refreshIcon = html`
@@ -253,6 +254,23 @@ export function renderChatControls(state: AppViewState) {
         title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
       >
         ${icons.brain}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${showTools ? "active" : ""}"
+        ?disabled=${state.onboarding}
+        @click=${() => {
+          if (state.onboarding) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatShowTools: !state.settings.chatShowTools,
+          });
+        }}
+        aria-pressed=${showTools}
+        title=${state.onboarding ? t("chat.onboardingDisabled") : t("chat.toolsToggle")}
+      >
+        ${icons.wrench}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"

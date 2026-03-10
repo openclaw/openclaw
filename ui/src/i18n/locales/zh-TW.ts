@@ -109,6 +109,7 @@ export const zh_TW: TranslationMap = {
     disconnected: "已斷開與網關的連接。",
     refreshTitle: "刷新聊天數據",
     thinkingToggle: "切換助手思考/工作輸出",
+    toolsToggle: "切換工具調用顯示",
     focusToggle: "切換專注模式 (隱藏側邊欄 + 頁面頁眉)",
     hideCronSessions: "隱藏定時任務會話",
     showCronSessions: "顯示定時任務會話",

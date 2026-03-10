@@ -112,6 +112,7 @@ export const pt_BR: TranslationMap = {
     disconnected: "Desconectado do gateway.",
     refreshTitle: "Atualizar dados do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
+    toolsToggle: "Alternar visibilidade das chamadas de ferramentas",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
     hideCronSessions: "Ocultar sessões de cron",
     showCronSessions: "Mostrar sessões de cron",
