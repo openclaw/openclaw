@@ -52,7 +52,7 @@ export const pt_BR: TranslationMap = {
     sessions: "Sessões ativas e padrões.",
     usage: "Uso e custos da API.",
     cron: "Despertares e execuções.",
-    skills: "Habilidades e chaves API.",
+    skills: "Habilidades e chaves API.", // pragma: allowlist secret
     nodes: "Dispositivos e comandos.",
     chat: "Chat do gateway para intervenções rápidas.",
     config: "Editar openclaw.json.",

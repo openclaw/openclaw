@@ -53,7 +53,7 @@ export const en: TranslationMap = {
     sessions: "Active sessions and defaults.",
     usage: "API usage and costs.",
     cron: "Wakeups and recurring runs.",
-    skills: "Skills and API keys.",
+    skills: "Skills and API keys.", // pragma: allowlist secret
     nodes: "Paired devices and commands.",
     chat: "Gateway chat for quick interventions.",
     config: "Edit openclaw.json.",
