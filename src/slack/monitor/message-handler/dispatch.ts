@@ -311,7 +311,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       // If startStream already created a Slack message, delete it to prevent
       // the orphaned stream message from persisting alongside the fallback.
+      // Only deliver the fallback when deletion succeeds (or no orphan
+      // existed) — if deletion fails the stream message is still visible, so
+      // sending a normal reply would recreate the duplicate this PR prevents.
       const orphanedTs = streamSession?.streamMessageTs;
+      let orphanDeleted = !orphanedTs; // trivially "deleted" if nothing to delete
       if (orphanedTs) {
         try {
           await ctx.app.client.chat.delete({
@@ -320,6 +324,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: orphanedTs,
           });
           logVerbose(`slack-stream: deleted orphaned stream message ${orphanedTs}`);
+          orphanDeleted = true;
         } catch (deleteErr) {
           logVerbose(
             `slack-stream: failed to delete orphaned stream message ${orphanedTs}: ${String(deleteErr)}`,
@@ -330,11 +335,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // Re-deliver the full content: everything already in the stream message
       // plus the current payload that failed to append. Using only `payload`
       // here would drop all previously-streamed text.
-      const fallbackText = streamedText ? `${streamedText}\n${text}` : text;
-      await deliverNormally(
-        { ...payload, text: fallbackText },
-        streamSession?.threadTs ?? plannedThreadTs,
-      );
+      if (orphanDeleted) {
+        const fallbackText = streamedText ? `${streamedText}\n${text}` : text;
+        await deliverNormally(
+          { ...payload, text: fallbackText },
+          streamSession?.threadTs ?? plannedThreadTs,
+        );
+      }
     }
   };
 
@@ -517,6 +524,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
       // If stop failed and a stream message exists, try to delete it so it
       // does not persist as a ghost message alongside any fallback delivery.
+      // Only deliver the fallback when deletion succeeds (or no orphan
+      // existed) — if deletion fails the stream message is still visible with
+      // its full content, so sending a normal reply would recreate the
+      // duplicate this PR prevents.
+      let orphanDeleted = !streamMsgTs; // trivially "deleted" if nothing to delete
       if (streamMsgTs) {
         try {
           await ctx.app.client.chat.delete({
@@ -525,6 +537,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: streamMsgTs,
           });
           logVerbose(`slack-stream: deleted orphaned stream message ${streamMsgTs} after stop failure`);
+          orphanDeleted = true;
         } catch (deleteErr) {
           logVerbose(
             `slack-stream: failed to delete orphaned stream message ${streamMsgTs}: ${String(deleteErr)}`,
@@ -533,7 +546,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       // Fall back to normal delivery with the full accumulated streamed text
       // so the user receives the complete answer even when stop() fails.
-      if (lastStreamPayload && streamedText) {
+      if (orphanDeleted && lastStreamPayload && streamedText) {
         await deliverNormally(
           { ...lastStreamPayload, text: streamedText },
           finalStream.threadTs,
