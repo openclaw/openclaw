@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - CLI/memory teardown: close cached memory search/index managers in the one-shot CLI shutdown path so watcher-backed memory caches no longer keep completed CLI runs alive after output finishes. (#40389) thanks @Julbarth.
 - Tools/web search: treat Brave `llm-context` grounding snippets as plain strings so `web_search` no longer returns empty snippet arrays in LLM Context mode. (#41387) thanks @zheliu2.
 - Feishu/file upload: pass the original filename directly to the Feishu API instead of URL-encoding it, so Chinese and other non-ASCII filenames are displayed correctly in Feishu instead of as percent-encoded strings. Fixes #40770.
+- Telegram/exec approvals: reject `/approve` commands aimed at other bots, keep deterministic approval prompts visible when tool-result delivery fails, and stop resolved exact IDs from matching other pending approvals by prefix. (#37233) Thanks @huntharo.
 
 ## 2026.3.8
 
