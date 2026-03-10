@@ -556,6 +556,9 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /** Session key for the agent session handling this message. Useful for plugins that
+   *  maintain per-session state (e.g. symbol tables) and need to look it up at send time. */
+  sessionKey?: string;
 };
 
 // message_received hook
