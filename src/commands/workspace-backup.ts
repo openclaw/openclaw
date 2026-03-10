@@ -14,14 +14,13 @@ import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import { encodeAbsolutePathForBackupArchive } from "./backup-shared.js";
 import { collectWorkspaceDirs, isPathWithin } from "./cleanup-utils.js";
 
-const WORKSPACE_BACKUP_SCHEMA_VERSION = 1;
+const WORKSPACE_BACKUP_SCHEMA_VERSION = 2;
 
 type WorkspaceBackupStatusFile = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   updatedAt: string;
   workspaces: Array<{
     sourcePath: string;
-    backupPath: string;
   }>;
 };
 
@@ -75,12 +74,39 @@ function workspaceStatusPath(target: string): string {
   return path.join(workspaceBackupRoot(target), "status.json");
 }
 
+function expectedMirrorPath(mirrorRoot: string, sourcePath: string): string {
+  return path.join(mirrorRoot, encodeAbsolutePathForBackupArchive(sourcePath));
+}
+
 async function readWorkspaceBackupStatus(
   target: string,
 ): Promise<WorkspaceBackupStatusFile | undefined> {
   try {
     const raw = await fs.readFile(workspaceStatusPath(target), "utf8");
-    return JSON.parse(raw) as WorkspaceBackupStatusFile;
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) {
+      return undefined;
+    }
+    const updatedAt =
+      "updatedAt" in parsed && typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined;
+    const workspaces = Array.isArray((parsed as { workspaces?: unknown }).workspaces)
+      ? (parsed as { workspaces: unknown[] }).workspaces.flatMap((entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "sourcePath" in entry &&
+          typeof entry.sourcePath === "string"
+            ? [{ sourcePath: entry.sourcePath }]
+            : [],
+        )
+      : [];
+    if (!updatedAt) {
+      return undefined;
+    }
+    return {
+      schemaVersion: WORKSPACE_BACKUP_SCHEMA_VERSION,
+      updatedAt,
+      workspaces,
+    };
   } catch {
     return undefined;
   }
@@ -89,7 +115,10 @@ async function readWorkspaceBackupStatus(
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   await fs.rename(tempPath, filePath);
 }
 
@@ -225,7 +254,7 @@ export async function workspaceBackupRunCommand(
     }
     const relativeDir = encodeAbsolutePathForBackupArchive(workspaceDir);
     const stagedDir = path.join(stagingRoot, `${relativeDir}-${randomUUID()}`);
-    const targetDir = path.join(mirrorRoot, relativeDir);
+    const targetDir = expectedMirrorPath(mirrorRoot, workspaceDir);
     await fs.mkdir(path.dirname(stagedDir), { recursive: true });
     await fs.cp(workspaceDir, stagedDir, {
       recursive: true,
@@ -242,7 +271,11 @@ export async function workspaceBackupRunCommand(
 
   for (const previous of previousStatus?.workspaces ?? []) {
     if (!activeSourcePaths.has(previous.sourcePath)) {
-      await fs.rm(previous.backupPath, { recursive: true, force: true });
+      const staleMirrorPath = expectedMirrorPath(mirrorRoot, previous.sourcePath);
+      if (!isPathWithin(staleMirrorPath, mirrorRoot)) {
+        continue;
+      }
+      await fs.rm(staleMirrorPath, { recursive: true, force: true });
     }
   }
 
@@ -250,7 +283,9 @@ export async function workspaceBackupRunCommand(
   const statusFile: WorkspaceBackupStatusFile = {
     schemaVersion: WORKSPACE_BACKUP_SCHEMA_VERSION,
     updatedAt,
-    workspaces: mirrored,
+    workspaces: mirrored.map((workspace) => ({
+      sourcePath: workspace.sourcePath,
+    })),
   };
   await writeJsonAtomic(workspaceStatusPath(target), statusFile);
 

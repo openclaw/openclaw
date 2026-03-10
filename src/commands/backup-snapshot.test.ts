@@ -94,4 +94,13 @@ describe("folder-backed snapshot backup commands", () => {
     expect(await fs.readFile(path.join(stateDir, "state.txt"), "utf8")).toBe("state\n");
     expect(await fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf8")).toBe("# soul\n");
   });
+
+  it("emits a single JSON payload when snapshot push runs with --json", async () => {
+    await backupPushCommand(runtime, { json: true }, { nowMs: Date.UTC(2026, 2, 10) });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(runtime.log).mock.calls[0]?.[0];
+    expect(typeof message).toBe("string");
+    expect(() => JSON.parse(String(message))).not.toThrow();
+  });
 });

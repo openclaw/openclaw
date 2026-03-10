@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { ResolvedSnapshotStoreConfig } from "./config.js";
 import type { BackupSnapshotEnvelope, BackupSnapshotStore } from "./types.js";
 
@@ -17,9 +20,38 @@ function payloadPath(targetDir: string, installationId: string, snapshotId: stri
 
 async function writeFileAtomic(filePath: string, content: string | Buffer): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
-  await fs.writeFile(tempPath, content, { mode: 0o600 });
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  const handle = await fs.open(tempPath, "wx", 0o600);
+  try {
+    await handle.writeFile(content);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
   await fs.rename(tempPath, filePath);
+}
+
+async function copyFileAtomic(sourcePath: string, destinationPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(destinationPath),
+    `.${path.basename(destinationPath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    await pipeline(
+      fsSync.createReadStream(sourcePath),
+      fsSync.createWriteStream(tempPath, { flags: "wx", mode: 0o600 }),
+    );
+    await fs.rename(tempPath, destinationPath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function readEnvelopeFile(filePath: string): Promise<BackupSnapshotEnvelope> {
@@ -32,9 +64,9 @@ export function createFolderSnapshotStore(
 ): BackupSnapshotStore {
   return {
     async uploadSnapshot(params) {
-      await writeFileAtomic(
+      await copyFileAtomic(
+        params.payloadPath,
         payloadPath(config.targetDir, params.installationId, params.snapshotId),
-        await fs.readFile(params.payloadPath),
       );
       await writeFileAtomic(
         envelopePath(config.targetDir, params.installationId, params.snapshotId),

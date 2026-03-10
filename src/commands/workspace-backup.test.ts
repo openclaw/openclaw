@@ -79,5 +79,59 @@ describe("workspace backup commands", () => {
     expect(status.target).toBe(targetDir);
     expect(status.workspaceCount).toBe(1);
     expect(status.lastUpdatedAt).toBeTruthy();
+
+    const statusFile = JSON.parse(
+      await fs.readFile(path.join(targetDir, "workspace", "status.json"), "utf8"),
+    ) as { schemaVersion: number; workspaces: Array<{ sourcePath: string; backupPath?: string }> };
+    expect(statusFile.schemaVersion).toBe(2);
+    expect(statusFile.workspaces).toEqual([{ sourcePath: workspaceDir }]);
+    expect(statusFile.workspaces[0]?.backupPath).toBeUndefined();
+  });
+
+  it("recomputes stale mirror paths instead of trusting status.json backupPath values", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const protectedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-protected-"));
+    targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-target-"));
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+      await fs.writeFile(path.join(protectedDir, "keep.txt"), "keep\n", "utf8");
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      await workspaceBackupInitCommand(runtime, { target: targetDir });
+      await workspaceBackupRunCommand(runtime, {});
+
+      await fs.writeFile(
+        path.join(targetDir, "workspace", "status.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          updatedAt: "2026-03-10T00:00:00.000Z",
+          workspaces: [
+            {
+              sourcePath: path.join(stateDir, "removed-workspace"),
+              backupPath: protectedDir,
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      await workspaceBackupRunCommand(runtime, {});
+
+      expect(await fs.readFile(path.join(protectedDir, "keep.txt"), "utf8")).toBe("keep\n");
+    } finally {
+      await fs.rm(protectedDir, { recursive: true, force: true });
+    }
   });
 });

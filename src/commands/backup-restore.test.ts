@@ -190,6 +190,40 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects restoring a workspace directly onto the home directory", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-home"), { recursive: true });
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [tempHome.home],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: tempHome.home,
+                archivePath: "archive-root/assets/workspace-home",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow("Refusing to restore workspace to an unsafe path");
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("emits a single JSON payload when restore runs with --json", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-json-"));
@@ -214,6 +248,51 @@ describe("backup restore", () => {
       expect(() => JSON.parse(String(message))).not.toThrow();
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects restore archives that contain symbolic links", async () => {
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-link-archive-"));
+    const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-link-source-"));
+    const linkedDir = path.join(sourceDir, "openclaw-backup");
+    const archivePath = path.join(archiveDir, "malicious-backup.tar.gz");
+    try {
+      await fs.mkdir(path.join(sourceDir, "outside"), { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "outside", "owned.txt"), "owned\n", "utf8");
+      await fs.mkdir(linkedDir, { recursive: true });
+      await fs.writeFile(
+        path.join(linkedDir, "manifest.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          archiveRoot: "openclaw-backup",
+          runtimeVersion: "2026.3.9",
+          platform: process.platform,
+          nodeVersion: process.version,
+          assets: [],
+        }),
+        "utf8",
+      );
+      await fs.symlink("../outside", path.join(linkedDir, "payload"));
+
+      await tar.c(
+        {
+          gzip: true,
+          cwd: sourceDir,
+          file: archivePath,
+        },
+        ["openclaw-backup"],
+      );
+
+      await expect(
+        backupRestoreCommand(runtime, {
+          archive: archivePath,
+          mode: "full-host",
+        }),
+      ).rejects.toThrow(/tar entry is a link|symbolic link/i);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+      await fs.rm(sourceDir, { recursive: true, force: true });
     }
   });
 });

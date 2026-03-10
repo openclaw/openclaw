@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
 import { decryptPayloadToArchive } from "../backup/snapshot-store/encryption.js";
 import {
   isNixMode,
@@ -13,8 +12,9 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { extractArchive } from "../infra/archive.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import {
   loadResolvedSnapshotBackup,
   resolveSnapshotStore,
@@ -52,6 +52,8 @@ type RestoreOperation = {
   sourcePath: string;
   targetPath: string;
 };
+
+const RESTORE_EXTRACT_TIMEOUT_MS = 60_000;
 
 function workspacePathKey(value: string): string {
   const resolved = path.resolve(value);
@@ -206,9 +208,26 @@ async function loadRestoredConfig(params: {
   }
 }
 
+async function assertTreeContainsNoSymlinks(rootPath: string): Promise<void> {
+  const entries = await fs.readdir(rootPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Refusing to restore directory containing symbolic links: ${entryPath}`);
+    }
+    if (entry.isDirectory()) {
+      await assertTreeContainsNoSymlinks(entryPath);
+    }
+  }
+}
+
 async function copySourceToTarget(sourcePath: string, targetPath: string): Promise<void> {
-  const stat = await fs.stat(sourcePath);
+  const stat = await fs.lstat(sourcePath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing to restore from a symbolic link: ${sourcePath}`);
+  }
   if (stat.isDirectory()) {
+    await assertTreeContainsNoSymlinks(sourcePath);
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.cp(sourcePath, targetPath, { recursive: true, force: true });
     return;
@@ -234,7 +253,10 @@ async function applyRestoreOperations(
         );
         await fs.mkdir(path.dirname(backupPath), { recursive: true });
         await fs.rename(operation.targetPath, backupPath);
-      } catch {
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
         backupPath = undefined;
       }
       await copySourceToTarget(operation.sourcePath, operation.targetPath);
@@ -248,6 +270,42 @@ async function applyRestoreOperations(
       }
     }
     throw error;
+  }
+}
+
+function isUnsafeRestoreTarget(targetPath: string): boolean {
+  const resolved = path.resolve(targetPath);
+  const root = path.parse(resolved).root;
+  if (resolved === root) {
+    return true;
+  }
+  const home = resolveHomeDir();
+  return Boolean(home && resolved === path.resolve(home));
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function assertSafeWorkspaceRestoreTarget(params: {
+  targetPath: string;
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+}): void {
+  const resolved = path.resolve(params.targetPath);
+  if (
+    isUnsafeRestoreTarget(resolved) ||
+    isPathWithin(resolved, params.stateDir) ||
+    resolved === path.resolve(params.configPath) ||
+    resolved === path.resolve(params.oauthDir)
+  ) {
+    throw new Error(`Refusing to restore workspace to an unsafe path: ${resolved}`);
   }
 }
 
@@ -365,6 +423,12 @@ export async function buildRestoreOperations(params: {
         if (!targetPath) {
           continue;
         }
+        assertSafeWorkspaceRestoreTarget({
+          targetPath,
+          stateDir,
+          configPath,
+          oauthDir,
+        });
         if (params.mode === "full-host" && stateAsset && isPathWithin(targetPath, stateDir)) {
           continue;
         }
@@ -401,10 +465,12 @@ export async function backupRestoreCommand(
       archive: restoreSource.archivePath,
       json: false,
     });
-    await tar.x({
-      file: restoreSource.archivePath,
-      cwd: workingDir,
-      gzip: true,
+    await extractArchive({
+      archivePath: restoreSource.archivePath,
+      destDir: workingDir,
+      kind: "tar",
+      tarGzip: true,
+      timeoutMs: RESTORE_EXTRACT_TIMEOUT_MS,
     });
 
     const archiveRoot = normalizeArchiveRoot(verified.archiveRoot);

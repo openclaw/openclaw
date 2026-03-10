@@ -45,7 +45,8 @@ export async function backupPushCommand(
   const keepLocalArchive = Boolean(opts.output?.trim());
 
   try {
-    const created = await backupCreateCommand(runtime, {
+    const archiveRuntime: RuntimeEnv = opts.json ? { ...runtime, log: () => {} } : runtime;
+    const created = await backupCreateCommand(archiveRuntime, {
       output: keepLocalArchive ? opts.output : tempDir,
       json: false,
       verify: Boolean(opts.verify),

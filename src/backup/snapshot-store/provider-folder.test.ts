@@ -63,7 +63,7 @@ describe("folder snapshot store", () => {
     const payloadPath = path.join(targetDir, "source.payload");
     await fs.writeFile(payloadPath, "payload-data", "utf8");
 
-    const writeSpy = vi.spyOn(fs, "writeFile");
+    const renameSpy = vi.spyOn(fs, "rename");
     const store = createFolderSnapshotStore({
       targetDir,
       encryptionKey: "secret",
@@ -76,13 +76,18 @@ describe("folder snapshot store", () => {
       payloadPath,
     });
 
-    const uploadWrites = writeSpy.mock.calls
+    const uploadRenames = renameSpy.mock.calls
       .map((call) => call[0])
       .filter(
-        (filePath): filePath is string => typeof filePath === "string" && filePath.endsWith(".tmp"),
+        (filePath): filePath is string => typeof filePath === "string" && filePath.includes(".tmp"),
       );
-    expect(uploadWrites[0]).toContain(".payload.bin.tmp");
-    expect(uploadWrites[1]).toContain(".envelope.json.tmp");
+    const renameTargets = renameSpy.mock.calls
+      .map((call) => call[1])
+      .filter((filePath): filePath is string => typeof filePath === "string");
+    expect(uploadRenames[0]).toContain(".payload.bin.");
+    expect(uploadRenames[1]).toContain(".envelope.json.");
+    expect(renameTargets[0]).toContain(".payload.bin");
+    expect(renameTargets[1]).toContain(".envelope.json");
   });
 
   it("writes snapshot files with restrictive mode", async () => {
@@ -90,7 +95,6 @@ describe("folder snapshot store", () => {
     const payloadPath = path.join(targetDir, "source.payload");
     await fs.writeFile(payloadPath, "payload-data", "utf8");
 
-    const writeSpy = vi.spyOn(fs, "writeFile");
     const store = createFolderSnapshotStore({
       targetDir,
       encryptionKey: "secret",
@@ -103,13 +107,10 @@ describe("folder snapshot store", () => {
       payloadPath,
     });
 
-    const uploadWrites = writeSpy.mock.calls.filter((call) => {
-      const filePath = call[0];
-      return typeof filePath === "string" && filePath.includes(path.join("snapshots", "inst_1"));
-    });
-    expect(uploadWrites.length).toBeGreaterThanOrEqual(2);
-    for (const call of uploadWrites) {
-      expect(call[2]).toMatchObject({ mode: 0o600 });
-    }
+    const snapshotRoot = path.join(targetDir, "snapshots", "inst_1");
+    const envelopeStat = await fs.stat(path.join(snapshotRoot, "snap_1.envelope.json"));
+    const payloadStat = await fs.stat(path.join(snapshotRoot, "snap_1.payload.bin"));
+    expect(envelopeStat.mode & 0o777).toBe(0o600);
+    expect(payloadStat.mode & 0o777).toBe(0o600);
   });
 });
