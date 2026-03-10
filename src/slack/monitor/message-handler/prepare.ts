@@ -737,42 +737,58 @@ export async function prepareSlackMessage(params: {
       })
     : null;
 
+  const handleRecordInboundError = (err: unknown) => {
+    ctx.logger.warn(
+      {
+        error: String(err),
+        storePath,
+        sessionKey,
+      },
+      "failed updating session meta",
+    );
+  };
+
   await recordInboundSession({
     storePath,
     sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: isDirectMessage
-      ? {
-          sessionKey: route.mainSessionKey,
-          channel: "slack",
-          to: `user:${message.user}`,
-          accountId: route.accountId,
-          threadId: threadContext.messageThreadId,
-          mainDmOwnerPin:
-            pinnedMainDmOwner && message.user
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: message.user.toLowerCase(),
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
-    onRecordError: (err) => {
-      ctx.logger.warn(
-        {
-          error: String(err),
-          storePath,
-          sessionKey,
-        },
-        "failed updating session meta",
-      );
+    updateLastRoute: {
+      sessionKey,
+      channel: "slack",
+      to: slackTo,
+      accountId: route.accountId,
+      threadId: threadContext.messageThreadId,
     },
+    onRecordError: handleRecordInboundError,
   });
+
+  if (isDirectMessage && route.mainSessionKey !== sessionKey) {
+    await recordInboundSession({
+      storePath,
+      sessionKey,
+      ctx: ctxPayload,
+      updateLastRoute: {
+        sessionKey: route.mainSessionKey,
+        channel: "slack",
+        to: `user:${message.user}`,
+        accountId: route.accountId,
+        threadId: threadContext.messageThreadId,
+        mainDmOwnerPin:
+          pinnedMainDmOwner && message.user
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: message.user.toLowerCase(),
+                onSkip: ({ ownerRecipient, senderRecipient }) => {
+                  logVerbose(
+                    `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
+      },
+      onRecordError: handleRecordInboundError,
+    });
+  }
 
   const replyTarget = ctxPayload.To ?? undefined;
   if (!replyTarget) {

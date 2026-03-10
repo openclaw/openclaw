@@ -570,6 +570,70 @@ describe("slack prepareSlackMessage inbound contract", () => {
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
+
+  it("persists channel delivery route for top-level channel sessions", async () => {
+    const { storePath } = makeTmpStorePath();
+    const slackCtx = createReplyToAllSlackCtx({
+      groupPolicy: "open",
+      defaultRequireMention: false,
+      asChannel: true,
+    });
+    slackCtx.cfg = {
+      ...slackCtx.cfg,
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({ channel: "C123", channel_type: "channel", ts: "600.000" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const entry = store[prepared!.ctxPayload.SessionKey];
+    expect(entry).toBeTruthy();
+    expect(entry.deliveryContext).toMatchObject({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "600.000",
+    });
+  });
+
+  it("persists thread delivery route for channel thread sessions", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "700.000" }],
+    });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "please fix",
+      ts: "701.000",
+      thread_ts: "700.000",
+      parent_user_id: "U2",
+    });
+
+    expect(prepared).toBeTruthy();
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const entry = store[prepared!.ctxPayload.SessionKey];
+    expect(entry).toBeTruthy();
+    expect(entry.deliveryContext).toMatchObject({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "700.000",
+    });
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {
