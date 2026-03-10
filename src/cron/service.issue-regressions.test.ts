@@ -1748,6 +1748,50 @@ describe("Cron issue regressions", () => {
     expect(job.enabled).toBe(true);
   });
 
+  it("#41764: clears lastError after a successful run following a previous error", () => {
+    const startedAt = Date.parse("2026-03-08T10:00:00.000Z");
+    const endedAt = startedAt + 50;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-41764-clear-last-error.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "clear-last-error-41764",
+      name: "clear last error",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt - 60_000 },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: startedAt - 1_000,
+        lastError: "previous run 429 rate limit exceeded",
+        lastStatus: "error",
+        consecutiveErrors: 1,
+      },
+    });
+
+    // Simulate a successful run after a previous error.
+    const shouldDelete = applyJobResult(state, job, {
+      status: "ok",
+      delivered: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastError).toBeUndefined();
+    expect(job.state.lastErrorReason).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(0);
+    expect(job.state.lastDelivered).toBe(true);
+    expect(job.state.lastDeliveryStatus).toBe("delivered");
+    expect(job.state.lastDeliveryError).toBeUndefined();
+  });
+
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
     const nowMs = Date.now();
     const everyMs = 24 * 60 * 60 * 1_000;
