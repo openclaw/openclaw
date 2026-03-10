@@ -77,7 +77,7 @@ export function resolveProviderVisionModelFromConfig(params: {
           (m) =>
             (m?.id ?? "").trim() === "MiniMax-VL-01" &&
             Array.isArray(m?.input) &&
-            m.input?.includes("image"),
+            m.input.includes("image"),
         )
       : null;
   const picked =
