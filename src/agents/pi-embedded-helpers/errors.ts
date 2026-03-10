@@ -405,6 +405,67 @@ function stripFinalTagsFromText(text: string): string {
   return text.replace(FINAL_TAG_RE, "");
 }
 
+function findBalancedJsonObjectEnd(text: string, startIndex: number): number | null {
+  if (startIndex < 0 || startIndex >= text.length || text[startIndex] !== "{") {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+  for (let i = startIndex; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (ch === "\\") {
+        escaping = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return i + 1;
+      }
+    }
+  }
+  return null;
+}
+
+function stripLeakedToolCallPrefix(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const header = text.match(/^\s*to=[^\s]+[^\n{]*\{/i);
+  if (!header) {
+    return text;
+  }
+  const braceIndex = text.indexOf("{", header.index ?? 0);
+  if (braceIndex < 0) {
+    return text;
+  }
+  const objectEnd = findBalancedJsonObjectEnd(text, braceIndex);
+  if (!objectEnd) {
+    return text;
+  }
+  const objectText = text.slice(braceIndex, objectEnd);
+  // Only strip if it looks like JSON tool-call arguments, not arbitrary prose.
+  if (!/"[a-zA-Z0-9_]+"\s*:/.test(objectText)) {
+    return text;
+  }
+  return text.slice(objectEnd).replace(/^[ \t]*(?:\r?\n)?/, "");
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -722,7 +783,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripLeakedToolCallPrefix(stripFinalTagsFromText(text));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
