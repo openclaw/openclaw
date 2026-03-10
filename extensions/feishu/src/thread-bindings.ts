@@ -21,6 +21,9 @@ const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const STORE_VERSION = 1;
+const FEISHU_BINDINGS_BY_ACCOUNT_CONVERSATION_KEY = Symbol.for(
+  "openclaw.feishuThreadBindingsByAccountConversation",
+);
 const FEISHU_PERSIST_QUEUE_BY_ACCOUNT_KEY = Symbol.for(
   "openclaw.feishuThreadBindingPersistQueueByAccount",
 );
@@ -70,7 +73,24 @@ export type FeishuThreadBindingRehydrateResult = {
 };
 
 const MANAGERS_BY_ACCOUNT_ID = new Map<string, FeishuThreadBindingManagerInternal>();
-const BINDINGS_BY_ACCOUNT_CONVERSATION = new Map<string, FeishuThreadBindingRecord>();
+
+function resolveSharedBindingsRegistry(): Map<string, FeishuThreadBindingRecord> {
+  // Feishu can be loaded through multiple module graphs in the same process.
+  // Keep the binding table on globalThis so every graph reads and persists the
+  // same in-memory snapshot instead of overwriting other graphs with stale Maps.
+  const globalRegistry = globalThis as typeof globalThis & {
+    [FEISHU_BINDINGS_BY_ACCOUNT_CONVERSATION_KEY]?: Map<string, FeishuThreadBindingRecord>;
+  };
+  const existing = globalRegistry[FEISHU_BINDINGS_BY_ACCOUNT_CONVERSATION_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, FeishuThreadBindingRecord>();
+  globalRegistry[FEISHU_BINDINGS_BY_ACCOUNT_CONVERSATION_KEY] = created;
+  return created;
+}
+
+const BINDINGS_BY_ACCOUNT_CONVERSATION = resolveSharedBindingsRegistry();
 
 function resolveSharedPersistQueueRegistry(): Map<string, Promise<void>> {
   // Feishu can be loaded through multiple module graphs in the same process.

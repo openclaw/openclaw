@@ -713,6 +713,102 @@ describe("feishu thread bindings", () => {
     }
   });
 
+  it("preserves bindings created by another module graph when persisting", async () => {
+    const homeDir = await fsMkdtemp();
+    const previousHome = process.env.HOME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.HOME = homeDir;
+    process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
+    const moduleUrl = new URL("./thread-bindings.ts", import.meta.url).href;
+    const suffix = Date.now().toString(36);
+    const first = await import(/* @vite-ignore */ `${moduleUrl}?shared-bindings=${suffix}-a`);
+    const second = await import(/* @vite-ignore */ `${moduleUrl}?shared-bindings=${suffix}-b`);
+    try {
+      first.createFeishuThreadBindingManager({
+        accountId: "work",
+        persist: true,
+        enableSweeper: false,
+      });
+      second.createFeishuThreadBindingManager({
+        accountId: "work",
+        persist: true,
+        enableSweeper: false,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:topic-x",
+        targetKind: "session",
+        conversation: {
+          channel: "feishu",
+          accountId: "work",
+          conversationId: "oc_chat_shared_bindings:thread:om_root_x",
+        },
+        placement: "current",
+      });
+      await Promise.all([
+        __testing.flushPersistQueueForTests("work"),
+        first.__testing.flushPersistQueueForTests("work"),
+        second.__testing.flushPersistQueueForTests("work"),
+      ]);
+
+      // Re-register the first module's adapter without recreating its manager.
+      // Before the fix this module still had a stale local Map, so binding Y
+      // would persist only Y and silently drop X from disk.
+      first.createFeishuThreadBindingManager({
+        accountId: "work",
+        persist: true,
+        enableSweeper: false,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:topic-y",
+        targetKind: "session",
+        conversation: {
+          channel: "feishu",
+          accountId: "work",
+          conversationId: "oc_chat_shared_bindings:thread:om_root_y",
+        },
+        placement: "current",
+      });
+      await Promise.all([
+        __testing.flushPersistQueueForTests("work"),
+        first.__testing.flushPersistQueueForTests("work"),
+        second.__testing.flushPersistQueueForTests("work"),
+      ]);
+
+      const bindingsPath = path.join(
+        process.env.OPENCLAW_STATE_DIR,
+        "feishu",
+        "thread-bindings-work.json",
+      );
+      const payload = JSON.parse(await fsPromises.readFile(bindingsPath, "utf-8")) as {
+        bindings: Array<{
+          conversationId: string;
+          targetSessionKey: string;
+        }>;
+      };
+      expect(payload.bindings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            conversationId: "oc_chat_shared_bindings:thread:om_root_x",
+            targetSessionKey: "agent:codex:acp:topic-x",
+          }),
+          expect.objectContaining({
+            conversationId: "oc_chat_shared_bindings:thread:om_root_y",
+            targetSessionKey: "agent:codex:acp:topic-y",
+          }),
+        ]),
+      );
+      expect(payload.bindings).toHaveLength(2);
+    } finally {
+      process.env.HOME = previousHome;
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      __testing.resetFeishuThreadBindingsForTests();
+      first.__testing.resetFeishuThreadBindingsForTests();
+      second.__testing.resetFeishuThreadBindingsForTests();
+    }
+  });
+
   it("preserves queued persisted bindings when a manager stops", async () => {
     const homeDir = await fsMkdtemp();
     const previousHome = process.env.HOME;
