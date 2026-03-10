@@ -45,7 +45,11 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkMaxTokens, resolveThreadForkPolicy } from "./session-fork.js";
+import {
+  forkSessionFromParent,
+  resolveParentForkMaxTokens,
+  resolveThreadForkPolicy,
+} from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
