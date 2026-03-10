@@ -37,7 +37,7 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
@@ -343,6 +343,10 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  /** True when the user has an explicit per-session or API model override (not just config default). */
+  hasExplicitModelOverride: boolean;
+  /** Stateful runner from createAdaptiveEmbeddedRunner() for this fallback chain. */
+  runAgent: ReturnType<typeof createAdaptiveEmbeddedRunner>;
   allowTransientCooldownProbe?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
@@ -455,7 +459,7 @@ function runAgentAttempt(params: {
     params.providerOverride === params.primaryProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
-  return runEmbeddedPiAgent({
+  return params.runAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -472,7 +476,10 @@ function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: params.opts.senderIsOwner,
+    // senderIsOwner is required on AgentCommandOpts (always a boolean), so the
+    // ?? true fallback is defensive-only and never triggers in practice. CLI
+    // agent runs are always owner-initiated, so true is the correct default.
+    senderIsOwner: params.opts.senderIsOwner ?? true,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
@@ -495,6 +502,7 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    _hasExplicitModelOverride: params.hasExplicitModelOverride,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -934,9 +942,7 @@ async function agentCommandInternal(
     let provider = defaultProvider;
     let model = defaultModel;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-    const hasStoredOverride = Boolean(
-      sessionEntry?.modelOverride || sessionEntry?.providerOverride,
-    );
+    let hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
     const needsModelCatalog = hasAllowlist || hasStoredOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
@@ -979,6 +985,8 @@ async function agentCommandInternal(
               storePath,
               entry,
             });
+            // Recompute: the allowlist cleanup may have cleared the override.
+            hasStoredOverride = Boolean(entry.modelOverride || entry.providerOverride);
           }
         }
       }
@@ -1099,7 +1107,13 @@ async function agentCommandInternal(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
-      const fallbackResult = await runWithModelFallback({
+      // One stateful runner per turn: createAdaptiveEmbeddedRunner captures escalation
+      // state so retries within this runWithModelFallback chain skip re-running the
+      // local model if cloud escalation already occurred.
+      const runAgent = createAdaptiveEmbeddedRunner();
+      const fallbackResult = await runWithModelFallback<
+        Awaited<ReturnType<typeof runEmbeddedPiAgent>>
+      >({
         cfg,
         provider,
         model,
@@ -1134,6 +1148,8 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            hasExplicitModelOverride: hasStoredOverride,
+            runAgent,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.

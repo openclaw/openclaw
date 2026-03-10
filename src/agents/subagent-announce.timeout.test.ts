@@ -57,6 +57,7 @@ vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunActive: () => false,
   queueEmbeddedPiMessage: () => false,
   waitForEmbeddedPiRunEnd: async () => true,
+  createAdaptiveEmbeddedRunner: () => () => Promise.resolve({ payloads: [], meta: {} }),
 }));
 
 vi.mock("./subagent-registry.js", () => ({
