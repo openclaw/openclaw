@@ -73,7 +73,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload) => {
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
@@ -92,7 +92,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
             }
           }
         }
-        return originalOnPayload?.(payload, payloadModel);
+        return originalOnPayload?.(payload);
       },
     });
   };
@@ -111,9 +111,9 @@ export function createOpenRouterWrapper(
         ...OPENROUTER_APP_HEADERS,
         ...options?.headers,
       },
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, payloadModel);
+        return onPayload?.(payload);
       },
     });
   };
@@ -136,9 +136,9 @@ export function createKilocodeWrapper(
         ...options?.headers,
         ...resolveKilocodeAppHeaders(),
       },
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, payloadModel);
+        return onPayload?.(payload);
       },
     });
   };
