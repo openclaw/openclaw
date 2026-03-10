@@ -102,6 +102,7 @@ export type ChannelAccountSnapshot = {
   linked?: boolean;
   running?: boolean;
   connected?: boolean;
+  restartPending?: boolean;
   reconnectAttempts?: number;
   lastConnectedAt?: number | null;
   lastDisconnect?:
@@ -129,6 +130,12 @@ export type ChannelAccountSnapshot = {
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  signingSecretSource?: string;
+  tokenStatus?: string;
+  botTokenStatus?: string;
+  appTokenStatus?: string;
+  signingSecretStatus?: string;
+  userTokenStatus?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;
@@ -257,6 +264,8 @@ export type ChannelThreadingContext = {
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
+  NativeChannelId?: string;
 };
 
 export type ChannelThreadingToolContext = {
@@ -279,6 +288,18 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    resolveTarget?: (params: {
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      input: string;
+      normalized: string;
+      preferredKind?: ChannelDirectoryEntryKind | "channel";
+    }) => Promise<{
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source?: "normalized" | "directory";
+    } | null>;
   };
   formatTargetDisplay?: (params: {
     target: string;
@@ -336,6 +357,12 @@ export type ChannelToolSend = {
 };
 
 export type ChannelMessageActionAdapter = {
+  /**
+   * Advertise agent-discoverable actions for this channel.
+   * Keep this aligned with any gated capability checks. Poll discovery is
+   * not inferred from `outbound.sendPoll`, so channels that want agents to
+   * create polls should include `"poll"` here when enabled.
+   */
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
