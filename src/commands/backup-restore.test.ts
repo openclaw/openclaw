@@ -489,6 +489,47 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("preserves symlinked restore targets when --force publishes to live storage", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-force-symlink-"),
+    );
+
+    try {
+      await fs.writeFile(path.join(sourceStateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "new-state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-force-symlink-target-");
+      const realStateDir = path.join(targetHome, "relocated-state");
+      const aliasedStateDir = path.join(targetHome, ".openclaw");
+      await fs.mkdir(realStateDir, { recursive: true });
+      await fs.rm(aliasedStateDir, { recursive: true, force: true });
+      await fs.symlink(realStateDir, aliasedStateDir);
+      setActiveHome(targetHome);
+      await fs.writeFile(path.join(realStateDir, "old.txt"), "old\n", "utf8");
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+      });
+
+      expect((await fs.lstat(aliasedStateDir)).isSymbolicLink()).toBe(true);
+      expect(await fs.readFile(path.join(realStateDir, "state.txt"), "utf8")).toBe("new-state\n");
+      await expect(fs.access(path.join(realStateDir, "old.txt"))).rejects.toThrow();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("rolls back live targets and preserves the backup archive when restore publication fails", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const sourceConfigPath = path.join(sourceHome.home, "backup-config.json");

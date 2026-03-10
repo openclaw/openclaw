@@ -50,6 +50,7 @@ type StagedBackupRestoreItem = BackupRestoreItem & {
 };
 
 type RestoreTransactionItem = StagedBackupRestoreItem & {
+  liveTargetPath: string;
   publishPath: string;
   rollbackPath: string | null;
   published: boolean;
@@ -722,6 +723,7 @@ function buildRestoreTempSiblingPath(targetPath: string, prefix: string): string
 
 async function publishRestoreItem(params: {
   item: StagedBackupRestoreItem;
+  liveTargetPath: string;
   publishPath: string;
 }): Promise<void> {
   await copyStagedAsset({
@@ -730,13 +732,13 @@ async function publishRestoreItem(params: {
     targetType: params.item.targetType,
   });
 
-  if (await pathExists(params.item.targetPath)) {
+  if (await pathExists(params.liveTargetPath)) {
     throw new Error(
       `Restore target changed during publication and would be overwritten: ${params.item.targetPath}`,
     );
   }
 
-  await fs.rename(params.publishPath, params.item.targetPath);
+  await fs.rename(params.publishPath, params.liveTargetPath);
 }
 
 async function rollbackRestorePublication(items: RestoreTransactionItem[]): Promise<void> {
@@ -744,16 +746,16 @@ async function rollbackRestorePublication(items: RestoreTransactionItem[]): Prom
     await fs.rm(item.publishPath, { recursive: true, force: true }).catch(() => undefined);
 
     if (item.published) {
-      await fs.rm(item.targetPath, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(item.liveTargetPath, { recursive: true, force: true }).catch(() => undefined);
     }
 
     if (item.rollbackPath) {
       const rollbackPath = item.rollbackPath;
-      if (await pathExists(item.targetPath)) {
-        await fs.rm(item.targetPath, { recursive: true, force: true }).catch(() => undefined);
+      if (await pathExists(item.liveTargetPath)) {
+        await fs.rm(item.liveTargetPath, { recursive: true, force: true }).catch(() => undefined);
       }
-      await fs.mkdir(path.dirname(item.targetPath), { recursive: true }).catch(() => undefined);
-      await fs.rename(rollbackPath, item.targetPath).catch(async () => {
+      await fs.mkdir(path.dirname(item.liveTargetPath), { recursive: true }).catch(() => undefined);
+      await fs.rename(rollbackPath, item.liveTargetPath).catch(async () => {
         if (!(await pathExists(rollbackPath))) {
           return;
         }
@@ -764,27 +766,37 @@ async function rollbackRestorePublication(items: RestoreTransactionItem[]): Prom
 }
 
 async function publishRestorePlan(stagedItems: StagedBackupRestoreItem[]): Promise<void> {
-  const transactionItems: RestoreTransactionItem[] = stagedItems.map((item) => ({
-    ...item,
-    publishPath: buildRestoreTempSiblingPath(item.targetPath, "openclaw-restore"),
-    rollbackPath: null,
-    published: false,
-  }));
+  const transactionItems: RestoreTransactionItem[] = await Promise.all(
+    stagedItems.map(async (item) => {
+      const targetStats = await fs.lstat(item.targetPath).catch(() => null);
+      const liveTargetPath = targetStats?.isSymbolicLink()
+        ? await canonicalizePath(item.targetPath)
+        : item.targetPath;
+      return {
+        ...item,
+        liveTargetPath,
+        publishPath: buildRestoreTempSiblingPath(liveTargetPath, "openclaw-restore"),
+        rollbackPath: null,
+        published: false,
+      };
+    }),
+  );
 
   try {
     for (const item of transactionItems) {
-      await fs.mkdir(path.dirname(item.targetPath), { recursive: true });
+      await fs.mkdir(path.dirname(item.liveTargetPath), { recursive: true });
 
-      if (await pathExists(item.targetPath)) {
+      if (await pathExists(item.liveTargetPath)) {
         item.rollbackPath = buildRestoreTempSiblingPath(
-          item.targetPath,
+          item.liveTargetPath,
           "openclaw-restore-rollback",
         );
-        await fs.rename(item.targetPath, item.rollbackPath);
+        await fs.rename(item.liveTargetPath, item.rollbackPath);
       }
 
       await publishRestoreItem({
         item,
+        liveTargetPath: item.liveTargetPath,
         publishPath: item.publishPath,
       });
       item.published = true;
