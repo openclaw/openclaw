@@ -1,6 +1,8 @@
 const KEY = "openclaw.control.settings.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
+// Use localStorage instead of sessionStorage to persist across page refreshes
+const USE_LOCAL_STORAGE_FOR_TOKEN = true;
 
 type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
 
@@ -22,14 +24,24 @@ export type UiSettings = {
   locale?: string;
 };
 
-function getSessionStorage(): Storage | null {
-  if (typeof window !== "undefined" && window.sessionStorage) {
-    return window.sessionStorage;
+function getTokenStorage(): Storage | null {
+  if (USE_LOCAL_STORAGE_FOR_TOKEN) {
+    if (typeof window !== "undefined" && window.localStorage) {
+      return window.localStorage;
+    }
+    if (typeof localStorage !== "undefined") {
+      return localStorage;
+    }
+    return null;
+  } else {
+    if (typeof window !== "undefined" && window.sessionStorage) {
+      return window.sessionStorage;
+    }
+    if (typeof sessionStorage !== "undefined") {
+      return sessionStorage;
+    }
+    return null;
   }
-  if (typeof sessionStorage !== "undefined") {
-    return sessionStorage;
-  }
-  return null;
 }
 
 function normalizeGatewayTokenScope(gatewayUrl: string): string {
@@ -57,7 +69,7 @@ function tokenSessionKeyForGateway(gatewayUrl: string): string {
 
 function loadSessionToken(gatewayUrl: string): string {
   try {
-    const storage = getSessionStorage();
+    const storage = getTokenStorage();
     if (!storage) {
       return "";
     }
@@ -71,7 +83,7 @@ function loadSessionToken(gatewayUrl: string): string {
 
 function persistSessionToken(gatewayUrl: string, token: string) {
   try {
-    const storage = getSessionStorage();
+    const storage = getTokenStorage();
     if (!storage) {
       return;
     }
