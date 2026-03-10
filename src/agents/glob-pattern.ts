@@ -4,9 +4,10 @@ export type CompiledGlobPattern =
   | { kind: "regex"; value: RegExp };
 
 function escapeRegex(value: string) {
-  // Standard "escape string for regex literal" pattern.
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+const GLOB_REGEX_CACHE = new Map<string, RegExp>();
 
 export function compileGlobPattern(params: {
   raw: string;
@@ -22,10 +23,12 @@ export function compileGlobPattern(params: {
   if (!normalized.includes("*")) {
     return { kind: "exact", value: normalized };
   }
-  return {
-    kind: "regex",
-    value: new RegExp(`^${escapeRegex(normalized).replaceAll("\\*", ".*")}$`),
-  };
+  let regex = GLOB_REGEX_CACHE.get(normalized);
+  if (!regex) {
+    regex = new RegExp(`^${escapeRegex(normalized).replaceAll("\\*", ".*")}$`);
+    GLOB_REGEX_CACHE.set(normalized, regex);
+  }
+  return { kind: "regex", value: regex };
 }
 
 export function compileGlobPatterns(params: {

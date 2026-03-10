@@ -196,26 +196,21 @@ function findStoreMatch(
   store: Record<string, SessionEntry>,
   ...candidates: string[]
 ): { entry: SessionEntry; key: string } | undefined {
-  // Exact match first.
   for (const candidate of candidates) {
     if (candidate && store[candidate]) {
       return { entry: store[candidate], key: candidate };
     }
   }
-  // Case-insensitive scan for ALL candidates.
   const loweredSet = new Set(candidates.filter(Boolean).map((c) => c.toLowerCase()));
   for (const key of Object.keys(store)) {
-    if (loweredSet.has(key.toLowerCase())) {
+    const lk = key.toLowerCase();
+    if (loweredSet.has(lk)) {
       return { entry: store[key], key };
     }
   }
   return undefined;
 }
 
-/**
- * Find all on-disk store keys that match the given key case-insensitively.
- * Returns every key from the store whose lowercased form equals the target's lowercased form.
- */
 export function findStoreKeysIgnoreCase(
   store: Record<string, unknown>,
   targetKey: string,
@@ -738,7 +733,7 @@ export function listSessionsFromStore(params: {
       : undefined;
 
   let sessions = Object.entries(store)
-    .filter(([key]) => {
+    .filter(([key, entry]) => {
       if (isCronRunSessionKey(key)) {
         return false;
       }
@@ -756,24 +751,22 @@ export function listSessionsFromStore(params: {
         if (!parsed) {
           return false;
         }
-        return normalizeAgentId(parsed.agentId) === agentId;
+        if (normalizeAgentId(parsed.agentId) !== agentId) {
+          return false;
+        }
       }
-      return true;
-    })
-    .filter(([key, entry]) => {
-      if (!spawnedBy) {
-        return true;
+      if (spawnedBy) {
+        if (key === "unknown" || key === "global") {
+          return false;
+        }
+        if (entry?.spawnedBy !== spawnedBy) {
+          return false;
+        }
       }
-      if (key === "unknown" || key === "global") {
+      if (label && entry?.label !== label) {
         return false;
       }
-      return entry?.spawnedBy === spawnedBy;
-    })
-    .filter(([, entry]) => {
-      if (!label) {
-        return true;
-      }
-      return entry?.label === label;
+      return true;
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;

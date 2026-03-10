@@ -122,6 +122,16 @@ export function resolveSessionStoreEntry(params: {
 } {
   const trimmedKey = params.sessionKey.trim();
   const normalizedKey = normalizeStoreSessionKey(trimmedKey);
+
+  const directHit = params.store[normalizedKey];
+  if (directHit) {
+    const legacyKeys: string[] = [];
+    if (trimmedKey !== normalizedKey && Object.prototype.hasOwnProperty.call(params.store, trimmedKey)) {
+      legacyKeys.push(trimmedKey);
+    }
+    return { normalizedKey, existing: directHit, legacyKeys };
+  }
+
   const legacyKeySet = new Set<string>();
   if (
     trimmedKey !== normalizedKey &&
@@ -129,17 +139,18 @@ export function resolveSessionStoreEntry(params: {
   ) {
     legacyKeySet.add(trimmedKey);
   }
-  let existing =
-    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
+  let existing: SessionEntry | undefined =
+    legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined;
   let existingUpdatedAt = existing?.updatedAt ?? 0;
-  for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
-    if (candidateKey === normalizedKey) {
+  for (const storeKey of Object.keys(params.store)) {
+    if (storeKey === normalizedKey) {
       continue;
     }
-    if (candidateKey.toLowerCase() !== normalizedKey) {
+    if (storeKey.toLowerCase() !== normalizedKey) {
       continue;
     }
-    legacyKeySet.add(candidateKey);
+    legacyKeySet.add(storeKey);
+    const candidateEntry = params.store[storeKey];
     const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;
     if (!existing || candidateUpdatedAt > existingUpdatedAt) {
       existing = candidateEntry;
@@ -268,7 +279,7 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  return { ...store };
 }
 
 export function readSessionUpdatedAt(params: {
@@ -533,11 +544,19 @@ export async function updateSessionStore<T>(
   return await withSessionStoreLock(storePath, async () => {
     const locked = LOCKED_STORE_CACHE.get(storePath);
     const store = locked
-      ? structuredClone(locked.store)
+      ? { ...locked.store }
       : loadSessionStore(storePath, { skipCache: true });
+    if (locked) {
+      locked.lastAccessAt = Date.now();
+    }
+    const snapshotJson = JSON.stringify(store);
     const result = await mutator(store);
-    await saveSessionStoreUnlocked(storePath, store, opts);
-    LOCKED_STORE_CACHE.set(storePath, { store: structuredClone(store) });
+    const dirty = JSON.stringify(store) !== snapshotJson;
+    if (dirty) {
+      await saveSessionStoreUnlocked(storePath, store, opts);
+      LOCKED_STORE_CACHE.set(storePath, { store: { ...store }, lastAccessAt: Date.now() });
+      evictLockedStoreCacheIfNeeded();
+    }
     return result;
   });
 }
@@ -567,7 +586,31 @@ type LockedStoreCache = {
   store: Record<string, SessionEntry>;
 };
 
+type LockedStoreCache = {
+  store: Record<string, SessionEntry>;
+  lastAccessAt: number;
+};
+
 const LOCKED_STORE_CACHE = new Map<string, LockedStoreCache>();
+const LOCKED_STORE_CACHE_TTL_MS = 60 * 60 * 1000;
+const LOCKED_STORE_CACHE_MAX = 200;
+
+function evictLockedStoreCacheIfNeeded(): void {
+  const now = Date.now();
+  for (const [key, entry] of LOCKED_STORE_CACHE) {
+    if (now - entry.lastAccessAt > LOCKED_STORE_CACHE_TTL_MS) {
+      LOCKED_STORE_CACHE.delete(key);
+    }
+  }
+  if (LOCKED_STORE_CACHE.size > LOCKED_STORE_CACHE_MAX) {
+    const oldest = [...LOCKED_STORE_CACHE.entries()].sort(
+      (a, b) => a[1].lastAccessAt - b[1].lastAccessAt,
+    );
+    for (const [key] of oldest.slice(0, LOCKED_STORE_CACHE.size - LOCKED_STORE_CACHE_MAX)) {
+      LOCKED_STORE_CACHE.delete(key);
+    }
+  }
+}
 
 const LAST_MAINTENANCE = new Map<string, number>();
 const MAINTENANCE_THROTTLE_MS = 5 * 60 * 1000;

@@ -34,6 +34,8 @@ const TOOL_LOCATION_PATH_KEYS = [
   "input_path",
 ] as const;
 
+const TOOL_LOCATION_PATH_KEYS_SET = new Set<string>(TOOL_LOCATION_PATH_KEYS);
+
 const TOOL_LOCATION_LINE_KEYS = [
   "line",
   "lineNumber",
@@ -57,11 +59,11 @@ const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
 };
 
 function escapeInlineControlChars(value: string): string {
-  let escaped = "";
+  const parts: string[] = [];
   for (const char of value) {
     const codePoint = char.codePointAt(0);
     if (codePoint === undefined) {
-      escaped += char;
+      parts.push(char);
       continue;
     }
 
@@ -71,27 +73,26 @@ function escapeInlineControlChars(value: string): string {
       codePoint === 0x2028 ||
       codePoint === 0x2029;
     if (!isInlineControl) {
-      escaped += char;
+      parts.push(char);
       continue;
     }
 
     const mapped = INLINE_CONTROL_ESCAPE_MAP[char];
     if (mapped) {
-      escaped += mapped;
+      parts.push(mapped);
       continue;
     }
 
-    // Keep escaped control bytes readable and stable in logs/prompts.
-    escaped +=
+    parts.push(
       codePoint <= 0xff
         ? `\\x${codePoint.toString(16).padStart(2, "0")}`
-        : `\\u${codePoint.toString(16).padStart(4, "0")}`;
+        : `\\u${codePoint.toString(16).padStart(4, "0")}`,
+    );
   }
-  return escaped;
+  return parts.join("");
 }
 
 function escapeResourceTitle(value: string): string {
-  // Keep title content, but escape characters that can break the resource-link annotation shape.
   return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
 }
 
@@ -213,9 +214,8 @@ function collectToolLocations(
 
   const record = value as Record<string, unknown>;
   const line = extractToolLocationLine(record);
-  for (const key of TOOL_LOCATION_PATH_KEYS) {
-    const rawPath = record[key];
-    if (typeof rawPath === "string") {
+  for (const [key, rawPath] of Object.entries(record)) {
+    if (typeof rawPath === "string" && TOOL_LOCATION_PATH_KEYS_SET.has(key)) {
       addToolLocation(locations, rawPath, line);
     }
   }
@@ -243,7 +243,6 @@ function collectToolLocations(
 
 export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
   const parts: string[] = [];
-  // Track accumulated byte count per block to catch oversized prompts before full concatenation
   let totalBytes = 0;
   for (const block of prompt) {
     let blockText: string | undefined;
@@ -260,9 +259,8 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
       blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
     }
     if (blockText !== undefined) {
-      // Guard: reject before allocating the full concatenated string
       if (maxBytes !== undefined) {
-        const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
+        const separatorBytes = parts.length > 0 ? 1 : 0;
         totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
         if (totalBytes > maxBytes) {
           throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
