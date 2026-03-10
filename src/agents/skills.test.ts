@@ -10,9 +10,9 @@ import {
   buildWorkspaceSkillCommandSpecs,
   buildWorkspaceSkillsPrompt,
   buildWorkspaceSkillSnapshot,
-  getActiveSkillEnvKeys,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
+import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
