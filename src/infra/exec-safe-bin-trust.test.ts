@@ -79,13 +79,14 @@ describe("exec safe bin trust", () => {
   it.runIf(process.platform === "darwin" || process.platform === "win32")(
     "matches trusted dirs case-insensitively on case-insensitive filesystems",
     () => {
+      const input = path.join(path.sep, "Users", "Dev", "Custom", "bin");
       const dirs = buildTrustedSafeBinDirs({
         baseDirs: [],
-        extraDirs: ["/Users/Dev/Custom/bin"],
+        extraDirs: [input],
       });
-      // Trusted dir should be stored lowercased on case-insensitive FS
-      expect(dirs.has("/users/dev/custom/bin")).toBe(true);
-      expect(dirs.has("/Users/Dev/Custom/bin")).toBe(false);
+      // Trusted dir should be stored lowercased (with platform separators) on case-insensitive FS
+      expect(dirs.has(path.resolve(input).toLowerCase())).toBe(true);
+      expect(dirs.has(path.resolve(input))).toBe(false);
     },
   );
 
@@ -94,19 +95,20 @@ describe("exec safe bin trust", () => {
     () => {
       // Simulate: normalizeConfiguredSafeBins lowercases bin paths,
       // but resolvedPath might retain original case from the filesystem.
+      const scriptsDir = path.join(path.sep, "Users", "Dev", "scripts");
       const dirs = buildTrustedSafeBinDirs({
         baseDirs: [],
-        extraDirs: ["/Users/Dev/scripts"],
+        extraDirs: [scriptsDir],
       });
       expect(
         isTrustedSafeBinPath({
-          resolvedPath: "/users/dev/scripts/my-tool.sh",
+          resolvedPath: path.join(scriptsDir.toLowerCase(), "my-tool.sh"),
           trustedDirs: dirs,
         }),
       ).toBe(true);
       expect(
         isTrustedSafeBinPath({
-          resolvedPath: "/Users/Dev/Scripts/my-tool.sh",
+          resolvedPath: path.join(path.sep, "Users", "Dev", "Scripts", "my-tool.sh"),
           trustedDirs: dirs,
         }),
       ).toBe(true);
