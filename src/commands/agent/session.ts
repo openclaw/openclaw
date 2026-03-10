@@ -21,7 +21,17 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import {
+  buildAgentPeerSessionKey,
+  normalizeAgentId,
+  normalizeMainKey,
+  toAgentRequestSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 
 export type SessionResolution = {
   sessionId: string;
@@ -40,31 +50,80 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
+function resolveDerivedSessionKey(opts: {
+  cfg: OpenClawConfig;
+  to?: string;
+  channel?: string;
+  accountId?: string | null;
+  agentId?: string;
+  mainKey: string;
+  scope: NonNullable<OpenClawConfig["session"]>["scope"] | "per-sender";
+}): string | undefined {
+  const rawTo = opts.to?.trim();
+  if (!rawTo) {
+    return undefined;
+  }
+
+  const agentId = normalizeAgentId(opts.agentId);
+  const normalizedChannel = normalizeMessageChannel(opts.channel);
+  if (normalizedChannel && isDeliverableMessageChannel(normalizedChannel)) {
+    const dmScope = opts.cfg.session?.dmScope;
+    return buildAgentPeerSessionKey({
+      agentId,
+      mainKey: opts.mainKey,
+      channel: normalizedChannel,
+      accountId: opts.accountId,
+      peerKind: "direct",
+      peerId: rawTo,
+      dmScope: dmScope && dmScope !== "main" ? dmScope : "per-channel-peer",
+    });
+  }
+
+  const ctx: MsgContext = { From: rawTo };
+  const genericSessionKey = resolveSessionKey(opts.scope, ctx, opts.mainKey);
+  const requestKey = toAgentRequestSessionKey(genericSessionKey) ?? genericSessionKey;
+  return toAgentStoreSessionKey({
+    agentId,
+    requestKey,
+    mainKey: opts.mainKey,
+  });
+}
+
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  channel?: string;
+  accountId?: string | null;
 }): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const explicitSessionKey =
-    opts.sessionKey?.trim() ||
-    resolveExplicitAgentSessionKey({
-      cfg: opts.cfg,
-      agentId: opts.agentId,
-    });
+  const explicitSessionKey = opts.sessionKey?.trim();
+  const fallbackAgentSessionKey = resolveExplicitAgentSessionKey({
+    cfg: opts.cfg,
+    agentId: opts.agentId,
+  });
   const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
   const storePath = resolveStorePath(sessionCfg?.store, {
-    agentId: storeAgentId,
+    agentId: opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : storeAgentId,
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
+    explicitSessionKey ??
+    resolveDerivedSessionKey({
+      cfg: opts.cfg,
+      to: opts.to,
+      channel: opts.channel,
+      accountId: opts.accountId,
+      agentId: opts.agentId,
+      mainKey,
+      scope,
+    }) ??
+    fallbackAgentSessionKey;
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
   if (
@@ -114,6 +173,8 @@ export function resolveSession(opts: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  channel?: string;
+  accountId?: string | null;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
@@ -122,6 +183,8 @@ export function resolveSession(opts: {
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    channel: opts.channel,
+    accountId: opts.accountId,
   });
   const now = Date.now();
 

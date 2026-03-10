@@ -33,6 +33,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      list: overrides?.agents?.list,
     },
     session: {
       store: storePath,
@@ -137,5 +138,33 @@ describe("agentCliCommand", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
+  });
+
+  it("routes explicit channel targets to a per-recipient session key", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            agent: "chatwoot_agent",
+            channel: "whatsapp",
+            to: "cw_111",
+          },
+          runtime,
+        );
+
+        const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+          params?: { sessionKey?: string };
+        };
+        expect(request.params?.sessionKey).toBe("agent:chatwoot_agent:whatsapp:direct:cw_111");
+      },
+      {
+        agents: {
+          list: [{ id: "chatwoot_agent" }],
+        },
+      },
+    );
   });
 });

@@ -27,6 +27,7 @@ const { resolveSessionKeyForRequest } = await import("./session.js");
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
   const MYBOT_STORE_PATH = "/tmp/mybot-store.json";
+  const CHATWOOT_STORE_PATH = "/tmp/chatwoot-store.json";
   type SessionStoreEntry = { sessionId: string; updatedAt: number };
   type SessionStoreMap = Record<string, SessionStoreEntry>;
 
@@ -36,6 +37,21 @@ describe("resolveSessionKeyForRequest", () => {
       (_store: string | undefined, opts?: { agentId?: string }) => {
         if (opts?.agentId === "mybot") {
           return MYBOT_STORE_PATH;
+        }
+        return MAIN_STORE_PATH;
+      },
+    );
+  };
+
+  const setupAgentStorePaths = () => {
+    mocks.listAgentIds.mockReturnValue(["main", "mybot", "chatwoot_agent"]);
+    mocks.resolveStorePath.mockImplementation(
+      (_store: string | undefined, opts?: { agentId?: string }) => {
+        if (opts?.agentId === "mybot") {
+          return MYBOT_STORE_PATH;
+        }
+        if (opts?.agentId === "chatwoot_agent") {
+          return CHATWOOT_STORE_PATH;
         }
         return MAIN_STORE_PATH;
       },
@@ -158,6 +174,21 @@ describe("resolveSessionKeyForRequest", () => {
     // so the cross-store search finds it in the mybot store
     expect(result.sessionKey).toBe("agent:mybot:main");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("derives an isolated per-target session key when channel + to are provided", async () => {
+    setupAgentStorePaths();
+    mocks.loadSessionStore.mockReturnValue({});
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "chatwoot_agent",
+      channel: "whatsapp",
+      to: "cw_111",
+    });
+
+    expect(result.sessionKey).toBe("agent:chatwoot_agent:whatsapp:direct:cw_111");
+    expect(result.storePath).toBe(CHATWOOT_STORE_PATH);
   });
 
   it("skips already-searched primary store when iterating agents", async () => {

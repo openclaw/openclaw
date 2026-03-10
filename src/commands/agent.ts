@@ -607,6 +607,8 @@ async function prepareAgentCommandExecution(
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
+    channel: opts.channel,
+    accountId: opts.accountId,
   });
 
   const {
