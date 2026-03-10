@@ -19,8 +19,9 @@ export type RestartAttempt = {
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-// Cover slow in-flight embedded compaction work before forcing restart.
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 90_000;
+// 0 = wait indefinitely for drain (no forced restart while work is active).
+const DEFAULT_DEFERRAL_MAX_WAIT_MS = 0;
+const DEFERRAL_WARN_INTERVAL_MS = 30_000;
 const RESTART_COOLDOWN_MS = 30_000;
 
 const restartLog = createSubsystemLogger("restart");
@@ -198,11 +199,17 @@ export function deferGatewayRestartUntilIdle(opts: {
   hooks?: RestartDeferralHooks;
   pollMs?: number;
   maxWaitMs?: number;
+  force?: boolean;
 }): void {
+  if (opts.force) {
+    emitGatewayRestart();
+    return;
+  }
+
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
   const maxWaitMsRaw = opts.maxWaitMs ?? DEFAULT_DEFERRAL_MAX_WAIT_MS;
-  const maxWaitMs = Math.max(pollMs, Math.floor(maxWaitMsRaw));
+  const maxWaitMs = maxWaitMsRaw > 0 ? Math.max(pollMs, Math.floor(maxWaitMsRaw)) : 0;
 
   let pending: number;
   try {
@@ -220,6 +227,7 @@ export function deferGatewayRestartUntilIdle(opts: {
 
   opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
+  let lastWarnAt = startedAt;
   const poll = setInterval(() => {
     let current: number;
     try {
@@ -236,11 +244,17 @@ export function deferGatewayRestartUntilIdle(opts: {
       emitGatewayRestart();
       return;
     }
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= maxWaitMs) {
+    const now = Date.now();
+    const elapsedMs = now - startedAt;
+    if (maxWaitMs > 0 && elapsedMs >= maxWaitMs) {
       clearInterval(poll);
       opts.hooks?.onTimeout?.(current, elapsedMs);
       emitGatewayRestart();
+      return;
+    }
+    if (now - lastWarnAt >= DEFERRAL_WARN_INTERVAL_MS) {
+      lastWarnAt = now;
+      restartLog.warn(`restart deferred: ${current} items still active (${elapsedMs}ms elapsed)`);
     }
   }, pollMs);
 }
@@ -407,6 +421,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  force?: boolean;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -470,6 +485,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
+      if (opts?.force) {
+        emitGatewayRestart();
+        return;
+      }
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
         emitGatewayRestart();

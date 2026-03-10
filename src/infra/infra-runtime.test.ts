@@ -232,20 +232,42 @@ describe("infra runtime", () => {
       }
     });
 
-    it("emits SIGUSR1 after deferral timeout even if still pending", async () => {
+    it("waits indefinitely by default when pending work exists (no forced timeout)", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        setPreRestartDeferralCheck(() => 5); // always pending
+        let pending = 5;
+        setPreRestartDeferralCheck(() => pending);
         scheduleGatewaySigusr1Restart({ delayMs: 0 });
 
         // Fire initial timeout
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
-        // Advance past the 90s max deferral wait
-        await vi.advanceTimersByTimeAsync(90_000);
+        // Advance well past the old 90s limit — should still NOT restart
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        // Drain pending work — now it restarts
+        pending = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("emits SIGUSR1 immediately when force is true even if pending", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => 5); // always pending
+        scheduleGatewaySigusr1Restart({ delayMs: 0, force: true });
+
+        // Fire initial timeout — force skips deferral entirely
+        await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);
