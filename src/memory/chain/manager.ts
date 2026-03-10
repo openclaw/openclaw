@@ -259,25 +259,103 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * Probe embedding availability
-   * Delegate to primary provider
+   * Probe embedding availability with fallback
    */
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    if (!this.primary) {
-      return { ok: false, error: "No primary provider configured" };
+    // Try primary
+    if (this.primary && this.primary.isAvailable()) {
+      try {
+        const result = await this.primary.probeEmbeddingAvailability();
+        if (result.ok) {
+          return result;
+        }
+      } catch (error) {
+        log.warn(
+          `Primary probeEmbeddingAvailability failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
-    return this.primary.probeEmbeddingAvailability();
+
+    // Try secondary providers
+    for (const provider of this.secondary) {
+      if (provider.isAvailable()) {
+        try {
+          const result = await provider.probeEmbeddingAvailability();
+          if (result.ok) {
+            return result;
+          }
+        } catch (error) {
+          log.warn(
+            `Secondary ${provider.config.name} probeEmbeddingAvailability failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
+
+    // Try fallback
+    if (this.config.global.enableFallback && this.fallback && this.fallback.isAvailable()) {
+      try {
+        const result = await this.fallback.probeEmbeddingAvailability();
+        if (result.ok) {
+          return result;
+        }
+      } catch (error) {
+        log.warn(
+          `Fallback probeEmbeddingAvailability failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    // All providers failed
+    return { ok: false, error: "No provider with embedding capability available" };
   }
 
   /**
-   * Probe vector availability
-   * Delegate to primary provider
+   * Probe vector availability with fallback
    */
   async probeVectorAvailability(): Promise<boolean> {
-    if (!this.primary) {
-      return false;
+    // Try primary
+    if (this.primary && this.primary.isAvailable()) {
+      try {
+        if (await this.primary.probeVectorAvailability()) {
+          return true;
+        }
+      } catch (error) {
+        log.warn(
+          `Primary probeVectorAvailability failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
-    return this.primary.probeVectorAvailability();
+
+    // Try secondary providers
+    for (const provider of this.secondary) {
+      if (provider.isAvailable()) {
+        try {
+          if (await provider.probeVectorAvailability()) {
+            return true;
+          }
+        } catch (error) {
+          log.warn(
+            `Secondary ${provider.config.name} probeVectorAvailability failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
+
+    // Try fallback
+    if (this.config.global.enableFallback && this.fallback && this.fallback.isAvailable()) {
+      try {
+        if (await this.fallback.probeVectorAvailability()) {
+          return true;
+        }
+      } catch (error) {
+        log.warn(
+          `Fallback probeVectorAvailability failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    return false;
   }
 
   /**
