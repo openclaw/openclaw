@@ -201,10 +201,15 @@ export function createMqttHooksService(params: {
           `mqtt-hooks: connected to ${brokerLabel} with ${activeSubscriptions.length} subscription(s)`,
         );
         const armStartupRetainedGuard = !hasConnectedOnce;
-        hasConnectedOnce = true;
-        void subscribeAll(armStartupRetainedGuard).catch((err) => {
-          ctx.logger.warn(`mqtt-hooks: subscribe failed: ${String(err)}`);
-        });
+        void subscribeAll(armStartupRetainedGuard)
+          .then(() => {
+            if (armStartupRetainedGuard) {
+              hasConnectedOnce = true;
+            }
+          })
+          .catch((err) => {
+            ctx.logger.warn(`mqtt-hooks: subscribe failed: ${String(err)}`);
+          });
       });
       client.on("reconnect", () => {
         ctx.logger.warn(`mqtt-hooks: reconnecting to ${brokerLabel}`);

@@ -5,11 +5,12 @@ import { createMqttHooksService } from "./service.js";
 
 class FakeMqttClient extends EventEmitter {
   subscribed: Array<{ topic: string; qos: number }> = [];
+  subscribeErrors: Array<Error | null> = [];
   closed = false;
 
   subscribe(topic: string, options: { qos: 0 | 1 | 2 }, callback: (err?: Error | null) => void) {
     this.subscribed.push({ topic, qos: options.qos });
-    callback(null);
+    callback(this.subscribeErrors.shift() ?? null);
   }
 
   end(_force: boolean, callback: (err?: Error | null) => void) {
@@ -277,5 +278,76 @@ describe("createMqttHooksService", () => {
       stateDir: "/tmp/openclaw-state",
       logger,
     });
+  });
+
+  it("re-arms startup retained guard when first subscribe attempt fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeClient = new FakeMqttClient();
+      fakeClient.subscribeErrors = [new Error("subscribe failed once"), null];
+
+      const service = createMqttHooksService({
+        pluginConfig: resolveMqttHooksPluginConfig({
+          broker: { url: "mqtt://broker.local:1883" },
+          subscriptions: [
+            {
+              id: "alerts",
+              topic: "home/alerts/#",
+              qos: 1,
+              action: "wake",
+              textTemplate: "Payload={{payloadText}}",
+            },
+          ],
+        }),
+        clientFactory: () => fakeClient as never,
+      });
+
+      await service.start({
+        config: {},
+        stateDir: "/tmp/openclaw-state",
+        logger: createLogger(),
+      });
+
+      fakeClient.emit("connect");
+      await Promise.resolve();
+
+      fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-a"), {
+        qos: 1,
+        retain: true,
+        dup: false,
+      });
+      await Promise.resolve();
+      expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
+
+      fakeClient.emit("connect");
+      await Promise.resolve();
+
+      fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-b"), {
+        qos: 1,
+        retain: true,
+        dup: false,
+      });
+      await Promise.resolve();
+      expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1600);
+
+      fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-c"), {
+        qos: 1,
+        retain: true,
+        dup: false,
+      });
+      await vi.waitFor(() => {
+        expect(sharedMocks.dispatchWakeIngressAction).toHaveBeenCalledOnce();
+      });
+
+      await service.stop?.({
+        config: {},
+        stateDir: "/tmp/openclaw-state",
+        logger: createLogger(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
