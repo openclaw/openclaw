@@ -454,7 +454,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveGoogleChatGroupToolPolicy,
     },
     threading: {
-      resolveReplyToMode: ({ cfg }) => cfg.channels?.googlechat?.replyToMode ?? "off",
+      resolveReplyToMode: ({ cfg }) => cfg.channels?.googlechat?.replyToMode ?? "all",
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildThreadToolContextFromMessageThreadOrReply({ context, hasRepliedRef }),
     },
