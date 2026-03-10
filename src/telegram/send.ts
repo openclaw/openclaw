@@ -108,24 +108,30 @@ function resolveTelegramMessageIdOrThrow(
   throw new Error(`Telegram ${context} returned no message_id`);
 }
 
+function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
+  if (!text) {
+    return [];
+  }
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  const chunks: string[] = [];
+  for (let start = 0; start < text.length; start += normalizedLimit) {
+    chunks.push(text.slice(start, start + normalizedLimit));
+  }
+  return chunks;
+}
+
 function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {
   if (!text) {
     return [];
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  if (chunkCount <= 1 || text.length <= normalizedLimit) {
-    return [text];
-  }
-  if (text.length > chunkCount * normalizedLimit) {
-    const chunks: string[] = [];
-    for (let start = 0; start < text.length; start += normalizedLimit) {
-      chunks.push(text.slice(start, start + normalizedLimit));
-    }
-    return chunks;
+  const fixedChunks = splitTelegramPlainTextChunks(text, normalizedLimit);
+  if (chunkCount <= 1 || fixedChunks.length >= chunkCount) {
+    return fixedChunks;
   }
   const chunks: string[] = [];
   let offset = 0;
-  for (let index = 0; index < chunkCount && offset < text.length; index += 1) {
+  for (let index = 0; index < chunkCount; index += 1) {
     const remainingChars = text.length - offset;
     const remainingChunks = chunkCount - index;
     const nextChunkLength =
@@ -686,14 +692,65 @@ export async function sendMessageTelegram(
         }
       : undefined;
 
+  const sendPlainChunkedText = async (
+    plainText: string,
+    context: string,
+  ): Promise<{ messageId: string; chatId: string }> => {
+    const chunks = splitTelegramPlainTextChunks(plainText, 4000);
+    let lastMessageId = "";
+    let lastChatId = chatId;
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      if (!chunk) {
+        continue;
+      }
+      const res = await withTelegramThreadFallback(
+        buildTextParams(index === chunks.length - 1),
+        "message",
+        opts.verbose,
+        async (effectiveParams, label) => {
+          const params = effectiveParams ? { ...effectiveParams } : {};
+          if (linkPreviewOptions) {
+            params.link_preview_options = linkPreviewOptions;
+          }
+          const hasParams = Object.keys(params).length > 0;
+          return await requestWithChatNotFound(
+            () =>
+              hasParams
+                ? api.sendMessage(chatId, chunk, params as Parameters<typeof api.sendMessage>[2])
+                : api.sendMessage(chatId, chunk),
+            label,
+          );
+        },
+      );
+      const messageId = resolveTelegramMessageIdOrThrow(res, context);
+      recordSentMessage(chatId, messageId);
+      lastMessageId = String(messageId);
+      lastChatId = String(res?.chat?.id ?? chatId);
+    }
+    return { messageId: lastMessageId, chatId: lastChatId };
+  };
+
   const sendChunkedText = async (
     rawText: string,
     context: string,
   ): Promise<{ messageId: string; chatId: string }> => {
-    const htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
-    const plainTextChunks = opts.plainText
-      ? splitTelegramPlainTextFallback(opts.plainText, htmlChunks.length, 4000)
-      : [];
+    let htmlChunks: string[];
+    try {
+      htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
+    } catch (error) {
+      logVerbose(
+        `telegram ${context} failed HTML chunk planning, retrying as plain text: ${formatErrorMessage(
+          error,
+        )}`,
+      );
+      return await sendPlainChunkedText(opts.plainText ?? rawText, context);
+    }
+    const plainTextChunks = splitTelegramPlainTextFallback(
+      opts.plainText ?? rawText,
+      htmlChunks.length,
+      4000,
+    );
     const chunks = htmlChunks.map((chunk, index) => ({
       rawText: chunk,
       htmlText: chunk,

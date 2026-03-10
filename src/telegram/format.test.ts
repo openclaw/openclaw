@@ -125,6 +125,12 @@ describe("markdownToTelegramHtml", () => {
     expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
   });
 
+  it("treats malformed leading ampersands as plain text when chunking html", () => {
+    const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });

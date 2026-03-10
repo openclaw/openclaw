@@ -265,6 +265,50 @@ function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
   return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
 }
 
+function findTelegramHtmlEntityEnd(text: string, start: number): number {
+  if (text[start] !== "&") {
+    return -1;
+  }
+  let index = start + 1;
+  if (index >= text.length) {
+    return -1;
+  }
+  if (text[index] === "#") {
+    index += 1;
+    if (index >= text.length) {
+      return -1;
+    }
+    const isHex = text[index] === "x" || text[index] === "X";
+    if (isHex) {
+      index += 1;
+      const hexStart = index;
+      while (/[0-9A-Fa-f]/.test(text[index] ?? "")) {
+        index += 1;
+      }
+      if (index === hexStart) {
+        return -1;
+      }
+    } else {
+      const digitStart = index;
+      while (/[0-9]/.test(text[index] ?? "")) {
+        index += 1;
+      }
+      if (index === digitStart) {
+        return -1;
+      }
+    }
+  } else {
+    const nameStart = index;
+    while (/[A-Za-z0-9]/.test(text[index] ?? "")) {
+      index += 1;
+    }
+    if (index === nameStart) {
+      return -1;
+    }
+  }
+  return text[index] === ";" ? index : -1;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
@@ -276,6 +320,10 @@ function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number
   }
   const lastSemicolon = text.lastIndexOf(";", normalizedMaxLength - 1);
   if (lastAmpersand < lastSemicolon) {
+    return normalizedMaxLength;
+  }
+  const entityEnd = findTelegramHtmlEntityEnd(text, lastAmpersand);
+  if (entityEnd === -1 || entityEnd < normalizedMaxLength) {
     return normalizedMaxLength;
   }
   return lastAmpersand;

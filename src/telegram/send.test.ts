@@ -1317,6 +1317,36 @@ describe("sendMessageTelegram", () => {
     expect(plainFallbackCalls.every((call) => !String(call?.[1] ?? "").includes("<"))).toBe(true);
     expect(res.messageId).toBe("91");
   });
+
+  it("keeps malformed leading ampersands on the chunked plain-text fallback path", async () => {
+    const chatId = "123";
+    const htmlText = `&${"A".repeat(5000)}`;
+    const plainText = "fallback!!";
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 0",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 92, chat: { id: chatId } })
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 93, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+
+    const res = await sendMessageTelegram(chatId, htmlText, {
+      token: "tok",
+      api,
+      textMode: "html",
+      plainText,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+    expect(String(sendMessage.mock.calls[0]?.[1] ?? "")).toMatch(/^&/);
+    const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
+    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
+    expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
+    expect(res.messageId).toBe("93");
+  });
 });
 
 describe("reactMessageTelegram", () => {
