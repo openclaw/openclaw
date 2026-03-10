@@ -7,6 +7,9 @@ import { stripAssistantInternalScaffolding } from "../../shared/text/assistant-v
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/g;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/gi;
 const ROLE_TURN_MARKER_RE = /\b(?:user|system|assistant)\s*:\s*$/gm;
+// [[reply_to:<id>]] and [[reply_to_current]] directive tags must be stripped
+// before delivery; they are routing metadata, not user-visible content.
+const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
 
 /**
  * Strip all assistant-internal scaffolding from outbound text before delivery.
@@ -19,7 +22,8 @@ export function sanitizeOutboundText(text: string): string {
   }
 
   let cleaned = stripAssistantInternalScaffolding(text);
-
+  
+  cleaned = cleaned.replace(REPLY_TAG_RE, "");
   cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
   cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");
   cleaned = cleaned.replace(ROLE_TURN_MARKER_RE, "");
