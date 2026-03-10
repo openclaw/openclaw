@@ -242,7 +242,7 @@ export class AcpSessionManager {
       const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
       const effectiveRuntimeOptions = normalizeRuntimeOptions({
         ...initialRuntimeOptions,
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        ...(requestedCwd && effectiveCwd ? { cwd: effectiveCwd } : {}),
       });
 
       const identityNow = Date.now();
@@ -897,14 +897,15 @@ export class AcpSessionManager {
       params.meta.agent?.trim() || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
-    const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
+    const requestedCwd = runtimeOptions.cwd;
+    const currentCwd = requestedCwd ?? normalizeText(params.meta.cwd);
     const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
     const cached = this.getCachedRuntimeState(params.sessionKey);
     if (cached) {
       const backendMatches = !configuredBackend || cached.backend === configuredBackend;
       const agentMatches = cached.agent === agent;
       const modeMatches = cached.mode === mode;
-      const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
+      const cwdMatches = (cached.cwd ?? "") === (currentCwd ?? "");
       if (backendMatches && agentMatches && modeMatches && cwdMatches) {
         return {
           runtime: cached.runtime,
@@ -928,7 +929,7 @@ export class AcpSessionManager {
           sessionKey: params.sessionKey,
           agent,
           mode,
-          cwd,
+          cwd: requestedCwd,
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",
@@ -937,10 +938,11 @@ export class AcpSessionManager {
     const previousMeta = params.meta;
     const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
     const now = Date.now();
-    const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
+    const effectiveCwd =
+      normalizeText(ensured.cwd) ?? requestedCwd ?? normalizeText(params.meta.cwd);
     const nextRuntimeOptions = normalizeRuntimeOptions({
       ...runtimeOptions,
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(requestedCwd && effectiveCwd ? { cwd: effectiveCwd } : {}),
     });
     const nextIdentity =
       mergeSessionIdentity({
@@ -1027,6 +1029,7 @@ export class AcpSessionManager {
         if (!base) {
           return null;
         }
+        const nextCwd = normalized.cwd ?? base.cwd;
         return {
           backend: base.backend,
           agent: base.agent,
@@ -1034,7 +1037,7 @@ export class AcpSessionManager {
           ...(base.identity ? { identity: base.identity } : {}),
           mode: base.mode,
           runtimeOptions: hasOptions ? normalized : undefined,
-          cwd: normalized.cwd,
+          ...(nextCwd ? { cwd: nextCwd } : {}),
           state: base.state,
           lastActivityAt: Date.now(),
           ...(base.lastError ? { lastError: base.lastError } : {}),
@@ -1047,7 +1050,8 @@ export class AcpSessionManager {
     if (!cached) {
       return;
     }
-    if ((cached.cwd ?? "") !== (normalized.cwd ?? "")) {
+    const nextCwd = normalized.cwd ?? cached.cwd;
+    if ((cached.cwd ?? "") !== (nextCwd ?? "")) {
       this.clearCachedRuntimeState(params.sessionKey);
       return;
     }

@@ -55,6 +55,33 @@ describe("acp session manager", () => {
     expect(store.hasSession("existing")).toBe(true);
   });
 
+  it("preserves the stored cwd when refreshing an existing session without a new cwd", () => {
+    store.createSession({
+      sessionId: "existing",
+      sessionKey: "acp:one",
+      cwd: "/tmp/one",
+    });
+    advance(500);
+
+    const refreshed = store.createSession({
+      sessionId: "existing",
+      sessionKey: "acp:two",
+    });
+
+    expect(refreshed.sessionKey).toBe("acp:two");
+    expect(refreshed.cwd).toBe("/tmp/one");
+    expect(refreshed.lastTouchedAt).toBe(1_500);
+  });
+
+  it("rejects new sessions that omit cwd", () => {
+    expect(() =>
+      store.createSession({
+        sessionId: "missing-cwd",
+        sessionKey: "acp:missing-cwd",
+      }),
+    ).toThrow(/missing a working directory/i);
+  });
+
   it("reaps idle sessions before enforcing the max session cap", () => {
     const boundedStore = createInMemorySessionStore({
       maxSessions: 1,

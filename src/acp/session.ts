@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AcpSession } from "./types.js";
 
 export type AcpSessionStore = {
-  createSession: (params: { sessionKey: string; cwd: string; sessionId?: string }) => AcpSession;
+  createSession: (params: { sessionKey: string; cwd?: string; sessionId?: string }) => AcpSession;
   hasSession: (sessionId: string) => boolean;
   getSession: (sessionId: string) => AcpSession | undefined;
   getSessionByRunId: (runId: string) => AcpSession | undefined;
@@ -83,9 +83,14 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     const existingSession = sessions.get(sessionId);
     if (existingSession) {
       existingSession.sessionKey = params.sessionKey;
-      existingSession.cwd = params.cwd;
+      if (params.cwd !== undefined) {
+        existingSession.cwd = params.cwd;
+      }
       touchSession(existingSession, nowMs);
       return existingSession;
+    }
+    if (params.cwd === undefined) {
+      throw new Error(`ACP session ${sessionId} is missing a working directory.`);
     }
     reapIdleSessions(nowMs);
     if (sessions.size >= maxSessions && !evictOldestIdleSession()) {

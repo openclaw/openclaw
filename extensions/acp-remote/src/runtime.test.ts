@@ -551,6 +551,52 @@ describe("AcpRemoteRuntime", () => {
     );
   });
 
+  it("reopens an existing remote session from a fresh runtime instance without replaying cwd", async () => {
+    const gateway = new MockAcpRemoteGateway();
+    const url = await gateway.start();
+    servers.push(gateway);
+    const runtimeA = new AcpRemoteRuntime({
+      url,
+      headers: {},
+      timeoutMs: 5_000,
+      retryDelayMs: 1,
+      protocolVersion: ACP_REMOTE_PROTOCOL_VERSION,
+    });
+
+    const first = await runtimeA.ensureSession({
+      sessionKey: "agent:codex:acp:fresh-runtime-reopen",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const requestsAfterCreate = gateway.requests.length;
+    const runtimeB = new AcpRemoteRuntime({
+      url,
+      headers: {},
+      timeoutMs: 5_000,
+      retryDelayMs: 1,
+      protocolVersion: ACP_REMOTE_PROTOCOL_VERSION,
+    });
+
+    const reopened = await runtimeB.ensureSession({
+      sessionKey: "agent:codex:acp:fresh-runtime-reopen",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const reopenRequests = gateway.requests.slice(requestsAfterCreate);
+    const sessionLoadRequest = reopenRequests.find(
+      (entry) => entry.request.method === "session/load",
+    );
+    const sessionNewRequest = reopenRequests.find(
+      (entry) => entry.request.method === "session/new",
+    );
+
+    expect(first.cwd).toBe(gateway.fallbackCwd);
+    expect(sessionLoadRequest?.request.params?.cwd).toBeUndefined();
+    expect(sessionNewRequest).toBeUndefined();
+    expect(reopened.cwd).toBe(gateway.fallbackCwd);
+    expect(decodeAcpRemoteHandleState(reopened.runtimeSessionName)?.cwd).toBe(gateway.fallbackCwd);
+  });
+
   it("uses Streamable HTTP headers and omits private transport markers", async () => {
     const { runtime, gateway } = await createRuntime();
 
