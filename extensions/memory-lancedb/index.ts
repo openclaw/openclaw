@@ -174,8 +174,10 @@ class MemoryDB {
     }
     // Enforce namespace ownership: only delete rows that belong to the caller's
     // namespace (or legacy untagged rows when agentId is provided).
-    const filter = agentId
-      ? `id = '${id}' AND (agentId = '${agentId}' OR agentId IS NULL)`
+    // Escape single quotes in agentId to prevent filter injection
+    const safeAgentId = agentId?.replace(/'/g, "''");
+    const filter = safeAgentId
+      ? `id = '${id}' AND (agentId = '${safeAgentId}' OR agentId IS NULL)`
       : `id = '${id}'`;
     await this.table!.delete(filter);
     return true;
@@ -549,7 +551,7 @@ const memoryPlugin = {
               vector,
               parseInt(opts.limit),
               0.3,
-              opts.agent ?? configNamespace,
+              opts.agent ?? (configNamespace === "global" ? undefined : configNamespace),
             );
             const output = results.map((r) => ({
               id: r.entry.id,
