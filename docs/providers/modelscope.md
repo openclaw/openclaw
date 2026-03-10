@@ -22,7 +22,7 @@ ModelScope provides OpenAI-compatible APIs for hosted models. OpenClaw uses the
 ```bash
 openclaw onboard --auth-choice modelscope-api-key
 # or non-interactive
-openclaw onboard --auth-choice apiKey --token-provider modelscope --token "$MODELSCOPE_API_KEY"
+openclaw onboard --modelscope-api-key "$MODELSCOPE_API_KEY"
 ```
 
 ## Config snippet
