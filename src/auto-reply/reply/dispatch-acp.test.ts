@@ -52,6 +52,12 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const agentEventMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+  getLatestAgentRunIdForSession: vi.fn<(sessionKey: string) => string | undefined>(() => "run-1"),
+  getAgentRunContext: vi.fn(),
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -86,6 +92,17 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
   }),
 }));
+
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
+  return {
+    ...actual,
+    emitAgentEvent: (event: unknown) => agentEventMocks.emitAgentEvent(event),
+    getLatestAgentRunIdForSession: (sessionKey: string) =>
+      agentEventMocks.getLatestAgentRunIdForSession(sessionKey),
+    getAgentRunContext: (runId: string) => agentEventMocks.getAgentRunContext(runId),
+  };
+});
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
@@ -232,6 +249,11 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    agentEventMocks.emitAgentEvent.mockReset();
+    agentEventMocks.getLatestAgentRunIdForSession.mockReset();
+    agentEventMocks.getLatestAgentRunIdForSession.mockReturnValue("run-1");
+    agentEventMocks.getAgentRunContext.mockReset();
+    agentEventMocks.getAgentRunContext.mockReturnValue(undefined);
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -432,6 +454,53 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
+      }),
+    );
+  });
+
+  it("emits lifecycle end event when ACP turn completes", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "test",
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        stream: "lifecycle",
+        sessionKey,
+        data: expect.objectContaining({
+          phase: "end",
+          endedAt: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
+  it("emits lifecycle error event when ACP turn fails", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValue(new Error("runtime exploded"));
+
+    await runDispatch({
+      bodyForAgent: "test",
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        stream: "lifecycle",
+        sessionKey,
+        data: expect.objectContaining({
+          phase: "error",
+          endedAt: expect.any(Number),
+          error: expect.any(String),
+        }),
       }),
     );
   });

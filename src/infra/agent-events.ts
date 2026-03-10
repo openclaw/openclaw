@@ -23,18 +23,60 @@ export type AgentRunContext = {
 const seqByRun = new Map<string, number>();
 const listeners = new Set<(evt: AgentEventPayload) => void>();
 const runContextById = new Map<string, AgentRunContext>();
+const runIdsBySessionKey = new Map<string, Set<string>>();
+
+function normalizeSessionKey(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function addRunIdToSession(sessionKey: string, runId: string) {
+  const existing = runIdsBySessionKey.get(sessionKey);
+  if (!existing) {
+    runIdsBySessionKey.set(sessionKey, new Set([runId]));
+    return;
+  }
+  // Re-add to keep insertion order stable for latest-run lookup.
+  if (existing.delete(runId)) {
+    existing.add(runId);
+    return;
+  }
+  existing.add(runId);
+}
+
+function removeRunIdFromSession(sessionKey: string, runId: string) {
+  const existing = runIdsBySessionKey.get(sessionKey);
+  if (!existing) {
+    return;
+  }
+  existing.delete(runId);
+  if (existing.size === 0) {
+    runIdsBySessionKey.delete(sessionKey);
+  }
+}
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
     return;
   }
+  const nextSessionKey = normalizeSessionKey(context.sessionKey);
   const existing = runContextById.get(runId);
   if (!existing) {
     runContextById.set(runId, { ...context });
+    if (nextSessionKey) {
+      addRunIdToSession(nextSessionKey, runId);
+    }
     return;
   }
-  if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
-    existing.sessionKey = context.sessionKey;
+  const previousSessionKey = normalizeSessionKey(existing.sessionKey);
+  if (nextSessionKey && existing.sessionKey !== nextSessionKey) {
+    if (previousSessionKey) {
+      removeRunIdFromSession(previousSessionKey, runId);
+    }
+    existing.sessionKey = nextSessionKey;
+    addRunIdToSession(nextSessionKey, runId);
+  } else if (nextSessionKey) {
+    addRunIdToSession(nextSessionKey, runId);
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
@@ -52,11 +94,28 @@ export function getAgentRunContext(runId: string) {
 }
 
 export function clearAgentRunContext(runId: string) {
+  const existing = runContextById.get(runId);
+  if (existing?.sessionKey) {
+    removeRunIdFromSession(existing.sessionKey, runId);
+  }
   runContextById.delete(runId);
 }
 
 export function resetAgentRunContextForTest() {
   runContextById.clear();
+  runIdsBySessionKey.clear();
+}
+
+export function getLatestAgentRunIdForSession(sessionKey: string): string | undefined {
+  const normalized = normalizeSessionKey(sessionKey);
+  if (!normalized) {
+    return undefined;
+  }
+  const runIds = runIdsBySessionKey.get(normalized);
+  if (!runIds || runIds.size === 0) {
+    return undefined;
+  }
+  return Array.from(runIds).at(-1);
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
