@@ -3,7 +3,6 @@ import {
   fetchWithSsrFGuard,
   GUARDED_FETCH_MODE,
   type GuardedFetchMode,
-  withStrictGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
