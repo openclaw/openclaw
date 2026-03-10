@@ -6,7 +6,7 @@ import { log } from "./logger.js";
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
@@ -197,7 +197,7 @@ export function createOpenAIResponsesContextManagementWrapper(
             compactThreshold,
           });
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };
@@ -226,7 +226,7 @@ export function createOpenAIServiceTierWrapper(
             payloadObj.service_tier = serviceTier;
           }
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };
@@ -250,7 +250,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? false,
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };

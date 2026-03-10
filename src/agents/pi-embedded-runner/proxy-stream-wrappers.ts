@@ -92,7 +92,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
             }
           }
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };
@@ -113,7 +113,7 @@ export function createOpenRouterWrapper(
       },
       onPayload: (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, model);
+        return onPayload?.(payload);
       },
     });
   };
@@ -138,7 +138,7 @@ export function createKilocodeWrapper(
       },
       onPayload: (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, model);
+        return onPayload?.(payload);
       },
     });
   };

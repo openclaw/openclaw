@@ -604,14 +604,10 @@ export function createOpenAIWebSocketStreamFn(
         ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
         ...extraParams,
       };
-      const nextPayload = await options?.onPayload?.(payload, model);
-      const requestPayload =
-        nextPayload && typeof nextPayload === "object"
-          ? (nextPayload as Parameters<OpenAIWebSocketManager["send"]>[0])
-          : (payload as Parameters<OpenAIWebSocketManager["send"]>[0]);
+      options?.onPayload?.(payload);
 
       try {
-        session.manager.send(requestPayload);
+        session.manager.send(payload as Parameters<OpenAIWebSocketManager["send"]>[0]);
       } catch (sendErr) {
         if (transport === "websocket") {
           throw sendErr instanceof Error ? sendErr : new Error(String(sendErr));
