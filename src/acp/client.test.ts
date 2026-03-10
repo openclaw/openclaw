@@ -136,8 +136,8 @@ describe("resolveAcpClientSpawnEnv", () => {
 
   it("preserves provider auth env vars for explicit custom ACP servers", () => {
     const env = resolveAcpClientSpawnEnv({
-      OPENAI_API_KEY: "openai-secret",
-      GITHUB_TOKEN: "gh-secret",
+      OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
+      GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
       HF_TOKEN: "hf-secret",
       OPENCLAW_API_KEY: "keep-me",
     });
