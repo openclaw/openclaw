@@ -21,6 +21,7 @@ type DefineChatCommandInput = {
   textAliases?: string[];
   scope?: CommandScope;
   category?: CommandCategory;
+  providers?: string[];
 };
 
 function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
@@ -43,6 +44,7 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
     textAliases: aliases,
     scope,
     category: command.category,
+    providers: command.providers,
   };
 }
 
@@ -533,6 +535,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
       argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "settings",
+      nativeName: "settings",
+      description: "Open the settings control panel.",
+      scope: "native",
+      category: "management",
+      providers: ["telegram"],
     }),
     defineChatCommand({
       key: "reset",

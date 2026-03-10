@@ -33,6 +33,7 @@ import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -74,6 +75,9 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+import { resolveSettingsAuthDecision } from "./settings-auth.js";
+import { parseSettingsCallbackData } from "./settings-buttons.js";
+import { handleSettingsCallback } from "./settings-panel.js";
 
 function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
@@ -1098,6 +1102,87 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
+
+      // Settings panel callback handler (cfg_menu, cfg_s_*, cfg_v_*)
+      // Must run before the inlineButtonsScope gates — settings callbacks are
+      // DM-only and have their own auth, so they should not be blocked by
+      // inlineButtonsScope=off or scope=group.
+      const settingsCallback = parseSettingsCallbackData(data);
+      if (settingsCallback) {
+        const settingsChatId = callbackMessage.chat.id;
+        const settingsIsGroup =
+          callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+        if (settingsIsGroup) {
+          return;
+        } // DM-only
+        const settingsSenderId = callback.from?.id ? String(callback.from.id) : "";
+        const settingsSenderUsername = callback.from?.username ?? "";
+        // Derive isForum / messageThreadId from the actual callback message so
+        // that topic-specific auth (requireTopic, per-topic allowFrom/dmPolicy
+        // overrides) is enforced identically to the /settings command path.
+        const settingsIsForum = callbackMessage.chat.is_forum === true;
+        const settingsMessageThreadId = callbackMessage.message_thread_id;
+        // Load fresh config so changes to allowFrom/dmPolicy since handler
+        // registration are respected.
+        const freshCfg = loadConfig();
+        const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+        // Use only the fresh config allowFrom — do NOT fall back to the stale
+        // allowFrom captured at handler registration time, otherwise deleting
+        // the allowlist at runtime silently restores the old entries.
+        const freshAllowFrom = freshTelegramCfg.allowFrom;
+        // Resolve full event auth context from the real callback message,
+        // including groupConfig, topicConfig, dmThreadId, groupAllowOverride,
+        // so per-DM/topic overrides are enforced.
+        const settingsEventAuth = await resolveTelegramEventAuthorizationContext({
+          chatId: settingsChatId,
+          isGroup: false,
+          isForum: settingsIsForum,
+          messageThreadId: settingsMessageThreadId,
+        });
+        // Use shared auth decision (same function the /settings command path
+        // should use) so command and callback auth are structurally identical.
+        const settingsAuth = resolveSettingsAuthDecision({
+          chatId: settingsChatId,
+          accountId,
+          senderId: settingsSenderId,
+          senderUsername: settingsSenderUsername,
+          cfg: freshCfg,
+          allowFrom: freshAllowFrom,
+          effectiveDmPolicy: settingsEventAuth.dmPolicy,
+          storeAllowFrom: settingsEventAuth.storeAllowFrom,
+          dmThreadId: settingsEventAuth.dmThreadId,
+          groupConfig: settingsEventAuth.groupConfig,
+          groupAllowOverride: settingsEventAuth.groupAllowOverride,
+        });
+        if (!settingsAuth.authorized) {
+          return;
+        }
+        if (!resolveChannelConfigWrites({ cfg: freshCfg, channelId: "telegram", accountId })) {
+          await replyToCallbackChat("Config writes are disabled for this account.");
+          return;
+        }
+        await handleSettingsCallback({
+          parsed: settingsCallback,
+          cfg: freshCfg,
+          accountId,
+          telegramCfg: freshTelegramCfg,
+          editMessage: async (text, buttons) => {
+            const keyboard = buildInlineKeyboard(buttons);
+            try {
+              await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+            } catch (editErr) {
+              const errStr = String(editErr);
+              if (!errStr.includes("message is not modified")) {
+                throw editErr;
+              }
+            }
+          },
+          answerCallback: async (text) => {
+            await replyToCallbackChat(text);
+          },
+        });
+        return;
+      }
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,

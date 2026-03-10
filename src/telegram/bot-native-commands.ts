@@ -16,8 +16,10 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/pr
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
+import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -44,6 +46,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -70,6 +73,7 @@ import {
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import { buildSettingsCommandResponse } from "./settings-panel.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -545,8 +549,15 @@ export const registerTelegramNativeCommands = ({
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
+      // Commands with dedicated handlers below (e.g. /settings) are skipped
+      // in the generic loop to avoid registering two bot.command() handlers
+      // for the same trigger.
+      const dedicatedHandlers = new Set(["settings"]);
       for (const command of nativeCommands) {
         const normalizedCommandName = normalizeTelegramCommandName(command.name);
+        if (dedicatedHandlers.has(normalizedCommandName)) {
+          continue;
+        }
         bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {
@@ -780,6 +791,102 @@ export const registerTelegramNativeCommands = ({
               ...deliveryBaseOptions,
             });
           }
+        });
+      }
+
+      // /settings — standalone handler that sends an inline keyboard control panel
+      // Only register when native commands are enabled so operators can disable
+      // this config-mutation entry point via channels.telegram.commands.native: false.
+      if (nativeEnabled) {
+        bot.command("settings", async (ctx: TelegramNativeCommandContext) => {
+          const msg = ctx.message;
+          if (!msg) {
+            return;
+          }
+          if (shouldSkipUpdate(ctx)) {
+            return;
+          }
+          const auth = await resolveTelegramCommandAuth({
+            msg,
+            bot,
+            cfg,
+            accountId,
+            telegramCfg,
+            allowFrom,
+            groupAllowFrom,
+            useAccessGroups,
+            resolveGroupPolicy,
+            resolveTelegramGroupConfig,
+            requireAuth: true,
+          });
+          if (!auth) {
+            return;
+          }
+          if (auth.isGroup) {
+            const threadParams =
+              buildTelegramThreadParams(
+                resolveTelegramThreadSpec({
+                  isGroup: true,
+                  isForum: auth.isForum,
+                  messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+                }),
+              ) ?? {};
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  auth.chatId,
+                  "Settings is only available in DMs.",
+                  threadParams,
+                ),
+            });
+            return;
+          }
+          if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+            const threadParams =
+              buildTelegramThreadParams(
+                resolveTelegramThreadSpec({
+                  isGroup: false,
+                  isForum: auth.isForum,
+                  messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+                }),
+              ) ?? {};
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  auth.chatId,
+                  "Config writes are disabled for this account.",
+                  threadParams,
+                ),
+            });
+            return;
+          }
+          // Load fresh config so the menu reflects the current persisted state,
+          // not the snapshot from handler registration time.
+          const freshCfg = loadConfig();
+          const freshTelegramCfg = resolveTelegramAccount({ cfg: freshCfg, accountId }).config;
+          const { text, buttons } = buildSettingsCommandResponse(freshTelegramCfg);
+          const keyboard = buildInlineKeyboard(buttons);
+          const threadParams =
+            buildTelegramThreadParams(
+              resolveTelegramThreadSpec({
+                isGroup: false,
+                isForum: auth.isForum,
+                messageThreadId: (msg as { message_thread_id?: number }).message_thread_id,
+              }),
+            ) ?? {};
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(auth.chatId, text, {
+                ...(keyboard ? { reply_markup: keyboard } : {}),
+                ...threadParams,
+              }),
+          });
         });
       }
 
