@@ -159,6 +159,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,
+        // Prevent reaction-collision loops in shared bot channels while still
+        // allowing PluralKit-proxied human messages to use status reactions.
+        isBotAuthoredMessage: Boolean(author.bot) && !sender.isPluralKit,
+        allowBotAuthoredMessage: false,
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();

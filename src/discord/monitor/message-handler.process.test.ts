@@ -272,6 +272,49 @@ describe("processDiscordMessage ack reactions", () => {
     ]);
   });
 
+  it("skips ack reactions for bot-authored messages to prevent bot-channel reaction churn", async () => {
+    const ctx = await createBaseContext({
+      author: {
+        id: "BOT-2",
+        bot: true,
+        username: "other-bot",
+        discriminator: "0",
+      },
+      sender: {
+        label: "other-bot",
+      },
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("keeps ack reactions for PluralKit-proxied bot messages", async () => {
+    const ctx = await createBaseContext({
+      author: {
+        id: "BOT-PK",
+        bot: true,
+        username: "pluralkit",
+        discriminator: "0",
+      },
+      sender: {
+        label: "Alice (PluralKit)",
+        isPluralKit: true,
+      },
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
+  });
+
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();

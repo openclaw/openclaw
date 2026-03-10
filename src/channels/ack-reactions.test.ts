@@ -110,6 +110,36 @@ describe("shouldAckReaction", () => {
       }),
     ).toBe(true);
   });
+
+  it("can suppress ack reactions for bot-authored messages", () => {
+    expect(
+      shouldAckReaction({
+        scope: "all",
+        isDirect: false,
+        isGroup: true,
+        isMentionableGroup: true,
+        requireMention: false,
+        canDetectMention: true,
+        effectiveWasMentioned: true,
+        isBotAuthoredMessage: true,
+        allowBotAuthoredMessage: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldAckReaction({
+        scope: "all",
+        isDirect: false,
+        isGroup: true,
+        isMentionableGroup: true,
+        requireMention: false,
+        canDetectMention: true,
+        effectiveWasMentioned: true,
+        isBotAuthoredMessage: true,
+        allowBotAuthoredMessage: true,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("shouldAckReactionForWhatsApp", () => {

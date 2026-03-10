@@ -11,10 +11,21 @@ export type AckReactionGateParams = {
   canDetectMention: boolean;
   effectiveWasMentioned: boolean;
   shouldBypassMention?: boolean;
+  /** True when the inbound message was authored by a bot/webhook identity. */
+  isBotAuthoredMessage?: boolean;
+  /**
+   * Allow ack/status reactions for bot-authored messages.
+   * Defaults to true for backward compatibility.
+   */
+  allowBotAuthoredMessage?: boolean;
 };
 
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
+  const allowBotAuthoredMessage = params.allowBotAuthoredMessage ?? true;
+  if (params.isBotAuthoredMessage && !allowBotAuthoredMessage) {
+    return false;
+  }
   if (scope === "off" || scope === "none") {
     return false;
   }
