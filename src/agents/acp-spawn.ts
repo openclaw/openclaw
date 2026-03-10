@@ -327,16 +327,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  // For mode=run without thread binding, implicitly route output to parent session
-  // instead of Discord. This enables agent-to-agent supervision patterns where
-  // the spawning agent wants to receive results directly, not via Discord.
   const requestThreadBinding = params.thread === true;
-  const implicitStreamToParent =
-    !streamToParentRequested &&
-    params.mode === "run" &&
-    !requestThreadBinding &&
-    Boolean(parentSessionKey);
-  const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -360,6 +351,17 @@ export async function spawnAcpDirect(
       error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
     };
   }
+
+  // For mode=run without thread binding, implicitly route output to parent session
+  // instead of Discord. This enables agent-to-agent supervision patterns where
+  // the spawning agent wants to receive results directly, not via Discord.
+  // Use resolved spawnMode (not params.mode) so default mode selection works.
+  const implicitStreamToParent =
+    !streamToParentRequested &&
+    spawnMode === "run" &&
+    !requestThreadBinding &&
+    Boolean(parentSessionKey);
+  const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;
 
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
