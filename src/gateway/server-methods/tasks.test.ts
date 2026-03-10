@@ -83,6 +83,23 @@ describe("loadTaskRegistry", () => {
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0]?.id).toBe("build-123");
   });
+
+  it("throws on malformed JSON rather than returning empty registry", () => {
+    const file = path.join(tmpDir, "corrupt.json");
+    fs.writeFileSync(file, "{ not valid json }", "utf8");
+    expect(() => loadTaskRegistry(file)).toThrow();
+  });
+
+  it("throws on unreadable file (permission error) rather than returning empty registry", () => {
+    const file = path.join(tmpDir, "noperm.json");
+    fs.writeFileSync(file, JSON.stringify({ tasks: [] }), "utf8");
+    fs.chmodSync(file, 0o000);
+    try {
+      expect(() => loadTaskRegistry(file)).toThrow();
+    } finally {
+      fs.chmodSync(file, 0o644); // restore so cleanup works
+    }
+  });
 });
 
 describe("saveTaskRegistry", () => {
@@ -443,6 +460,42 @@ describe("deliverTaskNotification", () => {
     const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
     // Task should not have been re-created by the registry write
     expect(updated.tasks).toHaveLength(0);
+  });
+
+  it("serialises concurrent notify calls for same task with different keys — both events persisted", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+    ]);
+    const sendToSession = vi.fn().mockResolvedValue(undefined);
+
+    // Two different events fire concurrently on the same task
+    await Promise.all([
+      deliverTaskNotification({
+        taskId: "t1",
+        event: "started",
+        message: "Starting",
+        registryPath,
+        sendToSession,
+      }),
+      deliverTaskNotification({
+        taskId: "t1",
+        event: "completed",
+        message: "Done",
+        registryPath,
+        sendToSession,
+      }),
+    ]);
+
+    const updated = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+    // Both event log entries must be present — no lost writes
+    const eventNames = updated.tasks[0].events.map((e) => e.event);
+    expect(eventNames).toContain("started");
+    expect(eventNames).toContain("completed");
+    // Both idempotency keys must be set
+    expect(updated.tasks[0].notifiedEvents["started"]).toBe(true);
+    expect(updated.tasks[0].notifiedEvents["completed"]).toBe(true);
+    // Both watchers notified (2 total sends)
+    expect(sendToSession).toHaveBeenCalledTimes(2);
   });
 
   it("serialises concurrent notify calls with same key — second skips without sending", async () => {

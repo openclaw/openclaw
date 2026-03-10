@@ -11,16 +11,22 @@ import type { GatewayRequestHandlers } from "./types.js";
 const MAX_TASK_EVENTS = 50;
 
 /**
- * In-flight lock map: prevents concurrent tasks.notify calls with the same
- * (taskId, idempotencyKey) from both executing fan-out.
+ * Per-task serialisation queue.
  *
- * Key: `${taskId}::${ikey}`
- * Value: the promise of the in-progress deliver call
+ * Key: taskId
+ * Value: tail of the promise chain for that task
  *
- * Since OpenClaw gateway runs in a single Node.js process, this Map is sufficient
- * to serialise concurrent WS-dispatched requests — no cross-process locking needed.
+ * All tasks.notify calls for the same taskId are chained so that each
+ * read-modify-write is strictly sequential — preventing lost updates when
+ * two different events (different idempotency keys) are notified concurrently.
+ *
+ * Per-key idempotency is enforced inside _deliverTaskNotification after the
+ * per-task lock is acquired.
+ *
+ * Since the gateway runs in a single Node.js process this Map is sufficient;
+ * no cross-process locking is needed.
  */
-const inFlightNotify = new Map<string, Promise<ReturnType<typeof _deliverTaskNotification>>>();
+const taskNotifyQueue = new Map<string, Promise<unknown>>();
 
 export type TaskWatcher = {
   sessionKey: string;
@@ -59,12 +65,19 @@ function getRegistryPath(): string {
 }
 
 export function loadTaskRegistry(registryPath = getRegistryPath()): TaskRegistry {
+  let raw: string;
   try {
-    const raw = fs.readFileSync(registryPath, "utf8");
-    return JSON.parse(raw) as TaskRegistry;
-  } catch {
-    return { tasks: [] };
+    raw = fs.readFileSync(registryPath, "utf8");
+  } catch (err: unknown) {
+    // File not found → fresh registry (normal for first run)
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { tasks: [] };
+    }
+    // Permission error, I/O failure, etc. → throw so callers don't overwrite good data
+    throw err;
   }
+  // Separate try so a JSON parse error is also surfaced rather than silently dropped
+  return JSON.parse(raw) as TaskRegistry;
 }
 
 export function saveTaskRegistry(registry: TaskRegistry, registryPath = getRegistryPath()): void {
@@ -202,36 +215,37 @@ async function _deliverTaskNotification(opts: {
 
 /**
  * Deliver a notification to all watchers of a task.
- * Idempotent and serialised: concurrent calls with the same (taskId, idempotencyKey)
- * wait for the in-flight call to complete, then the second caller reads the now-set
- * idempotency key and returns skipped — preventing duplicate fan-out.
+ *
+ * Serialised per taskId: all concurrent notify calls for the same task are
+ * queued so each read-modify-write completes before the next begins. This
+ * prevents lost event log entries or idempotency marks when two different
+ * events arrive simultaneously for the same task.
+ *
+ * Per-key idempotency is enforced inside _deliverTaskNotification; duplicate
+ * calls with the same (taskId, idempotencyKey) return skipped without sending.
  */
-export async function deliverTaskNotification(
+export function deliverTaskNotification(
   opts: Parameters<typeof _deliverTaskNotification>[0],
 ): Promise<ReturnType<typeof _deliverTaskNotification>> {
-  // Normalise key the same way the inner function does, so the lock key matches
-  const rawKey = opts.idempotencyKey?.trim();
-  const ikey = rawKey && rawKey.length > 0 ? rawKey : opts.event;
-  const lockKey = `${opts.taskId}::${ikey}`;
+  const taskId = opts.taskId;
 
-  const existing = inFlightNotify.get(lockKey);
-  if (existing) {
-    // Another call is already in flight for this (taskId, ikey).
-    // Wait for it to finish, then attempt delivery — the post-send guard will
-    // see the idempotency key is now set and return skipped.
-    await existing;
-  }
+  // Chain onto the existing tail for this task (or start fresh)
+  const tail = (taskNotifyQueue.get(taskId) ?? Promise.resolve()).then(() =>
+    _deliverTaskNotification(opts),
+  );
 
-  const promise = _deliverTaskNotification(opts);
-  inFlightNotify.set(lockKey, promise);
-  try {
-    return await promise;
-  } finally {
-    // Only delete our own entry; a racing call may have already replaced it.
-    if (inFlightNotify.get(lockKey) === promise) {
-      inFlightNotify.delete(lockKey);
+  // Store the silenced tail so the chain survives errors from inner calls.
+  const silentTail = tail.catch(() => undefined);
+  taskNotifyQueue.set(taskId, silentTail);
+
+  // Prune map entry when this tail is still the head (no newer call queued).
+  void silentTail.then(() => {
+    if (taskNotifyQueue.get(taskId) === silentTail) {
+      taskNotifyQueue.delete(taskId);
     }
-  }
+  });
+
+  return tail;
 }
 
 export const taskHandlers: GatewayRequestHandlers = {
