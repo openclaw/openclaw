@@ -77,6 +77,7 @@ function getDispatcherFromUndiciCall(nth: number) {
     | {
         options?: {
           connect?: Record<string, unknown>;
+          proxyTls?: Record<string, unknown>;
         };
       }
     | undefined;
@@ -199,7 +200,7 @@ describe("resolveTelegramFetch", () => {
         uri: "http://127.0.0.1:7890",
       }),
     );
-    expect(dispatcher?.options?.connect).toEqual(
+    expect(dispatcher?.options?.proxyTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: false,
       }),
@@ -235,13 +236,13 @@ describe("resolveTelegramFetch", () => {
 
     expect(firstDispatcher).toBe(secondDispatcher);
     expect(secondDispatcher).toBe(thirdDispatcher);
-    expect(firstDispatcher?.options?.connect).toEqual(
+    expect(firstDispatcher?.options?.proxyTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
       }),
     );
-    expect(firstDispatcher?.options?.connect?.family).not.toBe(4);
+    expect(firstDispatcher?.options?.proxyTls?.family).not.toBe(4);
   });
 
   it("does not arm sticky IPv4 fallback for env proxy paths", async () => {

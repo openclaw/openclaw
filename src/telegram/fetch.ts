@@ -200,7 +200,7 @@ function createTelegramDispatcher(params: {
     const proxyOptions = connect
       ? ({
           uri: explicitProxyUrl,
-          connect,
+          proxyTls: connect,
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
       : explicitProxyUrl;
     try {
