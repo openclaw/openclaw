@@ -1,0 +1,393 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ai/schemas/design-scheme/v1",
+  "title": "HMI Design Scheme",
+  "description": "Unified design scheme format for the Generative HMI Custom UI skill. Validated against uploaded design tokens from product managers.",
+  "type": "object",
+  "required": ["schemeVersion", "meta", "tokens", "themes", "components", "personalization"],
+  "additionalProperties": false,
+  "properties": {
+    "schemeVersion": {
+      "type": "string",
+      "description": "Semantic version of the design scheme format (major.minor).",
+      "pattern": "^\\d+\\.\\d+$",
+      "examples": ["1.0", "2.1"]
+    },
+    "meta": {
+      "type": "object",
+      "description": "Metadata about the uploaded design scheme.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable name of the design scheme.",
+          "minLength": 1
+        },
+        "author": {
+          "type": "string",
+          "description": "Name or identifier of the scheme author."
+        },
+        "uploadedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of when the scheme was uploaded."
+        },
+        "sourceFormat": {
+          "type": "string",
+          "description": "Original file format of the uploaded design source.",
+          "enum": ["json", "figma", "pdf", "docx", "xlsx"]
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "description": "Design tokens that define the visual language of the scheme.",
+      "required": ["colors", "typography", "spacing", "radius"],
+      "additionalProperties": false,
+      "properties": {
+        "colors": {
+          "type": "object",
+          "description": "Color palette tokens.",
+          "required": ["primary", "secondary", "surface", "surfaceDark", "accent", "text", "status"],
+          "additionalProperties": false,
+          "properties": {
+            "primary": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "description": "Primary brand color."
+            },
+            "secondary": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "description": "Secondary brand color."
+            },
+            "surface": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "description": "Default surface/background color."
+            },
+            "surfaceDark": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "description": "Dark variant of the surface color."
+            },
+            "accent": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "description": "Accent color for highlights and interactive elements."
+            },
+            "text": {
+              "type": "object",
+              "description": "Text color variants for different emphasis levels.",
+              "required": ["primary", "secondary", "disabled"],
+              "additionalProperties": false,
+              "properties": {
+                "primary": {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "description": "Primary text color (highest emphasis)."
+                },
+                "secondary": {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "description": "Secondary text color (medium emphasis)."
+                },
+                "disabled": {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "description": "Disabled text color (lowest emphasis)."
+                }
+              }
+            },
+            "status": {
+              "type": "object",
+              "description": "Semantic status colors.",
+              "required": ["success", "warning", "error"],
+              "additionalProperties": false,
+              "properties": {
+                "success": {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "description": "Success/positive status color."
+                },
+                "warning": {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "description": "Warning/caution status color."
+                },
+                "error": {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$",
+                  "description": "Error/danger status color."
+                }
+              }
+            }
+          }
+        },
+        "typography": {
+          "type": "object",
+          "description": "Typography tokens defining the type system.",
+          "required": ["fontFamily", "scale", "weight"],
+          "additionalProperties": false,
+          "properties": {
+            "fontFamily": {
+              "type": "string",
+              "description": "Primary font family name.",
+              "minLength": 1
+            },
+            "scale": {
+              "type": "object",
+              "description": "Type scale mapping semantic names to CSS font-size values.",
+              "required": ["h1", "h2", "h3", "body", "caption"],
+              "additionalProperties": false,
+              "properties": {
+                "h1": { "type": "string", "description": "Heading 1 font size." },
+                "h2": { "type": "string", "description": "Heading 2 font size." },
+                "h3": { "type": "string", "description": "Heading 3 font size." },
+                "body": { "type": "string", "description": "Body text font size." },
+                "caption": { "type": "string", "description": "Caption/small text font size." }
+              }
+            },
+            "weight": {
+              "type": "object",
+              "description": "Font weight values (numeric CSS font-weight).",
+              "required": ["regular", "medium", "bold"],
+              "additionalProperties": false,
+              "properties": {
+                "regular": { "type": "number", "description": "Regular font weight.", "examples": [400] },
+                "medium": { "type": "number", "description": "Medium font weight.", "examples": [500] },
+                "bold": { "type": "number", "description": "Bold font weight.", "examples": [700] }
+              }
+            }
+          }
+        },
+        "spacing": {
+          "type": "object",
+          "description": "Spacing scale tokens.",
+          "required": ["xs", "sm", "md", "lg", "xl"],
+          "additionalProperties": false,
+          "properties": {
+            "xs": { "type": "string", "description": "Extra-small spacing value." },
+            "sm": { "type": "string", "description": "Small spacing value." },
+            "md": { "type": "string", "description": "Medium spacing value." },
+            "lg": { "type": "string", "description": "Large spacing value." },
+            "xl": { "type": "string", "description": "Extra-large spacing value." }
+          }
+        },
+        "radius": {
+          "type": "object",
+          "description": "Border radius tokens.",
+          "required": ["sm", "md", "lg", "pill"],
+          "additionalProperties": false,
+          "properties": {
+            "sm": { "type": "string", "description": "Small border radius." },
+            "md": { "type": "string", "description": "Medium border radius." },
+            "lg": { "type": "string", "description": "Large border radius." },
+            "pill": { "type": "string", "description": "Pill/fully-rounded border radius." }
+          }
+        },
+        "elevation": {
+          "type": "object",
+          "description": "Elevation (box-shadow) tokens.",
+          "additionalProperties": false,
+          "properties": {
+            "card": { "type": "string", "description": "Card-level elevation shadow." },
+            "modal": { "type": "string", "description": "Modal-level elevation shadow." }
+          }
+        }
+      }
+    },
+    "themes": {
+      "type": "object",
+      "description": "Theme overrides for light and dark mode.",
+      "required": ["light", "dark"],
+      "additionalProperties": false,
+      "properties": {
+        "light": {
+          "type": "object",
+          "description": "Light theme overrides.",
+          "required": ["background", "text"],
+          "additionalProperties": false,
+          "properties": {
+            "background": { "type": "string", "description": "Background color for light theme." },
+            "text": { "type": "string", "description": "Text color for light theme." }
+          }
+        },
+        "dark": {
+          "type": "object",
+          "description": "Dark theme overrides.",
+          "required": ["background", "text"],
+          "additionalProperties": false,
+          "properties": {
+            "background": { "type": "string", "description": "Background color for dark theme." },
+            "text": { "type": "string", "description": "Text color for dark theme." }
+          }
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "description": "Component-level design constraints.",
+      "additionalProperties": false,
+      "properties": {
+        "card": {
+          "type": "object",
+          "description": "Card component constraints.",
+          "additionalProperties": false,
+          "properties": {
+            "minWidth": { "type": "string", "description": "Minimum card width." },
+            "maxWidth": { "type": "string", "description": "Maximum card width." },
+            "padding": { "type": "string", "description": "Card inner padding." },
+            "borderRadius": { "type": "string", "description": "Card border radius." },
+            "aspectRatios": {
+              "type": "array",
+              "description": "Allowed aspect ratios for cards.",
+              "items": { "type": "string" },
+              "examples": [["16:9", "4:3", "1:1"]]
+            }
+          }
+        },
+        "widget": {
+          "type": "object",
+          "description": "Widget layout and sizing constraints.",
+          "additionalProperties": false,
+          "properties": {
+            "grid": {
+              "type": "object",
+              "description": "Widget grid layout parameters.",
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "type": "integer",
+                  "description": "Number of grid columns.",
+                  "minimum": 1,
+                  "maximum": 6
+                },
+                "gap": {
+                  "type": "string",
+                  "description": "Gap between grid cells."
+                },
+                "maxRows": {
+                  "type": "integer",
+                  "description": "Maximum number of grid rows."
+                }
+              }
+            },
+            "sizes": {
+              "type": "object",
+              "description": "Predefined widget size classes.",
+              "additionalProperties": false,
+              "properties": {
+                "small": { "type": "string", "description": "Small widget size." },
+                "medium": { "type": "string", "description": "Medium widget size." },
+                "large": { "type": "string", "description": "Large widget size." },
+                "wide": { "type": "string", "description": "Wide widget size (spans multiple columns)." }
+              }
+            }
+          }
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "description": "Global constraints for the HMI rendering engine.",
+      "additionalProperties": false,
+      "properties": {
+        "maxWidgets": {
+          "type": "integer",
+          "description": "Maximum number of widgets allowed on screen.",
+          "minimum": 1
+        },
+        "editMode": {
+          "type": "object",
+          "description": "Constraints applied during edit/customization mode.",
+          "additionalProperties": false,
+          "properties": {
+            "scaleFactor": {
+              "type": "number",
+              "description": "Scale factor applied to the canvas in edit mode.",
+              "minimum": 0.5,
+              "maximum": 1.0
+            },
+            "showGrid": {
+              "type": "boolean",
+              "description": "Whether to show the alignment grid in edit mode."
+            },
+            "snapToGrid": {
+              "type": "boolean",
+              "description": "Whether widgets snap to the grid in edit mode."
+            }
+          }
+        },
+        "animation": {
+          "type": "object",
+          "description": "Animation constraints.",
+          "additionalProperties": false,
+          "properties": {
+            "maxDuration": {
+              "type": "string",
+              "description": "Maximum animation duration (e.g. '300ms')."
+            },
+            "easing": {
+              "type": "string",
+              "description": "Default easing function (e.g. 'ease-in-out')."
+            }
+          }
+        },
+        "accessibility": {
+          "type": "object",
+          "description": "Accessibility constraints.",
+          "additionalProperties": false,
+          "properties": {
+            "minContrastRatio": {
+              "type": "number",
+              "description": "Minimum WCAG contrast ratio for text.",
+              "examples": [4.5]
+            },
+            "minTouchTarget": {
+              "type": "string",
+              "description": "Minimum touch target size (e.g. '44px')."
+            }
+          }
+        }
+      }
+    },
+    "personalization": {
+      "type": "object",
+      "description": "Personalization rules controlling which aspects users may customize.",
+      "required": ["allowedCustomizations", "locked"],
+      "additionalProperties": false,
+      "properties": {
+        "allowedCustomizations": {
+          "type": "array",
+          "description": "List of customization axes the end-user is permitted to adjust.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "styleDirection",
+              "layoutDensity",
+              "informationEmphasis",
+              "componentArrangement",
+              "themeMode",
+              "motionIntensity",
+              "widgetComposition",
+              "sceneMode",
+              "screenMode",
+              "preferenceMemory"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "locked": {
+          "type": "array",
+          "description": "List of token paths or component names that must not be altered by personalization (e.g. 'tokens.colors.primary', 'components.card.aspectRatios').",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}
