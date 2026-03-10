@@ -618,6 +618,29 @@ describe("processDiscordMessage draft streaming", () => {
     }
   });
 
+  it("strips leaked tool transcript blocks from partial stream updates", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: `Before
+<tool_call>
+{"name":"subagents"}
+</tool_call>
+<tool_result>
+Spawned sub-agent
+</tool_result>
+After`,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    await runInPartialStreamMode();
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates).toEqual(["Before\n\nAfter"]);
+  });
+
   it("skips pure-reasoning partial updates without updating draft", async () => {
     const draftStream = createMockDraftStreamForTest();
 
@@ -631,5 +654,28 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("strips leaked tool transcript blocks from final Discord sends", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        text: `Before
+<tool_call>
+{"name":"subagents"}
+</tool_call>
+<tool_result>
+Spawned sub-agent
+</tool_result>
+After`,
+      });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await processStreamOffDiscordMessage();
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    const deliveryCall = deliverDiscordReply.mock.calls.at(0) as Array<unknown> | undefined;
+    const deliveryArgs = deliveryCall?.[0] as { replies?: Array<{ text?: string }> } | undefined;
+    expect(deliveryArgs?.replies?.[0]?.text).toBe("Before\n\nAfter");
   });
 });

@@ -427,6 +427,7 @@ export function handleMessageEnd(
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
+  ctx.state.blockState.toolTranscriptDepth = 0;
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;

@@ -148,6 +148,19 @@ describe("sanitizeTextContent", () => {
     const result = sanitizeTextContent(input).trim();
     expect(result).toBe("Before  after");
   });
+
+  it("strips raw tool transcript blocks", () => {
+    const input = `Before
+<tool_call>
+{"name":"subagents"}
+</tool_call>
+<tool_result>
+Spawned sub-agent
+</tool_result>
+After`;
+    const result = sanitizeTextContent(input).trim();
+    expect(result).toBe("Before\n\nAfter");
+  });
 });
 
 beforeAll(async () => {
