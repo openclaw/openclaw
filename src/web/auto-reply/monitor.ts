@@ -152,6 +152,7 @@ export async function monitorWebChannel(
     let heartbeat: NodeJS.Timeout | null = null;
     let watchdogTimer: NodeJS.Timeout | null = null;
     let lastMessageAt: number | null = null;
+    let connectionEstablishedAt: number | null = null;
     let handledMessages = 0;
     let _lastInboundMsg: WebInboundMsg | null = null;
     let unregisterUnhandled: (() => void) | null = null;
@@ -211,7 +212,8 @@ export async function monitorWebChannel(
       },
     });
 
-    Object.assign(status, createConnectedChannelStatusPatch());
+    connectionEstablishedAt = Date.now();
+    Object.assign(status, createConnectedChannelStatusPatch(connectionEstablishedAt));
     status.lastError = null;
     emitStatus();
 
@@ -294,10 +296,11 @@ export async function monitorWebChannel(
       }, heartbeatSeconds * 1000);
 
       watchdogTimer = setInterval(() => {
-        if (!lastMessageAt) {
+        const lastActivityAt = Math.max(connectionEstablishedAt ?? 0, lastMessageAt ?? 0);
+        if (!lastActivityAt) {
           return;
         }
-        const timeSinceLastMessage = Date.now() - lastMessageAt;
+        const timeSinceLastMessage = Date.now() - lastActivityAt;
         if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
           return;
         }
@@ -306,7 +309,8 @@ export async function monitorWebChannel(
           {
             connectionId,
             minutesSinceLastMessage,
-            lastMessageAt: new Date(lastMessageAt),
+            connectionEstablishedAt: connectionEstablishedAt ? new Date(connectionEstablishedAt) : null,
+            lastMessageAt: lastMessageAt ? new Date(lastMessageAt) : null,
             messagesHandled: handledMessages,
           },
           "Message timeout detected - forcing reconnect",

@@ -201,6 +201,55 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
+  it("forces reconnect when watchdog fires with no messages received (regression #99)", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const closeResolvers: Array<(reason: unknown) => void> = [];
+      const listenerFactory = vi.fn(async () => {
+        let resolveClose: (reason: unknown) => void = () => {};
+        const onClose = new Promise<unknown>((res) => {
+          resolveClose = res;
+          closeResolvers.push(res);
+        });
+        return {
+          close: vi.fn(),
+          onClose,
+          signalClose: (reason?: unknown) => resolveClose(reason),
+        };
+      });
+      const { controller, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        heartbeatSeconds: 60,
+        messageTimeoutMs: 30,
+        watchdogCheckMs: 5,
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      // Advance time past the timeout without sending any messages.
+      // The watchdog should still trigger based on connectionEstablishedAt.
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+      await vi.waitFor(
+        () => {
+          expect(listenerFactory).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      controller.abort();
+      closeResolvers[1]?.({ status: 499, isLoggedOut: false });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {
