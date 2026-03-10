@@ -9,8 +9,8 @@ metadata:
         "emoji": "🛡️",
         "requires": { "env": ["OUTTAKE_API_KEY"], "bins": ["curl"] },
         "primaryEnv": "OUTTAKE_API_KEY",
-        "homepage": "https://outtake.ai"
-      }
+        "homepage": "https://outtake.ai",
+      },
   }
 ---
 
@@ -69,37 +69,37 @@ Or configure in OpenClaw:
   skills: {
     entries: {
       "domain-trust-check": {
-        apiKey: "outtake_..."
-      }
-    }
-  }
+        apiKey: "outtake_...",
+      },
+    },
+  },
 }
 ```
 
-| Status | Meaning |
-|---|---|
-| 409 | Email already registered — use your existing key |
-| 429 | Rate limited (5 registrations/hour) |
+| Status | Meaning                                          |
+| ------ | ------------------------------------------------ |
+| 409    | Email already registered — use your existing key |
+| 429    | Rate limited (5 registrations/hour)              |
 
 Optional fields: `wallet_address` (Ethereum), `agent_framework` (e.g. "openclaw").
 
 ## Interpreting Results
 
-| verdict | safe_to_visit | Action |
-|---|---|---|
-| `malicious` | `unsafe` | **Block.** Do NOT visit. Warn the user. |
+| verdict      | safe_to_visit      | Action                                              |
+| ------------ | ------------------ | --------------------------------------------------- |
+| `malicious`  | `unsafe`           | **Block.** Do NOT visit. Warn the user.             |
 | `suspicious` | `safe` or `unsafe` | **Warn** the user. If `unsafe`, treat as malicious. |
-| `safe` | `safe` | Safe to visit. |
-| `unknown` | `unknown` | No data. Proceed with caution. |
+| `safe`       | `safe`             | Safe to visit.                                      |
+| `unknown`    | `unknown`          | No data. Proceed with caution.                      |
 
 ### Response Fields
 
-| Field | Values | Description |
-|---|---|---|
-| `verdict` | `malicious`, `suspicious`, `safe`, `unknown` | Threat classification |
-| `confidence` | `0.0` – `1.0` | `1.0` = human-reviewed, `0.7–0.99` = ML, `0.0` = no data |
-| `safe_to_visit` | `safe`, `unsafe`, `unknown` | Binary browsing safety |
-| `recommended_action` | `block`, `warn`, `proceed`, `use_caution` | Suggested action |
+| Field                | Values                                       | Description                                              |
+| -------------------- | -------------------------------------------- | -------------------------------------------------------- |
+| `verdict`            | `malicious`, `suspicious`, `safe`, `unknown` | Threat classification                                    |
+| `confidence`         | `0.0` – `1.0`                                | `1.0` = human-reviewed, `0.7–0.99` = ML, `0.0` = no data |
+| `safe_to_visit`      | `safe`, `unsafe`, `unknown`                  | Binary browsing safety                                   |
+| `recommended_action` | `block`, `warn`, `proceed`, `use_caution`    | Suggested action                                         |
 
 ## Batch Checking
 
@@ -125,9 +125,9 @@ curl -s -X POST https://app.outtake.ai/api/v1/trust/check-batch \
 
 ## Rate Limits
 
-| Limit | Window | Value |
-|---|---|---|
-| Burst | Per minute | 10 requests |
+| Limit | Window       | Value             |
+| ----- | ------------ | ----------------- |
+| Burst | Per minute   | 10 requests       |
 | Daily | Per 24 hours | 10,000 URL checks |
 
 On `429`, wait `retry_after_seconds` before retrying. Do not retry `400` errors.
