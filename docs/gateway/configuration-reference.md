@@ -304,6 +304,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Token: `channels.discord.token`, with `DISCORD_BOT_TOKEN` as fallback for the default account.
+- Direct outbound calls that provide an explicit Discord `token` use that token for the call; account retry/policy settings still come from the selected account in the active runtime snapshot.
 - Optional `channels.discord.defaultAccount` overrides default account selection when it matches a configured account id.
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
