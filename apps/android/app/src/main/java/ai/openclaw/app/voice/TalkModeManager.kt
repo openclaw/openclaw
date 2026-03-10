@@ -22,6 +22,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.isCanonicalMainSessionKey
 import ai.openclaw.app.normalizeMainKey
 import ai.openclaw.app.shouldReplaceMainSessionKey
 import java.io.File
