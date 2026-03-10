@@ -140,7 +140,6 @@ describe("renderTable", () => {
     expect(line1Index).toBeGreaterThan(-1);
     expect(line2Index).toBe(line1Index + 1);
   });
-
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
     const width = 72;
     const out = renderTable({
