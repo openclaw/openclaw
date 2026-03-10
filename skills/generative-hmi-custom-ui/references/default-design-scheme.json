@@ -54,7 +54,7 @@
     "allowedCustomizations": [
       "styleDirection",
       "layoutDensity",
-      "informationEmphasis",
+      "infoEmphasis",
       "componentArrangement",
       "themeMode",
       "motionIntensity",

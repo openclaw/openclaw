@@ -121,30 +121,30 @@
     '}',
 
     // Dark theme support
-    '[data-theme="dark"] .hmi-chatbot-panel {',
+    '[data-theme="night"] .hmi-chatbot-panel {',
     '  background: var(--color-surface-dark, #1E1E1E);',
     '  color: var(--theme-text, #E8EAED);',
     '}',
-    '[data-theme="dark"] .hmi-chatbot-header {',
+    '[data-theme="night"] .hmi-chatbot-header {',
     '  background: var(--color-surface-dark, #1E1E1E);',
     '  border-bottom-color: rgba(255,255,255,0.1);',
     '}',
-    '[data-theme="dark"] .hmi-chatbot-messages {',
+    '[data-theme="night"] .hmi-chatbot-messages {',
     '  background: var(--color-surface-dark, #1E1E1E);',
     '}',
-    '[data-theme="dark"] .hmi-chatbot-input-wrap {',
+    '[data-theme="night"] .hmi-chatbot-input-wrap {',
     '  background: var(--color-surface-dark, #1E1E1E);',
     '  border-top-color: rgba(255,255,255,0.1);',
     '}',
-    '[data-theme="dark"] .hmi-chatbot-input {',
+    '[data-theme="night"] .hmi-chatbot-input {',
     '  background: rgba(255,255,255,0.08);',
     '  color: var(--theme-text, #E8EAED);',
     '}',
-    '[data-theme="dark"] .hmi-chatbot-msg--bot {',
+    '[data-theme="night"] .hmi-chatbot-msg--bot {',
     '  background: rgba(255,255,255,0.08);',
     '  color: var(--theme-text, #E8EAED);',
     '}',
-    '[data-theme="dark"] .hmi-chatbot-msg--system {',
+    '[data-theme="night"] .hmi-chatbot-msg--system {',
     '  color: var(--color-text-secondary, #9AA0A6);',
     '}',
 
@@ -421,7 +421,7 @@
     );
     els.schemeInput = _el('input', 'hmi-chatbot-file-input', {
       type: 'file',
-      accept: '.json,.pdf,.docx,.xlsx',
+      accept: '.json,.pdf,.docx,.xlsx,.fig',
     });
     uploadLabel.appendChild(els.schemeInput);
     els.schemeInput.addEventListener('change', _handleSchemeFileChange);

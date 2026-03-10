@@ -322,201 +322,9 @@
 
     /* ================================================================
        Chatbot Entry
-       Floating action button (bottom-right) that expands into a
-       chat panel with message history, input field, and send button.
+       The chatbot UI (FAB button, chat panel, messages, input) is
+       dynamically created by chatbot-widget.js. No inline CSS needed.
        ================================================================ */
-    .hmi-chatbot-fab {
-      position: fixed;
-      bottom: var(--spacing-lg);
-      right: var(--spacing-lg);
-      width: 56px;
-      height: 56px;
-      border: none;
-      border-radius: var(--radius-pill);
-      background: var(--color-primary);
-      color: var(--color-surface);
-      box-shadow: var(--elevation-modal);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all var(--animation-duration) var(--animation-easing);
-      z-index: 1000;
-    }
-
-    .hmi-chatbot-fab:hover {
-      transform: scale(1.08);
-      filter: brightness(1.1);
-    }
-
-    .hmi-chatbot-fab:active {
-      transform: scale(0.95);
-    }
-
-    /* Hidden when chat panel is open */
-    .hmi-chatbot-fab--hidden {
-      transform: scale(0);
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .hmi-chat-panel {
-      position: fixed;
-      bottom: var(--spacing-lg);
-      right: var(--spacing-lg);
-      width: 360px;
-      height: 480px;
-      background: var(--color-surface);
-      border-radius: var(--radius-lg);
-      box-shadow: var(--elevation-modal);
-      display: flex;
-      flex-direction: column;
-      z-index: 1001;
-      overflow: hidden;
-      /* Collapsed state: scale from bottom-right */
-      transform: scale(0);
-      transform-origin: bottom right;
-      opacity: 0;
-      pointer-events: none;
-      transition: transform var(--animation-duration) var(--animation-easing),
-                  opacity var(--animation-duration) var(--animation-easing);
-    }
-
-    .hmi-chat-panel--open {
-      transform: scale(1);
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    [data-theme="night"] .hmi-chat-panel {
-      background: var(--color-surface-dark);
-    }
-
-    .hmi-chat-panel__header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: var(--spacing-md);
-      border-bottom: 1px solid var(--color-secondary);
-      flex-shrink: 0;
-    }
-
-    .hmi-chat-panel__title {
-      font-size: var(--font-h3);
-      font-weight: var(--font-weight-medium);
-      color: var(--color-text-primary);
-    }
-
-    .hmi-chat-panel__close {
-      width: 32px;
-      height: 32px;
-      border: none;
-      border-radius: var(--radius-pill);
-      background: transparent;
-      color: var(--color-text-secondary);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background var(--animation-duration) var(--animation-easing);
-    }
-
-    .hmi-chat-panel__close:hover {
-      background: var(--color-secondary);
-      color: var(--color-surface);
-    }
-
-    .hmi-chat-panel__messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: var(--spacing-md);
-      display: flex;
-      flex-direction: column;
-      gap: var(--spacing-sm);
-    }
-
-    .hmi-chat-bubble {
-      max-width: 80%;
-      padding: var(--spacing-sm) var(--spacing-md);
-      border-radius: var(--radius-md);
-      font-size: var(--font-body);
-      line-height: 1.5;
-      word-wrap: break-word;
-    }
-
-    .hmi-chat-bubble--user {
-      align-self: flex-end;
-      background: var(--color-primary);
-      color: var(--color-surface);
-      border-bottom-right-radius: var(--spacing-xs);
-    }
-
-    .hmi-chat-bubble--assistant {
-      align-self: flex-start;
-      background: var(--color-surface);
-      color: var(--color-text-primary);
-      border: 1px solid var(--color-secondary);
-      border-bottom-left-radius: var(--spacing-xs);
-    }
-
-    [data-theme="night"] .hmi-chat-bubble--assistant {
-      background: var(--color-surface-dark);
-      color: var(--theme-text);
-      border-color: var(--color-text-secondary);
-    }
-
-    .hmi-chat-panel__input-area {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm);
-      padding: var(--spacing-md);
-      border-top: 1px solid var(--color-secondary);
-      flex-shrink: 0;
-    }
-
-    .hmi-chat-panel__input {
-      flex: 1;
-      padding: var(--spacing-sm) var(--spacing-md);
-      border: 1px solid var(--color-secondary);
-      border-radius: var(--radius-pill);
-      background: var(--theme-background);
-      color: var(--color-text-primary);
-      font-family: var(--font-family);
-      font-size: var(--font-body);
-      outline: none;
-      transition: border-color var(--animation-duration) var(--animation-easing);
-    }
-
-    .hmi-chat-panel__input:focus {
-      border-color: var(--color-primary);
-    }
-
-    .hmi-chat-panel__input::placeholder {
-      color: var(--color-text-disabled);
-    }
-
-    .hmi-chat-panel__send {
-      width: 40px;
-      height: 40px;
-      border: none;
-      border-radius: var(--radius-pill);
-      background: var(--color-primary);
-      color: var(--color-surface);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      transition: all var(--animation-duration) var(--animation-easing);
-    }
-
-    .hmi-chat-panel__send:hover {
-      filter: brightness(1.1);
-    }
-
-    .hmi-chat-panel__send:active {
-      transform: scale(0.9);
-    }
 
     /* ================================================================
        Design Scheme Upload Modal
@@ -875,9 +683,9 @@
           <span class="hmi-edit-drag-handle" aria-label="Drag to reorder">&#x2630;</span>
         </div>
 
-      Valid widget types: navigation, media, phone, climate,
-      drive-mode, seat-adjustment, ambient-light, vehicle-status,
-      trip-information, weather
+      Valid widget types: navigation, weather, music, toggle,
+      clock, notification, vehicle-status, energy,
+      calendar, dial, suggestions, trip
 
       Valid sizes: 1x1, 2x1, 2x2, 4x1
       Grid: 4 columns, max 3 rows, max 12 widgets total.
@@ -913,61 +721,9 @@
 
   <!-- ================================================================
        SECTION 4: Chatbot Entry
-       Floating action button (bottom-right) that expands to a chat
-       panel. The panel includes message history, a text input, and
-       a send button. Collapse/expand is animated.
+       Chatbot UI is dynamically created by chatbot-widget.js
        ================================================================ -->
-
-  <!-- Chatbot FAB -->
-  <button class="hmi-chatbot-fab" id="chatbotFab" onclick="toggleChatbot()" aria-label="Open chatbot">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-    </svg>
-  </button>
-
-  <!-- Chat Panel -->
-  <div class="hmi-chat-panel" id="chatPanel">
-    <div class="hmi-chat-panel__header">
-      <span class="hmi-chat-panel__title">HMI Assistant</span>
-      <button class="hmi-chat-panel__close" onclick="toggleChatbot()" aria-label="Close chatbot">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/>
-          <line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-    </div>
-
-    <div class="hmi-chat-panel__messages" id="chatMessages">
-      <!-- GENERATE: chat message history here -->
-      <!--
-        Messages use .hmi-chat-bubble with modifiers:
-          .hmi-chat-bubble--user      (user messages, aligned right)
-          .hmi-chat-bubble--assistant  (bot messages, aligned left)
-      -->
-      <div class="hmi-chat-bubble hmi-chat-bubble--assistant">
-        Hello! I can help you customize your dashboard. Try saying
-        "make it sportier" or "switch to dark mode".
-      </div>
-      <!-- GENERATE: end chat messages -->
-    </div>
-
-    <div class="hmi-chat-panel__input-area">
-      <input
-        class="hmi-chat-panel__input"
-        id="chatInput"
-        type="text"
-        placeholder="Type a message..."
-        autocomplete="off"
-        aria-label="Chat message input"
-      />
-      <button class="hmi-chat-panel__send" id="chatSend" onclick="sendChatMessage()" aria-label="Send message">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-        </svg>
-      </button>
-    </div>
-  </div>
+  <!-- Chatbot UI is dynamically created by chatbot-widget.js -->
 
   <!-- ================================================================
        SECTION 5: Design Scheme Upload Modal
@@ -1227,64 +983,17 @@
     }
 
     /* ==============================================================
-       toggleChatbot()
-       Expands or collapses the chat panel. When the panel opens,
-       the FAB hides; when it closes, the FAB reappears.
+       sendChatMessage(text)
+       Delegates to chatbot-widget.js which manages the chat UI,
+       WebSocket connection, and message rendering.
        ============================================================== */
-    let isChatOpen = false;
-
-    function toggleChatbot() {
-      isChatOpen = !isChatOpen;
-      const fab = document.getElementById('chatbotFab');
-      const panel = document.getElementById('chatPanel');
-
-      if (isChatOpen) {
-        fab.classList.add('hmi-chatbot-fab--hidden');
-        panel.classList.add('hmi-chat-panel--open');
-        document.getElementById('chatInput').focus();
-      } else {
-        fab.classList.remove('hmi-chatbot-fab--hidden');
-        panel.classList.remove('hmi-chat-panel--open');
-      }
-    }
-
-    /* ==============================================================
-       sendChatMessage()
-       Reads the chat input, appends a user bubble, clears the
-       input, and delegates to the chatbot-widget.js WebSocket
-       handler for response processing.
-       ============================================================== */
-    function sendChatMessage() {
-      const input = document.getElementById('chatInput');
-      const text = input.value.trim();
+    function sendChatMessage(text) {
       if (!text) return;
-
-      // Append user message bubble
-      const messages = document.getElementById('chatMessages');
-      const bubble = document.createElement('div');
-      bubble.className = 'hmi-chat-bubble hmi-chat-bubble--user';
-      bubble.textContent = text;
-      messages.appendChild(bubble);
-
-      // Clear input
-      input.value = '';
-
-      // Scroll to bottom
-      messages.scrollTop = messages.scrollHeight;
-
-      // Connect to OpenClaw Gateway - provided by chatbot-widget.js
-      if (typeof window.sendToChatbot === 'function') {
-        window.sendToChatbot(text);
+      // Delegate to chatbot-widget.js
+      if (typeof HMIChatbot !== 'undefined' && typeof HMIChatbot.sendMessage === 'function') {
+        HMIChatbot.sendMessage(text);
       }
     }
-
-    // Allow Enter key to send messages
-    document.getElementById('chatInput').addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendChatMessage();
-      }
-    });
 
     /* ==============================================================
        openSchemeUpload() / closeSchemeUpload()
@@ -1388,8 +1097,8 @@
         closeSchemeUpload();
       } else if (window._pendingSchemeFile) {
         // Delegate to chatbot-widget.js for server-side parsing
-        if (typeof window.uploadSchemeFile === 'function') {
-          window.uploadSchemeFile(window._pendingSchemeFile);
+        if (typeof HMIChatbot !== 'undefined' && typeof HMIChatbot.uploadScheme === 'function') {
+          HMIChatbot.uploadScheme(window._pendingSchemeFile);
         }
         closeSchemeUpload();
       }
@@ -1439,9 +1148,9 @@
        ============================================================== */
     function savePreference(key, value) {
       try {
-        const prefs = JSON.parse(localStorage.getItem('hmi-preferences') || '{}');
+        const prefs = JSON.parse(localStorage.getItem('openclaw-hmi-preferences') || '{}');
         prefs[key] = value;
-        localStorage.setItem('hmi-preferences', JSON.stringify(prefs));
+        localStorage.setItem('openclaw-hmi-preferences', JSON.stringify(prefs));
       } catch (e) {
         // localStorage may be unavailable in some embedded contexts
       }
@@ -1449,7 +1158,7 @@
 
     function loadPreference(key) {
       try {
-        const prefs = JSON.parse(localStorage.getItem('hmi-preferences') || '{}');
+        const prefs = JSON.parse(localStorage.getItem('openclaw-hmi-preferences') || '{}');
         return prefs[key] || null;
       } catch (e) {
         return null;
@@ -1458,7 +1167,7 @@
 
     function loadAllPreferences() {
       try {
-        return JSON.parse(localStorage.getItem('hmi-preferences') || '{}');
+        return JSON.parse(localStorage.getItem('openclaw-hmi-preferences') || '{}');
       } catch (e) {
         return {};
       }
@@ -1466,7 +1175,7 @@
 
     function clearPreferences() {
       try {
-        localStorage.removeItem('hmi-preferences');
+        localStorage.removeItem('openclaw-hmi-preferences');
       } catch (e) {
         // Ignore
       }
@@ -1528,8 +1237,7 @@
 | Header | scheme button | Opens design scheme upload modal |
 | Widget Grid | `widgetGrid` | 4-column CSS Grid for widget placement |
 | Scene Bar | `sceneBar` | Horizontal scrollable mode selector |
-| Chatbot FAB | `chatbotFab` | Floating button to open chat panel |
-| Chat Panel | `chatPanel` | Expandable chat interface with messages and input |
+| Chatbot | _(dynamic)_ | Created by chatbot-widget.js at runtime |
 | Upload Modal | `schemeModal` | Design scheme file upload with drag-and-drop |
 | Edit Overlay | `editGridOverlay` | Grid guidelines shown in edit mode |
 | Edit Toolbar | `editToolbar` | Add/remove widget buttons, exit edit mode |
@@ -1546,8 +1254,7 @@
 | `.hmi-widget--disabled` | Disabled state (opacity 0.5, no pointer events) |
 | `.hmi-scene-btn` | Scene mode pill button |
 | `.hmi-scene-btn--active` | Active scene mode |
-| `.hmi-chat-bubble--user` | User chat message (right-aligned, primary bg) |
-| `.hmi-chat-bubble--assistant` | Bot chat message (left-aligned, surface bg) |
+| `.hmi-chatbot-*` | Chatbot UI classes (injected by chatbot-widget.js) |
 | `.hmi-btn--primary` | Primary action button |
 | `.hmi-btn--secondary` | Secondary/cancel button |
 | `.hmi-grid--edit-mode` | Applies scale(0.85) to widget grid |
@@ -1561,11 +1268,10 @@
 | `applyDesignScheme(scheme)` | Maps design scheme JSON tokens to CSS custom properties |
 | `switchTheme(mode)` | Toggles `data-theme` attribute (`"day"`, `"night"`, `"auto"`) |
 | `toggleEditMode()` | Enters/exits edit mode with grid scaling and overlays |
-| `toggleChatbot()` | Expands/collapses the chat panel |
 | `openSchemeUpload()` | Opens the design scheme upload modal |
 | `closeSchemeUpload()` | Closes the upload modal and resets state |
 | `selectScene(mode)` | Activates a scene mode button |
-| `sendChatMessage()` | Sends the chat input text to the chatbot |
+| `sendChatMessage(text)` | Delegates a message to HMIChatbot.sendMessage() |
 | `savePreference(key, value)` | Persists a preference to localStorage |
 | `loadPreference(key)` | Loads a preference from localStorage |
 | `clearPreferences()` | Removes all saved preferences |

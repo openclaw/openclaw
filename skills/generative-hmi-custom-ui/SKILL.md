@@ -37,7 +37,7 @@ Read `~/.openclaw/hmi-schemes/active.json`. If the file does not exist, fall bac
 
 ### Step 2: Load user preferences
 
-Read any saved preferences from `~/.openclaw/hmi-preferences/`. If the directory is empty or missing, use defaults: `styleDirection: "minimal"`, `layoutDensity: "balanced"`, `infoEmphasis: "icon-first"`, `themeMode: "auto"`, `motionIntensity: "medium"`, `widgetComposition: ["navigation", "media", "climate", "vehicle-status", "drive-mode", "ambient-light"]`.
+Read any saved preferences from `~/.openclaw/hmi-preferences/`. If the directory is empty or missing, use defaults: `styleDirection: "minimal"`, `layoutDensity: "balanced"`, `infoEmphasis: "icon-first"`, `themeMode: "auto"`, `motionIntensity: "medium"`, `widgetComposition: ["navigation", "weather", "music", "toggle", "clock", "vehicle-status"]`.
 
 ### Step 3: Read the HTML template
 
@@ -45,7 +45,7 @@ Load the page skeleton from `references/html-template.md`. Use this as the base 
 
 ### Step 4: Determine widget composition
 
-Check the user's `widgetComposition` preference. For each widget in the list, confirm it is a supported type: `navigation`, `media`, `phone`, `climate`, `drive-mode`, `seat-adjustment`, `ambient-light`, `vehicle-status`, `trip-information`. Reject unsupported types silently and proceed with valid ones. Respect `constraints.maxWidgets` from the scheme.
+Check the user's `widgetComposition` preference. For each widget in the list, confirm it is a supported type: `navigation`, `weather`, `music`, `toggle`, `clock`, `notification`, `vehicle-status`, `energy`, `calendar`, `dial`, `suggestions`, `trip`. Reject unsupported types silently and proceed with valid ones. Respect `constraints.maxWidgets` from the scheme.
 
 ### Step 5: Generate widget HTML
 

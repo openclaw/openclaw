@@ -211,14 +211,17 @@ Only include the fields that the user's request explicitly changes. Omitted fiel
 
 **Supported widget types:**
 - `navigation`
-- `media`
-- `phone`
-- `climate`
-- `drive-mode`
-- `seat-adjustment`
-- `ambient-light`
+- `weather`
+- `music`
+- `toggle`
+- `clock`
+- `notification`
 - `vehicle-status`
-- `trip-information`
+- `energy`
+- `calendar`
+- `dial`
+- `suggestions`
+- `trip`
 
 **Restrictions:**
 - Only supported widget types listed above may be used

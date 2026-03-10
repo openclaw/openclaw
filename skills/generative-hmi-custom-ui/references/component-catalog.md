@@ -120,7 +120,7 @@ All widgets inherit these base styles:
 }
 
 /* Night theme override */
-[data-theme="dark"] .hmi-widget {
+[data-theme="night"] .hmi-widget {
   background: var(--color-surface-dark);
   color: var(--theme-text);
 }
