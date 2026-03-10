@@ -39,6 +39,7 @@ RUN mkdir -p /out && \
 
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
+ARG OPENCLAW_SKIP_UI_BUILD
 
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
