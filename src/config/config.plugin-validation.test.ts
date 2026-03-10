@@ -279,6 +279,30 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts voice-call OpenAI TTS speed and instructions config fields", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                openai: {
+                  voice: "alloy",
+                  speed: 1.5,
+                  instructions: "Speak in a cheerful tone",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
     const res = validateInSuite({
       agents: {

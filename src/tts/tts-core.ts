@@ -619,10 +619,13 @@ export async function openaiTTS(params: {
   baseUrl: string;
   model: string;
   voice: string;
+  speed?: number;
+  instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
+    params;
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -646,6 +649,8 @@ export async function openaiTTS(params: {
         input: text,
         voice,
         response_format: responseFormat,
+        ...(speed != null && { speed }),
+        ...(instructions != null && { instructions }),
       }),
       signal: controller.signal,
     });

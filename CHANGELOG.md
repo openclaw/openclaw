@@ -535,6 +535,7 @@ Docs: https://docs.openclaw.ai
 - Browser/config schema: accept `browser.profiles.*.driver: "openclaw"` while preserving legacy `"clawd"` compatibility in validated config. (#39374; based on #35621) Thanks @gambletan and @ingyukoh.
 - Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
 - Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
+- Voice-call\OpenAI TTS schema parity: add missing `speed` and `instructions` fields to the OpenAI TTS `configSchema` so gateway AJV validation accepts already-supported runtime config. (#39226) Thanks @ademczuk.
 
 ## 2026.3.2
 
