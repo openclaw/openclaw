@@ -365,13 +365,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         context,
       });
       if (typeof previewTargetAfterStop.previewMessageId !== "number") {
-        if (lane.stream?.sendMayHaveLanded?.()) {
-          params.log(
-            `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
-          );
-          params.markDelivered();
-          return "retained";
-        }
+        // This is the first preview creation — no prior visible message exists.
+        // Even if sendMayHaveLanded, prefer fallback over silence: a duplicate
+        // is better than the user seeing nothing at all.
         return "fallback";
       }
       return finalizePreview(previewTargetAfterStop.previewMessageId, true, false);
@@ -386,7 +382,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       context,
     });
     if (typeof previewTargetAfterStop.previewMessageId !== "number") {
-      if (lane.stream?.sendMayHaveLanded?.()) {
+      // Only retain when a prior preview is already visible to the user —
+      // otherwise falling back is safer than silence.
+      if (lane.hasStreamedMessage && lane.stream?.sendMayHaveLanded?.()) {
         params.log(
           `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
         );

@@ -538,11 +538,39 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("retains preview when sendMayHaveLanded is true and no messageId", async () => {
+  it("falls back when sendMayHaveLanded is true but no prior visible preview exists", async () => {
     const stream = createTestDraftStream();
     stream.sendMayHaveLanded.mockReturnValue(true);
-    // No messageId → resolvePreviewTarget returns undefined
+    // No messageId and no prior preview → nothing visible for user to see
     const harness = createHarness({ answerStream: stream });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    // Prefer fallback (possible duplicate) over silence (no message at all)
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hello final" }),
+    );
+  });
+
+  it("retains when sendMayHaveLanded is true and a prior preview was visible", async () => {
+    // Stream has a messageId (visible preview) but loses it after stop
+    const stream = createTestDraftStream({ messageId: 999 });
+    stream.sendMayHaveLanded.mockReturnValue(true);
+    const harness = createHarness({
+      answerStream: stream,
+      answerHasStreamedMessage: true,
+    });
+    // Simulate messageId lost after stop (e.g. forceNewMessage or timeout)
+    harness.stopDraftLane.mockImplementation(async (lane: DraftLaneState) => {
+      stream.setMessageId(undefined);
+      await lane.stream?.stop();
+    });
 
     const result = await harness.deliverLaneText({
       laneName: "answer",
