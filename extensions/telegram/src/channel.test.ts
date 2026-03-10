@@ -129,7 +129,7 @@ describe("telegramPlugin duplicate token guard", () => {
     cfg.channels!.telegram!.accounts!.ops = {
       ...cfg.channels!.telegram!.accounts!.ops,
       webhookUrl: "https://example.test/telegram-webhook",
-      webhookSecret: "secret",
+      webhookSecret: "secret", // pragma: allowlist secret
       webhookPort: 9876,
     };
 

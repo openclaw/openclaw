@@ -7,11 +7,11 @@ import type {
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
   DEFAULT_ACCOUNT_ID,
-  addWildcardAllowFrom,
   formatDocsLink,
   mergeAllowFromEntries,
   normalizeAccountId,
-  promptAccountId,
+  resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
   listBlueBubblesAccountIds,
@@ -26,19 +26,11 @@ import { normalizeBlueBubblesServerUrl } from "./types.js";
 const channel = "bluebubbles" as const;
 
 function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.bluebubbles?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      bluebubbles: {
-        ...cfg.channels?.bluebubbles,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "bluebubbles",
+    dmPolicy,
+  });
 }
 
 function setBlueBubblesAllowFrom(
@@ -160,21 +152,16 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
-    const blueBubblesOverride = accountOverrides.bluebubbles?.trim();
     const defaultAccountId = resolveDefaultBlueBubblesAccountId(cfg);
-    let accountId = blueBubblesOverride
-      ? normalizeAccountId(blueBubblesOverride)
-      : defaultAccountId;
-    if (shouldPromptAccountIds && !blueBubblesOverride) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "BlueBubbles",
-        currentId: accountId,
-        listAccountIds: listBlueBubblesAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "BlueBubbles",
+      accountOverride: accountOverrides.bluebubbles,
+      shouldPromptAccountIds,
+      listAccountIds: listBlueBubblesAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const resolvedAccount = resolveBlueBubblesAccount({ cfg: next, accountId });

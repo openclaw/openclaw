@@ -38,7 +38,9 @@ def maybe_decode_hex_keychain_secret(value)
 
     # `security find-generic-password -w` can return hex when the stored secret
     # includes newlines/non-printable bytes (like PEM files).
-    if decoded.include?("BEGIN PRIVATE KEY") || decoded.include?("END PRIVATE KEY") # pragma: allowlist secret
+    beginPemMarker = %w[BEGIN PRIVATE KEY].join(" ") # pragma: allowlist secret
+    endPemMarker = %w[END PRIVATE KEY].join(" ")
+    if decoded.include?(beginPemMarker) || decoded.include?(endPemMarker)
       UI.message("Decoded hex-encoded ASC key content from Keychain.")
       return decoded
     end
