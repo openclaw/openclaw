@@ -454,6 +454,48 @@ describe("backup restore", () => {
     }
   });
 
+  it("keeps rollback rename moves on the target filesystem", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-exdev-"));
+    const originalRename = fs.rename.bind(fs);
+    try {
+      await fs.writeFile(path.join(stateDir, "state.txt"), "before\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      await fs.writeFile(path.join(stateDir, "state.txt"), "after\n", "utf8");
+
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (sourcePath, destPath) => {
+        const sourcePathString = sourcePath.toString();
+        const destPathString = destPath.toString();
+        const targetParent = path.dirname(stateDir);
+        const relativeDest = path.relative(targetParent, destPathString);
+        if (
+          sourcePathString === stateDir &&
+          (relativeDest.startsWith("..") || path.isAbsolute(relativeDest))
+        ) {
+          const error = new Error("cross-device link not permitted") as NodeJS.ErrnoException;
+          error.code = "EXDEV";
+          throw error;
+        }
+        return await originalRename(sourcePathString, destPathString);
+      });
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+      });
+
+      expect(await fs.readFile(path.join(stateDir, "state.txt"), "utf8")).toBe("before\n");
+      renameSpy.mockRestore();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps --json output clean when force-stopping the gateway", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-force-stop-"));
@@ -522,7 +564,7 @@ describe("backup restore", () => {
           archive: archivePath,
           mode: "full-host",
         }),
-      ).rejects.toThrow(/unsupported tar link entry|tar entry is a link|symbolic link/i);
+      ).rejects.toThrow(/unsupported tar (special )?entry|tar entry is a link|symbolic link/i);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
       await fs.rm(sourceDir, { recursive: true, force: true });

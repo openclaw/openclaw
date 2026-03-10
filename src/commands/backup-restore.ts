@@ -283,36 +283,53 @@ async function copySourceToTarget(sourcePath: string, targetPath: string): Promi
   await fs.copyFile(sourcePath, targetPath);
 }
 
-async function applyRestoreOperations(
-  operations: RestoreOperation[],
-  rollbackRoot: string,
-): Promise<void> {
-  const applied: Array<{ targetPath: string; backupPath?: string }> = [];
+async function moveTargetToRollbackPath(targetPath: string): Promise<{
+  rollbackPath: string;
+  rollbackDir: string;
+}> {
+  const targetParent = path.dirname(targetPath);
+  const rollbackDir = await fs.mkdtemp(path.join(targetParent, ".openclaw-restore-rollback-"));
+  const rollbackPath = path.join(rollbackDir, path.basename(targetPath) || "target");
+  await fs.rename(targetPath, rollbackPath);
+  return {
+    rollbackPath,
+    rollbackDir,
+  };
+}
+
+async function applyRestoreOperations(operations: RestoreOperation[]): Promise<void> {
+  const applied: Array<{ targetPath: string; backupPath?: string; rollbackDir?: string }> = [];
   try {
     for (const operation of operations) {
       let backupPath: string | undefined;
+      let rollbackDir: string | undefined;
       try {
         await fs.access(operation.targetPath);
-        backupPath = path.join(
-          rollbackRoot,
-          `${applied.length}-${path.basename(operation.targetPath) || "target"}`,
-        );
-        await fs.mkdir(path.dirname(backupPath), { recursive: true });
-        await fs.rename(operation.targetPath, backupPath);
+        const moved = await moveTargetToRollbackPath(operation.targetPath);
+        backupPath = moved.rollbackPath;
+        rollbackDir = moved.rollbackDir;
       } catch (error) {
         if (!isNotFoundError(error)) {
           throw error;
         }
         backupPath = undefined;
       }
-      applied.push({ targetPath: operation.targetPath, backupPath });
+      applied.push({ targetPath: operation.targetPath, backupPath, rollbackDir });
       await copySourceToTarget(operation.sourcePath, operation.targetPath);
+    }
+    for (const appliedOp of applied) {
+      if (appliedOp.rollbackDir) {
+        await fs.rm(appliedOp.rollbackDir, { recursive: true, force: true });
+      }
     }
   } catch (error) {
     for (const appliedOp of applied.toReversed()) {
       await fs.rm(appliedOp.targetPath, { recursive: true, force: true }).catch(() => undefined);
       if (appliedOp.backupPath) {
         await fs.rename(appliedOp.backupPath, appliedOp.targetPath).catch(() => undefined);
+      }
+      if (appliedOp.rollbackDir) {
+        await fs.rm(appliedOp.rollbackDir, { recursive: true, force: true }).catch(() => undefined);
       }
     }
     throw error;
@@ -550,8 +567,7 @@ export async function backupRestoreCommand(
       manifest,
       extractedRoot,
     });
-    const rollbackRoot = path.join(workingDir, "rollback");
-    await applyRestoreOperations(operations, rollbackRoot);
+    await applyRestoreOperations(operations);
 
     const result: BackupRestoreResult = {
       mode,
