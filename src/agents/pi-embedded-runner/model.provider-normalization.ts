@@ -54,9 +54,33 @@ function normalizeOpenAICodexTransport(params: {
   } as Model<Api>;
 }
 
+function normalizeOpenAITransport(params: { provider: string; model: Model<Api> }): Model<Api> {
+  if (normalizeProviderId(params.provider) !== "openai") {
+    return params.model;
+  }
+
+  const useResponsesTransport =
+    params.model.api === "openai-completions" &&
+    (!params.model.baseUrl || isOpenAIApiBaseUrl(params.model.baseUrl));
+
+  if (!useResponsesTransport) {
+    return params.model;
+  }
+
+  return {
+    ...params.model,
+    api: "openai-responses",
+  } as Model<Api>;
+}
+
 export function normalizeResolvedProviderModel(params: {
   provider: string;
   model: Model<Api>;
 }): Model<Api> {
-  return normalizeModelCompat(normalizeOpenAICodexTransport(params));
+  const normalizedOpenAI = normalizeOpenAITransport(params);
+  const normalizedCodex = normalizeOpenAICodexTransport({
+    provider: params.provider,
+    model: normalizedOpenAI,
+  });
+  return normalizeModelCompat(normalizedCodex);
 }
