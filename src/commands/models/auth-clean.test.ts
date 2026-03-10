@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 // ---- hoisted mocks ---------------------------------------------------------
@@ -10,7 +10,9 @@ const mocks = vi.hoisted(() => ({
   resolveAgentDir: vi.fn((_cfg: unknown, _id: unknown) => "/home/user/.openclaw/agents/main/agent"),
   ensureAuthProfileStore: vi.fn(),
   updateAuthProfileStoreWithLock: vi.fn(),
+  loadAgentLocalAuthProfileStore: vi.fn(),
   loadModelsConfig: vi.fn(),
+  resolveKnownAgentId: vi.fn(() => null),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -24,6 +26,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
 
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
+  loadAgentLocalAuthProfileStore: mocks.loadAgentLocalAuthProfileStore,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -31,7 +34,7 @@ vi.mock("./load-config.js", () => ({
 }));
 
 vi.mock("./shared.js", () => ({
-  resolveKnownAgentId: vi.fn(() => null),
+  resolveKnownAgentId: mocks.resolveKnownAgentId,
 }));
 
 // ---- helpers ----------------------------------------------------------------
@@ -42,7 +45,9 @@ function makeRuntime(): RuntimeEnv & { logs: string[] } {
   const logs: string[] = [];
   const runtime = {
     logs,
-    log: (msg: string) => { logs.push(msg); },
+    log: (msg: string) => {
+      logs.push(msg);
+    },
     error: vi.fn(),
     exit: vi.fn(),
   };
@@ -65,10 +70,7 @@ function makeCfg(
   return { auth: { profiles, ...(orderIds.length > 0 ? { order } : {}) } } as OpenClawConfig;
 }
 
-function makeStore(
-  profileIds: string[],
-  extras: Partial<AuthProfileStore> = {},
-): AuthProfileStore {
+function makeStore(profileIds: string[], extras: Partial<AuthProfileStore> = {}): AuthProfileStore {
   const profiles: AuthProfileStore["profiles"] = {};
   for (const id of profileIds) {
     const provider = id.split(":")[0] ?? "anthropic";
@@ -98,7 +100,14 @@ function captureUpdater(storeSeed: AuthProfileStore): {
     },
   );
 
-  return { get result() { return captured!; }, get returned() { return returned; } };
+  return {
+    get result() {
+      return captured!;
+    },
+    get returned() {
+      return returned;
+    },
+  };
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -249,8 +258,8 @@ describe("modelsAuthCleanCommand", () => {
     await modelsAuthCleanCommand({ json: true }, runtime);
 
     expect(runtime.logs.length).toBe(2);
-    const plan = JSON.parse(runtime.logs[0]!);
-    const result = JSON.parse(runtime.logs[1]!);
+    const plan = JSON.parse(runtime.logs[0]);
+    const result = JSON.parse(runtime.logs[1]);
 
     expect(plan).toMatchObject({ toRemove: ["anthropic:manual"], dryRun: false });
     expect(result).toMatchObject({ ok: true, removed: 1 });
@@ -266,7 +275,7 @@ describe("modelsAuthCleanCommand", () => {
     await modelsAuthCleanCommand({ json: true, dryRun: true }, runtime);
 
     expect(runtime.logs.length).toBe(1);
-    const plan = JSON.parse(runtime.logs[0]!);
+    const plan = JSON.parse(runtime.logs[0]);
     expect(plan).toMatchObject({ toRemove: ["anthropic:manual"], dryRun: true });
     expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
@@ -303,5 +312,40 @@ describe("modelsAuthCleanCommand", () => {
     mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
 
     await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(/lock busy/i);
+  });
+
+  it("non-default agent: excludes main-only profiles from toRemove", async () => {
+    // The agent-local store has agent-profile (configured) and agent-stale (not configured).
+    // The merged view returned by ensureAuthProfileStore also includes main-only-profile,
+    // which exists only in the main store and is NOT configured.
+    // toRemove must contain only agent-stale (from the agent-local store),
+    // NOT main-only-profile (which lives in the main store and must not be touched).
+    const agentLocalStore = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+    const mergedStore = makeStore([
+      "anthropic:agent-profile",
+      "anthropic:agent-stale",
+      "anthropic:main-only-profile", // exists in main store only, not agent-local
+    ]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    // Non-default agent: resolveKnownAgentId returns "worker", default is "main"
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    // ensureAuthProfileStore is NOT called for non-default agents (loadAgentLocalAuthProfileStore is)
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(agentLocalStore);
+    // The updater receives the merged store (simulating what updateAuthProfileStoreWithLock
+    // would pass in production after calling ensureAuthProfileStore internally).
+    const capture = captureUpdater(mergedStore);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ agent: "worker" }, runtime);
+
+    // toRemove was computed from agentLocalStore only: ["anthropic:agent-stale"]
+    expect(capture.result.profiles).not.toHaveProperty("anthropic:agent-stale");
+    expect(capture.result.profiles).toHaveProperty("anthropic:agent-profile");
+    // main-only-profile was never in toRemove, so the updater left it intact
+    expect(capture.result.profiles).toHaveProperty("anthropic:main-only-profile");
+    // ensureAuthProfileStore should not have been called for profile-set computation
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
   });
 });

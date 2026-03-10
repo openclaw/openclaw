@@ -481,6 +481,22 @@ export function ensureAuthProfileStore(
   return merged;
 }
 
+/**
+ * Load only the agent-local auth profile store, without merging with the main
+ * agent store. Use this when computing which profiles to delete: the clean
+ * command's write target is the agent-local file only, so profile IDs that
+ * exist exclusively in the main store must never appear in toRemove.
+ *
+ * Unlike ensureAuthProfileStore, this function does NOT merge the main store
+ * into the result for non-default agents.
+ */
+export function loadAgentLocalAuthProfileStore(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
+  return loadAuthProfileStoreForAgent(agentDir, options);
+}
+
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
   const profiles = Object.fromEntries(
