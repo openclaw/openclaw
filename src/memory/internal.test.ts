@@ -124,6 +124,55 @@ describe("listMemoryFiles", () => {
     }
   });
 
+  it("skips directories in excludeDirs set", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const extraDir = path.join(tmpDir, "extra");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "note.md"), "# Note");
+    const nodeModules = path.join(extraDir, "node_modules");
+    await fs.mkdir(nodeModules, { recursive: true });
+    await fs.writeFile(path.join(nodeModules, "junk.md"), "# Junk from dependency");
+    const gitDir = path.join(extraDir, ".git");
+    await fs.mkdir(gitDir, { recursive: true });
+    await fs.writeFile(path.join(gitDir, "hooks.md"), "# Git internals");
+
+    const excludeDirs = new Set(["node_modules", ".git"]);
+    const files = await listMemoryFiles(tmpDir, [extraDir], excludeDirs);
+    expect(files.some((file) => file.endsWith("MEMORY.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("junk.md"))).toBe(false);
+    expect(files.some((file) => file.endsWith("hooks.md"))).toBe(false);
+  });
+
+  it("skips excludeDirs in the default memory directory too", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const memoryDir = path.join(tmpDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "daily.md"), "# Daily");
+    const venv = path.join(memoryDir, "venv");
+    await fs.mkdir(venv, { recursive: true });
+    await fs.writeFile(path.join(venv, "readme.md"), "# Should be excluded");
+
+    const excludeDirs = new Set(["venv"]);
+    const files = await listMemoryFiles(tmpDir, undefined, excludeDirs);
+    expect(files.some((file) => file.endsWith("daily.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("readme.md"))).toBe(false);
+  });
+
+  it("works with empty excludeDirs set", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const subDir = path.join(tmpDir, "memory", "nested");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(path.join(subDir, "note.md"), "# Nested note");
+
+    const files = await listMemoryFiles(tmpDir, undefined, new Set());
+    expect(files.some((file) => file.endsWith("MEMORY.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
+  });
+
   it("dedupes overlapping extra paths that resolve to the same file", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
