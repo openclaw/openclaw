@@ -171,19 +171,21 @@ export async function createCalendarEvent(
 
   dingtalkLogger.info(`Creating calendar event "${params.summary}" for user ${userId}`);
 
-  const startWithTimezone = {
-    ...params.start,
-    timeZone: params.start.timeZone ?? DEFAULT_CALENDAR_TIMEZONE,
-  };
-  const endWithTimezone = {
-    ...params.end,
-    timeZone: params.end.timeZone ?? DEFAULT_CALENDAR_TIMEZONE,
-  };
+  const timezone = params.start.timeZone ?? DEFAULT_CALENDAR_TIMEZONE;
 
+  // Build the event body for v1.0 API format (ISO 8601 dateTime + timeZone)
   const body: Record<string, unknown> = {
     summary: params.summary,
-    start: startWithTimezone,
-    end: endWithTimezone,
+    start: {
+      dateTime: params.start.dateTime,
+      date: params.start.date,
+      timeZone: timezone,
+    },
+    end: {
+      dateTime: params.end.dateTime,
+      date: params.end.date,
+      timeZone: params.end.timeZone ?? timezone,
+    },
   };
 
   if (params.description) body.description = params.description;

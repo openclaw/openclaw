@@ -315,7 +315,7 @@ function registerCalendarTool(api: OpenClawPluginApi, dingtalkCfg: DingtalkConfi
                   error: "summary, start_time, and end_time are required for creating an event",
                 });
               }
-              const calendarTimezone = "Asia/Shanghai";
+              const calendarTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
               const event = await createCalendarEvent(dingtalkCfg, userId, {
                 summary: calParams.summary,
                 description: calParams.description,
