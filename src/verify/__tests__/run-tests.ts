@@ -23,7 +23,20 @@ function assert(condition: boolean, msg: string) {
 }
 
 function eq(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const keysA = Object.keys(a as Record<string, unknown>).toSorted();
+    const keysB = Object.keys(b as Record<string, unknown>).toSorted();
+    if (JSON.stringify(keysA) !== JSON.stringify(keysB)) {
+      return false;
+    }
+    return keysA.every((key) =>
+      eq((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+    );
+  }
+  return a === b;
 }
 
 console.log("parseToolCatalog:");
