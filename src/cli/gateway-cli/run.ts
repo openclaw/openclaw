@@ -17,7 +17,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
+import { applyEnvProxyToGlobalDispatcher } from "../../infra/net/undici-global-dispatcher.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
@@ -172,15 +172,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   // Node.js connections on macOS. Third-party SDKs embedded in the gateway
   // (e.g. the Pi coding-agent SDK) call bare fetch() and therefore bypass any
   // configured proxy, causing LLM requests to time out in proxy-required
-  // environments. Patch globalThis.fetch early so every bare fetch() call in
-  // the process inherits the proxy settings — EnvHttpProxyAgent also honours
-  // NO_PROXY, so loopback / localhost exclusions are preserved.
-  const proxyFetchResult = resolveProxyFetchFromEnv();
-  if (proxyFetchResult) {
-    globalThis.fetch = proxyFetchResult.fetch;
-    gatewayLog.info(
-      `${proxyFetchResult.envVar} detected — patched globalThis.fetch to route through proxy`,
-    );
+  // environments. Install an EnvHttpProxyAgent as the global undici dispatcher
+  // early so every bare fetch() call inherits the proxy — this approach keeps
+  // ensureGlobalUndiciStreamTimeouts() composable (it detects env-proxy and
+  // applies timeout settings on top). NO_PROXY exclusions are also honoured.
+  const proxyEnvVar = applyEnvProxyToGlobalDispatcher();
+  if (proxyEnvVar) {
+    gatewayLog.info(`${proxyEnvVar} detected — set undici global dispatcher to EnvHttpProxyAgent`);
   }
 
   setConsoleTimestampPrefix(true);

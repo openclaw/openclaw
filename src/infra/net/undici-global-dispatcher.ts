@@ -1,5 +1,7 @@
 import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { logWarn } from "../../logger.js";
+import { PROXY_ENV_KEYS } from "./proxy-env.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -110,4 +112,42 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedDispatcherKey = null;
+}
+
+/**
+ * If any proxy env var (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, or their lowercase
+ * variants) is set, install an EnvHttpProxyAgent as the global undici dispatcher
+ * so that bare fetch() calls — including those from third-party SDKs that do not
+ * accept a custom fetch — route through the configured proxy.
+ *
+ * Using setGlobalDispatcher() rather than replacing globalThis.fetch keeps the
+ * approach composable: subsequent ensureGlobalUndiciStreamTimeouts() calls can
+ * still detect and upgrade the dispatcher with timeout settings.
+ *
+ * Returns the name of the env var that triggered the change, or undefined when
+ * no proxy is configured or the dispatcher could not be set.
+ */
+export function applyEnvProxyToGlobalDispatcher(): string | undefined {
+  let detectedKey: string | undefined;
+  for (const key of PROXY_ENV_KEYS) {
+    if (process.env[key]?.trim()) {
+      detectedKey = key;
+      break;
+    }
+  }
+  if (!detectedKey) {
+    return undefined;
+  }
+  try {
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+    // Reset memoised key so the next ensureGlobalUndiciStreamTimeouts() call
+    // picks up the new env-proxy dispatcher and applies timeout settings.
+    lastAppliedDispatcherKey = null;
+    return detectedKey;
+  } catch (err) {
+    logWarn(
+      `Proxy env var set but EnvHttpProxyAgent dispatcher could not be installed — bare fetch() calls may bypass the proxy: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return undefined;
+  }
 }
