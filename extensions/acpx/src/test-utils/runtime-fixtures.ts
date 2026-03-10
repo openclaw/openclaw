@@ -312,6 +312,7 @@ process.exit(2);
 export async function createMockRuntimeFixture(params?: {
   permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
   queueOwnerTtlSeconds?: number;
+  agentCommand?: string;
   mcpServers?: ResolvedAcpxPluginConfig["mcpServers"];
 }): Promise<{
   runtime: AcpxRuntime;
@@ -328,6 +329,7 @@ export async function createMockRuntimeFixture(params?: {
     allowPluginLocalInstall: false,
     installCommand: "n/a",
     cwd: dir,
+    agentCommand: params?.agentCommand,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",
     strictWindowsCmdWrapper: true,

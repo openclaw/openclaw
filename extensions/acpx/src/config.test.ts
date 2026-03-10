@@ -180,6 +180,70 @@ describe("acpx plugin config parsing", () => {
     );
   });
 
+  it("accepts agentCommand override", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agentCommand: "npx --yes kilocode@latest",
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.agentCommand).toBe("npx --yes kilocode@latest");
+  });
+
+  it("trims agentCommand whitespace", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agentCommand: "  npx --yes kilocode@latest  ",
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.agentCommand).toBe("npx --yes kilocode@latest");
+  });
+
+  it("resolves agentCommand as undefined when not set", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.agentCommand).toBeUndefined();
+  });
+
+  it("rejects empty agentCommand", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          agentCommand: "",
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("agentCommand must be a non-empty string");
+  });
+
+  it("rejects whitespace-only agentCommand", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          agentCommand: "   ",
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("agentCommand must be a non-empty string");
+  });
+
+  it("rejects non-string agentCommand", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          agentCommand: 42,
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("agentCommand must be a non-empty string");
+  });
+
   it("schema accepts mcp server config", () => {
     const schema = createAcpxPluginConfigSchema();
     if (!schema.safeParse) {
