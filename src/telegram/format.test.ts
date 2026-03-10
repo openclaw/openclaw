@@ -161,6 +161,19 @@ describe("markdownToTelegramHtmlChunks word-boundary splitting", () => {
     }
   });
 
+  it("handles non-breaking spaces by splitting on \u00A0 when possible", () => {
+    const text = `hello\u00A0beta\u00A0world`;
+    const chunks = markdownToTelegramHtmlChunks(text, 6);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    // Ensure we don't split "beta" across chunks.
+    for (let i = 0; i < chunks.length - 1; i += 1) {
+      expect(chunks[i]?.endsWith("b") && chunks[i + 1]?.startsWith("eta")).toBe(false);
+      expect(chunks[i]?.endsWith("be") && chunks[i + 1]?.startsWith("ta")).toBe(false);
+      expect(chunks[i]?.endsWith("bet") && chunks[i + 1]?.startsWith("a")).toBe(false);
+    }
+  });
+
   it("handles newlines by splitting on \n when possible", () => {
     const text = "first line\nsecond line with beta token\nthird line";
     const chunks = markdownToTelegramHtmlChunks(text, 25);
