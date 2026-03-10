@@ -431,7 +431,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
-  <Accordion title="Forum topics and thread behavior">
+  <Accordion title="Forum topics, DM topics, and thread behavior">
     Forum supergroups:
 
     - topic session keys append `:topic:<threadId>`
@@ -444,7 +444,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)`)
     - typing actions still include `message_thread_id`
 
-    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`).
+    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`, `disableAudioPreflight`).
     `agentId` is topic-only and does not inherit from group defaults.
 
     **Per-topic agent routing**: Each topic can route to a different agent by setting `agentId` in the topic config. This gives each topic its own isolated workspace, memory, and session. Example:
@@ -520,23 +520,35 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
-    This is currently scoped to forum topics in groups and supergroups.
+    This top-level `bindings[]` path is currently scoped to forum topics in groups and supergroups.
 
     **Thread-bound ACP spawn from chat**:
 
-    - `/acp spawn <agent> --thread here|auto` can bind the current Telegram topic to a new ACP session.
-    - Follow-up topic messages route to the bound ACP session directly (no `/acp steer` required).
-    - OpenClaw pins the spawn confirmation message in-topic after a successful bind.
-    - Requires `channels.telegram.threadBindings.spawnAcpSessions=true`.
+    - `/acp spawn <agent> --thread here|auto` binds the current Telegram conversation when one is available:
+      - forum topics in groups/supergroups
+      - DM topics
+      - plain DMs
+    - Follow-up messages from that conversation route to the bound ACP session directly (no `/acp steer` required).
+    - OpenClaw pins the spawn confirmation only for topic conversations (`<chatId>:topic:<topicId>`), not for plain DM binds.
+    - Plain non-topic groups are not bindable with `--thread here|auto`.
+    - Enabled by default for Telegram; set `channels.telegram.threadBindings.spawnAcpSessions=false` to disable it.
+
+    DM topics (`chat.type="private"` with `message_thread_id`):
+
+    - per-DM config path: `channels.telegram.direct.<chatId>` (or `channels.telegram.direct."*"`)
+    - per-DM topic config path: `channels.telegram.direct.<chatId>.topics.<threadId>` (or `channels.telegram.direct."*".topics.<threadId>`)
+    - per-DM overrides: `dmPolicy`, `allowFrom`, `skills`, `systemPrompt`, `tools`, `toolsBySender`, `enabled`, `requireTopic`
+    - per-DM-topic overrides: `allowFrom`, `skills`, `systemPrompt`, `enabled`, `agentId`
+    - DM topic sessions keep DM routing and append a thread suffix (`:thread:<chatId>:<threadId>`) to the base session key
+
+    `requireTopic: true` blocks non-topic DM messages, callback queries, and native commands.
+    Telegram reaction updates do not carry DM `message_thread_id`, so reactions are blocked for that DM when `requireTopic: true` is enabled.
+    DM topic entries reuse the shared Telegram topic schema, so config validation also accepts `requireMention`, `groupPolicy`, and `disableAudioPreflight`; those keys are group/topic-only code paths and are currently ignored in private chats.
 
     Template context includes:
 
     - `MessageThreadId`
     - `IsForum`
-
-    DM thread behavior:
-
-    - private chats with `message_thread_id` keep DM routing but use thread-aware session keys/reply targets.
 
   </Accordion>
 
@@ -853,16 +865,26 @@ Primary reference:
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
+  - `channels.telegram.groups.<id>.tools` / `toolsBySender`: per-group tool policy overrides.
   - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
   - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
   - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
   - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
-  - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (group fields + topic-only `agentId`).
-  - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent (overrides group-level and binding routing).
-  - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
-  - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-  - top-level `bindings[]` with `type: "acp"` and canonical topic id `chatId:topic:topicId` in `match.peer.id`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
-  - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route DM topics to a specific agent (same behavior as forum topics).
+  - `channels.telegram.groups.<id>.disableAudioPreflight`: skip mention-detection audio preflight for this group.
+  - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (`requireMention`, `groupPolicy`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `agentId`, `disableAudioPreflight`).
+  - `channels.telegram.groups.<id>.topics.<threadId>.agentId`: route this topic to a specific agent for normal Telegram routing. Configured ACP bindings and active conversation bindings still take precedence.
+  - `channels.telegram.groups.<id>.topics.<threadId>.disableAudioPreflight`: per-topic audio preflight override.
+- `channels.telegram.direct`: per-DM config map keyed by private chat ID (or `"*"`).
+  - `channels.telegram.direct.<id>.dmPolicy`: per-DM DM policy override.
+  - `channels.telegram.direct.<id>.tools` / `toolsBySender`: per-DM tool policy overrides.
+  - `channels.telegram.direct.<id>.skills`: per-DM skill filter (omit = all skills, empty = none).
+  - `channels.telegram.direct.<id>.allowFrom`: per-DM sender allowlist override.
+  - `channels.telegram.direct.<id>.systemPrompt`: extra system prompt for this DM.
+  - `channels.telegram.direct.<id>.enabled`: disable this DM route when `false`.
+  - `channels.telegram.direct.<id>.requireTopic`: require DM messages to come from a DM topic (`message_thread_id`).
+  - `channels.telegram.direct.<id>.topics.<threadId>.*`: per-DM-topic overrides (`allowFrom`, `skills`, `systemPrompt`, `enabled`, `agentId`). The shared topic schema also accepts `requireMention`, `groupPolicy`, and `disableAudioPreflight`, but private-chat handlers currently ignore those group-only keys.
+  - `channels.telegram.direct.<id>.topics.<threadId>.agentId`: route this DM topic to a specific agent for normal Telegram routing. Configured ACP bindings and active conversation bindings still take precedence.
+- top-level `bindings[]` with `type: "acp"` and canonical topic id `chatId:topic:topicId` in `match.peer.id`: persistent ACP topic binding fields (see [ACP Agents](/tools/acp-agents#channel-specific-settings)).
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.commands.nativeSkills`: enable/disable Telegram native skills commands.
@@ -870,8 +892,11 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). Telegram preview streaming uses a single preview message that is edited in place.
+- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). In DMs, OpenClaw uses native `sendMessageDraft` when available and falls back to `sendMessage`/`editMessageText`; in groups and topics, it sends a single preview message and edits it in place.
+- `channels.telegram.blockStreaming`: toggle block-streaming behavior for this account.
+- `channels.telegram.blockStreamingCoalesce`: merge streamed block replies before final send.
 - `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
+- `channels.telegram.timeoutSeconds`: Telegram API client timeout in seconds.
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
@@ -880,29 +905,39 @@ Primary reference:
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
 - `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
 - `channels.telegram.webhookHost`: local webhook bind host (default `127.0.0.1`).
-- `channels.telegram.webhookPort`: local webhook bind port (default `8787`).
+- `channels.telegram.webhookPort`: local webhook bind port (default `8787`; set `0` for ephemeral).
+- `channels.telegram.webhookCertPath`: self-signed cert (PEM) upload path for webhook registration.
+- `channels.telegram.threadBindings`: Telegram conversation/thread binding controls.
+  - `channels.telegram.threadBindings.enabled`: enable Telegram conversation binding logic.
+  - `channels.telegram.threadBindings.idleHours` / `maxAgeHours`: idle/age expiry for bindings.
+  - `channels.telegram.threadBindings.spawnAcpSessions`: allow `/acp spawn ... --thread` bindings.
+  - `channels.telegram.threadBindings.spawnSubagentSessions`: reserved for adapter parity; built-in thread-bound `sessions_spawn({ thread: true })` support is not currently implemented for Telegram.
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
+- `channels.telegram.actions.poll`: gate Telegram poll creation (requires `sendMessage`).
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
+- `channels.telegram.heartbeat`: per-channel heartbeat visibility override.
+- `channels.telegram.responsePrefix`: per-channel response-prefix override.
+- `channels.telegram.ackReaction`: per-channel ack reaction override.
 
 - [Configuration reference - Telegram](/gateway/configuration-reference#telegram)
 
 Telegram-specific high-signal fields:
 
-- startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*`
-- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
+- startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*`, `defaultAccount`
+- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, `direct`, `direct.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
-- threading/replies: `replyToMode`
-- streaming: `streaming` (preview), `blockStreaming`
+- threading/replies: `replyToMode`, `threadBindings`
+- streaming: `streaming` (preview), `blockStreaming`, `blockStreamingCoalesce`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
-- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
-- actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
-- reactions: `reactionNotifications`, `reactionLevel`
-- writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `network.dnsResultOrder`, `proxy`
+- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`
+- actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|poll|sticker`
+- reactions: `reactionNotifications`, `reactionLevel`, `ackReaction`
+- writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`, `heartbeat`
 
 ## Related
 

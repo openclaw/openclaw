@@ -345,8 +345,8 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 
 ### [Telegram](https://docs.openclaw.ai/channels/telegram)
 
-- Set `TELEGRAM_BOT_TOKEN` or `channels.telegram.botToken` (env wins).
-- Optional: set `channels.telegram.groups` (with `channels.telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `channels.telegram.allowFrom` or `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` as needed.
+- Set `channels.telegram.botToken` (or `channels.telegram.tokenFile`); `TELEGRAM_BOT_TOKEN` is only a fallback for the default account.
+- Optional: set `channels.telegram.groups` (with `channels.telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). For DM overrides, use `channels.telegram.direct.<chatId>` (or `channels.telegram.direct."*"`); for DM topic overrides (`allowFrom`, `skills`, `systemPrompt`, `enabled`, `agentId`), use `channels.telegram.direct.<chatId>.topics.<threadId>` (or `channels.telegram.direct."*".topics.<threadId>`). Also `channels.telegram.allowFrom` or `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` as needed.
 
 ```json5
 {

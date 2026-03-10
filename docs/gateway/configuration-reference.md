@@ -158,17 +158,28 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       enabled: true,
       botToken: "your-bot-token",
       dmPolicy: "pairing",
-      allowFrom: ["tg:123456789"],
+      allowFrom: [123456789],
       groups: {
         "*": { requireMention: true },
         "-1001234567890": {
-          allowFrom: ["@admin"],
+          allowFrom: [123456789],
           systemPrompt: "Keep answers brief.",
           topics: {
             "99": {
               requireMention: false,
               skills: ["search"],
               systemPrompt: "Stay on topic.",
+            },
+          },
+        },
+      },
+      direct: {
+        "123456789": {
+          requireTopic: true,
+          topics: {
+            "7": {
+              agentId: "support",
+              systemPrompt: "Support-only DM topic",
             },
           },
         },
@@ -180,8 +191,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all
       linkPreview: true,
-      streaming: "partial", // off | partial | block | progress (default: off)
-      actions: { reactions: true, sendMessage: true },
+      streaming: "partial", // off | partial | block | progress (default: partial)
+      actions: { reactions: true, sendMessage: true, poll: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
       retry: {
@@ -198,6 +209,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       webhookUrl: "https://example.com/telegram-webhook",
       webhookSecret: "secret",
       webhookPath: "/telegram-webhook",
+      webhookHost: "127.0.0.1",
+      webhookPort: 8787,
+      webhookCertPath: "/path/to/cert.pem",
     },
   },
 }
@@ -207,8 +221,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- `allowFrom` / `groupAllowFrom` should use numeric Telegram user IDs. Numeric strings are accepted, and `telegram:` / `tg:` prefixes are normalized. `@username` entries are not authorized at runtime.
+- `channels.telegram.direct.<chatId>` (or `direct."*"`) configures DM-specific overrides, including DM topic routing via `channels.telegram.direct.<chatId>.topics.<threadId>.agentId` and DM topic enforcement via `requireTopic`.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
-- Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
+- Telegram stream previews: in DMs, OpenClaw uses native `sendMessageDraft` when available and falls back to `sendMessage`/`editMessageText` otherwise; in groups and topics, it sends a preview message and edits it in place.
+- Webhook TLS note: set `webhookCertPath` when registering a self-signed certificate.
 - Retry policy: see [Retry policy](/concepts/retry).
 
 ### Discord

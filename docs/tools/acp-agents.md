@@ -77,16 +77,19 @@ Required feature flags for thread-bound ACP:
 
 - `acp.enabled=true`
 - `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch)
-- Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
+- Channel-adapter ACP thread-spawn support enabled (adapter-specific)
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+  - Telegram: enabled by default; set `channels.telegram.threadBindings.spawnAcpSessions=false` to disable
 
 ### Thread supporting channels
 
 - Any channel adapter that exposes session/thread binding capability.
 - Current built-in support:
   - Discord threads/channels
-  - Telegram topics (forum topics in groups/supergroups and DM topics)
+  - Telegram current-conversation binds for `/acp spawn --thread here|auto`:
+    - forum topics in groups/supergroups
+    - DM topics
+    - plain DMs
 - Plugin channels can add support through the same binding interface.
 
 ## Channel specific settings
@@ -99,6 +102,7 @@ For non-ephemeral workflows, configure persistent ACP bindings in top-level `bin
 - `bindings[].match` identifies the target conversation:
   - Discord channel or thread: `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
   - Telegram forum topic: `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
+    - Top-level persistent `bindings[]` currently support Telegram forum topics only (not plain DMs / DM topics).
 - `bindings[].agentId` is the owning OpenClaw agent id.
 - Optional ACP overrides live under `bindings[].acp`:
   - `mode` (`persistent` or `oneshot`)
@@ -348,7 +352,7 @@ Notes:
 - On non-thread binding surfaces, default behavior is effectively `off`.
 - Thread-bound spawn requires channel policy support:
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-  - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+  - Telegram: enabled by default; set `channels.telegram.threadBindings.spawnAcpSessions=false` to disable
 
 ## ACP controls
 

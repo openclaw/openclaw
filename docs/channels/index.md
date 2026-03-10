@@ -28,7 +28,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
 - [Synology Chat](/channels/synology-chat) — Synology NAS Chat via outgoing+incoming webhooks (plugin, installed separately).
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
-- [Telegram](/channels/telegram) — Bot API via grammY; supports groups.
+- [Telegram](/channels/telegram) — Bot API via grammY; supports groups plus forum/DM topics.
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
