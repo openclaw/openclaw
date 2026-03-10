@@ -25,7 +25,7 @@ Example hook config (enable Gmail preset mapping):
 {
   hooks: {
     enabled: true,
-    token: "OPENCLAW_HOOK_TOKEN",
+    token: "${OPENCLAW_HOOKS_TOKEN}",
     path: "/hooks",
     presets: ["gmail"],
   },
@@ -39,7 +39,7 @@ that sets `deliver` + optional `channel`/`to`:
 {
   hooks: {
     enabled: true,
-    token: "OPENCLAW_HOOK_TOKEN",
+    token: "${OPENCLAW_HOOKS_TOKEN}",
     presets: ["gmail"],
     mappings: [
       {
@@ -186,7 +186,7 @@ gog gmail watch serve \
   --path /gmail-pubsub \
   --token <shared> \
   --hook-url http://127.0.0.1:18789/hooks/gmail \
-  --hook-token OPENCLAW_HOOK_TOKEN \
+  --hook-token "$OPENCLAW_HOOKS_TOKEN" \
   --include-body \
   --max-bytes 20000
 ```

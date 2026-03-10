@@ -48,7 +48,12 @@ Where does the **Gateway** run?
 - **This Mac (Local only):** onboarding can configure auth and write credentials
   locally.
 - **Remote (over SSH/Tailnet):** onboarding does **not** configure local auth;
-  credentials must exist on the gateway host.
+  credentials must exist on the gateway host. When remote mode is selected,
+  a **remote gateway token** field appears so you can enter the token for
+  connecting to your remote Gateway. Existing non-plaintext token values in
+  `gateway.remote.token` are preserved until you explicitly replace them.
+  If the loaded token shape cannot be used directly from the macOS app,
+  a warning is shown.
 - **Configure later:** skip setup and leave the app unconfigured.
 
 <Tip>
