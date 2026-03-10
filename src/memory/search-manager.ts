@@ -1,3 +1,4 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
@@ -35,7 +36,9 @@ export async function getMemorySearchManager(params: {
     }
 
     // Check if QMD binary is available before attempting to create manager
-    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command);
+    // Use agent workspace as cwd to ensure relative paths (e.g., ./bin/qmd) resolve correctly
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command, 5000, workspaceDir);
     if (!qmdCheck.available) {
       log.warn(`QMD binary not available: ${qmdCheck.error}`);
       log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
