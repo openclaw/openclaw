@@ -3,12 +3,19 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
 const loadConfig = vi.fn().mockReturnValue({});
+const resolveModelAuthCompatibilityError = vi.hoisted(() =>
+  vi.fn<() => string | undefined>(() => undefined),
+);
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/openclaw.json",
   readConfigFileSnapshot,
   writeConfigFile,
   loadConfig,
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveModelAuthCompatibilityError,
 }));
 
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
@@ -55,6 +62,8 @@ describe("models set + fallbacks", () => {
   beforeEach(() => {
     readConfigFileSnapshot.mockClear();
     writeConfigFile.mockClear();
+    resolveModelAuthCompatibilityError.mockReset();
+    resolveModelAuthCompatibilityError.mockReturnValue(undefined);
   });
 
   it("normalizes z.ai provider in models set", async () => {
@@ -124,5 +133,18 @@ describe("models set + fallbacks", () => {
         models: { "anthropic/claude-opus-4-6": {} },
       },
     });
+  });
+
+  it("fails fast when the requested model is incompatible with configured auth", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+    resolveModelAuthCompatibilityError.mockReturnValue(
+      'Model "openai-codex/gpt-5.3-codex-spark" is not supported with OpenAI Codex OAuth (ChatGPT account).',
+    );
+
+    await expect(modelsSetCommand("openai-codex/gpt-5.3-codex-spark", runtime)).rejects.toThrow(
+      "not supported with OpenAI Codex OAuth",
+    );
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 });

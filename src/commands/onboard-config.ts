@@ -8,7 +8,21 @@ export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 export function applyOnboardingLocalWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
+  options?: { hasExistingConfig?: boolean },
 ): OpenClawConfig {
+  const nextTools =
+    baseConfig.tools?.profile !== undefined
+      ? {
+          ...baseConfig.tools,
+          profile: baseConfig.tools.profile,
+        }
+      : options?.hasExistingConfig
+        ? baseConfig.tools
+        : {
+            ...baseConfig.tools,
+            profile: ONBOARDING_DEFAULT_TOOLS_PROFILE,
+          };
+
   return {
     ...baseConfig,
     agents: {
@@ -26,9 +40,6 @@ export function applyOnboardingLocalWorkspaceConfig(
       ...baseConfig.session,
       dmScope: baseConfig.session?.dmScope ?? ONBOARDING_DEFAULT_DM_SCOPE,
     },
-    tools: {
-      ...baseConfig.tools,
-      profile: baseConfig.tools?.profile ?? ONBOARDING_DEFAULT_TOOLS_PROFILE,
-    },
+    ...(nextTools ? { tools: nextTools } : {}),
   };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -9,11 +9,27 @@ import {
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
 
+const resolveModelAuthCompatibilityError = vi.hoisted(() =>
+  vi.fn<() => string | undefined>(() => undefined),
+);
+
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveSessionAgentId: vi.fn(() => "main"),
+}));
+
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  };
+});
+
+vi.mock("../../agents/model-auth.js", () => ({
+  resolveModelAuthCompatibilityError,
 }));
 
 vi.mock("../../agents/sandbox.js", () => ({
@@ -57,7 +73,27 @@ function resolveModelSelectionForCommand(params: {
   });
 }
 
+beforeEach(() => {
+  resolveModelAuthCompatibilityError.mockReset();
+  resolveModelAuthCompatibilityError.mockReturnValue(undefined);
+});
+
 describe("/model chat UX", () => {
+  it("rejects incompatible model/auth combinations before switching", () => {
+    resolveModelAuthCompatibilityError.mockReturnValue(
+      'Model "openai-codex/gpt-5.3-codex-spark" is not supported with OpenAI Codex OAuth (ChatGPT account).',
+    );
+
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai-codex/gpt-5.3-codex-spark",
+      allowedModelKeys: new Set(["openai-codex/gpt-5.3-codex-spark"]),
+      allowedModelCatalog: [{ provider: "openai-codex", id: "gpt-5.3-codex-spark" }],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain("not supported with OpenAI Codex OAuth");
+  });
+
   it("shows summary for /model with no args", async () => {
     const directives = parseInlineDirectives("/model");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
