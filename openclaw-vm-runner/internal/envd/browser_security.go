@@ -21,25 +21,11 @@ var blockedProtocols = map[string]bool{
 	"vbscript":         true,
 }
 
-// blockedIPRanges lists IP ranges that must be blocked for SSRF prevention.
-var blockedIPRanges = []net.IPNet{
-	// Link-local (cloud metadata endpoints like 169.254.169.254)
-	parseCIDR("169.254.0.0/16"),
-	// Loopback
-	parseCIDR("127.0.0.0/8"),
-	// Private RFC 1918
-	parseCIDR("10.0.0.0/8"),
-	parseCIDR("172.16.0.0/12"),
-	parseCIDR("192.168.0.0/16"),
-	// IPv6 link-local
-	parseCIDR("fe80::/10"),
-	// IPv6 loopback
-	parseCIDR("::1/128"),
-	// IPv6 ULA (Unique Local Address) — equivalent of RFC 1918 for IPv6.
-	// Includes fd00:ec2::254 (AWS IPv6 metadata endpoint).
-	parseCIDR("fc00::/7"),
-	// IPv6 unspecified — some stacks route to localhost
-	parseCIDR("::/128"),
+// blockedCIDRs lists additional IP ranges not covered by Go's net.IP helpers.
+// The primary blocking is done via isBlockedIP using Go stdlib classification.
+var blockedCIDRs = []net.IPNet{
+	// IETF "shared address space" for CGN (RFC 6598) — not covered by IsPrivate().
+	parseCIDR("100.64.0.0/10"),
 }
 
 // blockedHostnames lists cloud metadata hostnames and IPs that must be blocked.
@@ -192,9 +178,25 @@ func parseHexIP(host string) net.IP {
 	return net.IP(b)
 }
 
-// isBlockedIP checks an IP against all blocked ranges.
+// isBlockedIP uses Go's standard library IP classification to block any
+// non-public-unicast address. This is more robust than maintaining a manual
+// CIDR list, as it covers all special-purpose ranges including:
+//   - Loopback (127.0.0.0/8, ::1)
+//   - Private/RFC1918 (10/8, 172.16/12, 192.168/16) + IPv6 ULA (fc00::/7)
+//   - Link-local (169.254/16, fe80::/10)
+//   - Multicast (224/4, ff00::/8)
+//   - Unspecified (0.0.0.0, ::)
+//
+// Additionally checks blockedCIDRs for ranges not covered by stdlib (e.g. CGN 100.64/10).
 func isBlockedIP(ip net.IP) bool {
-	for _, cidr := range blockedIPRanges {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	for _, cidr := range blockedCIDRs {
 		if cidr.Contains(ip) {
 			return true
 		}
