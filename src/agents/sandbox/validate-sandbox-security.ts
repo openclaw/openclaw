@@ -119,9 +119,10 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   if (!roots?.length) {
     return [];
   }
+  const windowsPrefix = /^[A-Za-z]:/;
   const normalized = roots
     .map((entry) => entry.trim())
-    .filter((entry) => entry.startsWith("/"))
+    .filter((entry) => entry.startsWith("/") || windowsPrefix.test(entry))
     .map(normalizeHostPath);
   const expanded = new Set<string>();
   for (const root of normalized) {
