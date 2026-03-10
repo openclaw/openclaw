@@ -33,6 +33,7 @@ const pluginSdkEntrypoints = [
   "memory-core",
   "memory-lancedb",
   "minimax-portal-auth",
+  "moonpay",
   "nextcloud-talk",
   "nostr",
   "open-prose",

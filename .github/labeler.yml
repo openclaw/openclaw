@@ -220,6 +220,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lobster/**"
+"extensions: moonpay":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/moonpay/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:
