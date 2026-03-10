@@ -598,12 +598,11 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
   })
     .then((didAnnounce) => {
-      // Only send external notification when the internal announce succeeded,
-      // otherwise the parent session hasn't been notified yet and an external
-      // notification would be premature.
-      if (didAnnounce) {
-        void sendExternalCompletionNotification(entry);
-      }
+      // Send external completion notification regardless of whether the
+      // internal announce succeeded.  When the requester session is inactive
+      // (didAnnounce=false), the external notification is the only signal that
+      // the run finished — without it, deferred/inactive cases are silently lost.
+      void sendExternalCompletionNotification(entry);
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
     })
     .catch((error) => {
