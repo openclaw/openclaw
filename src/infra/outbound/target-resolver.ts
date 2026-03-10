@@ -197,17 +197,10 @@ function detectTargetKind(
     return "group";
   }
 
-  if (
-    trimmed.startsWith("@") ||
-    /^<@!?/.test(trimmed) ||
-    /^(user|dm):/i.test(trimmed)
-  ) {
+  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^(user|dm):/i.test(trimmed)) {
     return "user";
   }
-  if (
-    trimmed.startsWith("#") ||
-    /^(channel|group|chat|room|conversation):/i.test(trimmed)
-  ) {
+  if (trimmed.startsWith("#") || /^(channel|group|chat|room|conversation):/i.test(trimmed)) {
     return "group";
   }
 
