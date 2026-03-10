@@ -36,6 +36,8 @@ type LoadedHookModule = {
   exportName: string;
 };
 
+type WorkspaceOverrideMap = Map<string, Set<string>>;
+
 /**
  * Startup loader for multi-agent gateways.
  *
@@ -73,7 +75,7 @@ export async function loadInternalHooksForStartup(
         createSharedHookHandler({
           cfg,
           handler,
-          overriddenWorkspaceDirs: overriddenWorkspacesByHookName.get(entry.hook.name),
+          overriddenWorkspaces: overriddenWorkspacesByHookName.get(entry.hook.name),
         }),
     });
   } catch (err) {
@@ -362,13 +364,17 @@ function normalizeWorkspaceDirs(workspaceDirs: readonly string[]): string[] {
 
 function buildWorkspaceOverrideMap(
   workspaceEntriesByDir: ReadonlyMap<string, readonly HookEntry[]>,
-): Map<string, Set<string>> {
-  const overrides = new Map<string, Set<string>>();
+): Map<string, WorkspaceOverrideMap> {
+  const overrides = new Map<string, WorkspaceOverrideMap>();
   for (const [workspaceDir, entries] of workspaceEntriesByDir) {
     for (const entry of entries) {
-      const current = overrides.get(entry.hook.name) ?? new Set<string>();
-      current.add(workspaceDir);
-      overrides.set(entry.hook.name, current);
+      const workspaceOverrides = overrides.get(entry.hook.name) ?? new Map<string, Set<string>>();
+      const events = workspaceOverrides.get(workspaceDir) ?? new Set<string>();
+      for (const event of entry.metadata?.events ?? []) {
+        events.add(event);
+      }
+      workspaceOverrides.set(workspaceDir, events);
+      overrides.set(entry.hook.name, workspaceOverrides);
     }
   }
   return overrides;
@@ -402,19 +408,26 @@ function createWorkspaceScopedHandler(params: {
 function createSharedHookHandler(params: {
   cfg: OpenClawConfig;
   handler: InternalHookHandler;
-  overriddenWorkspaceDirs?: ReadonlySet<string>;
+  overriddenWorkspaces?: ReadonlyMap<string, ReadonlySet<string>>;
 }): InternalHookHandler {
-  if (!params.overriddenWorkspaceDirs || params.overriddenWorkspaceDirs.size === 0) {
+  if (!params.overriddenWorkspaces || params.overriddenWorkspaces.size === 0) {
     return params.handler;
   }
 
   return async (event) => {
+    const eventWorkspaceDir = resolveEventWorkspaceDir(event, params.cfg);
     if (isGatewayStartupEvent(event)) {
+      const startupOverrides = eventWorkspaceDir
+        ? params.overriddenWorkspaces?.get(eventWorkspaceDir)
+        : undefined;
+      if (startupOverrides?.has("gateway:startup")) {
+        return;
+      }
+      await params.handler(event);
       return;
     }
 
-    const eventWorkspaceDir = resolveEventWorkspaceDir(event, params.cfg);
-    if (eventWorkspaceDir && params.overriddenWorkspaceDirs?.has(eventWorkspaceDir)) {
+    if (eventWorkspaceDir && params.overriddenWorkspaces?.has(eventWorkspaceDir)) {
       return;
     }
     await params.handler(event);

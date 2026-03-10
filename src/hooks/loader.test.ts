@@ -757,5 +757,43 @@ describe("loader", () => {
       await triggerInternalHook(event);
       expect(event.messages).toEqual([mainWorkspace]);
     });
+
+    it("does not suppress shared startup hooks when the matching workspace-local hook does not subscribe to startup", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeHook({
+        hooksRoot: managedHooksDir,
+        hookName: "override-me",
+        events: ["gateway:startup"],
+        message: "shared-startup",
+      });
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "override-me",
+        events: ["command:new"],
+        message: "main-command",
+      });
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir,
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(2);
+
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+        cfg,
+        workspaceDir: mainWorkspace,
+      });
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["shared-startup"]);
+    });
   });
 });
