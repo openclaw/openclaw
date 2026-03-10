@@ -344,9 +344,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return undefined;
   };
   const resolveGroupRequireMention = (chatId: string | number) => {
-    // When Telegram groupPolicy is "open", the user explicitly opted into
-    // processing all group messages — default to not requiring mentions.
-    // This is scoped to Telegram only; other channels retain their own defaults.
+    // Explicit requireMention override always takes precedence — even when
+    // groupPolicy is open.  This preserves the operator's ability to force
+    // mention gating regardless of policy.
+    if (typeof opts.requireMention === "boolean") {
+      return resolveChannelGroupRequireMention({
+        cfg,
+        channel: "telegram",
+        accountId: account.accountId,
+        groupId: String(chatId),
+        requireMentionOverride: opts.requireMention,
+        overrideOrder: "after-config",
+      });
+    }
+    // When Telegram groupPolicy is "open" and no explicit override exists,
+    // default to not requiring mentions.  This is scoped to Telegram only;
+    // other channels retain their own defaults.
     const groupPolicy = resolveChannelGroupPolicyMode(cfg, "telegram", account.accountId);
     if (groupPolicy === "open") {
       return false;
@@ -356,7 +369,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
-      requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
   };
