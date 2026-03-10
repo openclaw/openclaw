@@ -1,3 +1,5 @@
+import { parseAdaptiveCardMarkers, stripCardMarkers } from "../../../cards/parse.js";
+import { telegramStrategy } from "../../../cards/strategies/telegram.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
@@ -52,6 +54,30 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
     });
+
+    // Adaptive card rendering: convert card markers to Telegram HTML + inline keyboard
+    const parsed = parseAdaptiveCardMarkers(text);
+    if (parsed) {
+      let rendered: ReturnType<typeof telegramStrategy.render> | null = null;
+      try {
+        rendered = telegramStrategy.render(parsed);
+      } catch {
+        // strategy error — fall through to fallback text
+      }
+      if (rendered?.type === "telegram") {
+        const buttons: TelegramInlineButtons | undefined = rendered.replyMarkup
+          ? (rendered.replyMarkup.inline_keyboard as unknown as TelegramInlineButtons)
+          : undefined;
+        const result = await send(to, rendered.text, {
+          ...baseOpts,
+          buttons,
+        });
+        return { channel: "telegram", ...result };
+      }
+      // Card markers present but rendering failed; strip markers to avoid leaking raw JSON
+      text = parsed.fallbackText || stripCardMarkers(text);
+    }
+
     const result = await send(to, text, {
       ...baseOpts,
     });

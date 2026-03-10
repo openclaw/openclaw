@@ -1,3 +1,5 @@
+import { parseAdaptiveCardMarkers, stripCardMarkers } from "../../../cards/parse.js";
+import { slackStrategy } from "../../../cards/strategies/slack.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
@@ -99,6 +101,33 @@ export const slackOutbound: ChannelOutboundAdapter = {
   sendPayload: async (ctx) =>
     await sendTextMediaPayload({ channel: "slack", ctx, adapter: slackOutbound }),
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
+    // Adaptive card rendering: convert card markers to Slack Block Kit
+    const parsed = parseAdaptiveCardMarkers(text);
+    if (parsed) {
+      let rendered: ReturnType<typeof slackStrategy.render> | null = null;
+      try {
+        rendered = slackStrategy.render(parsed);
+      } catch {
+        // strategy error — fall through to fallback text
+      }
+      if (rendered?.type === "slack" && rendered.blocks.length > 0) {
+        const send = deps?.sendSlack ?? sendMessageSlack;
+        const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
+        const slackIdentity = resolveSlackSendIdentity(identity);
+        const result = await send(to, rendered.fallback, {
+          cfg,
+          threadTs,
+          accountId: accountId ?? undefined,
+          blocks: rendered.blocks as NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"],
+          ...(slackIdentity ? { identity: slackIdentity } : {}),
+        });
+        return { channel: "slack" as const, ...result };
+      }
+      // Card markers present but no blocks rendered (unsupported elements).
+      // Use fallback text to avoid leaking raw markers to the user.
+      text = parsed.fallbackText || stripCardMarkers(text);
+    }
+
     return await sendSlackOutboundMessage({
       cfg,
       to,
