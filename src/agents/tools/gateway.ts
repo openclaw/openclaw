@@ -144,7 +144,19 @@ export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverride
           urlOverride: envUrlOverride,
         }).target;
       } catch {
-        // Malformed or security-rejected env URL; fall through to config-based resolution.
+        // URL rejected by the agent-tools allowlist (e.g. non-loopback URL not matching
+        // gateway.remote.url, or URL with a non-root path like /ws). callGateway /
+        // buildGatewayConnectionDetails will still use this env URL as-is, so we must
+        // classify based on the actual target host — not silently fall back to local.
+        try {
+          const parsed = new URL(envUrlOverride.trim());
+          // Normalize IPv6 brackets: "[::1]" → "::1"
+          const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+          const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+          return isLoopback ? "local" : "remote";
+        } catch {
+          // Truly malformed URL; callGateway will also fail. Fall through to config-based resolution.
+        }
       }
     }
     // No env override. When mode=remote with a configured remote URL → truly remote.

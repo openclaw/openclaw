@@ -109,6 +109,39 @@ describe("resolveGatewayTarget – env URL override classification", () => {
     expect(resolveGatewayTarget()).toBe("remote");
   });
 
+  it("classifies env-only remote URL (not matching gateway.remote.url) as 'remote'", () => {
+    // callGateway uses the env URL as-is even when validateGatewayUrlOverrideForAgentTools
+    // rejects it (different host than configured gateway.remote.url). Must not leak
+    // deliveryContext into a remote call by falling back to 'local'.
+    process.env.OPENCLAW_GATEWAY_URL = "wss://other-host.example.com";
+    setConfig({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example.com" } },
+    });
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("classifies env-only remote URL with no configured gateway.remote.url as 'remote'", () => {
+    // callGateway picks up the env URL even when gateway.remote.url is absent.
+    process.env.OPENCLAW_GATEWAY_URL = "wss://remote.example.com";
+    setConfig({});
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("classifies env URL with /ws path (rejected by allowlist) as 'remote'", () => {
+    // URLs with non-root paths are rejected by validateGatewayUrlOverrideForAgentTools but
+    // callGateway/buildGatewayConnectionDetails still use them verbatim. Classify correctly.
+    process.env.OPENCLAW_GATEWAY_URL = "wss://remote.example.com/ws";
+    setConfig({});
+    expect(resolveGatewayTarget()).toBe("remote");
+  });
+
+  it("classifies loopback env URL with /ws path (rejected by allowlist) as 'local'", () => {
+    // Even with a non-root path, loopback targets remain local.
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789/ws";
+    setConfig({});
+    expect(resolveGatewayTarget()).toBe("local");
+  });
+
   it("OPENCLAW_GATEWAY_URL takes precedence over env CLAWDBOT_GATEWAY_URL", () => {
     process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
     process.env.CLAWDBOT_GATEWAY_URL = "wss://remote.example.com";
