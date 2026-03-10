@@ -476,7 +476,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     };
     respond(true, result, undefined);
   },
-  "sessions.reset": async ({ params, respond }) => {
+  "sessions.reset": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -568,6 +568,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reason: "session-reset",
       });
     }
+    context.broadcast("session", {
+      type: "reset",
+      sessionKey: target.canonicalKey ?? key,
+      reason: p.reason === "new" ? "new" : "reset",
+    });
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
