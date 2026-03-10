@@ -506,7 +506,6 @@ describe("isFailoverErrorMessage", () => {
     const samples = [
       "Unhandled stop reason: MALFORMED_RESPONSE",
       "Unhandled stop reason: malformed_response",
-      "Unhandled stop reason: MALFORMED_FUNCTION_CALL",
       "stop reason: MALFORMED_RESPONSE",
     ];
     for (const sample of samples) {
@@ -514,6 +513,13 @@ describe("isFailoverErrorMessage", () => {
       expect(classifyFailoverReason(sample)).toBe("timeout");
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
+  });
+
+  it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+    const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
   });
 });
 
