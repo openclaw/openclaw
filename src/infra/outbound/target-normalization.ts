@@ -14,6 +14,11 @@ type TargetNormalizerCacheEntry = {
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
 
+type LegacyTargetNormalizerResult = {
+  ok?: boolean;
+  to?: unknown;
+};
+
 function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   const version = getActivePluginRegistryVersion();
   const cached = targetNormalizerCacheByChannelId.get(channelId);
@@ -39,8 +44,25 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   }
   const providerId = normalizeChannelId(provider);
   const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
-  const normalized = normalizer?.(raw) ?? fallback;
+  const candidate = normalizer?.(raw);
+  const normalized =
+    typeof candidate === "string"
+      ? candidate
+      : isLegacyTargetNormalizerResult(candidate)
+        ? readLegacyTarget(candidate)
+        : fallback;
   return normalized || undefined;
+}
+
+function isLegacyTargetNormalizerResult(value: unknown): value is LegacyTargetNormalizerResult {
+  return typeof value === "object" && value !== null && ("ok" in value || "to" in value);
+}
+
+function readLegacyTarget(value: LegacyTargetNormalizerResult): string | undefined {
+  if (typeof value.to === "string" && value.to.trim()) {
+    return value.to.trim();
+  }
+  return undefined;
 }
 
 export function buildTargetResolverSignature(channel: ChannelId): string {
