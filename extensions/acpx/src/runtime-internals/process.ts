@@ -126,6 +126,7 @@ export function spawnWithResolvedCommand(
     command: string;
     args: string[];
     cwd: string;
+    stripProviderAuthEnvVars?: boolean;
   },
   options?: SpawnCommandOptions,
 ): ChildProcessWithoutNullStreams {
@@ -141,9 +142,11 @@ export function spawnWithResolvedCommand(
     ...process.env,
     OPENCLAW_SHELL: "acp",
   };
-  for (const key of listKnownProviderAuthEnvVarNames()) {
-    if (key !== "OPENCLAW_API_KEY") {
-      delete childEnv[key];
+  if (params.stripProviderAuthEnvVars !== false) {
+    for (const key of listKnownProviderAuthEnvVarNames()) {
+      if (key !== "OPENCLAW_API_KEY") {
+        delete childEnv[key];
+      }
     }
   }
 
@@ -191,6 +194,7 @@ export async function spawnAndCollect(
     command: string;
     args: string[];
     cwd: string;
+    stripProviderAuthEnvVars?: boolean;
   },
   options?: SpawnCommandOptions,
   runtime?: {

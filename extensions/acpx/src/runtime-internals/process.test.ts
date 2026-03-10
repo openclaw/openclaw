@@ -322,4 +322,37 @@ describe("spawnAndCollect", () => {
     expect(parsed.openclaw).toBe("keep-me");
     expect(parsed.shell).toBe("acp");
   });
+
+  it("preserves provider auth env vars for explicit custom commands", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-secret");
+    vi.stubEnv("GITHUB_TOKEN", "gh-secret");
+    vi.stubEnv("HF_TOKEN", "hf-secret");
+    vi.stubEnv("OPENCLAW_API_KEY", "keep-me");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({openai:process.env.OPENAI_API_KEY,github:process.env.GITHUB_TOKEN,hf:process.env.HF_TOKEN,openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}))",
+      ],
+      cwd: process.cwd(),
+      stripProviderAuthEnvVars: false,
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.error).toBeNull();
+
+    const parsed = JSON.parse(result.stdout) as {
+      openai?: string;
+      github?: string;
+      hf?: string;
+      openclaw?: string;
+      shell?: string;
+    };
+    expect(parsed.openai).toBe("openai-secret");
+    expect(parsed.github).toBe("gh-secret");
+    expect(parsed.hf).toBe("hf-secret");
+    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.shell).toBe("acp");
+  });
 });
