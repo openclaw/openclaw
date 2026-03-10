@@ -88,24 +88,32 @@ async function canonicalWorkspacePathKey(value: string): Promise<string> {
 
 function selectWorkspaceTargets(params: {
   workspaceAssetCount: number;
-  manifestWorkspaceDirs: string[];
-  restoredWorkspaceDirs: string[];
-  currentWorkspaceDirs: string[];
+  workspaceDirs: string[];
 }): string[] | undefined {
-  const candidates = [
-    params.manifestWorkspaceDirs,
-    params.restoredWorkspaceDirs,
-    params.currentWorkspaceDirs,
-  ];
-  for (const dirs of candidates) {
-    if (dirs.length === params.workspaceAssetCount) {
-      return dirs;
-    }
-    if (dirs.length === 1 && params.workspaceAssetCount === 1) {
-      return dirs;
-    }
+  if (params.workspaceDirs.length === params.workspaceAssetCount) {
+    return params.workspaceDirs;
+  }
+  if (params.workspaceDirs.length === 1 && params.workspaceAssetCount === 1) {
+    return params.workspaceDirs;
   }
   return undefined;
+}
+
+async function mapWorkspaceTargetsBySourcePath(
+  workspaceDirs: string[],
+  workspaceAssetSourceKeys: readonly string[],
+): Promise<Map<string, string> | undefined> {
+  const workspaceEntries = await Promise.all(
+    workspaceDirs.map(async (entry) => [await canonicalWorkspacePathKey(entry), entry] as const),
+  );
+  const workspaceMap = new Map(workspaceEntries);
+  if (
+    workspaceMap.size !== workspaceAssetSourceKeys.length ||
+    !workspaceAssetSourceKeys.every((key) => workspaceMap.has(key))
+  ) {
+    return undefined;
+  }
+  return workspaceMap;
 }
 
 async function ensureGatewayStopped(
@@ -408,18 +416,9 @@ export async function buildRestoreOperations(params: {
   const configAsset = assetByKind.get("config")?.[0];
   const credentialsAsset = assetByKind.get("credentials")?.[0];
   const workspaceAssets = assetByKind.get("workspace") ?? [];
-  const manifestWorkspaceEntries = await Promise.all(
-    manifestWorkspaceDirs.map(
-      async (entry) => [await canonicalWorkspacePathKey(entry), entry] as const,
-    ),
-  );
-  const manifestWorkspaceMap = new Map(manifestWorkspaceEntries);
   const workspaceAssetSourceKeys = await Promise.all(
     workspaceAssets.map(async (asset) => await canonicalWorkspacePathKey(asset.sourcePath)),
   );
-  const canMatchWorkspaceTargetsBySourcePath =
-    manifestWorkspaceMap.size === workspaceAssets.length &&
-    workspaceAssetSourceKeys.every((key) => manifestWorkspaceMap.has(key));
 
   if (params.mode === "config-only") {
     const configSourcePath =
@@ -469,58 +468,79 @@ export async function buildRestoreOperations(params: {
 
   if (params.mode === "workspace-only" || params.mode === "full-host") {
     if (workspaceAssets.length > 0) {
-      // The manifest records the exact workspace roots that were archived. Prefer it over
-      // config-derived values because config parsing may fall back to the default workspace.
-      const workspaceTargetsBySourcePath = canMatchWorkspaceTargetsBySourcePath
-        ? new Map<string, string>(
-            await Promise.all(
-              workspaceAssets.map(async (asset): Promise<readonly [string, string]> => {
-                const assetSourceKey = await canonicalWorkspacePathKey(asset.sourcePath);
-                const targetPath = manifestWorkspaceMap.get(assetSourceKey);
-                if (!targetPath) {
-                  throw new Error(
-                    `Workspace restore target mismatch for archived workspace: ${asset.sourcePath}`,
-                  );
-                }
-                return [assetSourceKey, targetPath] as const;
-              }),
-            ),
-          )
-        : undefined;
-      const workspaceTargets = workspaceTargetsBySourcePath
-        ? undefined
-        : selectWorkspaceTargets({
-            workspaceAssetCount: workspaceAssets.length,
-            manifestWorkspaceDirs,
-            restoredWorkspaceDirs,
-            currentWorkspaceDirs,
-          });
-      if (!workspaceTargetsBySourcePath && !workspaceTargets) {
-        throw new Error(
-          `Workspace restore target mismatch: archive has ${workspaceAssets.length} workspace asset(s), but no compatible restore target set was found.`,
+      const workspaceTargetCandidates = [
+        currentWorkspaceDirs,
+        restoredWorkspaceDirs,
+        manifestWorkspaceDirs,
+      ];
+      let workspaceTargetError: Error | undefined;
+      let restoredWorkspace = false;
+      for (const candidateDirs of workspaceTargetCandidates) {
+        const workspaceTargetsBySourcePath = await mapWorkspaceTargetsBySourcePath(
+          candidateDirs,
+          workspaceAssetSourceKeys,
         );
+        const workspaceTargets =
+          workspaceTargetsBySourcePath ??
+          selectWorkspaceTargets({
+            workspaceAssetCount: workspaceAssets.length,
+            workspaceDirs: candidateDirs,
+          });
+        if (!workspaceTargets) {
+          continue;
+        }
+        const candidateOperations: RestoreOperation[] = [];
+        let candidateInvalid = false;
+        for (const [index, asset] of workspaceAssets.entries()) {
+          const assetSourceKey = workspaceAssetSourceKeys[index];
+          const targetPath =
+            workspaceTargets instanceof Map
+              ? workspaceTargets.get(assetSourceKey)
+              : workspaceTargets[index];
+          if (!targetPath) {
+            candidateInvalid = true;
+            break;
+          }
+          if (params.mode === "full-host" && stateAsset && isPathWithin(targetPath, stateDir)) {
+            continue;
+          }
+          try {
+            await assertSafeWorkspaceRestoreTarget({
+              targetPath,
+              stateDir,
+              configPath,
+              oauthDir,
+            });
+          } catch (error) {
+            workspaceTargetError = error instanceof Error ? error : new Error(String(error));
+            candidateInvalid = true;
+            break;
+          }
+          candidateOperations.push({
+            kind: "workspace",
+            sourcePath: getAssetExtractPath(params.extractedRoot, asset),
+            targetPath,
+          });
+        }
+        if (candidateInvalid) {
+          continue;
+        }
+        if (candidateOperations.length === 0 && params.mode === "full-host" && stateAsset) {
+          continue;
+        }
+        operations.push(...candidateOperations);
+        restoredWorkspace = true;
+        break;
       }
-      for (const [index, asset] of workspaceAssets.entries()) {
-        const assetSourceKey = await canonicalWorkspacePathKey(asset.sourcePath);
-        const targetPath =
-          workspaceTargetsBySourcePath?.get(assetSourceKey) ?? workspaceTargets?.[index];
-        if (!targetPath) {
-          continue;
+      if (!restoredWorkspace) {
+        if (workspaceTargetError) {
+          throw workspaceTargetError;
         }
-        await assertSafeWorkspaceRestoreTarget({
-          targetPath,
-          stateDir,
-          configPath,
-          oauthDir,
-        });
-        if (params.mode === "full-host" && stateAsset && isPathWithin(targetPath, stateDir)) {
-          continue;
+        if (!(params.mode === "full-host" && stateAsset)) {
+          throw new Error(
+            `Workspace restore target mismatch: archive has ${workspaceAssets.length} workspace asset(s), but no compatible restore target set was found.`,
+          );
         }
-        operations.push({
-          kind: "workspace",
-          sourcePath: getAssetExtractPath(params.extractedRoot, asset),
-          targetPath,
-        });
       }
     }
   }

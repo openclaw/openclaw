@@ -27,9 +27,36 @@ export async function resolveInstallationId(params: {
   createIfMissing?: boolean;
 }): Promise<string | undefined> {
   const filePath = buildInstallationFilePath(params.stateDir);
+  let raw: string | undefined;
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<InstallationRecord>;
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      raw = undefined;
+    } else {
+      throw new Error(`Failed to read backup installation record at ${filePath}.`, {
+        cause: error,
+      });
+    }
+  }
+
+  if (raw !== undefined) {
+    let parsed: Partial<InstallationRecord>;
+    try {
+      parsed = JSON.parse(raw) as Partial<InstallationRecord>;
+    } catch (error) {
+      throw new Error(
+        `Invalid backup installation record at ${filePath}. Delete or repair it before continuing.`,
+        {
+          cause: error,
+        },
+      );
+    }
     if (
       parsed.schemaVersion === 1 &&
       typeof parsed.installationId === "string" &&
@@ -37,8 +64,9 @@ export async function resolveInstallationId(params: {
     ) {
       return parsed.installationId;
     }
-  } catch {
-    // Fall through to optional creation.
+    throw new Error(
+      `Invalid backup installation record at ${filePath}. Delete or repair it before continuing.`,
+    );
   }
 
   if (!params.createIfMissing) {

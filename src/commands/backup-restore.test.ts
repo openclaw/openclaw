@@ -260,6 +260,76 @@ describe("backup restore", () => {
     }
   });
 
+  it("prefers current workspace targets over archived absolute paths", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const currentWorkspace = path.join(tempHome.home, "current-workspace");
+    const archivedWorkspace = path.join("/tmp", "archived-workspace");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "assets", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(rootDir, "assets", "config", "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: archivedWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(tempHome.home, ".openclaw", "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: currentWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const operations = await buildRestoreOperations({
+        mode: "workspace-only",
+        extractedRoot: rootDir,
+        manifest: {
+          schemaVersion: 1,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          archiveRoot: "archive-root",
+          runtimeVersion: "2026.3.9",
+          platform: process.platform,
+          nodeVersion: process.version,
+          paths: {
+            workspaceDirs: [archivedWorkspace],
+          },
+          assets: [
+            {
+              kind: "config",
+              sourcePath: path.join(tempHome.home, ".openclaw", "openclaw.json"),
+              archivePath: "archive-root/assets/config/openclaw.json",
+            },
+            {
+              kind: "workspace",
+              sourcePath: archivedWorkspace,
+              archivePath: "archive-root/assets/workspace",
+            },
+          ],
+        },
+      });
+
+      expect(operations).toEqual([
+        expect.objectContaining({
+          kind: "workspace",
+          targetPath: currentWorkspace,
+        }),
+      ]);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects restoring a workspace directly onto the home directory", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");
