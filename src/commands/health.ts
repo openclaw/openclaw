@@ -348,6 +348,7 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -378,6 +379,7 @@ export async function getHealthSnapshot(params?: {
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
   const doProbe = params?.probe !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
+  const runtimeSnapshot = params?.runtimeSnapshot;
   const channelOrder = listChannelPlugins().map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
 
@@ -450,7 +452,12 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
+      const defaultRuntime = runtimeSnapshot?.channels[plugin.id];
+      const runtimeAccount = runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId];
+      const runtimeForAccount =
+        runtimeAccount ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
       const snapshot: ChannelAccountSnapshot = {
+        ...(runtimeForAccount ?? {}),
         accountId,
         enabled,
         configured,

@@ -201,6 +201,77 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.error).toMatch(/unauthorized/i);
   });
 
+  it("includes runtime channel state when provided by the gateway", async () => {
+    testConfig = {
+      channels: {
+        telegram: { botToken: "t-1" },
+      },
+    };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/getMe")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: { id: 1, username: "bot" } }),
+          } as unknown as Response;
+        }
+        if (url.includes("/getWebhookInfo")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, result: { url: "https://example.com/h" } }),
+          } as unknown as Response;
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ ok: false, description: "nope" }),
+        } as unknown as Response;
+      }),
+    );
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            running: true,
+            connected: true,
+            lastConnectedAt: 123,
+            lastEventAt: 456,
+          },
+        },
+        channelAccounts: {
+          telegram: {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              lastConnectedAt: 123,
+              lastEventAt: 456,
+            },
+          },
+        },
+      },
+    });
+    const telegram = snap.channels.telegram as {
+      running?: boolean;
+      connected?: boolean;
+      lastConnectedAt?: number;
+      lastEventAt?: number;
+    };
+    expect(telegram.running).toBe(true);
+    expect(telegram.connected).toBe(true);
+    expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.lastEventAt).toBe(456);
+  });
+
   it("captures unexpected probe exceptions as errors", async () => {
     testConfig = { channels: { telegram: { botToken: "t-err" } } };
     testStore = {};
