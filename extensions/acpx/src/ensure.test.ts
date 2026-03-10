@@ -149,6 +149,30 @@ describe("acpx ensure", () => {
       command: "/custom/acpx",
       args: ["--help"],
       cwd: "/custom",
+      stripProviderAuthEnvVars: undefined,
+    });
+  });
+
+  it("forwards stripProviderAuthEnvVars to version checks", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "Usage: acpx [options]\n",
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    await checkAcpxVersion({
+      command: "/plugin/node_modules/.bin/acpx",
+      cwd: "/plugin",
+      expectedVersion: undefined,
+      stripProviderAuthEnvVars: true,
+    });
+
+    expect(spawnAndCollectMock).toHaveBeenCalledWith({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--help"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
     });
   });
 

@@ -6,9 +6,12 @@ import {
 } from "./provider-env-vars.js";
 
 describe("provider env vars", () => {
-  it("keeps secret and provider auth env var lists in sync", () => {
-    expect(listKnownSecretEnvVarNames()).toEqual(listKnownProviderAuthEnvVarNames());
-    expect(listKnownSecretEnvVarNames()).toEqual(
+  it("keeps the auth scrub list broader than the global secret env list", () => {
+    expect(listKnownProviderAuthEnvVarNames()).toEqual(
+      expect.arrayContaining(["GITHUB_TOKEN", "GH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"]),
+    );
+    expect(listKnownSecretEnvVarNames()).not.toEqual(listKnownProviderAuthEnvVarNames());
+    expect(listKnownSecretEnvVarNames()).not.toEqual(
       expect.arrayContaining(["GITHUB_TOKEN", "GH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"]),
     );
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");

@@ -45,13 +45,14 @@ const EXTRA_PROVIDER_AUTH_ENV_VARS = [
   "VLLM_API_KEY",
 ] as const;
 
+const KNOWN_SECRET_ENV_VARS = [
+  ...new Set(Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys)),
+];
+
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 const KNOWN_PROVIDER_AUTH_ENV_VARS = [
-  ...new Set([
-    ...Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys),
-    ...EXTRA_PROVIDER_AUTH_ENV_VARS,
-  ]),
+  ...new Set([...KNOWN_SECRET_ENV_VARS, ...EXTRA_PROVIDER_AUTH_ENV_VARS]),
 ];
 
 export function listKnownProviderAuthEnvVarNames(): string[] {
@@ -59,7 +60,7 @@ export function listKnownProviderAuthEnvVarNames(): string[] {
 }
 
 export function listKnownSecretEnvVarNames(): string[] {
-  return listKnownProviderAuthEnvVarNames();
+  return [...KNOWN_SECRET_ENV_VARS];
 }
 
 export function omitEnvKeysCaseInsensitive(
