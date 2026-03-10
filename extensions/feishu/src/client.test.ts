@@ -322,3 +322,108 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toEqual({ proxyUrl: "http://upper-http:8999" });
   });
 });
+
+describe("createFeishuClient HTTP proxy handling", () => {
+  beforeEach(() => {
+    clearClientCache();
+  });
+
+  it("does not inject proxy agent when proxy env is absent", async () => {
+    createFeishuClient({ appId: "app_no_proxy", appSecret: "secret", accountId: "no-proxy" });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.not.objectContaining({ httpsAgent: expect.anything(), proxy: false }),
+    );
+    expect(httpsProxyAgentCtorMock).not.toHaveBeenCalled();
+  });
+
+  it("injects httpsAgent and proxy:false when HTTPS_PROXY is set", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.test:8080";
+
+    createFeishuClient({ appId: "app_with_proxy", appSecret: "secret", accountId: "with-proxy" });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { post: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.post("https://example.com/api", { data: 1 });
+
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://proxy.test:8080");
+
+    expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
+      "https://example.com/api",
+      { data: 1 },
+      expect.objectContaining({
+        httpsAgent: { proxyUrl: "http://proxy.test:8080" },
+        proxy: false,
+      }),
+    );
+  });
+
+  it("uses https_proxy over HTTP_PROXY for HTTP client", async () => {
+    process.env.https_proxy = "http://lower-https:8001";
+    process.env.HTTP_PROXY = "http://upper-http:8004";
+
+    createFeishuClient({ appId: "app_precedence", appSecret: "secret", accountId: "precedence" });
+
+    const expectedProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: { get: (...args: unknown[]) => Promise<unknown> };
+    };
+    await lastCall.httpInstance.get("https://example.com/api");
+
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedProxy);
+
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({
+        httpsAgent: { proxyUrl: expectedProxy },
+        proxy: false,
+      }),
+    );
+  });
+
+  it("caches proxy agent across multiple HTTP requests", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.cached:9999";
+
+    createFeishuClient({ appId: "app_cached", appSecret: "secret", accountId: "cached" });
+
+    const calls = (LarkClient as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const lastCall = calls[calls.length - 1][0] as {
+      httpInstance: {
+        get: (...args: unknown[]) => Promise<unknown>;
+        post: (...args: unknown[]) => Promise<unknown>;
+      };
+    };
+
+    await lastCall.httpInstance.get("https://example.com/api/1");
+    await lastCall.httpInstance.post("https://example.com/api/2", { data: 2 });
+
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api/1",
+      expect.objectContaining({
+        httpsAgent: { proxyUrl: "http://proxy.cached:9999" },
+        proxy: false,
+      }),
+    );
+    expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
+      "https://example.com/api/2",
+      { data: 2 },
+      expect.objectContaining({
+        httpsAgent: { proxyUrl: "http://proxy.cached:9999" },
+        proxy: false,
+      }),
+    );
+  });
+});

@@ -7,14 +7,37 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl =
+function getProxyUrl(): string | undefined {
+  return (
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
     process.env.http_proxy ||
-    process.env.HTTP_PROXY;
+    process.env.HTTP_PROXY
+  );
+}
+
+function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+  const proxyUrl = getProxyUrl();
   if (!proxyUrl) return undefined;
   return new HttpsProxyAgent(proxyUrl);
+}
+
+let cachedHttpProxyAgent: HttpsProxyAgent<string> | undefined;
+let cachedHttpProxyUrl: string | undefined;
+
+function getHttpProxyAgent(): HttpsProxyAgent<string> | undefined {
+  const proxyUrl = getProxyUrl();
+  if (!proxyUrl) {
+    cachedHttpProxyAgent = undefined;
+    cachedHttpProxyUrl = undefined;
+    return undefined;
+  }
+  if (cachedHttpProxyUrl === proxyUrl && cachedHttpProxyAgent) {
+    return cachedHttpProxyAgent;
+  }
+  cachedHttpProxyUrl = proxyUrl;
+  cachedHttpProxyAgent = new HttpsProxyAgent(proxyUrl);
+  return cachedHttpProxyAgent;
 }
 
 // Multi-account client cache
@@ -40,23 +63,34 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * Create an HTTP instance that delegates to the Lark SDK's default instance
  * but injects a default request timeout to prevent indefinite hangs
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
+ * Also injects HTTPS proxy agent when proxy env vars are configured,
+ * to properly handle HTTP CONNECT tunneling for HTTPS requests.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
 
-  function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
+  function injectOptions<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
+    const agent = getHttpProxyAgent();
+    const baseOptions = { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
+    if (agent) {
+      return {
+        ...baseOptions,
+        httpsAgent: agent,
+        proxy: false,
+      } as Lark.HttpRequestOptions<D>;
+    }
+    return baseOptions;
   }
 
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
-    get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
-    put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
-    patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
-    delete: (url, opts) => base.delete(url, injectTimeout(opts)),
-    head: (url, opts) => base.head(url, injectTimeout(opts)),
-    options: (url, opts) => base.options(url, injectTimeout(opts)),
+    request: (opts) => base.request(injectOptions(opts)),
+    get: (url, opts) => base.get(url, injectOptions(opts)),
+    post: (url, data, opts) => base.post(url, data, injectOptions(opts)),
+    put: (url, data, opts) => base.put(url, data, injectOptions(opts)),
+    patch: (url, data, opts) => base.patch(url, data, injectOptions(opts)),
+    delete: (url, opts) => base.delete(url, injectOptions(opts)),
+    head: (url, opts) => base.head(url, injectOptions(opts)),
+    options: (url, opts) => base.options(url, injectOptions(opts)),
   };
 }
 
