@@ -1157,6 +1157,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
   "cron.maxConcurrentRuns":
     "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+  "cron.missedJobStaggerMs":
+    "Delay in ms between deferred missed-job executions after a restart (default: `5000`). Increase this to smooth restart bursts further, or set `0` to disable spacing between deferred jobs.",
+  "cron.maxMissedJobsPerRestart":
+    "Maximum missed jobs to run immediately after a restart before deferring the rest (default: `5`). Lower this to protect the gateway during large catch-up bursts, or raise it when restart latency matters more than load smoothing.",
   "cron.retry":
     "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
   "cron.retry.maxAttempts":

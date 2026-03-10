@@ -3,6 +3,7 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
+  ALLOW_ALWAYS_NOT_PERSISTED_WARNING,
   addAllowlistEntry,
   recordAllowlistUse,
   resolveAllowAlwaysPatterns,
@@ -14,10 +15,13 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
+import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -104,6 +108,16 @@ function warnWritableTrustedDirOnce(message: string): void {
   }
   safeBinTrustedDirWarningCache.add(message);
   logWarn(message);
+}
+
+function notifyAllowAlwaysNotPersisted(sessionKey?: string): void {
+  logWarn(ALLOW_ALWAYS_NOT_PERSISTED_WARNING);
+  const normalizedSessionKey = sessionKey?.trim();
+  if (!normalizedSessionKey) {
+    return;
+  }
+  enqueueSystemEvent(ALLOW_ALWAYS_NOT_PERSISTED_WARNING, { sessionKey: normalizedSessionKey });
+  requestHeartbeatNow(scopedHeartbeatWakeOptions(normalizedSessionKey, { reason: "exec-event" }));
 }
 
 function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
@@ -292,8 +306,6 @@ async function evaluateSystemRunPolicyPhase(
     cmdInvocation,
     shellWrapperInvocation: parsed.shellCommand !== null,
   });
-  analysisOk = policy.analysisOk;
-  allowlistSatisfied = policy.allowlistSatisfied;
   if (!policy.allowed) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
@@ -444,7 +456,7 @@ async function executeSystemRunPhase(
   }
 
   if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
-    if (phase.policy.analysisOk) {
+    if (phase.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments: phase.segments,
         cwd: phase.cwd,
@@ -452,9 +464,7 @@ async function executeSystemRunPhase(
         platform: process.platform,
       });
       if (patterns.length === 0) {
-        logWarn(
-          "exec: allow-always could not persist any allowlist patterns (command may contain only shell builtins like cd, export, etc.)",
-        );
+        notifyAllowAlwaysNotPersisted(phase.sessionKey);
       }
       for (const pattern of patterns) {
         if (pattern) {

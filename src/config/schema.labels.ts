@@ -555,6 +555,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.enabled": "Cron Enabled",
   "cron.store": "Cron Store Path",
   "cron.maxConcurrentRuns": "Cron Max Concurrent Runs",
+  "cron.missedJobStaggerMs": "Cron Missed Job Stagger (ms)",
+  "cron.maxMissedJobsPerRestart": "Cron Max Missed Jobs Per Restart",
   "cron.retry": "Cron Retry Policy",
   "cron.retry.maxAttempts": "Cron Retry Max Attempts",
   "cron.retry.backoffMs": "Cron Retry Backoff (ms)",

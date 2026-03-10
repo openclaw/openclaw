@@ -264,6 +264,17 @@ describe("cron webhook schema", () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it("accepts cron restart catch-up tuning", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        missedJobStaggerMs: 15_000,
+        maxMissedJobsPerRestart: 2,
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
 });
 
 describe("broadcast", () => {

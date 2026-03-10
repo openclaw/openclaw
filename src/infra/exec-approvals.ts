@@ -141,6 +141,9 @@ export type ExecApprovalsResolved = {
   file: ExecApprovalsFile;
 };
 
+export const ALLOW_ALWAYS_NOT_PERSISTED_WARNING =
+  "Warning: allow-always approved this run, but nothing could be added to the allowlist. This can happen with shell builtins like cd or export, or wrapper-only commands, so you'll be asked again next time.";
+
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
 

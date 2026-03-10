@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, type Mock, vi } from "vitest";
-import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  ALLOW_ALWAYS_NOT_PERSISTED_WARNING,
+  type SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -30,6 +34,10 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 });
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
+  beforeEach(() => {
+    resetSystemEventsForTest();
+  });
+
   function createLocalRunResult(stdout = "local-ok") {
     return {
       success: true,
@@ -312,6 +320,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
     approved?: boolean;
+    approvalDecision?: "allow-once" | "allow-always" | null;
     runCommand?: HandleSystemRunInvokeOptions["runCommand"];
     runViaMacAppExecHost?: HandleSystemRunInvokeOptions["runViaMacAppExecHost"];
     sendInvokeResult?: HandleSystemRunInvokeOptions["sendInvokeResult"];
@@ -365,6 +374,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         systemRunPlan: params.systemRunPlan,
         cwd: params.cwd,
         approved: params.approved ?? false,
+        approvalDecision: params.approvalDecision,
         sessionKey: "agent:main:main",
       },
       skillBins: {
@@ -544,6 +554,29 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(runCommand).not.toHaveBeenCalled();
     expectInvokeErrorMessage(sendInvokeResult, { message: "allowlist miss" });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "enqueues a user-visible warning when allow-always cannot persist a stable allowlist pattern",
+    async () => {
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals(),
+        run: async () => {
+          const sessionKey = "agent:main:main";
+          const { sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            security: "allowlist",
+            ask: "on-miss",
+            approved: true,
+            approvalDecision: "allow-always",
+            command: ["/usr/bin/sudo", "/bin/echo", "ok"],
+          });
+
+          expect(peekSystemEvents(sessionKey)).toContain(ALLOW_ALWAYS_NOT_PERSISTED_WARNING);
+          expectInvokeOk(sendInvokeResult);
+        },
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "pins PATH-token executable to canonical path for approval-based runs",

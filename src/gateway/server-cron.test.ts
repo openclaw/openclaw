@@ -86,6 +86,36 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("passes restart catch-up tuning into CronService", () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-tuning-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+        missedJobStaggerMs: 12_000,
+        maxMissedJobsPerRestart: 3,
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronState = state.cron as unknown as {
+        state: { deps: { missedJobStaggerMs?: number; maxMissedJobsPerRestart?: number } };
+      };
+      expect(cronState.state.deps.missedJobStaggerMs).toBe(12_000);
+      expect(cronState.state.deps.maxMissedJobsPerRestart).toBe(3);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-ssrf-${Date.now()}`);
     const cfg = {

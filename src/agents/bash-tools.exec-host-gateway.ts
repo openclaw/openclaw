@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
+  ALLOW_ALWAYS_NOT_PERSISTED_WARNING,
   addAllowlistEntry,
   type ExecAsk,
   type ExecSecurity,
@@ -218,9 +219,11 @@ export async function processGatewayAllowlist(
             platform: process.platform,
           });
           if (patterns.length === 0) {
-            logWarn(
-              "exec: allow-always could not persist any allowlist patterns (command may contain only shell builtins like cd, export, etc.)",
-            );
+            logWarn(ALLOW_ALWAYS_NOT_PERSISTED_WARNING);
+            emitExecSystemEvent(ALLOW_ALWAYS_NOT_PERSISTED_WARNING, {
+              sessionKey: params.notifySessionKey,
+              contextKey,
+            });
           }
           for (const pattern of patterns) {
             if (pattern) {
