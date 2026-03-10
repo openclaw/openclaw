@@ -1938,6 +1938,108 @@ describe("handleFeishuMessage command authorization", () => {
     }
   });
 
+  it("drops a stale local binding after authoritative rehydrate removes it", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:group:oc-unbound-group",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+
+    const homeDir = await fsMkdtemp();
+    const previousHome = process.env.HOME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.HOME = homeDir;
+    process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
+
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          feishu: {
+            enabled: true,
+            groups: {
+              "oc-unbound-group": {
+                requireMention: false,
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig;
+
+      ensureFeishuThreadBindingManagerForAccount({
+        cfg,
+        accountId: "default",
+        persist: true,
+        enableSweeper: false,
+      });
+
+      const bindingsPath = path.join(
+        process.env.OPENCLAW_STATE_DIR,
+        "feishu",
+        "thread-bindings-default.json",
+      );
+      const { getSessionBindingService } = await import("openclaw/plugin-sdk/feishu");
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:main:acp:stale-topic",
+        targetKind: "session",
+        conversation: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc-unbound-group:thread:om_unbound_root",
+        },
+        placement: "current",
+        metadata: {
+          nativeThreadId: "omt_unbound_native",
+        },
+      });
+      await __testing.flushPersistQueueForTests("default");
+
+      await fsPromises.writeFile(
+        bindingsPath,
+        JSON.stringify(
+          {
+            version: 1,
+            bindings: [],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const event: FeishuMessageEvent = {
+        sender: { sender_id: { open_id: "ou-topic-unbind-user" } },
+        message: {
+          message_id: "msg-topic-unbind-followup",
+          root_id: "om_unbound_root",
+          parent_id: "om_prev_unbound",
+          chat_id: "oc-unbound-group",
+          chat_type: "group",
+          thread_id: "omt_unbound_native",
+          message_type: "text",
+          content: JSON.stringify({ text: "do not use the stale target" }),
+        },
+      };
+
+      await dispatchMessage({ cfg, event });
+
+      expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: "agent:main:feishu:group:oc-unbound-group",
+          MessageThreadId: "om_unbound_root",
+          NativeChannelId: "oc-unbound-group:thread:om_unbound_root",
+        }),
+      );
+    } finally {
+      restoreEnvVar("HOME", previousHome);
+      restoreEnvVar("OPENCLAW_STATE_DIR", previousStateDir);
+      __testing.resetFeishuThreadBindingsForTests();
+    }
+  });
+
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

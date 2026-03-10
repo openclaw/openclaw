@@ -1264,10 +1264,9 @@ export async function handleFeishuMessage(params: {
           cfg,
           accountId: account.accountId,
         });
-        const rehydratedThreadBinding = resolveThreadBinding();
-        if (rehydratedThreadBinding || !threadBinding) {
-          threadBinding = rehydratedThreadBinding;
-        }
+        // Rehydration already handles pending-write safety. If the authoritative
+        // disk state no longer contains this binding, drop the stale local match.
+        threadBinding = resolveThreadBinding();
       }
       const boundSessionKey = threadBinding?.targetSessionKey?.trim();
       if (threadBinding && boundSessionKey) {
