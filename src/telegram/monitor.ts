@@ -170,6 +170,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
         webhookCertPath: opts.webhookCertPath,
+        onInboundMessage: opts.onInboundMessage,
       });
       await waitForAbortSignal(opts.abortSignal);
       return;
