@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -100,6 +100,10 @@ function captureUpdater(storeSeed: AuthProfileStore): {
 // ---- tests ------------------------------------------------------------------
 
 describe("modelsAuthCleanCommand", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("removes stale profiles from profiles, usageStats, and lastGood", async () => {
     const store = makeStore(["anthropic:me.com", "anthropic:gmail", "anthropic:manual"], {
       usageStats: {
@@ -135,8 +139,8 @@ describe("modelsAuthCleanCommand", () => {
 
     await modelsAuthCleanCommand({}, makeRuntime());
 
-    // key deleted because filtered list became empty
-    expect(capture.result.order).not.toHaveProperty("anthropic");
+    // order key deleted entirely because filtered list became empty
+    expect(capture.result.order).toBeUndefined();
   });
 
   it("keeps a non-empty order array when only some ids are stale", async () => {
