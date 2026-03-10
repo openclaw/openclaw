@@ -30,8 +30,8 @@ import type { ResolvedFeishuAccount } from "./types.js";
 export type ChannelStatusCallback = (patch: {
   accountId: string;
   connected?: boolean;
-  lastConnectedAt?: number;
-  lastEventAt?: number;
+  lastConnectedAt?: number | null;
+  lastEventAt?: number | null;
   mode?: string;
 }) => void;
 
@@ -142,6 +142,7 @@ export async function monitorWebSocket({
 
     function handleAbort() {
       log(`feishu[${accountId}]: abort signal received, stopping`);
+      setStatus?.({ accountId, connected: false });
       cleanup();
       resolve();
     }
@@ -299,6 +300,7 @@ export async function monitorWebhook({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+      setStatus?.({ accountId, connected: false });
       cleanup();
       resolve();
     };
@@ -313,11 +315,12 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      const now = Date.now();
       setStatus?.({
         accountId,
         connected: true,
-        lastConnectedAt: Date.now(),
-        lastEventAt: Date.now(),
+        lastConnectedAt: now,
+        lastEventAt: now,
         mode: "webhook",
       });
     });
