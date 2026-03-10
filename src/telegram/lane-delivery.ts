@@ -4,6 +4,7 @@ export {
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
+  type LanePreviewLifecycle,
 } from "./lane-delivery-text-deliverer.js";
 export {
   createLaneDeliveryStateTracker,
