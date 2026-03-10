@@ -1,20 +1,41 @@
 {
     "version": "0.2.0",
+    "tasks": [
+        {
+            "label": "Build",
+            "type": "shell",
+            "command": "pnpm build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build with sourcemap",
+            "type": "shell",
+            "command": "npx tsdown"
+        }
+    ],
     "configurations": [
         {
             "name": "Gateway (tsx)",
             "type": "node",
             "request": "launch",
             "runtimeExecutable": "node",
+            "program": "${workspaceFolder}/src/entry.ts",
             "runtimeArgs": [
                 "--import",
-                "tsx",
-                "src/entry.ts",
+                "tsx"
+            ],
+            "args": [
                 "gateway",
                 "--verbose",
                 "--allow-unconfigured"
             ],
             "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "sourceMaps": true,
+            "resolveSourceMapLocations": [
+                "${workspaceFolder}/src/**",
+                "${workspaceFolder}/dist/**/*.js"
+            ],
             "skipFiles": [
                 "<node_internals>/**"
             ],
@@ -25,35 +46,19 @@
             }
         },
         {
-            "name": "CLI Entry",
-            "type": "node",
-            "request": "launch",
-            "runtimeExecutable": "node",
-            "runtimeArgs": [
-                "--import",
-                "tsx",
-                "src/index.ts"
-            ],
-            "console": "integratedTerminal",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "env": {
-                "NODE_ENV": "development"
-            }
-        },
-        {
             "name": "Gateway (built)",
             "type": "node",
             "request": "launch",
             "runtimeExecutable": "node",
-            "runtimeArgs": [
-                "dist/entry.js",
+            "program": "${workspaceFolder}/dist/entry.js",
+            "args": [
                 "gateway",
                 "--verbose",
                 "--allow-unconfigured"
             ],
             "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "sourceMaps": true,
             "skipFiles": [
                 "<node_internals>/**",
                 "node_modules/**"
