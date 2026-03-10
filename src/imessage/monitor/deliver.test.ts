@@ -166,6 +166,8 @@ describe("deliverReplies", () => {
       "chat_id:40",
       "Hey Matt.",
       expect.objectContaining({
+        client,
+        maxBytes: 2048,
         accountId: "acct-4",
         replyToId: "1578",
       }),
