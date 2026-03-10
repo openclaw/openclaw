@@ -278,7 +278,7 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
-    documentBatchWindowMs: z.number().optional(),
+    documentBatchWindowMs: z.number().int().min(0).optional(),
   })
   .strict();
 

@@ -1090,8 +1090,7 @@ export const registerTelegramHandlers = ({
     // merging unrelated documents under a shared "unknown" key.
     const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
     if (!mediaGroupId && msg.document && documentBatchWindowMs > 0 && docSenderId) {
-      const docThreadId = resolvedThreadId ?? dmThreadId ?? 0;
-      const docBatchKey = `doc:${chatId}:${docSenderId}:${docThreadId}`;
+      const docBatchKey = `doc:${chatId}:${docSenderId}:${resolvedThreadId ?? "f"}:${dmThreadId ?? "d"}`;
       const existing = documentBatchBuffer.get(docBatchKey);
       if (existing) {
         existing.messages.push({ msg, ctx });
