@@ -11,18 +11,31 @@ import {
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
-const { getOAuthApiKeyMock } = vi.hoisted(() => ({
+const { getOAuthApiKeyMock, refreshOpenAICodexOAuthTokenMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn(async () => {
+    throw new Error("Failed to extract accountId from token");
+  }),
+  refreshOpenAICodexOAuthTokenMock: vi.fn(async () => {
     throw new Error("Failed to extract accountId from token");
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: getOAuthApiKeyMock,
-  getOAuthProviders: () => [
-    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
-  ],
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: getOAuthApiKeyMock,
+    getOAuthProviders: () => [
+      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+    ],
+  };
+});
+
+vi.mock("../openai-codex-oauth.js", () => ({
+  refreshOpenAICodexOAuthToken: refreshOpenAICodexOAuthTokenMock,
 }));
 
 function createExpiredOauthStore(params: {
@@ -55,6 +68,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
   beforeEach(async () => {
     getOAuthApiKeyMock.mockClear();
+    refreshOpenAICodexOAuthTokenMock.mockClear();
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     agentDir = path.join(tempRoot, "agents", "main", "agent");
@@ -91,7 +105,8 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+    expect(refreshOpenAICodexOAuthTokenMock).toHaveBeenCalledTimes(1);
+    expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {
@@ -122,7 +137,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       }),
       agentDir,
     );
-    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+    refreshOpenAICodexOAuthTokenMock.mockImplementationOnce(async () => {
       throw new Error("invalid_grant");
     });
 
