@@ -5,6 +5,12 @@ import { readJsonFile, writeJsonAtomic } from "./json-files.js";
 
 const STORE_FILENAME = "pending-inbound.json";
 
+/** Maximum number of pending inbound entries before oldest are pruned. */
+const MAX_PENDING_ENTRIES = 200;
+
+/** Maximum number of active turn entries before oldest are pruned. */
+const MAX_ACTIVE_TURNS = 50;
+
 /**
  * Lock options for pending-inbound-store read-modify-write operations.
  * Mirrors AUTH_STORE_LOCK_OPTIONS from auth-profiles.
@@ -73,6 +79,17 @@ export async function writePendingInbound(
     const existing = await readPendingInboundFile(filePath);
     const key = storeKey(entry);
     existing.entries[key] = entry;
+    // Prune oldest entries by capturedAt when the store exceeds the cap.
+    const keys = Object.keys(existing.entries);
+    if (keys.length > MAX_PENDING_ENTRIES) {
+      const sorted = keys.toSorted(
+        (a, b) => (existing.entries[a].capturedAt ?? 0) - (existing.entries[b].capturedAt ?? 0),
+      );
+      const pruneCount = sorted.length - MAX_PENDING_ENTRIES;
+      for (let i = 0; i < pruneCount; i++) {
+        delete existing.entries[sorted[i]];
+      }
+    }
     await writeJsonAtomic(filePath, existing, {
       mode: 0o600,
       trailingNewline: true,
@@ -158,6 +175,18 @@ export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry):
       existing.activeTurns = {};
     }
     existing.activeTurns[entry.sessionId] = entry;
+    // Prune oldest active turns by startedAt when the store exceeds the cap.
+    const turnKeys = Object.keys(existing.activeTurns);
+    if (turnKeys.length > MAX_ACTIVE_TURNS) {
+      const sorted = turnKeys.toSorted(
+        (a, b) =>
+          (existing.activeTurns![a].startedAt ?? 0) - (existing.activeTurns![b].startedAt ?? 0),
+      );
+      const pruneCount = sorted.length - MAX_ACTIVE_TURNS;
+      for (let i = 0; i < pruneCount; i++) {
+        delete existing.activeTurns[sorted[i]];
+      }
+    }
     await writeJsonAtomic(filePath, existing, {
       mode: 0o600,
       trailingNewline: true,
