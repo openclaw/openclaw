@@ -184,11 +184,12 @@ function assertAllowedResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   policy?: SsrFPolicy,
 ): void {
-  for (const entry of results) {
-    // Reuse the exact same host/IP classifier as the pre-DNS check to avoid drift.
-    if (isBlockedHostnameOrIp(entry.address, policy)) {
-      throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
-    }
+  // Reject only when every DNS answer is blocked. In dual-stack environments,
+  // polluted/special-use AAAA records can co-exist with valid public A records.
+  // The connection path will still use pinned + ordered addresses downstream.
+  const hasAllowedAddress = results.some((entry) => !isBlockedHostnameOrIp(entry.address, policy));
+  if (!hasAllowedAddress) {
+    throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
   }
 }
 
@@ -319,6 +320,10 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
 
+  const allowedResults = skipPrivateNetworkChecks
+    ? results
+    : results.filter((entry) => !isBlockedHostnameOrIp(entry.address, params.policy));
+
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
@@ -326,7 +331,7 @@ export async function resolvePinnedHostnameWithPolicy(
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
   // families so Happy Eyeballs and pinned round-robin both attempt IPv4 first.
-  const addresses = dedupeAndPreferIpv4(results);
+  const addresses = dedupeAndPreferIpv4(allowedResults);
   if (addresses.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
