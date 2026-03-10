@@ -108,7 +108,7 @@ Quick validation flow:
 3. Restart Gateway and confirm browser visibility:
    - `openclaw gateway restart`
    - `openclaw browser profiles`
-   - `openclaw browser tabs --profile remote`
+   - `openclaw browser tabs --browser-profile remote`
 
 If steps 1 and 2 succeed with the same target, OpenClaw profile failures are usually configuration-level rather than transport-level.
 
