@@ -79,6 +79,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--tz <iana>", "Timezone for cron expressions (IANA)", "")
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
+      .option(
+        "--post-mode <mode>",
+        "Main-session post mode: summary (default) or off",
+      )
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
@@ -144,6 +148,12 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--wake must be now or next-heartbeat");
           }
 
+          const postModeRaw =
+            typeof opts.postMode === "string" ? opts.postMode.trim() : undefined;
+          if (postModeRaw && postModeRaw !== "summary" && postModeRaw !== "off") {
+            throw new Error("--post-mode must be summary or off");
+          }
+
           const agentId =
             typeof opts.agent === "string" && opts.agent.trim()
               ? sanitizeAgentId(opts.agent.trim())
@@ -205,6 +215,9 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
           }
+          if (postModeRaw === "off" && sessionTarget === "main") {
+            throw new Error("--post-mode off only applies to isolated jobs.");
+          }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
             (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
@@ -256,6 +269,7 @@ export function registerCronAddCommand(cron: Command) {
             schedule,
             sessionTarget,
             wakeMode,
+            postToMainMode: postModeRaw || undefined,
             payload,
             delivery: deliveryMode
               ? {

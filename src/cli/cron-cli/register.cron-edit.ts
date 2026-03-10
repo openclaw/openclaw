@@ -47,6 +47,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--tz <iana>", "Timezone for cron expressions (IANA)")
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)")
+      .option(
+        "--post-mode <mode>",
+        "Main-session post mode: summary (default) or off",
+      )
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
       .option("--thinking <level>", "Thinking level for agent jobs")
@@ -131,6 +135,13 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.wake === "string") {
             patch.wakeMode = opts.wake;
+          }
+          if (typeof opts.postMode === "string") {
+            const pm = opts.postMode.trim();
+            if (pm !== "summary" && pm !== "off") {
+              throw new Error("--post-mode must be summary or off");
+            }
+            patch.postToMainMode = pm;
           }
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");

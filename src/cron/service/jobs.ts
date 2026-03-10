@@ -544,6 +544,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     schedule,
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
+    postToMainMode: input.postToMainMode,
     payload: input.payload,
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
@@ -599,6 +600,9 @@ export function applyJobPatch(
   }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;
+  }
+  if (patch.postToMainMode) {
+    job.postToMainMode = patch.postToMainMode;
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);

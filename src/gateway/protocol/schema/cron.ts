@@ -23,6 +23,10 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
 
 const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
+const CronPostToMainModeSchema = Type.Union([
+  Type.Literal("summary"),
+  Type.Literal("off"),
+]);
 const CronRunStatusSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
@@ -253,6 +257,7 @@ export const CronJobSchema = Type.Object(
     schedule: CronScheduleSchema,
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
+    postToMainMode: Type.Optional(CronPostToMainModeSchema),
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
@@ -283,6 +288,7 @@ export const CronAddParamsSchema = Type.Object(
     schedule: CronScheduleSchema,
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
+    postToMainMode: Type.Optional(CronPostToMainModeSchema),
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
@@ -297,6 +303,7 @@ export const CronJobPatchSchema = Type.Object(
     schedule: Type.Optional(CronScheduleSchema),
     sessionTarget: Type.Optional(CronSessionTargetSchema),
     wakeMode: Type.Optional(CronWakeModeSchema),
+    postToMainMode: Type.Optional(CronPostToMainModeSchema),
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
