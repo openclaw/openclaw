@@ -546,7 +546,9 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
+  patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,

@@ -6,10 +6,10 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
-  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
   normalizeAccountId,
+  patchScopedAccountConfig,
   resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/bluebubbles";
@@ -38,34 +38,14 @@ function setBlueBubblesAllowFrom(
   accountId: string,
   allowFrom: string[],
 ): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        bluebubbles: {
-          ...cfg.channels?.bluebubbles,
-          allowFrom,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      bluebubbles: {
-        ...cfg.channels?.bluebubbles,
-        accounts: {
-          ...cfg.channels?.bluebubbles?.accounts,
-          [accountId]: {
-            ...cfg.channels?.bluebubbles?.accounts?.[accountId],
-            allowFrom,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: { allowFrom },
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  });
 }
 
 function parseBlueBubblesAllowFromInput(raw: string): string[] {
