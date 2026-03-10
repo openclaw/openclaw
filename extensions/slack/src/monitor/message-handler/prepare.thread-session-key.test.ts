@@ -22,6 +22,15 @@ async function loadSlackPrepareModules() {
   createSlackTestAccount = helpers.createSlackTestAccount;
 }
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-test-sessions.json"),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+  };
+});
+
 function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
   const replyToMode = overrides?.replyToMode ?? "all";
   return createInboundSlackTestContext({
