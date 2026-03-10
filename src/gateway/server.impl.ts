@@ -276,13 +276,31 @@ function resolvePendingDeliveryRecoveryTargets(params: {
     if (!plugin) {
       continue;
     }
+
+    const configuredAccountIds = plugin.config
+      .listAccountIds(params.cfg)
+      .map((accountId) => accountId.trim())
+      .filter(Boolean);
+    const configuredAccountSet = new Set(configuredAccountIds);
+
     const accountIdRaw = typeof entry.accountId === "string" ? entry.accountId.trim() : "";
+    if (accountIdRaw && !configuredAccountSet.has(accountIdRaw)) {
+      // Queue may contain stale deliveries for removed accounts. Do not block
+      // startup preflight on targets that can never become ready.
+      continue;
+    }
+
     const accountId =
       accountIdRaw ||
       resolveChannelDefaultAccountId({
         plugin,
         cfg: params.cfg,
+        accountIds: configuredAccountIds,
       });
+    if (!accountId) {
+      continue;
+    }
+
     const key = `${channel}:${accountId}`;
     if (!targets.has(key)) {
       targets.set(key, { channel, accountId });
