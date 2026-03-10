@@ -8,7 +8,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as ts from "typescript";
-import type { ParsedPolicies } from "./types.js";
+import type { ParsedPolicies, ParsedToolCatalog } from "./types.js";
+import { parseToolCatalog } from "./parse-tools.js";
+
+export type ParsePoliciesOptions = {
+  catalog?: ParsedToolCatalog;
+};
 
 function parseSourceFile(filePath: string): ts.SourceFile {
   const content = fs.readFileSync(filePath, "utf-8");
@@ -143,19 +148,37 @@ function parseSubagentDenyLists(srcDir: string): {
   return { denyAlways, denyLeaf };
 }
 
-export function parsePolicies(srcDir: string): ParsedPolicies {
+function resolveCoreToolIds(srcDir: string, options?: ParsePoliciesOptions): Set<string> {
+  const catalog = options?.catalog ?? parseToolCatalog(srcDir);
+  return new Set(catalog.tools.map((tool) => tool.id));
+}
+
+function deriveExtraTools(toolIds: Set<string>, candidates: string[][]): string[] {
+  const extras = new Set<string>();
+  for (const list of candidates) {
+    for (const entry of list) {
+      if (!entry) {
+        continue;
+      }
+      if (!toolIds.has(entry)) {
+        extras.add(entry);
+      }
+    }
+  }
+  return Array.from(extras).toSorted();
+}
+
+export function parsePolicies(srcDir: string, options?: ParsePoliciesOptions): ParsedPolicies {
+  const toolIds = resolveCoreToolIds(srcDir, options);
   const aliases = parseAliases(srcDir);
   const ownerOnlyFallbacks = parseOwnerOnlyFallbacks(srcDir);
   const { denyAlways, denyLeaf } = parseSubagentDenyLists(srcDir);
+  const extraTools = deriveExtraTools(toolIds, [ownerOnlyFallbacks, denyAlways, denyLeaf]);
   return {
     aliases,
     ownerOnlyFallbacks,
     subagentDenyAlways: denyAlways,
     subagentDenyLeaf: denyLeaf,
-    // extraTools is intentionally hardcoded here because `whatsapp_login` is an intrinsic
-    // security boundary that is treated as a core tool, despite not being in the
-    // `CORE_TOOL_DEFINITIONS` catalog array itself. Without full cross-file resolution
-    // joining `ParsedToolCatalog` and `ParsedPolicies`, we cannot dynamically compute this.
-    extraTools: ["whatsapp_login"],
+    extraTools,
   };
 }

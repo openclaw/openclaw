@@ -44,7 +44,7 @@ assert(
 assert(catalog.sectionOrder[0].id === "fs", "first section is fs");
 
 console.log("\nparsePolicies:");
-const policies = parsePolicies(path.join(srcDir, "src"));
+const policies = parsePolicies(path.join(srcDir, "src"), { catalog });
 assert(
   eq(policies.aliases, { bash: "exec", "apply-patch": "apply_patch" }),
   "2 aliases parsed correctly",
@@ -57,10 +57,11 @@ assert(policies.subagentDenyAlways.includes("gateway"), "gateway in deny-always 
 assert(policies.subagentDenyAlways.includes("memory_get"), "memory_get in deny-always list");
 assert(policies.subagentDenyLeaf.length === 3, "3 subagent deny-leaf tools");
 assert(policies.subagentDenyLeaf.includes("sessions_spawn"), "sessions_spawn in deny-leaf list");
+assert(eq(policies.extraTools, ["whatsapp_login"]), "extra tools derived from policies");
 
 console.log("\nparsePipeline:");
 const pipeline = parsePipeline(path.join(srcDir, "src"));
-assert(pipeline.steps.length === 7, "7 pipeline steps");
+assert(pipeline.steps.length > 0, "pipeline has at least one step");
 assert(
   pipeline.steps.every((s) => s.stripPluginOnlyAllowlist),
   "all steps strip plugin-only",

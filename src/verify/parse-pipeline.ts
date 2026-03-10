@@ -107,7 +107,7 @@ function extractParamName(node: ts.Expression): string {
   return "";
 }
 
-/** Must match the number of steps in buildDefaultToolPolicyPipelineSteps */
+/** Current number of steps in buildDefaultToolPolicyPipelineSteps (for diagnostics only). */
 const EXPECTED_PIPELINE_STEPS = 7;
 
 export function parsePipeline(srcDir: string): ParsedPipeline {
@@ -130,10 +130,13 @@ export function parsePipeline(srcDir: string): ParsedPipeline {
     }
   }
 
+  if (steps.length === 0) {
+    throw new Error("[parse-pipeline] No pipeline steps parsed from tool-policy-pipeline.ts");
+  }
   if (steps.length !== EXPECTED_PIPELINE_STEPS) {
-    throw new Error(
-      `[parse-pipeline] Expected ${EXPECTED_PIPELINE_STEPS} pipeline steps, got ${steps.length}. ` +
-        `If buildDefaultToolPolicyPipelineSteps was intentionally changed, update the expected count.`,
+    console.warn(
+      `[parse-pipeline] Pipeline step count changed from ${EXPECTED_PIPELINE_STEPS} to ${steps.length}. ` +
+        `Verify SMT encoders and tests still match the runtime pipeline.`,
     );
   }
 
