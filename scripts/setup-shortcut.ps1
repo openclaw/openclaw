@@ -12,7 +12,7 @@ if (Test-Path $OldShortcut) {
 $ShortcutPath = Join-Path $DesktopPath "Hakua.lnk"
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = "powershell.exe"
-$Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$LauncherPs1`" -SpeakOnReady"
+$Shortcut.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$LauncherPs1`" -SpeakOnReady"
 $Shortcut.WorkingDirectory = $ProjectDir
 $Shortcut.IconLocation = if (Test-Path $IconPath) { "$IconPath,0" } else { "powershell.exe,0" }
 $Shortcut.Description = "Legacy alias for Clawdbot unified desktop stack"

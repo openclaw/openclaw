@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
+- ACP/sessions_spawn: add optional `resumeSessionId` for `runtime: "acp"` so spawned ACP sessions can resume an existing ACPX/Codex conversation instead of always starting fresh. (#41847) Thanks @pejmanjohn.
 
 ### Breaking
 
@@ -16,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 - Resolve web tool SecretRefs atomically at runtime. (#41599) Thanks @joshavant.
 - Feishu/local image auto-convert: pass `mediaLocalRoots` through the `sendText` local-image shim so allowed local image paths upload as Feishu images again instead of falling back to raw path text. (#40623) Thanks @ayanesakura.
+- ACP/ACPX plugin: bump the bundled `acpx` pin to `0.1.16` so plugin-local installs and strict version checks match the latest published CLI. (#41975) Thanks @dutifulbob.
 - macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
 - Gateway/Control UI: keep dashboard auth tokens in session-scoped browser storage so same-tab refreshes preserve remote token auth without restoring long-lived localStorage token persistence, while scoping tokens to the selected gateway URL and fragment-only bootstrap flow. (#40892) thanks @velvet-shark.
 - Models/Kimi Coding: send `anthropic-messages` tools in native Anthropic format again so `kimi-coding` stops degrading tool calls into XML/plain-text pseudo invocations instead of real `tool_use` blocks. (#38669, #39907, #40552) Thanks @opriz.
@@ -51,6 +53,11 @@ Docs: https://docs.openclaw.ai
 - Tools/web search: recover OpenRouter Perplexity citation extraction from `message.annotations` when chat-completions responses omit top-level citations. (#40881) Thanks @laurieluo.
 - Security/external content: treat whitespace-delimited `EXTERNAL UNTRUSTED CONTENT` boundary markers like underscore-delimited variants so prompt wrappers cannot bypass marker sanitization. (#35983) Thanks @urianpaul94.
 - Telegram/network env-proxy: apply configured transport policy to proxied HTTPS dispatchers as well as direct `NO_PROXY` bypasses, so resolver-scoped IPv4 fallback and network settings work consistently for env-proxied Telegram traffic. (#40740) Thanks @sircrumpet.
+- Agents/memory flush: forward `memoryFlushWritePath` through `runEmbeddedPiAgent` so memory-triggered flush turns keep the append-only write guard without aborting before tool setup. Follows up on #38574. (#41761) Thanks @frankekn.
+- CI/CodeQL Swift toolchain: select Xcode 26.1 before installing Swift build tools so the CodeQL Swift job uses Swift tools 6.2 on `macos-latest`. (#41787) thanks @BunsDev.
+- Sandbox/subagents: pass the real configured workspace through `sessions_spawn` inheritance when a parent agent runs in a copied-workspace sandbox, so child `/agent` mounts point at the configured workspace instead of the parent sandbox copy. (#40757) Thanks @dsantoreis.
+- Mattermost/plugin send actions: normalize direct `replyTo` fallback handling so threaded plugin sends trim blank IDs and reuse the correct reply target again. (#41176) Thanks @hnykda.
+- MS Teams/allowlist resolution: use the General channel conversation ID as the resolved team key (with Graph GUID fallback) so Bot Framework runtime `channelData.team.id` matching works for team and team/channel allowlist entries. (#41838) Thanks @BradGroux.
 
 ## 2026.3.8
 
@@ -116,6 +123,7 @@ Docs: https://docs.openclaw.ai
 - MS Teams/authz: keep `groupPolicy: "allowlist"` enforcing sender allowlists even when a team/channel route allowlist is configured, so route matches no longer widen group access to every sender in that route. Thanks @zpbrent.
 - Security/system.run: bind approved `bun` and `deno run` script operands to on-disk file snapshots so post-approval script rewrites are denied before execution.
 - Skills/download installs: pin the validated per-skill tools root before writing downloaded archives, so rebinding the lexical tools path cannot redirect download writes outside the intended tools directory. Thanks @tdjackey.
+- Control UI/Debug: replace the Manual RPC free-text method field with a sorted dropdown sourced from gateway-advertised methods, and stack the form vertically for narrower layouts. (#14967) thanks @rixau.
 
 ## 2026.3.7
 
@@ -474,6 +482,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover 402 recovery: keep temporary spend-limit `402` payloads retryable, preserve explicit insufficient-credit billing detection even in long provider payloads, and allow throttled billing-cooldown probes so single-provider setups can recover instead of staying locked out. (#38533) Thanks @xialonglee.
 - Browser/config schema: accept `browser.profiles.*.driver: "openclaw"` while preserving legacy `"clawd"` compatibility in validated config. (#39374; based on #35621) Thanks @gambletan and @ingyukoh.
 - Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
+- Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
 
 ## 2026.3.2
 

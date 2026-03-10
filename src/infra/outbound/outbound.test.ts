@@ -1142,6 +1142,28 @@ describe("resolveOutboundSessionRoute", () => {
     });
   });
 
+  it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
+    const userId = "dthcxgoxhifn3pwh65cut3ud3w";
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "mattermost",
+      agentId: "main",
+      target: userId,
+      resolvedTarget: {
+        to: `user:${userId}`,
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: `agent:main:mattermost:direct:${userId}`,
+      from: `mattermost:${userId}`,
+      to: `user:${userId}`,
+      chatType: "direct",
+    });
+  });
+
   it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
     await expect(
       resolveOutboundSessionRoute({

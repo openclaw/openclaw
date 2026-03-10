@@ -3,6 +3,7 @@
 # Delegates core stack to launch-desktop-stack.ps1
 
 param(
+    [switch]$SpeakOnReady,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$PassthroughArgs
 )
@@ -37,9 +38,19 @@ if (-not $ollamaProc) {
     Write-Host "  - Ollama already running (PID: $($ollamaProc.Id))." -ForegroundColor Green
 }
 
-# Delegate to launch-desktop-stack.ps1
+# Delegate to launch-desktop-stack.ps1 in the same console so shortcut windows
+# stay attached to visible output instead of closing immediately.
 Write-Host ""
 Write-Host "Handing off to OpenClaw Desktop Stack..." -ForegroundColor Cyan
 Write-Host ""
 
-& powershell.exe -ExecutionPolicy Bypass -File $LauncherPs1 -SpeakOnReady @PassthroughArgs
+$launcherSplat = @{}
+if ($SpeakOnReady) {
+    $launcherSplat["SpeakOnReady"] = $true
+}
+
+if ($PassthroughArgs -and $PassthroughArgs.Count -gt 0) {
+    & $LauncherPs1 @launcherSplat @PassthroughArgs
+} else {
+    & $LauncherPs1 @launcherSplat
+}

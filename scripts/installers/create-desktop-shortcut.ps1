@@ -21,7 +21,7 @@ function Set-Shortcut {
 
     $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = "powershell.exe"
-    $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$LauncherPs1`" -SpeakOnReady"
+    $Shortcut.Arguments = "-NoExit -ExecutionPolicy Bypass -File `"$LauncherPs1`" -SpeakOnReady"
     $Shortcut.WorkingDirectory = $ProjectDir
     $Shortcut.Description = $Description
 
