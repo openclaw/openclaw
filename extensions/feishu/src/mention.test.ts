@@ -8,12 +8,10 @@ import {
 } from "./mention.js";
 
 // 构造一个最小 FeishuMessageEvent 用于测试
-function makeEvent(
-  overrides: Partial<FeishuMessageEvent> & {
-    mentions?: FeishuMessageEvent["message"]["mentions"];
-    chat_type?: "p2p" | "group";
-  },
-): FeishuMessageEvent {
+function makeEvent(overrides: {
+  mentions?: FeishuMessageEvent["message"]["mentions"];
+  chat_type?: "p2p" | "group" | "private";
+}): FeishuMessageEvent {
   return {
     sender: {
       sender_id: { open_id: "sender-id" },
@@ -180,6 +178,14 @@ describe("isMentionForwardRequest", () => {
           botMention("ou-bot-b", "BotB", "@_user_1"),
           userMention("ou-user1", "Alice", "@_user_2"),
         ],
+      });
+      expect(isMentionForwardRequest(event, BOT_OPEN_ID)).toBe(true);
+    });
+
+    it("'private' chat_type 行为与 p2p 一致", () => {
+      const event = makeEvent({
+        chat_type: "private",
+        mentions: [userMention("ou-user1", "Alice", "@_user_1")],
       });
       expect(isMentionForwardRequest(event, BOT_OPEN_ID)).toBe(true);
     });
