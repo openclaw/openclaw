@@ -80,7 +80,6 @@ import {
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
-  ZAI_DEFAULT_MODEL_REF,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
