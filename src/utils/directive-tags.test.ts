@@ -55,6 +55,15 @@ describe("parseInlineDirectives", () => {
     expect(result.text).toBe("First line\n    indented continuation");
   });
 
+  test("no injected space when tag appears at the start of a non-first line (Codex review)", () => {
+    // Regression for the case flagged in the Codex bot review on PR #41968.
+    // With the old " " replacement, "line1\n[[tag]]line2" became "line1\n line2".
+    const input = "line1\n[[audio_as_voice]]line2";
+    const result = parseInlineDirectives(input);
+    expect(result.text).toBe("line1\nline2");
+    expect(result.audioAsVoice).toBe(true);
+  });
+
   // ── existing directive-extraction behaviour ─────────────────────────────
 
   test("detects audio_as_voice tag and strips it by default", () => {

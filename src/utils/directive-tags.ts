@@ -135,7 +135,11 @@ export function parseInlineDirectives(
   cleaned = cleaned.replace(AUDIO_TAG_RE, (match) => {
     audioAsVoice = true;
     hasAudioTag = true;
-    return stripAudioTag ? " " : match;
+    // Replace with empty string rather than a space so that no injected
+    // whitespace is left at line boundaries (see #41699, Codex review).
+    // Adjacent inline spaces (e.g. "Hello [[tag]] World") are collapsed by
+    // normalizeDirectiveWhitespace.
+    return stripAudioTag ? "" : match;
   });
 
   cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined) => {
@@ -148,7 +152,7 @@ export function parseInlineDirectives(
         lastExplicitId = id;
       }
     }
-    return stripReplyTags ? " " : match;
+    return stripReplyTags ? "" : match;
   });
 
   cleaned = normalizeDirectiveWhitespace(cleaned);
