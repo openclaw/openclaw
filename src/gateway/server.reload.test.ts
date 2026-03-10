@@ -8,6 +8,7 @@ import {
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
+  testState,
   withGatewayServer,
 } from "./test-helpers.js";
 
@@ -235,6 +236,94 @@ describe("gateway hot reload", () => {
     );
   }
 
+  async function writeTalkApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          talk: {
+            apiKey: { source: "env", provider: "default", id: refId },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeGatewayTraversalExecRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "vault", id: "a/../b" },
+            },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeGatewayTokenExecRefConfig(params: {
+    resolverScriptPath: string;
+    modePath: string;
+    tokenValue: string;
+  }) {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "vault", id: "gateway/token" },
+            },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+                allowSymlinkCommand: true,
+                args: [params.resolverScriptPath, params.modePath, params.tokenValue],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
   async function writeDisabledSurfaceRefConfig() {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -450,6 +539,13 @@ describe("gateway hot reload", () => {
     );
   });
 
+  it("fails startup when an active exec ref id contains traversal segments", async () => {
+    await writeGatewayTraversalExecRefConfig();
+    await expect(withGatewayServer(async () => {})).rejects.toThrow(
+      /must not include "\." or "\.\." path segments/i,
+    );
+  });
+
   it("allows startup when unresolved refs exist only on disabled surfaces", async () => {
     await writeDisabledSurfaceRefConfig();
     delete process.env.DISABLED_TELEGRAM_STARTUP_REF;
@@ -553,6 +649,154 @@ describe("gateway hot reload", () => {
       expect(first.ok).toBe(true);
       expect(second.ok).toBe(true);
     } finally {
+      ws.close();
+      await server.close();
+    }
+  });
+
+  it("keeps last-known-good snapshot active when secrets.reload fails over RPC", async () => {
+    const refId = "RUNTIME_LKG_TALK_API_KEY";
+    const previousRefValue = process.env[refId];
+    process.env[refId] = "talk-key-before-reload-failure"; // pragma: allowlist secret
+    await writeTalkApiKeyEnvRefConfig(refId);
+
+    const { server, ws } = await startServerWithClient();
+    try {
+      await connectOk(ws);
+      const preResolve = await rpcReq<{
+        assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
+      }>(ws, "secrets.resolve", {
+        commandName: "runtime-lkg-test",
+        targetIds: ["talk.apiKey"],
+      });
+      expect(preResolve.ok).toBe(true);
+      expect(preResolve.payload?.assignments?.[0]?.path).toBe("talk.apiKey");
+      expect(preResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
+
+      delete process.env[refId];
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
+      expect(reload.ok).toBe(false);
+      expect(reload.error?.code).toBe("UNAVAILABLE");
+      expect(reload.error?.message ?? "").toContain(refId);
+
+      const postResolve = await rpcReq<{
+        assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
+      }>(ws, "secrets.resolve", {
+        commandName: "runtime-lkg-test",
+        targetIds: ["talk.apiKey"],
+      });
+      expect(postResolve.ok).toBe(true);
+      expect(postResolve.payload?.assignments?.[0]?.path).toBe("talk.apiKey");
+      expect(postResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
+    } finally {
+      if (previousRefValue === undefined) {
+        delete process.env[refId];
+      } else {
+        process.env[refId] = previousRefValue;
+      }
+      ws.close();
+      await server.close();
+    }
+  });
+
+  it("keeps last-known-good auth snapshot active when gateway auth token exec reload fails", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is not set");
+    }
+    const resolverScriptPath = path.join(stateDir, "gateway-auth-token-resolver.cjs");
+    const modePath = path.join(stateDir, "gateway-auth-token-resolver.mode");
+    const tokenValue = "gateway-auth-exec-token";
+    await fs.mkdir(path.dirname(resolverScriptPath), { recursive: true });
+    await fs.writeFile(
+      resolverScriptPath,
+      `const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const modePath = process.argv[2];
+  const token = process.argv[3];
+  const mode = fs.existsSync(modePath) ? fs.readFileSync(modePath, "utf8").trim() : "ok";
+  let ids = ["gateway/token"];
+  try {
+    const parsed = JSON.parse(input || "{}");
+    if (Array.isArray(parsed.ids) && parsed.ids.length > 0) {
+      ids = parsed.ids.map((entry) => String(entry));
+    }
+  } catch {}
+
+  if (mode === "fail") {
+    const errors = {};
+    for (const id of ids) {
+      errors[id] = { message: "forced failure" };
+    }
+    process.stdout.write(JSON.stringify({ protocolVersion: 1, values: {}, errors }) + "\\n");
+    return;
+  }
+
+  const values = {};
+  for (const id of ids) {
+    values[id] = token;
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, values }) + "\\n");
+});
+`,
+      "utf8",
+    );
+    await fs.writeFile(modePath, "ok\n", "utf8");
+    await writeGatewayTokenExecRefConfig({
+      resolverScriptPath,
+      modePath,
+      tokenValue,
+    });
+
+    const previousGatewayAuth = testState.gatewayAuth;
+    const previousGatewayTokenEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
+    testState.gatewayAuth = undefined;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+    const started = await startServerWithClient();
+    const { server, ws, envSnapshot } = started;
+    try {
+      await connectOk(ws, {
+        token: tokenValue,
+      });
+      const preResolve = await rpcReq<{
+        assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
+      }>(ws, "secrets.resolve", {
+        commandName: "runtime-lkg-auth-test",
+        targetIds: ["gateway.auth.token"],
+      });
+      expect(preResolve.ok).toBe(true);
+      expect(preResolve.payload?.assignments?.[0]?.path).toBe("gateway.auth.token");
+      expect(preResolve.payload?.assignments?.[0]?.value).toBe(tokenValue);
+
+      await fs.writeFile(modePath, "fail\n", "utf8");
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
+      expect(reload.ok).toBe(false);
+      expect(reload.error?.code).toBe("UNAVAILABLE");
+      expect(reload.error?.message ?? "").toContain("forced failure");
+
+      const postResolve = await rpcReq<{
+        assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
+      }>(ws, "secrets.resolve", {
+        commandName: "runtime-lkg-auth-test",
+        targetIds: ["gateway.auth.token"],
+      });
+      expect(postResolve.ok).toBe(true);
+      expect(postResolve.payload?.assignments?.[0]?.path).toBe("gateway.auth.token");
+      expect(postResolve.payload?.assignments?.[0]?.value).toBe(tokenValue);
+    } finally {
+      testState.gatewayAuth = previousGatewayAuth;
+      if (previousGatewayTokenEnv === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayTokenEnv;
+      }
+      envSnapshot.restore();
       ws.close();
       await server.close();
     }
