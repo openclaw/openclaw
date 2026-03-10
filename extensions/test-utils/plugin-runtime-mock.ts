@@ -1,5 +1,5 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
-import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/test-utils";
+import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk/test-utils";
 import { vi } from "vitest";
 
 type DeepPartial<T> = {
@@ -75,10 +75,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         chunkMarkdownTextWithMode: vi.fn((text: string) => (text ? [text] : [])),
         chunkText: vi.fn((text: string) => (text ? [text] : [])),
         chunkTextWithMode: vi.fn((text: string) => (text ? [text] : [])),
-        resolveChunkMode: vi.fn(() => "length"),
+        resolveChunkMode: vi.fn(
+          () => "length",
+        ) as unknown as PluginRuntime["channel"]["text"]["resolveChunkMode"],
         resolveTextChunkLimit: vi.fn(() => 4000),
         hasControlCommand: vi.fn(() => false),
-        resolveMarkdownTableMode: vi.fn(() => "code"),
+        resolveMarkdownTableMode: vi.fn(
+          () => "code",
+        ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
         convertMarkdownTables: vi.fn((text: string) => text),
       },
       reply: {
@@ -119,6 +123,17 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
       },
       routing: {
+        buildAgentSessionKey: vi.fn(
+          ({
+            agentId,
+            channel,
+            peer,
+          }: {
+            agentId: string;
+            channel: string;
+            peer?: { kind?: string; id?: string };
+          }) => `agent:${agentId}:${channel}:${peer?.kind ?? "direct"}:${peer?.id ?? "peer"}`,
+        ) as unknown as PluginRuntime["channel"]["routing"]["buildAgentSessionKey"],
         resolveAgentRoute: vi.fn(() => ({
           agentId: "main",
           accountId: "default",
@@ -237,6 +252,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+    },
+    modelAuth: {
+      getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
+      resolveApiKeyForProvider:
+        vi.fn() as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
+    },
+    subagent: {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      getSession: vi.fn(),
+      deleteSession: vi.fn(),
     },
   };
 

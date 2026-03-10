@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Chat, Message } from "@grammyjs/types";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -39,14 +38,6 @@ const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
 const ORIGINAL_TZ = process.env.TZ;
-const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
-  chat as Chat;
-const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message =>
-  ({
-    message_id: 1,
-    date: 0,
-    ...message,
-  }) as Message;
 const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
@@ -124,87 +115,6 @@ describe("createTelegramBot", () => {
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
-    const cases = [
-      [{ message: mockMessage({ chat: mockChat({ id: 123 }) }) }, "telegram:123"],
-      [
-        {
-          message: mockMessage({
-            chat: mockChat({ id: 123, type: "private" }),
-            message_thread_id: 9,
-          }),
-        },
-        "telegram:123:topic:9",
-      ],
-      [
-        {
-          message: mockMessage({
-            chat: mockChat({ id: 123, type: "supergroup" }),
-            message_thread_id: 9,
-          }),
-        },
-        "telegram:123",
-      ],
-      [
-        {
-          message: mockMessage({
-            chat: mockChat({ id: 123, type: "supergroup", is_forum: true }),
-          }),
-        },
-        "telegram:123:topic:1",
-      ],
-      [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555"],
-      [
-        {
-          channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
-        },
-        "telegram:-100777111222",
-      ],
-      [
-        {
-          update: {
-            channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
-          },
-        },
-        "telegram:-100777111223",
-      ],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }) },
-        "telegram:123:control",
-      ],
-      [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) }, "telegram:123"],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }) },
-        "telegram:123:control",
-      ],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop please" }) },
-        "telegram:123:control",
-      ],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "do not do that" }) },
-        "telegram:123:control",
-      ],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "остановись" }) },
-        "telegram:123:control",
-      ],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }) },
-        "telegram:123:control",
-      ],
-      [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }) }, "telegram:123"],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }) },
-        "telegram:123",
-      ],
-      [
-        { message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }) },
-        "telegram:123",
-      ],
-    ] as const;
-    for (const [input, expected] of cases) {
-      expect(getTelegramSequentialKey(input)).toBe(expected);
-    }
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });

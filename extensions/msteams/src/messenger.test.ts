@@ -1,8 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
+import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
@@ -38,7 +39,7 @@ const chunkMarkdownText = (text: string, limit: number) => {
   return chunks;
 };
 
-const runtimeStub = {
+const runtimeStub: PluginRuntime = createPluginRuntimeMock({
   channel: {
     text: {
       chunkMarkdownText,
@@ -47,7 +48,7 @@ const runtimeStub = {
       convertMarkdownTables: (text: string) => text,
     },
   },
-} as unknown as PluginRuntime;
+});
 
 const createNoopAdapter = (): MSTeamsAdapter => ({
   continueConversation: async () => {},
@@ -70,6 +71,17 @@ const createRecordedSendActivity = (
     return { id: `id:${content}` };
   };
 };
+
+const REVOCATION_ERROR = "Cannot perform 'set' on a proxy that has been revoked";
+
+const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
+  continueConversation: async (_appId, _reference, logic) => {
+    await logic({
+      sendActivity: createRecordedSendActivity(proactiveSent),
+    });
+  },
+  process: async () => {},
+});
 
 describe("msteams messenger", () => {
   beforeEach(() => {
@@ -296,18 +308,11 @@ describe("msteams messenger", () => {
 
       const ctx = {
         sendActivity: async () => {
-          throw new TypeError("Cannot perform 'set' on a proxy that has been revoked");
+          throw new TypeError(REVOCATION_ERROR);
         },
       };
 
-      const adapter: MSTeamsAdapter = {
-        continueConversation: async (_appId, _reference, logic) => {
-          await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
-          });
-        },
-        process: async () => {},
-      };
+      const adapter = createFallbackAdapter(proactiveSent);
 
       const ids = await sendMSTeamsMessages({
         replyStyle: "thread",
@@ -337,18 +342,11 @@ describe("msteams messenger", () => {
             threadSent.push(content);
             return { id: `id:${content}` };
           }
-          throw new TypeError("Cannot perform 'set' on a proxy that has been revoked");
+          throw new TypeError(REVOCATION_ERROR);
         },
       };
 
-      const adapter: MSTeamsAdapter = {
-        continueConversation: async (_appId, _reference, logic) => {
-          await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
-          });
-        },
-        process: async () => {},
-      };
+      const adapter = createFallbackAdapter(proactiveSent);
 
       const ids = await sendMSTeamsMessages({
         replyStyle: "thread",
