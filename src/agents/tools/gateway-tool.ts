@@ -157,7 +157,13 @@ export function createGatewayTool(opts?: {
               }
             : undefined;
         const extracted = extractDeliveryInfo(sessionKey);
-        const deliveryContext = liveContext ?? extracted.deliveryContext;
+        const deliveryContext =
+          liveContext != null
+            ? {
+                ...liveContext,
+                accountId: liveContext.accountId ?? extracted.deliveryContext?.accountId,
+              }
+            : extracted.deliveryContext;
         // Guard threadId with the same session check as deliveryContext. When
         // targeting another session, opts.agentThreadId belongs to the current
         // session's thread and must not be written into the sentinel — it would

@@ -205,7 +205,13 @@ function resolveConfigRestartRequest(params: unknown): {
   const { deliveryContext: extractedDeliveryContext, threadId: extractedThreadId } =
     extractDeliveryInfo(sessionKey);
   const paramsDeliveryContext = parseDeliveryContextFromParams(params);
-  const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
+  const deliveryContext =
+    paramsDeliveryContext != null
+      ? {
+          ...paramsDeliveryContext,
+          accountId: paramsDeliveryContext.accountId ?? extractedDeliveryContext?.accountId,
+        }
+      : extractedDeliveryContext;
   const threadId = paramsDeliveryContext?.threadId ?? extractedThreadId;
 
   return {
