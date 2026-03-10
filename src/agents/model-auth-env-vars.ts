@@ -12,6 +12,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
   "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+  modelscope: ["MODELSCOPE_API_KEY"],
   openai: ["OPENAI_API_KEY"],
   google: ["GEMINI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],

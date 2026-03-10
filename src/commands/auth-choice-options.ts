@@ -162,6 +162,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["huggingface-api-key"],
   },
   {
+    value: "modelscope",
+    label: "ModelScope",
+    hint: "Inference API",
+    choices: ["modelscope-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",

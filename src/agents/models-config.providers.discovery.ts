@@ -9,6 +9,12 @@ import {
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
+import {
+  discoverModelScopeModels,
+  MODELSCOPE_BASE_URL,
+  MODELSCOPE_MODEL_CATALOG,
+  buildModelScopeModelDefinition,
+} from "./modelscope-models.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
@@ -252,6 +258,19 @@ export async function buildHuggingfaceProvider(discoveryApiKey?: string): Promis
       : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   return {
     baseUrl: HUGGINGFACE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildModelScopeProvider(discoveryApiKey?: string): Promise<ProviderConfig> {
+  const resolvedSecret = discoveryApiKey?.trim() ?? "";
+  const models =
+    resolvedSecret !== ""
+      ? await discoverModelScopeModels(resolvedSecret)
+      : MODELSCOPE_MODEL_CATALOG.map(buildModelScopeModelDefinition);
+  return {
+    baseUrl: MODELSCOPE_BASE_URL,
     api: "openai-completions",
     models,
   };

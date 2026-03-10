@@ -10,6 +10,7 @@ import {
 } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import { applyAuthChoiceModelScope } from "./auth-choice.apply.modelscope.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import {
   applyGoogleGeminiModelDefault,
@@ -96,6 +97,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   venice: "venice-api-key",
   together: "together-api-key",
   huggingface: "huggingface-api-key",
+  modelscope: "modelscope-api-key",
   mistral: "mistral-api-key",
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
@@ -671,6 +673,10 @@ export async function applyAuthChoiceApiProviders(
 
   if (authChoice === "huggingface-api-key") {
     return applyAuthChoiceHuggingface({ ...params, authChoice });
+  }
+
+  if (authChoice === "modelscope-api-key") {
+    return applyAuthChoiceModelScope({ ...params, authChoice });
   }
 
   return null;

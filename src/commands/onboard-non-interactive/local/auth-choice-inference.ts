@@ -25,6 +25,7 @@ type AuthChoiceFlagOptions = Pick<
   | "huggingfaceApiKey"
   | "zaiApiKey"
   | "xiaomiApiKey"
+  | "modelscopeApiKey"
   | "minimaxApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"

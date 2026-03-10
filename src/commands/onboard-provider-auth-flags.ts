@@ -19,6 +19,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "veniceApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
+  | "modelscopeApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
@@ -155,6 +156,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--huggingface-api-key",
     cliOption: "--huggingface-api-key <key>",
     description: "Hugging Face API key (HF token)",
+  },
+  {
+    optionKey: "modelscopeApiKey",
+    authChoice: "modelscope-api-key",
+    cliFlag: "--modelscope-api-key",
+    cliOption: "--modelscope-api-key <key>",
+    description: "ModelScope API key",
   },
   {
     optionKey: "opencodeZenApiKey",

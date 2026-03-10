@@ -68,6 +68,7 @@ describe("applyAuthChoice", () => {
     "AI_GATEWAY_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "MOONSHOT_API_KEY",
+    "MODELSCOPE_API_KEY",
     "MISTRAL_API_KEY",
     "KIMI_API_KEY",
     "GEMINI_API_KEY",
