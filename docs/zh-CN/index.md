@@ -38,7 +38,7 @@ x-i18n:
 
 <Columns>
   <Card title="入门指南" href="/start/getting-started" icon="rocket">
-    安装 OpenClaw 并在几分钟内启动 Gateway 网关。
+    安装 OpenClaw，并在几分钟内启动 Gateway 网关。
   </Card>
   <Card title="运行向导" href="/start/wizard" icon="sparkles">
     通过 `openclaw onboard` 和配对流程进行引导式设置。
@@ -48,7 +48,20 @@ x-i18n:
   </Card>
 </Columns>
 
-OpenClaw 通过单个 Gateway 网关进程将聊天应用连接到 Pi 等编程智能体。它为 OpenClaw 助手提供支持，并支持本地或远程部署。
+## 什么是 OpenClaw？
+
+OpenClaw 是一个**自托管的 Gateway 网关**，它将你最喜爱的聊天应用（WhatsApp、Telegram、Discord、iMessage 等）连接到像 Pi 这样的 AI 编程智能体。你只需在自己的机器（或服务器）上运行一个 Gateway 网关进程，它就会成为消息应用与全天候在线 AI 助手之间的桥梁。
+
+**它是为谁准备的？** 想要一个可以随时随地发消息，且无需交出数据控制权或依赖托管服务的个人 AI 助手的开发者和高级用户。
+
+**它有什么独特之处？**
+
+- **自托管**：运行在你的硬件上，由你制定规则。
+- **多渠道**：一个 Gateway 网关进程同时服务于 WhatsApp、Telegram、Discord 等多个平台。
+- **智能体原生**：专为支持工具调用、会话、记忆和多智能体路由的编程智能体而设计。
+- **开源**：采用 MIT 许可证，由社区驱动。
+
+**你需要什么？** Node 22+、所选提供商的 API 密钥，以及 5 分钟时间。为了获得最佳质量和安全性，请使用现有的最强大的最新一代模型。
 
 ## 工作原理
 
@@ -83,7 +96,7 @@ Gateway 网关是会话、路由和渠道连接的唯一事实来源。
     浏览器仪表板，用于聊天、配置、会话和节点管理。
   </Card>
   <Card title="移动节点" icon="smartphone">
-    配对 iOS 和 Android 节点，支持 Canvas。
+    配对 iOS 和 Android 节点，支持 Canvas、摄像头、语音及设备操作等工作流。
   </Card>
 </Columns>
 
@@ -95,7 +108,7 @@ Gateway 网关是会话、路由和渠道连接的唯一事实来源。
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="新手引导并安装服务">
+  <Step title="运行向导并安装服务">
     ```bash
     openclaw onboard --install-daemon
     ```

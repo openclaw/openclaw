@@ -87,6 +87,7 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
       },
       openai: {
         apiKey: "openai_api_key",
+        baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
@@ -208,6 +209,9 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
 - `prefsPath`：覆盖本地偏好 JSON 路径（提供商/限制/摘要）。
 - `apiKey` 值回退到环境变量（`ELEVENLABS_API_KEY`/`XI_API_KEY`、`OPENAI_API_KEY`）。
 - `elevenlabs.baseUrl`：覆盖 ElevenLabs API 基础 URL。
+- `openai.baseUrl`：覆盖 OpenAI TTS 端点。
+  - 解析顺序：`messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
+  - 非默认值被视为 OpenAI 兼容的 TTS 端点，因此可以接受自定义模型和语音名称。
 - `elevenlabs.voiceSettings`：
   - `stability`、`similarityBoost`、`style`：`0..1`
   - `useSpeakerBoost`：`true|false`
