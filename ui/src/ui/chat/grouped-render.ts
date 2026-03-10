@@ -8,6 +8,8 @@ import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
+import { parseAdaptiveCardMarkers } from "./adaptive-card-parse.ts";
+import { renderAdaptiveCard } from "./adaptive-card-render.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -659,7 +661,11 @@ function renderGroupedMessage(
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+
+  // Detect adaptive card markers before markdown conversion.
+  const parsedCard = markdownBase ? parseAdaptiveCardMarkers(markdownBase) : null;
+  const markdown = parsedCard ? (parsedCard.fallbackText || null) : markdownBase;
+
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
@@ -670,13 +676,13 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  if (!markdown && !parsedCard && hasToolCards && isToolResult) {
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages) {
+  if (!markdown && !parsedCard && !visibleToolCards && !hasImages) {
     return nothing;
   }
 
@@ -767,6 +773,7 @@ function renderGroupedMessage(
             ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
           `
       }
+      ${parsedCard ? renderAdaptiveCard(parsedCard) : nothing}
     </div>
   `;
 }
