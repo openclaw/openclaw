@@ -20,10 +20,8 @@ const { getOAuthApiKeyMock, refreshOpenAICodexOAuthTokenMock } = vi.hoisted(() =
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
-  );
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
