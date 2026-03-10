@@ -12,7 +12,6 @@ Do (review-only)
 Goal: produce a thorough review and a clear recommendation (READY FOR /landpr vs NEEDS WORK vs INVALID CLAIM). Do NOT merge, do NOT push, do NOT make changes in the repo as part of this command.
 
 0. Truthfulness + reality gate (required for bug-fix claims)
-
    - Do not trust the issue text or PR summary by default; verify in code and evidence.
    - If the PR claims to fix a bug linked to an issue, confirm the bug exists now (repro steps, logs, failing test, or clear code-path proof).
    - Prove root cause with exact location (`path/file.ts:line` + explanation of why behavior is wrong).
@@ -86,13 +85,13 @@ B) Claim verification matrix (required)
 
 - Fill this table:
 
-  | Field | Evidence |
-  |---|---|
-  | Claimed problem | ... |
-  | Evidence observed (repro/log/test/code) | ... |
-  | Root cause location (`path:line`) | ... |
-  | Why this fix addresses that root cause | ... |
-  | Regression coverage (test name or manual proof) | ... |
+  | Field                                           | Evidence |
+  | ----------------------------------------------- | -------- |
+  | Claimed problem                                 | ...      |
+  | Evidence observed (repro/log/test/code)         | ...      |
+  | Root cause location (`path:line`)               | ...      |
+  | Why this fix addresses that root cause          | ...      |
+  | Regression coverage (test name or manual proof) | ...      |
 
 - If any row is missing/weak, default to `NEEDS WORK` or `INVALID CLAIM`.
 
