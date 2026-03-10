@@ -48,6 +48,21 @@ describe("resolveTelegramToken", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const dir = withTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    const tokenLink = path.join(dir, "token-link.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    fs.symlinkSync(tokenFile, tokenLink);
+
+    const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("falls back to config token when no env or tokenFile", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const cfg = {
