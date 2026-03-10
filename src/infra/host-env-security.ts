@@ -1,4 +1,5 @@
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
+import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -101,7 +102,7 @@ export function sanitizeHostExecEnv(params?: {
   }
 
   if (!overrides) {
-    return merged;
+    return markOpenClawExecEnv(merged);
   }
 
   for (const [rawKey, value] of Object.entries(overrides)) {
@@ -124,7 +125,7 @@ export function sanitizeHostExecEnv(params?: {
     merged[key] = value;
   }
 
-  return merged;
+  return markOpenClawExecEnv(merged);
 }
 
 export function sanitizeSystemRunEnvOverrides(params?: {

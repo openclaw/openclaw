@@ -58,7 +58,6 @@ Welcome to the lobster tank! 🦞
 
 - **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
   - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
-    
 - **Josh Lehman** - Compaction, Tlon/Urbit subsystem
   - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
@@ -73,7 +72,10 @@ Welcome to the lobster tank! 🦞
 
 - **Robin Waslander** - Security, PR triage, bug fixes
   - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
- 
+
+- **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
+  - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
