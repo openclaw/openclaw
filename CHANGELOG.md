@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/outbound HTML sends: chunk long HTML-mode messages, preserve plain-text fallback and silent-delivery params across retries, and cut over to plain text when HTML chunk planning cannot safely preserve the full message. (#42240) thanks @obviyus.
 - Agents/embedded overload logs: include the failing model and provider in error-path console output, with lifecycle regression coverage for the rendered and sanitized `consoleMessage`. (#41236) thanks @jiarung.
 - Agents/failover: treat Gemini `MALFORMED_RESPONSE` stop reasons as retryable timeouts so preview-model enum drift falls back cleanly instead of crashing the run, without also reclassifying malformed function-call errors. (#42292) Thanks @jnMetaCode.
+- Discord/Telegram outbound runtime config: thread runtime-resolved config through Discord and Telegram send paths so SecretRef-based credentials stay resolved during message delivery. (#42352) Thanks @joshavant.
 
 ## 2026.3.8
 
