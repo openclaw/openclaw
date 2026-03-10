@@ -306,6 +306,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         if (!isConflict && !isRecoverable) {
           throw err;
         }
+        if (isConflict) {
+          webhookCleared = false; 
+        }
         const reason = isConflict ? "getUpdates conflict" : "network error";
         const errMsg = formatErrorMessage(err);
         const shouldRestart = await waitBeforeRestart(
