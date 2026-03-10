@@ -5,9 +5,8 @@ import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-// We currently skip pruning tool results that contain images. Still, we count them (approx.) so
-// we start trimming prunable tool results earlier when image-heavy context is consuming the window.
 const IMAGE_CHAR_ESTIMATE = 8_000;
+const IMAGE_PRUNED_PLACEHOLDER = "[image removed during context pruning]";
 
 function asText(text: string): TextContent {
   return { type: "text", text };
@@ -185,14 +184,39 @@ function findFirstUserIndex(messages: AgentMessage[]): number | null {
   return null;
 }
 
+/**
+ * Strip image blocks from a tool result, replacing them with text placeholders.
+ * Preserves any accompanying text content.
+ */
+function stripImageBlocks(
+  content: ReadonlyArray<TextContent | ImageContent>,
+): (TextContent | ImageContent)[] {
+  const result: (TextContent | ImageContent)[] = [];
+  let lastWasPlaceholder = false;
+  for (const block of content) {
+    if (block.type === "image") {
+      // Deduplicate consecutive placeholders (e.g. multiple images in a row)
+      if (!lastWasPlaceholder) {
+        result.push(asText(IMAGE_PRUNED_PLACEHOLDER));
+        lastWasPlaceholder = true;
+      }
+    } else {
+      result.push(block);
+      lastWasPlaceholder = false;
+    }
+  }
+  return result;
+}
+
 function softTrimToolResultMessage(params: {
   msg: ToolResultMessage;
   settings: EffectiveContextPruningSettings;
 }): ToolResultMessage | null {
   const { msg, settings } = params;
-  // Ignore image tool results for now: these are often directly relevant and hard to partially prune safely.
+
+  // For image-containing tool results: strip image blocks, keep text content.
   if (hasImageBlocks(msg.content)) {
-    return null;
+    return { ...msg, content: stripImageBlocks(msg.content) };
   }
 
   const parts = collectTextSegments(msg.content);
@@ -272,9 +296,6 @@ export function pruneContextMessages(params: {
       continue;
     }
     if (!isToolPrunable(msg.toolName)) {
-      continue;
-    }
-    if (hasImageBlocks(msg.content)) {
       continue;
     }
     prunableToolIndexes.push(i);
