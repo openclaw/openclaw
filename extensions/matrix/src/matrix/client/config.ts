@@ -185,6 +185,14 @@ export async function resolveMatrixAuth(params?: {
     );
   }
 
+  const homeserverHostname = (() => {
+    try {
+      return new URL(resolved.homeserver).hostname;
+    } catch {
+      return undefined;
+    }
+  })();
+
   // Login with password using HTTP API.
   const { response: loginResponse, release: releaseLoginResponse } = await fetchWithSsrFGuard({
     url: `${resolved.homeserver}/_matrix/client/v3/login`,
@@ -198,6 +206,7 @@ export async function resolveMatrixAuth(params?: {
         initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
       }),
     },
+    policy: homeserverHostname ? { allowedHostnames: [homeserverHostname] } : undefined,
     auditContext: "matrix.login",
   });
   const login = await (async () => {
