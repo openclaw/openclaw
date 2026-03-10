@@ -1755,4 +1755,37 @@ describe("createTelegramBot", () => {
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
   });
+
+  it("skips group message when neverReply is true on the telegram channel config", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+          neverReply: true,
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100555, type: "supergroup", title: "Silent Group" },
+        from: { id: 42, first_name: "Ada", username: "ada" },
+        text: "hello from group",
+        date: 1736380800,
+        message_id: 300,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // neverReply causes resolveTelegramInboundBody to return null, so no reply is dispatched
+    // (history recording is verified in bot-message-context.never-reply.test.ts)
+    expect(replySpy).not.toHaveBeenCalled();
+  });
 });
