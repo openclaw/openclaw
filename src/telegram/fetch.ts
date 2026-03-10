@@ -407,7 +407,7 @@ export function resolveTelegramFetch(
         // Proxy routes should not arm sticky IPv4 mode; `family=4` would constrain
         // proxy-connect behavior instead of Telegram endpoint selection.
         if (!allowStickyIpv4Fallback) {
-          return sourceFetch(input, withDispatcherIfMissing(init, defaultDispatcher));
+          throw err;
         }
         if (!stickyIpv4FallbackEnabled) {
           stickyIpv4FallbackEnabled = true;

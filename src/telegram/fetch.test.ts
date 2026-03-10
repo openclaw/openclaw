@@ -203,15 +203,12 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
-  it("does not arm sticky IPv4 fallback for explicit proxy paths", async () => {
+  it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
     ProxyAgentCtor.mockClear();
     const fetchError = buildFetchFallbackError("EHOSTUNREACH");
-    undiciFetch
-      .mockRejectedValueOnce(fetchError)
-      .mockResolvedValueOnce({ ok: true } as Response)
-      .mockResolvedValueOnce({ ok: true } as Response);
+    undiciFetch.mockRejectedValueOnce(fetchError).mockResolvedValueOnce({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(proxyFetch, {
       network: {
@@ -220,18 +217,18 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
     await resolved("https://api.telegram.org/botx/sendChatAction");
 
-    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
 
     const firstDispatcher = getDispatcherFromUndiciCall(1);
     const secondDispatcher = getDispatcherFromUndiciCall(2);
-    const thirdDispatcher = getDispatcherFromUndiciCall(3);
 
     expect(firstDispatcher).toBe(secondDispatcher);
-    expect(secondDispatcher).toBe(thirdDispatcher);
     expect(firstDispatcher?.options?.proxyTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
@@ -241,13 +238,10 @@ describe("resolveTelegramFetch", () => {
     expect(firstDispatcher?.options?.proxyTls?.family).not.toBe(4);
   });
 
-  it("does not arm sticky IPv4 fallback for env proxy paths", async () => {
+  it("does not blind-retry when sticky IPv4 fallback is disallowed for env proxy paths", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
     const fetchError = buildFetchFallbackError("EHOSTUNREACH");
-    undiciFetch
-      .mockRejectedValueOnce(fetchError)
-      .mockResolvedValueOnce({ ok: true } as Response)
-      .mockResolvedValueOnce({ ok: true } as Response);
+    undiciFetch.mockRejectedValueOnce(fetchError).mockResolvedValueOnce({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
       network: {
@@ -256,18 +250,18 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    await resolved("https://api.telegram.org/botx/sendMessage");
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
     await resolved("https://api.telegram.org/botx/sendChatAction");
 
-    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
 
     const firstDispatcher = getDispatcherFromUndiciCall(1);
     const secondDispatcher = getDispatcherFromUndiciCall(2);
-    const thirdDispatcher = getDispatcherFromUndiciCall(3);
 
     expect(firstDispatcher).toBe(secondDispatcher);
-    expect(secondDispatcher).toBe(thirdDispatcher);
     expect(firstDispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
