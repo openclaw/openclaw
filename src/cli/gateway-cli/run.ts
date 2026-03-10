@@ -175,11 +175,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   // environments. Patch globalThis.fetch early so every bare fetch() call in
   // the process inherits the proxy settings — EnvHttpProxyAgent also honours
   // NO_PROXY, so loopback / localhost exclusions are preserved.
-  const proxyFetch = resolveProxyFetchFromEnv();
-  if (proxyFetch) {
-    globalThis.fetch = proxyFetch;
+  const proxyFetchResult = resolveProxyFetchFromEnv();
+  if (proxyFetchResult) {
+    globalThis.fetch = proxyFetchResult.fetch;
     gatewayLog.info(
-      "http_proxy env var detected — patched globalThis.fetch to route through proxy",
+      `${proxyFetchResult.envVar} detected — patched globalThis.fetch to route through proxy`,
     );
   }
 
