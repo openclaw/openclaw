@@ -444,6 +444,28 @@ describe("deliverTaskNotification", () => {
     // Task should not have been re-created by the registry write
     expect(updated.tasks).toHaveLength(0);
   });
+
+  it("skips second concurrent notify with same idempotency key written during fan-out", async () => {
+    const registryPath = writeRegistry(tmpDir, [
+      makeTask({ id: "t1", watchers: [{ sessionKey: "s1", addedAt: Date.now() }] }),
+    ]);
+    // Simulate a concurrent notify writing the idempotency key during our fan-out
+    const sendToSession = vi.fn().mockImplementation(async () => {
+      const reg = JSON.parse(fs.readFileSync(registryPath, "utf8")) as TaskRegistry;
+      reg.tasks[0].notifiedEvents["completed"] = true;
+      fs.writeFileSync(registryPath, JSON.stringify(reg, null, 2));
+    });
+    const result = await deliverTaskNotification({
+      taskId: "t1",
+      event: "completed",
+      message: "done",
+      registryPath,
+      sendToSession,
+    });
+    // Delivery happened (sendToSession was called) but post-send guard detected concurrent write
+    expect(result.skipped).toBe("already delivered");
+    expect(result.delivered).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

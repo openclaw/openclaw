@@ -155,6 +155,14 @@ export async function deliverTaskNotification(opts: {
   }
 
   const freshTask = freshRegistry.tasks[freshIndex];
+
+  // Re-check idempotency after reload: a concurrent tasks.notify with the same key may have
+  // completed its writes while our fan-out was in flight. Both callers passed the pre-send guard,
+  // but only the first writer wins here — the second returns skipped to prevent duplicate delivery.
+  if (freshTask.notifiedEvents[ikey]) {
+    return { delivered: [], failed: [], skipped: "already delivered" };
+  }
+
   const updatedEvents = [...freshTask.events, newEvent].slice(-MAX_TASK_EVENTS);
 
   // Merge new idempotency key and cap the map to MAX_TASK_EVENTS entries.
