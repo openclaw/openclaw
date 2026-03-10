@@ -46,6 +46,7 @@ import {
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
+import { CommandLane } from "../../process/lanes.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
@@ -195,6 +196,17 @@ function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
+function resolveCronEmbeddedAgentLane(lane?: string) {
+  const trimmed = lane?.trim();
+  // Cron jobs already execute inside the cron command lane. Reusing that same
+  // lane for the nested embedded-agent run deadlocks: the outer cron task holds
+  // the lane while the inner run waits to reacquire it.
+  if (!trimmed || trimmed === "cron") {
+    return CommandLane.Nested;
+  }
+  return trimmed;
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -610,7 +622,7 @@ export async function runCronIsolatedAgentTurn(params: {
             config: cfgWithAgentDefaults,
             skillsSnapshot,
             prompt: promptText,
-            lane: params.lane ?? "cron",
+            lane: resolveCronEmbeddedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
             authProfileId,

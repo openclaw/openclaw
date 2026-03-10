@@ -35,12 +35,12 @@ function mockEmbeddedOk() {
 }
 
 /**
- * Extract the provider and model from the last runEmbeddedPiAgent call.
+ * Extract select fields from the last runEmbeddedPiAgent call.
  */
-function lastEmbeddedCall(): { provider?: string; model?: string } {
+function lastEmbeddedCall(): { provider?: string; model?: string; lane?: string } {
   const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
   expect(calls.length).toBeGreaterThan(0);
-  return calls.at(-1)?.[0] as { provider?: string; model?: string };
+  return calls.at(-1)?.[0] as { provider?: string; model?: string; lane?: string };
 }
 
 const DEFAULT_MESSAGE = "do it";
@@ -106,6 +106,14 @@ describe("cron model formatting and precedence edge cases", () => {
   // ------ provider/model string splitting ------
 
   describe("parseModelRef formatting", () => {
+    it("moves nested embedded runs off the cron lane to avoid self-deadlock", async () => {
+      await withTempHome(async (home) => {
+        const { res, call } = await runTurn(home);
+        expect(res.status).toBe("ok");
+        expect(call.lane).toBe("nested");
+      });
+    });
+
     it("splits standard provider/model", async () => {
       await withTempHome(async (home) => {
         const { res, call } = await runTurn(home, {
