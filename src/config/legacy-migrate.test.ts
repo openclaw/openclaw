@@ -251,7 +251,7 @@ describe("legacy migrate gateway.bind to loopback for tailscale serve/funnel (is
     {
       bind: "tailnet" as const,
       mode: "funnel" as const,
-      auth: { mode: "password" as const, password: "pw" },
+      auth: { mode: "password" as const, password: "pw" }, // pragma: allowlist secret
     },
   ])("migrates bind=$bind to loopback for tailscale $mode", ({ bind, mode, auth }) => {
     const res = migrateLegacyConfig({
