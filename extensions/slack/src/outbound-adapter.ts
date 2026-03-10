@@ -21,6 +21,136 @@ import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
 
+// ---------------------------------------------------------------------------
+// Adaptive Card rendering: inline card extraction + Slack Block Kit conversion.
+// Mirrors src/cards/parse.ts + src/cards/strategies/slack.ts but kept inline
+// to avoid cross-workspace imports (extensions cannot import from src/ directly).
+// ---------------------------------------------------------------------------
+
+const AC_CARD_RE = /<!--adaptive-card-->([\s\S]*?)<!--\/adaptive-card-->/;
+
+interface AcParsed {
+  card: { type: "AdaptiveCard"; body: unknown[]; actions?: unknown[] };
+  fallbackText: string;
+}
+
+function parseAdaptiveCardMarkers(text: string): AcParsed | null {
+  const m = AC_CARD_RE.exec(text);
+  if (!m) {
+    return null;
+  }
+  try {
+    const card = JSON.parse(m[1].trim());
+    if (card?.type !== "AdaptiveCard") {
+      return null;
+    }
+    const fallbackText = text.slice(0, m.index).trim();
+    return { card, fallbackText };
+  } catch {
+    return null;
+  }
+}
+
+type AcElement = Record<string, unknown>;
+
+function acStr(val: unknown, fallback = ""): string {
+  if (typeof val === "string") return val;
+  if (val == null) return fallback;
+  return JSON.stringify(val);
+}
+
+function renderAcTextBlock(el: AcElement): unknown {
+  const text = acStr(el.text);
+  const weight = el.weight as string | undefined;
+  const formatted = weight === "Bolder" ? `*${text}*` : text;
+  return { type: "section", text: { type: "mrkdwn", text: formatted } };
+}
+
+function renderAcFactSet(el: AcElement): unknown | null {
+  const facts = el.facts as Array<{ title?: string; value?: string }> | undefined;
+  if (!facts?.length) return null;
+  return {
+    type: "section",
+    fields: facts.map((f) => ({ type: "mrkdwn", text: `*${f.title ?? ""}*\n${f.value ?? ""}` })),
+  };
+}
+
+function renderAcImage(el: AcElement): unknown | null {
+  const url = acStr(el.url);
+  const alt = acStr(el.altText) || acStr(el.alt) || "image";
+  if (!url) return null;
+  return { type: "image", image_url: url, alt_text: alt };
+}
+
+function renderAcElement(el: AcElement): unknown[] {
+  switch (el.type) {
+    case "TextBlock":
+      return [renderAcTextBlock(el)];
+    case "FactSet": {
+      const block = renderAcFactSet(el);
+      return block ? [block] : [];
+    }
+    case "Image": {
+      const block = renderAcImage(el);
+      return block ? [block] : [];
+    }
+    case "ColumnSet": {
+      const columns = el.columns as Array<{ items?: AcElement[] }> | undefined;
+      if (!columns?.length) return [];
+      return columns.flatMap((col) => (col.items ?? []).flatMap(renderAcElement));
+    }
+    case "Container": {
+      const items = el.items as AcElement[] | undefined;
+      return (items ?? []).flatMap(renderAcElement);
+    }
+    default:
+      return [];
+  }
+}
+
+function renderAcActions(actions: unknown[]): unknown[] {
+  type SlackButton = {
+    type: "button";
+    text: { type: "plain_text"; text: string };
+    url?: string;
+    action_id?: string;
+    value?: string;
+  };
+  const buttons: SlackButton[] = [];
+  for (const raw of actions) {
+    const action = raw as AcElement;
+    const label = acStr(action.title);
+    if (!label) continue;
+    if (action.type === "Action.OpenUrl") {
+      buttons.push({ type: "button", text: { type: "plain_text", text: label }, url: acStr(action.url) });
+    } else if (action.type === "Action.Submit") {
+      const actionId = typeof action.id === "string" ? action.id : `ac_submit_${buttons.length}`;
+      buttons.push({
+        type: "button",
+        text: { type: "plain_text", text: label },
+        action_id: actionId,
+        value: action.data != null ? JSON.stringify(action.data) : undefined,
+      });
+    }
+  }
+  return buttons.length > 0 ? [{ type: "actions", elements: buttons }] : [];
+}
+
+function renderSlackCard(parsed: AcParsed): { blocks: unknown[]; fallback: string } {
+  const blocks: unknown[] = [];
+  for (const el of parsed.card.body) {
+    const rendered = renderAcElement(el as AcElement);
+    if (rendered.length > 0) {
+      if (blocks.length > 0) blocks.push({ type: "divider" });
+      blocks.push(...rendered);
+    }
+  }
+  if (parsed.card.actions?.length) {
+    blocks.push(...renderAcActions(parsed.card.actions));
+  }
+  return { blocks, fallback: parsed.fallbackText };
+}
+
 function resolveRenderedInteractiveBlocks(
   interactive?: InteractiveReply,
 ): SlackBlock[] | undefined {
@@ -205,8 +335,27 @@ export const slackOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) =>
-      await sendSlackOutboundMessage({
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
+      // Adaptive card rendering: convert card markers to Slack Block Kit
+      const acParsed = parseAdaptiveCardMarkers(text);
+      if (acParsed) {
+        const rendered = renderSlackCard(acParsed);
+        if (rendered.blocks.length > 0) {
+          const send =
+            resolveOutboundSendDep<typeof sendMessageSlack>(deps, "slack") ?? sendMessageSlack;
+          const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);
+          const slackIdentity = resolveSlackSendIdentity(identity);
+          return await send(to, rendered.fallback, {
+            cfg,
+            threadTs,
+            accountId: accountId ?? undefined,
+            blocks: rendered.blocks as NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"],
+            ...(slackIdentity ? { identity: slackIdentity } : {}),
+          });
+        }
+      }
+
+      return await sendSlackOutboundMessage({
         cfg,
         to,
         text,
@@ -215,7 +364,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
         identity,
-      }),
+      });
+    },
     sendMedia: async ({
       cfg,
       to,
