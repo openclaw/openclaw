@@ -230,6 +230,7 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
+  const inboundThreadId = message.thread?.name;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: rawBody,
@@ -250,8 +251,9 @@ async function processMessageWithPipeline(params: {
     Surface: "googlechat",
     MessageSid: message.name,
     MessageSidFull: message.name,
-    ReplyToId: message.thread?.name,
-    ReplyToIdFull: message.thread?.name,
+    ReplyToId: inboundThreadId,
+    ReplyToIdFull: inboundThreadId,
+    MessageThreadId: inboundThreadId,
     MediaPath: mediaPath,
     MediaType: mediaType,
     MediaUrl: mediaPath,
@@ -318,6 +320,7 @@ async function processMessageWithPipeline(params: {
       deliver: async (payload) => {
         await deliverGoogleChatReply({
           payload,
+          threadId: ctxPayload.MessageThreadId ?? ctxPayload.ReplyToId,
           account,
           spaceId,
           runtime,
@@ -365,6 +368,7 @@ async function downloadAttachment(
 
 async function deliverGoogleChatReply(params: {
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
+  threadId?: string;
   account: ResolvedGoogleChatAccount;
   spaceId: string;
   runtime: GoogleChatRuntimeEnv;
@@ -373,8 +377,18 @@ async function deliverGoogleChatReply(params: {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
+  const {
+    payload,
+    threadId,
+    account,
+    spaceId,
+    runtime,
+    core,
+    config,
+    statusSink,
+    typingMessageName,
+  } = params;
+  const resolvedThreadId = threadId?.trim() || payload.replyToId?.trim() || undefined;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -431,7 +445,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: resolvedThreadId,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -463,7 +477,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: resolvedThreadId,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });
