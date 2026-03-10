@@ -632,7 +632,7 @@ export async function onTimer(state: CronServiceState) {
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       try {
-        const result = await executeJobCoreWithTimeout(state, job);
+        const result = await executeJobCore(state, job);
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
@@ -1130,28 +1130,57 @@ export async function executeJobCore(
     return resolveAbortError();
   }
 
-  const res = await state.deps.runIsolatedAgentJob({
-    job,
-    message: job.payload.message,
-    abortSignal,
-  });
+  const isolatedTimeoutMs = resolveCronJobTimeoutMs(job);
+  const isolatedAbortController = new AbortController();
+  let isolatedTimeoutId: NodeJS.Timeout | undefined;
+  const combinedAbortSignal = abortSignal
+    ? AbortSignal.any([abortSignal, isolatedAbortController.signal])
+    : isolatedAbortController.signal;
 
-  if (abortSignal?.aborted) {
-    return { status: "error", error: timeoutErrorMessage() };
+  try {
+    if (typeof isolatedTimeoutMs === "number") {
+      isolatedTimeoutId = setTimeout(() => {
+        isolatedAbortController.abort(timeoutErrorMessage());
+      }, isolatedTimeoutMs);
+    }
+
+    const res = await state.deps.runIsolatedAgentJob({
+      job,
+      message: job.payload.message,
+      abortSignal: combinedAbortSignal,
+    });
+
+    if (combinedAbortSignal.aborted) {
+      return { status: "error", error: timeoutErrorMessage() };
+    }
+
+    return {
+      status: res.status,
+      error: res.error,
+      summary: res.summary,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
+      sessionId: res.sessionId,
+      sessionKey: res.sessionKey,
+      model: res.model,
+      provider: res.provider,
+      usage: res.usage,
+    };
+  } catch (err) {
+    const isolatedTimedOut =
+      isolatedAbortController.signal.aborted &&
+      isolatedAbortController.signal.reason === timeoutErrorMessage();
+    const upstreamTimedOut =
+      abortSignal?.aborted === true && abortSignal.reason === timeoutErrorMessage();
+    if (isolatedTimedOut || upstreamTimedOut) {
+      return { status: "error", error: timeoutErrorMessage() };
+    }
+    throw err;
+  } finally {
+    if (isolatedTimeoutId) {
+      clearTimeout(isolatedTimeoutId);
+    }
   }
-
-  return {
-    status: res.status,
-    error: res.error,
-    summary: res.summary,
-    delivered: res.delivered,
-    deliveryAttempted: res.deliveryAttempted,
-    sessionId: res.sessionId,
-    sessionKey: res.sessionKey,
-    model: res.model,
-    provider: res.provider,
-    usage: res.usage,
-  };
 }
 
 /**
