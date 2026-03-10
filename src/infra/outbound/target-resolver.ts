@@ -196,16 +196,31 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
+  const lowered = trimmed.toLowerCase();
+  const providerPrefix = `${channel.toLowerCase()}:`;
+  const withoutProvider = lowered.startsWith(providerPrefix)
+    ? trimmed.slice(providerPrefix.length).trim()
+    : trimmed;
 
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^(user|dm):/i.test(trimmed)) {
+  if (
+    withoutProvider.startsWith("@") ||
+    /^<@!?/.test(withoutProvider) ||
+    /^(user|dm):/i.test(withoutProvider)
+  ) {
     return "user";
   }
-  if (trimmed.startsWith("#") || /^(channel|group|chat|room|conversation):/i.test(trimmed)) {
+  if (
+    withoutProvider.startsWith("#") ||
+    /^(channel|group|chat|room|conversation):/i.test(withoutProvider)
+  ) {
     return "group";
   }
 
   // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
-  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
+  if (
+    (channel === "bluebubbles" || channel === "imessage") &&
+    /^\+?\d{6,}$/.test(withoutProvider)
+  ) {
     return "user";
   }
 
