@@ -65,15 +65,20 @@ export function registerCronSimpleCommands(cron: Command) {
     cron
       .command("runs")
       .description("Show cron run history (JSONL-backed)")
-      .requiredOption("--id <id>", "Job id")
+      .argument("[id]", "Job id (alias for --id)")
+      .option("--id <id>", "Job id")
       .option("--limit <n>", "Max entries (default 50)", "50")
-      .action(async (opts) => {
+      .action(async (id, opts) => {
         try {
           const limitRaw = Number.parseInt(String(opts.limit ?? "50"), 10);
           const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
-          const id = String(opts.id);
+          // Support both positional arg and --id flag (positional takes priority)
+          const jobId = id || opts.id;
+          if (!jobId) {
+            throw new Error("Missing job id. Use 'cron runs <id>' or 'cron runs --id <id>'");
+          }
           const res = await callGatewayFromCli("cron.runs", opts, {
-            id,
+            id: String(jobId),
             limit,
           });
           printCronJson(res);
