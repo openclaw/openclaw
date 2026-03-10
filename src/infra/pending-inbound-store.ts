@@ -12,6 +12,43 @@ const MAX_PENDING_ENTRIES = 200;
 const MAX_ACTIVE_TURNS = 50;
 
 /**
+ * In-process operation queue keyed by resolved file path.
+ *
+ * `withFileLock` is reentrant for the same process (it increments a counter
+ * rather than blocking), so concurrent in-process callers can still
+ * read-modify-write the same stale snapshot.  This map serializes operations
+ * on the same file path within the current process by chaining each new
+ * operation onto the previous promise — guaranteeing sequential execution
+ * even when the file lock is already held.
+ *
+ * The cross-process file lock is still acquired inside each operation to
+ * protect against concurrent writes from other processes.
+ */
+const inProcessOpQueue = new Map<string, Promise<void>>();
+
+/**
+ * Serialize an async operation on `filePath` within this process.
+ * Each call chains onto the previous pending operation for the same path,
+ * ensuring sequential read-modify-write even when `withFileLock` is
+ * reentrant.
+ */
+function withInProcessQueue(filePath: string, fn: () => Promise<void>): Promise<void> {
+  const prev = inProcessOpQueue.get(filePath) ?? Promise.resolve();
+  // Chain the new operation.  Use .then(fn, fn) so a rejected predecessor
+  // does not skip this operation (mirrors status-reactions.ts pattern).
+  const next = prev.then(fn, fn);
+  inProcessOpQueue.set(filePath, next);
+  // Clean up the map entry once the chain settles to avoid unbounded growth
+  // for paths that are written once and never again.
+  void next.finally(() => {
+    if (inProcessOpQueue.get(filePath) === next) {
+      inProcessOpQueue.delete(filePath);
+    }
+  });
+  return next;
+}
+
+/**
  * Lock options for pending-inbound-store read-modify-write operations.
  * Mirrors AUTH_STORE_LOCK_OPTIONS from auth-profiles.
  */
@@ -75,27 +112,29 @@ export async function writePendingInbound(
   entry: PendingInboundEntry,
 ): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
-    const existing = await readPendingInboundFile(filePath);
-    const key = storeKey(entry);
-    existing.entries[key] = entry;
-    // Prune oldest entries by capturedAt when the store exceeds the cap.
-    const keys = Object.keys(existing.entries);
-    if (keys.length > MAX_PENDING_ENTRIES) {
-      const sorted = keys.toSorted(
-        (a, b) => (existing.entries[a].capturedAt ?? 0) - (existing.entries[b].capturedAt ?? 0),
-      );
-      const pruneCount = sorted.length - MAX_PENDING_ENTRIES;
-      for (let i = 0; i < pruneCount; i++) {
-        delete existing.entries[sorted[i]];
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      const existing = await readPendingInboundFile(filePath);
+      const key = storeKey(entry);
+      existing.entries[key] = entry;
+      // Prune oldest entries by capturedAt when the store exceeds the cap.
+      const keys = Object.keys(existing.entries);
+      if (keys.length > MAX_PENDING_ENTRIES) {
+        const sorted = keys.toSorted(
+          (a, b) => (existing.entries[a].capturedAt ?? 0) - (existing.entries[b].capturedAt ?? 0),
+        );
+        const pruneCount = sorted.length - MAX_PENDING_ENTRIES;
+        for (let i = 0; i < pruneCount; i++) {
+          delete existing.entries[sorted[i]];
+        }
       }
-    }
-    await writeJsonAtomic(filePath, existing, {
-      mode: 0o600,
-      trailingNewline: true,
-      ensureDirMode: 0o700,
-    });
-  });
+      await writeJsonAtomic(filePath, existing, {
+        mode: 0o600,
+        trailingNewline: true,
+        ensureDirMode: 0o700,
+      });
+    }),
+  );
 }
 
 /**
@@ -130,18 +169,20 @@ export async function clearPendingInbound(stateDir: string): Promise<void> {
  */
 export async function clearPendingInboundEntries(stateDir: string): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
-    const existing = await readPendingInboundFile(filePath);
-    if (Object.keys(existing.entries).length === 0) {
-      return; // nothing to clear
-    }
-    existing.entries = {};
-    await writeJsonAtomic(filePath, existing, {
-      mode: 0o600,
-      trailingNewline: true,
-      ensureDirMode: 0o700,
-    });
-  });
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      const existing = await readPendingInboundFile(filePath);
+      if (Object.keys(existing.entries).length === 0) {
+        return; // nothing to clear
+      }
+      existing.entries = {};
+      await writeJsonAtomic(filePath, existing, {
+        mode: 0o600,
+        trailingNewline: true,
+        ensureDirMode: 0o700,
+      });
+    }),
+  );
 }
 
 /**
@@ -149,18 +190,20 @@ export async function clearPendingInboundEntries(stateDir: string): Promise<void
  */
 export async function clearAllActiveTurns(stateDir: string): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
-    const existing = await readPendingInboundFile(filePath);
-    if (!existing.activeTurns || Object.keys(existing.activeTurns).length === 0) {
-      return; // nothing to clear
-    }
-    existing.activeTurns = {};
-    await writeJsonAtomic(filePath, existing, {
-      mode: 0o600,
-      trailingNewline: true,
-      ensureDirMode: 0o700,
-    });
-  });
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      const existing = await readPendingInboundFile(filePath);
+      if (!existing.activeTurns || Object.keys(existing.activeTurns).length === 0) {
+        return; // nothing to clear
+      }
+      existing.activeTurns = {};
+      await writeJsonAtomic(filePath, existing, {
+        mode: 0o600,
+        trailingNewline: true,
+        ensureDirMode: 0o700,
+      });
+    }),
+  );
 }
 
 /**
@@ -169,30 +212,32 @@ export async function clearAllActiveTurns(stateDir: string): Promise<void> {
  */
 export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
-    const existing = await readPendingInboundFile(filePath);
-    if (!existing.activeTurns) {
-      existing.activeTurns = {};
-    }
-    existing.activeTurns[entry.sessionId] = entry;
-    // Prune oldest active turns by startedAt when the store exceeds the cap.
-    const turnKeys = Object.keys(existing.activeTurns);
-    if (turnKeys.length > MAX_ACTIVE_TURNS) {
-      const sorted = turnKeys.toSorted(
-        (a, b) =>
-          (existing.activeTurns![a].startedAt ?? 0) - (existing.activeTurns![b].startedAt ?? 0),
-      );
-      const pruneCount = sorted.length - MAX_ACTIVE_TURNS;
-      for (let i = 0; i < pruneCount; i++) {
-        delete existing.activeTurns[sorted[i]];
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      const existing = await readPendingInboundFile(filePath);
+      if (!existing.activeTurns) {
+        existing.activeTurns = {};
       }
-    }
-    await writeJsonAtomic(filePath, existing, {
-      mode: 0o600,
-      trailingNewline: true,
-      ensureDirMode: 0o700,
-    });
-  });
+      existing.activeTurns[entry.sessionId] = entry;
+      // Prune oldest active turns by startedAt when the store exceeds the cap.
+      const turnKeys = Object.keys(existing.activeTurns);
+      if (turnKeys.length > MAX_ACTIVE_TURNS) {
+        const sorted = turnKeys.toSorted(
+          (a, b) =>
+            (existing.activeTurns![a].startedAt ?? 0) - (existing.activeTurns![b].startedAt ?? 0),
+        );
+        const pruneCount = sorted.length - MAX_ACTIVE_TURNS;
+        for (let i = 0; i < pruneCount; i++) {
+          delete existing.activeTurns[sorted[i]];
+        }
+      }
+      await writeJsonAtomic(filePath, existing, {
+        mode: 0o600,
+        trailingNewline: true,
+        ensureDirMode: 0o700,
+      });
+    }),
+  );
 }
 
 /**
@@ -201,18 +246,20 @@ export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry):
  */
 export async function clearActiveTurn(stateDir: string, sessionId: string): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
-    const existing = await readPendingInboundFile(filePath);
-    if (!existing.activeTurns) {
-      return;
-    }
-    delete existing.activeTurns[sessionId];
-    await writeJsonAtomic(filePath, existing, {
-      mode: 0o600,
-      trailingNewline: true,
-      ensureDirMode: 0o700,
-    });
-  });
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      const existing = await readPendingInboundFile(filePath);
+      if (!existing.activeTurns) {
+        return;
+      }
+      delete existing.activeTurns[sessionId];
+      await writeJsonAtomic(filePath, existing, {
+        mode: 0o600,
+        trailingNewline: true,
+        ensureDirMode: 0o700,
+      });
+    }),
+  );
 }
 
 /**
