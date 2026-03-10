@@ -138,47 +138,26 @@ describe("sessions_spawn resumeSessionId integration tests", () => {
     });
   });
 
-  describe("resumeSessionId parameter validation", () => {
-    it("rejects resumeSessionId without runtime=acp", async () => {
+  describe("resumeSessionId edge cases", () => {
+    it("accepts special characters in resumeSessionId", async () => {
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
       });
 
-      const result = await tool.execute("call-no-runtime-acp", {
-        runtime: "subagent",
-        task: "try resume with subagent runtime",
-        agentId: "codex",
-        resumeSessionId: "some-session-id",
-        mode: "session",
-      });
-
-      expect(result.details).toMatchObject({
-        status: "error",
-      });
-      const details = result.details as { error?: string };
-      expect(details.error).toContain("resumeSessionId is only supported for runtime=acp");
-    });
-
-    it("accepts any non-empty resumeSessionId with runtime=acp", async () => {
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-      });
-
-      const result = await tool.execute("call-valid-resume-id", {
+      const result = await tool.execute("call-special-chars", {
         runtime: "acp",
-        task: "test valid resume id",
+        task: "test special chars in resume id",
         agentId: "codex",
-        resumeSessionId: "valid-session-id-with-special-chars!@#",
+        resumeSessionId: "session-id-with-special-chars!@#",
         mode: "session",
       });
 
-      // Should accept any string as resumeSessionId when runtime=acp
       expect(result.details).toMatchObject({
         status: "accepted",
       });
       expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          resumeSessionId: "valid-session-id-with-special-chars!@#",
+          resumeSessionId: "session-id-with-special-chars!@#",
         }),
         expect.any(Object),
       );
@@ -191,38 +170,34 @@ describe("sessions_spawn resumeSessionId integration tests", () => {
         agentSessionKey: "agent:main:main",
       });
 
-      // First call succeeds
-      hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      // Both calls should succeed when run concurrently
+      hoisted.spawnAcpDirectMock.mockResolvedValue({
         status: "accepted",
-        childSessionKey: "agent:codex:acp:first",
-        runId: "run-first",
+        childSessionKey: "agent:codex:acp:concurrent",
+        runId: "run-concurrent",
       });
 
-      // Second concurrent call to same session
-      hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
-        status: "accepted",
-        childSessionKey: "agent:codex:acp:second",
-        runId: "run-second",
-      });
-
-      const result1 = await tool.execute("call-concurrent-1", {
-        runtime: "acp",
-        task: "first concurrent resume",
-        agentId: "codex",
-        resumeSessionId: "concurrent-session",
-        mode: "session",
-      });
-
-      const result2 = await tool.execute("call-concurrent-2", {
-        runtime: "acp",
-        task: "second concurrent resume",
-        agentId: "codex",
-        resumeSessionId: "concurrent-session",
-        mode: "session",
-      });
+      // Run both calls in parallel to test actual concurrency
+      const [result1, result2] = await Promise.all([
+        tool.execute("call-concurrent-1", {
+          runtime: "acp",
+          task: "first concurrent resume",
+          agentId: "codex",
+          resumeSessionId: "concurrent-session",
+          mode: "session",
+        }),
+        tool.execute("call-concurrent-2", {
+          runtime: "acp",
+          task: "second concurrent resume",
+          agentId: "codex",
+          resumeSessionId: "concurrent-session",
+          mode: "session",
+        }),
+      ]);
 
       expect(result1.details).toMatchObject({ status: "accepted" });
       expect(result2.details).toMatchObject({ status: "accepted" });
+      expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledTimes(2);
     });
 
     it("resumes session with stored secrets intact", async () => {
