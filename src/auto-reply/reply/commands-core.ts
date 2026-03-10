@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
 import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAcpCommand } from "./commands-acp.js";
@@ -39,6 +37,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import { emitBeforeResetPluginHook } from "./reset-hooks.js";
 import { routeReply } from "./route-reply.js";
 
 let HANDLERS: CommandHandler[] | null = null;
@@ -56,6 +55,7 @@ export async function emitResetCommandHooks(params: {
   sessionKey?: string;
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
+  storePath?: HandleCommandsParams["storePath"];
   workspaceDir: string;
 }): Promise<void> {
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
@@ -91,47 +91,13 @@ export async function emitResetCommandHooks(params: {
     }
   }
 
-  // Fire before_reset plugin hook — extract memories before session history is lost
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_reset")) {
-    const prevEntry = params.previousSessionEntry;
-    const sessionFile = prevEntry?.sessionFile;
-    // Fire-and-forget: read old session messages and run hook
-    void (async () => {
-      try {
-        const messages: unknown[] = [];
-        if (sessionFile) {
-          const content = await fs.readFile(sessionFile, "utf-8");
-          for (const line of content.split("\n")) {
-            if (!line.trim()) {
-              continue;
-            }
-            try {
-              const entry = JSON.parse(line);
-              if (entry.type === "message" && entry.message) {
-                messages.push(entry.message);
-              }
-            } catch {
-              // skip malformed lines
-            }
-          }
-        } else {
-          logVerbose("before_reset: no session file available, firing hook with empty messages");
-        }
-        await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: params.action },
-          {
-            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-            sessionKey: params.sessionKey,
-            sessionId: prevEntry?.sessionId,
-            workspaceDir: params.workspaceDir,
-          },
-        );
-      } catch (err: unknown) {
-        logVerbose(`before_reset hook failed: ${String(err)}`);
-      }
-    })();
-  }
+  await emitBeforeResetPluginHook({
+    sessionKey: params.sessionKey,
+    previousSessionEntry: params.previousSessionEntry,
+    workspaceDir: params.workspaceDir,
+    reason: params.action,
+    storePath: params.storePath,
+  });
 }
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
@@ -247,6 +213,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
           sessionKey: boundAcpKey,
           sessionEntry: hookSessionEntry,
           previousSessionEntry: hookPreviousSessionEntry,
+          storePath: params.storePath,
           workspaceDir: params.workspaceDir,
         });
         if (resetTail) {
@@ -286,6 +253,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       sessionKey: params.sessionKey,
       sessionEntry: params.sessionEntry,
       previousSessionEntry: params.previousSessionEntry,
+      storePath: params.storePath,
       workspaceDir: params.workspaceDir,
     });
   }

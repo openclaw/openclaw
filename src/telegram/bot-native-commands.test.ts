@@ -270,4 +270,58 @@ describe("registerTelegramNativeCommands", () => {
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
+
+  it("uses the DM thread session key for plugin command internal sent hooks", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: { key: "plug", requireAuth: false },
+      args: undefined,
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...buildParams({
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+          },
+        },
+      }),
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+          commandHandlers.set(name, cb);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+
+    await handler?.({
+      match: "",
+      message: {
+        message_id: 42,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "alice" },
+        message_thread_id: 99,
+      },
+    });
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeyForInternalHooks: "agent:main:main:thread:12345:99",
+      }),
+    );
+  });
 });
