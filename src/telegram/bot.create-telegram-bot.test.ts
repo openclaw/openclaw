@@ -110,6 +110,61 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+
+  it("auto-configures timeoutSeconds to 60 when proxyFetch is provided and no explicit timeout", () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+    createTelegramBot({ token: "tok", proxyFetch });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("explicit timeoutSeconds overrides proxy auto-config in createTelegramBot", () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          timeoutSeconds: 45,
+        },
+      },
+    });
+    createTelegramBot({ token: "tok", proxyFetch });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 45 }),
+      }),
+    );
+  });
+
+  it("does not auto-configure timeoutSeconds when no proxyFetch is provided", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const clientOptions = (botCtorSpy.mock.calls[0]?.[1] as { client?: { timeoutSeconds?: number } })
+      ?.client;
+    expect(clientOptions?.timeoutSeconds).toBeUndefined();
+  });
+
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);

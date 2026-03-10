@@ -212,6 +212,31 @@ describe("sendMessageTelegram", () => {
         opts: { token: "tok", accountId: "foo" },
         expectedTimeout: 61,
       },
+      {
+        name: "auto-configures timeoutSeconds to 60 when proxy is set",
+        cfg: {
+          channels: {
+            telegram: {
+              proxy: "socks5://proxy.example.com:1080",
+            },
+          },
+        },
+        opts: { token: "tok" },
+        expectedTimeout: 60,
+      },
+      {
+        name: "explicit timeoutSeconds overrides proxy auto-config",
+        cfg: {
+          channels: {
+            telegram: {
+              proxy: "socks5://proxy.example.com:1080",
+              timeoutSeconds: 45,
+            },
+          },
+        },
+        opts: { token: "tok" },
+        expectedTimeout: 45,
+      },
     ] as const;
     for (const testCase of cases) {
       botCtorSpy.mockClear();

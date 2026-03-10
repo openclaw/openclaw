@@ -148,10 +148,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
   }
 
-  const timeoutSeconds =
+  // Auto-configure timeoutSeconds when using proxy to prevent indefinite hangs
+  // when proxy TCP connections drop silently (see issue #41704).
+  // Note: Only check opts.proxyFetch (the actual proxy used for polling) rather than
+  // telegramCfg.proxy, since resolveTelegramFetch only uses opts.proxyFetch.
+  // send.ts handles config-proxy path independently via resolveTelegramClientOptions.
+  //
+  // Trade-off: This timeout applies globally to all Telegram API calls (not just getUpdates),
+  // which may affect large media uploads on high-latency/proxied links. Users can override
+  // by explicitly setting channels.telegram.timeoutSeconds to a larger value if needed.
+  const hasProxy = Boolean(opts.proxyFetch);
+  const explicitTimeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
+  const timeoutSeconds = explicitTimeoutSeconds ?? (hasProxy ? 60 : undefined);
   const client: ApiClientOptions | undefined =
     finalFetch || timeoutSeconds
       ? {
