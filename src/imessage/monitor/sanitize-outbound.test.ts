@@ -52,7 +52,22 @@ describe("sanitizeOutboundText", () => {
     const text = "Hello\n\n\n\n\nWorld";
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");
   });
-
+  
+  it("strips [[reply_to:<id>]] directive tag", () => {
+    const text = "[[reply_to:1578]] Hey Matt.";
+    expect(sanitizeOutboundText(text)).toBe("Hey Matt.");
+  });
+  
+  it("strips [[reply_to_current]] directive tag", () => {
+    const text = "[[reply_to_current]] Sure thing!";
+    expect(sanitizeOutboundText(text)).toBe("Sure thing!");
+  });
+  
+  it("strips [[reply_to:<id>]] with spaces inside brackets", () => {
+    const text = "[[ reply_to : 42 ]] Hello there.";
+    expect(sanitizeOutboundText(text)).toBe("Hello there.");
+  });
+  
   it("handles combined internal markers in one message", () => {
     const text = "<thinking>step 1</thinking>NO_REPLY +#+#+#+# assistant to=final\n\nActual reply";
     const result = sanitizeOutboundText(text);
