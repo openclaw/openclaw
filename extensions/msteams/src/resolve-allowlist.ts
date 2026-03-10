@@ -139,7 +139,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       // Use the General channel's conversation ID as the team key — this
       // matches what Bot Framework sends at runtime. Fall back to the Graph
       // GUID if the General channel isn't found (renamed or deleted).
-      const teamId = generalChannel?.id ?? graphTeamId;
+      const teamId = generalChannel?.id?.trim() || graphTeamId;
       if (!channel) {
         return {
           input,
