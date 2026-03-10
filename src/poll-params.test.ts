@@ -27,6 +27,9 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: 0 })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: "0" })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationHours: -1 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: -30 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "-30" })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
@@ -49,6 +52,7 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
     expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ poll_duration_seconds: "0" })).toBe(false);
+    expect(hasPollCreationParams({ poll_duration_seconds: "-30" })).toBe(false);
     expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
   });
 
