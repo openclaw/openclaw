@@ -130,27 +130,27 @@ beforeAll(async () => {
     .webp({ quality: 100 })
     .toBuffer();
   staticWebpFile = await writeTempFile(staticWebpBuffer, ".webp");
-  animatedWebpBuffer = await sharp(
-    [
-      {
-        create: {
-          width: 2,
-          height: 2,
-          channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 },
-        },
-      },
-      {
-        create: {
-          width: 2,
-          height: 2,
-          channels: 4,
-          background: { r: 0, g: 255, b: 0, alpha: 1 },
-        },
-      },
-    ],
-    { join: { animated: true } },
-  )
+  const animatedFrameA = await sharp({
+    create: {
+      width: 2,
+      height: 2,
+      channels: 4,
+      background: { r: 255, g: 0, b: 0, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+  const animatedFrameB = await sharp({
+    create: {
+      width: 2,
+      height: 2,
+      channels: 4,
+      background: { r: 0, g: 255, b: 0, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+  animatedWebpBuffer = await sharp([animatedFrameA, animatedFrameB], { join: { animated: true } })
     .webp({ loop: 0, delay: [100, 100] })
     .toBuffer();
   animatedWebpFile = await writeTempFile(animatedWebpBuffer, ".webp");
