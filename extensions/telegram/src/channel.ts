@@ -438,11 +438,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     collectStatusIssues: collectTelegramStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      getTelegramRuntime().channel.telegram.probeTelegram(
-        account.token,
-        timeoutMs,
-        account.config.proxy,
-      ),
+      getTelegramRuntime().channel.telegram.probeTelegram(account.token, timeoutMs, {
+        accountId: account.accountId,
+        proxyUrl: account.config.proxy,
+        network: account.config.network,
+      }),
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
@@ -468,6 +468,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         botId,
         groupIds,
         proxyUrl: account.config.proxy,
+        network: account.config.network,
         timeoutMs,
       });
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
@@ -531,11 +532,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
       try {
-        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(
-          token,
-          2500,
-          account.config.proxy,
-        );
+        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
+          accountId: account.accountId,
+          proxyUrl: account.config.proxy,
+          network: account.config.network,
+        });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) {
           telegramBotLabel = ` (@${username})`;
