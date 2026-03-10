@@ -300,7 +300,7 @@ function buildCoveredAssetManifestEntries(params: {
 }): BackupManifestAsset[] {
   const verifiedArchive = params.verifiedArchive;
   const manifest = verifiedArchive.manifest;
-  const supportedCoveredKinds: BackupAssetKind[] = ["config", "credentials"];
+  const supportedCoveredKinds = ["config", "credentials"] as const;
   const explicitKinds = new Set(manifest.assets.map((asset) => asset.kind));
   const stateAsset = manifest.assets.find((asset) => asset.kind === "state");
   const stateAssetArchivePath = stateAsset?.archivePath;
