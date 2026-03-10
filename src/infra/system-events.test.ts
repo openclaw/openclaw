@@ -3,7 +3,12 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  MAX_EVENTS,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -54,6 +59,40 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("MAX_EVENTS is exported and positive", () => {
+    expect(typeof MAX_EVENTS).toBe("number");
+    expect(MAX_EVENTS).toBeGreaterThan(0);
+  });
+
+  it("distinct entries with same message text are not deduplicated when text differs", () => {
+    // Simulates the P2 fix: include entry.id in eventText so two identical
+    // messages from the same sender don't collapse into one.
+    const key = "telegram:drain-dedup-test";
+    const first = enqueueSystemEvent(
+      '[pending-inbound:acc::1234:100] Missed message from Alice: "hello"',
+      { sessionKey: key },
+    );
+    const second = enqueueSystemEvent(
+      '[pending-inbound:acc::1234:101] Missed message from Alice: "hello"',
+      { sessionKey: key },
+    );
+    expect(first).toBe(true);
+    expect(second).toBe(true); // NOT deduplicated: different entry ids in text
+    expect(peekSystemEvents(key)).toHaveLength(2);
+  });
+
+  it("caps per-session queue at MAX_EVENTS and drops oldest entries on overflow", () => {
+    const key = "telegram:overflow-test";
+    for (let i = 0; i < MAX_EVENTS + 5; i++) {
+      enqueueSystemEvent(`event-${i}`, { sessionKey: key });
+    }
+    const events = peekSystemEvents(key);
+    expect(events).toHaveLength(MAX_EVENTS);
+    // Oldest entries (event-0 through event-4) should have been dropped
+    expect(events[0]).toBe(`event-5`);
+    expect(events[MAX_EVENTS - 1]).toBe(`event-${MAX_EVENTS + 4}`);
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {
