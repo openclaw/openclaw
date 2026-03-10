@@ -17,6 +17,7 @@ import { formatHelpExamples } from "../help-format.js";
 
 const DEFAULT_BACKUP_SCHEDULE_MS = 24 * 60 * 60_000;
 const DEFAULT_BACKUP_OUTPUT = "~/Backups/";
+const CRON_LIST_PAGE_LIMIT = 200;
 
 function resolveBackupScheduleJobs(rawJobs: unknown): CronJob[] {
   const jobs = (rawJobs as { jobs?: CronJob[] } | CronJob[] | null | undefined) ?? [];
@@ -65,6 +66,47 @@ function resolveBackupSchedule(opts: Record<string, unknown>) {
     tz: typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined,
     staggerMs: parseCronStaggerMs({ staggerRaw, useExact }),
   };
+}
+
+function resolveCronListPage(raw: unknown): {
+  hasMore: boolean;
+  nextOffset: number | null;
+} {
+  if (!raw || Array.isArray(raw) || typeof raw !== "object") {
+    return { hasMore: false, nextOffset: null };
+  }
+  const record = raw as { hasMore?: unknown; nextOffset?: unknown };
+  const hasMore = record.hasMore === true;
+  const nextOffset =
+    typeof record.nextOffset === "number" && Number.isFinite(record.nextOffset)
+      ? Math.max(0, Math.floor(record.nextOffset))
+      : null;
+  return { hasMore, nextOffset };
+}
+
+async function findBackupScheduleJobById(opts: Record<string, unknown>, id: string) {
+  let offset = 0;
+  for (;;) {
+    const listed = await callGatewayFromCli("cron.list", opts, {
+      includeDisabled: true,
+      offset,
+      limit: CRON_LIST_PAGE_LIMIT,
+    });
+    const job = resolveBackupScheduleJobs(listed).find((entry) => entry.id === id);
+    if (job) {
+      return job;
+    }
+
+    const page = resolveCronListPage(listed);
+    if (!page.hasMore) {
+      return undefined;
+    }
+    const nextOffset =
+      typeof page.nextOffset === "number" && page.nextOffset > offset
+        ? page.nextOffset
+        : offset + CRON_LIST_PAGE_LIMIT;
+    offset = nextOffset;
+  }
 }
 
 export function registerBackupScheduleCommand(backup: Command) {
@@ -182,10 +224,7 @@ export function registerBackupScheduleCommand(backup: Command) {
       .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
-          const listed = await callGatewayFromCli("cron.list", opts, {
-            includeDisabled: true,
-          });
-          const job = resolveBackupScheduleJobs(listed).find((entry) => entry.id === id);
+          const job = await findBackupScheduleJobById(opts as Record<string, unknown>, id);
           if (!job) {
             throw new Error(`unknown scheduled backup id: ${id}`);
           }
