@@ -18,15 +18,15 @@ export async function downloadLineMedia(
     channelAccessToken,
   });
 
-  const httpResponse = await client.getMessageContentWithHttpInfo(messageId);
+  const response = await client.getMessageContentWithHttpInfo(messageId);
 
-  const contentType = httpResponse.httpResponse.headers.get("content-type") ?? undefined;
+  const contentType = response.httpResponse.headers.get("content-type") ?? undefined;
 
-  // httpResponse.body is a Readable stream
+  // response.body is a Readable stream
   const chunks: Buffer[] = [];
   let totalSize = 0;
 
-  for await (const chunk of httpResponse.body as AsyncIterable<Buffer>) {
+  for await (const chunk of response.body as AsyncIterable<Buffer>) {
     totalSize += chunk.length;
     if (totalSize > maxBytes) {
       throw new Error(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
