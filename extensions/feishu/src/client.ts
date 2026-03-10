@@ -7,12 +7,17 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+function getProxyUrlFromEnv(): string | undefined {
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
     process.env.http_proxy ||
     process.env.HTTP_PROXY;
+  return proxyUrl || undefined;
+}
+
+function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+  const proxyUrl = getProxyUrlFromEnv();
   if (!proxyUrl) return undefined;
   return new HttpsProxyAgent(proxyUrl);
 }
@@ -43,9 +48,12 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
+  const proxyUrl = getProxyUrlFromEnv();
+  const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
+    const proxyOptions = proxyAgent ? { httpsAgent: proxyAgent, proxy: false } : {};
+    return { timeout: defaultTimeoutMs, ...proxyOptions, ...opts } as Lark.HttpRequestOptions<D>;
   }
 
   return {
