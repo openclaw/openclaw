@@ -396,6 +396,8 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/mcp-client: {}
+
   extensions/memory-core:
     dependencies:
       openclaw:
@@ -424,6 +426,40 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+
+  extensions/mumble:
+    dependencies:
+      '@discordjs/opus':
+        specifier: ^0.10.0
+        version: 0.10.0
+      '@tf2pickup-org/mumble-client':
+        specifier: ^0.12.5
+        version: 0.12.6
+      node-fetch:
+        specifier: ^3.3.2
+        version: 3.3.2
+      opus-decoder:
+        specifier: ^0.7.11
+        version: 0.7.11
+      opus-encdec:
+        specifier: ^0.1.1
+        version: 0.1.1
+      rxjs:
+        specifier: ^7.8.2
+        version: 7.8.2
+      ws:
+        specifier: ^8.18.0
+        version: 8.19.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.37
+      openclaw:
+        specifier: '*'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
 
   extensions/nextcloud-talk:
     dependencies:
@@ -521,6 +557,15 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/zulip:
+    devDependencies:
+      openclaw:
+        specifier: ^2026.2.0
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
 
   packages/clawdbot:
     dependencies:
@@ -2436,6 +2481,9 @@ packages:
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
 
+  '@protobuf-ts/runtime@2.11.1':
+    resolution: {integrity: sha512-KuDaT1IfHkugM2pyz+FwiY80ejWrkH1pAtOBOZFuR6SXEFTsnb/jiQWQ1rCIrcKx2BtyxnxW6BWwsVSA/Ie+WQ==}
+
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
 
@@ -3290,6 +3338,12 @@ packages:
 
   '@swc/helpers@0.5.19':
     resolution: {integrity: sha512-QamiFeIK3txNjgUTNppE6MiG3p7TdninpZu0E0PbqVh1a9FNLT2FRhisaa4NcaX52XVhA5l7Pk58Ft7Sqi/2sA==}
+
+  '@tf2pickup-org/mumble-client@0.12.6':
+    resolution: {integrity: sha512-TsL+e9mqbCVfKRIDvlF5CSQiS4Sh4LMSOpNq6/NJv3hGt+b36b6oqvTKSJ2IriKNbNMIUn6LsweXVwMQOgbhRg==}
+
+  '@tf2pickup-org/mumble-protocol@1.0.12':
+    resolution: {integrity: sha512-6Jx2aPcRc8AMDRFheW6GK+JEBVusfFZ3X/5q1Gze4H1tgmBvyTGbAqUYZtCTiYQQSSp8DXCANa/YKpfuAcuKvA==}
 
   '@thi.ng/bitstream@2.4.43':
     resolution: {integrity: sha512-tObOEr+osboa0kqQPk7Ny0E3vVfBRch13YJO5RpaDDSkMQmoXK/pw3yW/6kKJIObt27YQol6pGlOZBvB8MsghQ==}
@@ -5513,6 +5567,9 @@ packages:
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
 
+  opus-encdec@0.1.1:
+    resolution: {integrity: sha512-TDzyGqYqrwn5UEUNaLsfLGu8Ma+HRNrgLYj7Vx5wfTnafAA21G6Bnm/qTIa3orQi/yZPZYmkdpO/gez4nfA1Rw==}
+
   opusscript@0.1.1:
     resolution: {integrity: sha512-mL0fZZOUnXdZ78woRXp18lApwpp0lF5tozJOD1Wut0dgrA9WuQTgSels/CSmFleaAZrJi/nci5KOVtbuxeWoQA==}
 
@@ -5994,6 +6051,9 @@ packages:
 
   run-parallel@1.2.0:
     resolution: {integrity: sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA==}
+
+  rxjs@7.8.2:
+    resolution: {integrity: sha512-dhKf903U/PQZY6boNNtAGdWbG85WAbjT/1xYoZIC7FAY0yWapOBQVsVrDl58W86//e1VpMNBtRV4MaXfdMySFA==}
 
   safe-buffer@5.1.2:
     resolution: {integrity: sha512-Gd2UZBJDkXlY7GbJxfsE8/nvKkUEU1G38c1siN6QP6a9PT9MmHB8GnpscSmMJSoF8LOIrt8ud/wPtojys4G6+g==}
@@ -7977,7 +8037,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
-    optional: true
 
   '@discordjs/opus@0.10.0':
     dependencies:
@@ -7986,7 +8045,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
-    optional: true
 
   '@discordjs/voice@0.19.0(@discordjs/opus@0.10.0)(opusscript@0.1.1)':
     dependencies:
@@ -8097,8 +8155,7 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
-  '@eshaz/web-worker@1.2.2':
-    optional: true
+  '@eshaz/web-worker@1.2.2': {}
 
   '@google/genai@1.43.0':
     dependencies:
@@ -9355,6 +9412,8 @@ snapshots:
 
   '@polka/url@1.0.0-next.29': {}
 
+  '@protobuf-ts/runtime@2.11.1': {}
+
   '@protobufjs/aspromise@1.1.2': {}
 
   '@protobufjs/base64@1.1.2': {}
@@ -10358,6 +10417,16 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
+  '@tf2pickup-org/mumble-client@0.12.6':
+    dependencies:
+      '@protobuf-ts/runtime': 2.11.1
+      '@tf2pickup-org/mumble-protocol': 1.0.12
+      rxjs: 7.8.2
+
+  '@tf2pickup-org/mumble-protocol@1.0.12':
+    dependencies:
+      '@protobuf-ts/runtime': 2.11.1
+
   '@thi.ng/bitstream@2.4.43':
     dependencies:
       '@thi.ng/errors': 2.6.5
@@ -10791,7 +10860,6 @@ snapshots:
     dependencies:
       '@eshaz/web-worker': 1.2.2
       simple-yenc: 1.0.4
-    optional: true
 
   '@wasm-audio-decoders/flac@0.2.10':
     dependencies:
@@ -10835,8 +10903,7 @@ snapshots:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
 
-  abbrev@1.1.1:
-    optional: true
+  abbrev@1.1.1: {}
 
   abort-controller@3.0.0:
     dependencies:
@@ -10875,7 +10942,6 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   agent-base@7.1.4: {}
 
@@ -10922,14 +10988,12 @@ snapshots:
       json-bignum: 0.0.3
       tslib: 2.8.1
 
-  aproba@2.1.0:
-    optional: true
+  aproba@2.1.0: {}
 
   are-we-there-yet@2.0.0:
     dependencies:
       delegates: 1.0.0
       readable-stream: 3.6.2
-    optional: true
 
   argparse@2.0.1: {}
 
@@ -11230,8 +11294,7 @@ snapshots:
 
   color-name@1.1.4: {}
 
-  color-support@1.1.3:
-    optional: true
+  color-support@1.1.3: {}
 
   colors@1.4.0: {}
 
@@ -11263,8 +11326,7 @@ snapshots:
 
   commander@5.1.0: {}
 
-  console-control-strings@1.1.0:
-    optional: true
+  console-control-strings@1.1.0: {}
 
   constantinople@4.0.1:
     dependencies:
@@ -11345,8 +11407,7 @@ snapshots:
 
   delayed-stream@1.0.0: {}
 
-  delegates@1.0.0:
-    optional: true
+  delegates@1.0.0: {}
 
   depd@2.0.0: {}
 
@@ -11743,8 +11804,7 @@ snapshots:
       jsonfile: 6.2.0
       universalify: 2.0.1
 
-  fs.realpath@1.0.0:
-    optional: true
+  fs.realpath@1.0.0: {}
 
   fsevents@2.3.2:
     optional: true
@@ -11765,7 +11825,6 @@ snapshots:
       string-width: 4.2.3
       strip-ansi: 6.0.1
       wide-align: 1.1.5
-    optional: true
 
   gaxios@7.1.3:
     dependencies:
@@ -11857,7 +11916,6 @@ snapshots:
       minimatch: 10.2.4
       once: 1.4.0
       path-is-absolute: 1.0.1
-    optional: true
 
   google-auth-library@10.6.1:
     dependencies:
@@ -11906,8 +11964,7 @@ snapshots:
     dependencies:
       has-symbols: 1.1.0
 
-  has-unicode@2.0.1:
-    optional: true
+  has-unicode@2.0.1: {}
 
   hash.js@1.1.7:
     dependencies:
@@ -12010,7 +12067,6 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   https-proxy-agent@7.0.6:
     dependencies:
@@ -12048,7 +12104,6 @@ snapshots:
     dependencies:
       once: 1.4.0
       wrappy: 1.0.2
-    optional: true
 
   inherits@2.0.4: {}
 
@@ -12460,7 +12515,6 @@ snapshots:
   make-dir@3.1.0:
     dependencies:
       semver: 6.3.1
-    optional: true
 
   make-dir@4.0.0:
     dependencies:
@@ -12712,7 +12766,6 @@ snapshots:
   nopt@5.0.0:
     dependencies:
       abbrev: 1.1.1
-    optional: true
 
   nostr-tools@2.23.3(typescript@5.9.3):
     dependencies:
@@ -12738,7 +12791,6 @@ snapshots:
       console-control-strings: 1.1.0
       gauge: 3.0.2
       set-blocking: 2.0.0
-    optional: true
 
   nth-check@2.1.1:
     dependencies:
@@ -12905,7 +12957,8 @@ snapshots:
   opus-decoder@0.7.11:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
-    optional: true
+
+  opus-encdec@0.1.1: {}
 
   opusscript@0.1.1: {}
 
@@ -13048,8 +13101,7 @@ snapshots:
 
   partial-json@0.1.7: {}
 
-  path-is-absolute@1.0.1:
-    optional: true
+  path-is-absolute@1.0.1: {}
 
   path-key@3.1.1: {}
 
@@ -13362,7 +13414,6 @@ snapshots:
       inherits: 2.0.4
       string_decoder: 1.3.0
       util-deprecate: 1.0.2
-    optional: true
 
   readdirp@5.0.0: {}
 
@@ -13424,7 +13475,6 @@ snapshots:
   rimraf@3.0.2:
     dependencies:
       glob: 7.2.3
-    optional: true
 
   rimraf@5.0.10:
     dependencies:
@@ -13514,6 +13564,10 @@ snapshots:
     dependencies:
       queue-microtask: 1.2.3
 
+  rxjs@7.8.2:
+    dependencies:
+      tslib: 2.8.1
+
   safe-buffer@5.1.2: {}
 
   safe-buffer@5.2.1: {}
@@ -13537,8 +13591,7 @@ snapshots:
     dependencies:
       parseley: 0.12.1
 
-  semver@6.3.1:
-    optional: true
+  semver@6.3.1: {}
 
   semver@7.7.4: {}
 
@@ -13594,8 +13647,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  set-blocking@2.0.0:
-    optional: true
+  set-blocking@2.0.0: {}
 
   setimmediate@1.0.5: {}
 
@@ -13697,8 +13749,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  simple-yenc@1.0.4:
-    optional: true
+  simple-yenc@1.0.4: {}
 
   sirv@3.0.2:
     dependencies:
@@ -13861,7 +13912,6 @@ snapshots:
   string_decoder@1.3.0:
     dependencies:
       safe-buffer: 5.2.1
-    optional: true
 
   stringify-entities@4.0.4:
     dependencies:
@@ -14216,7 +14266,6 @@ snapshots:
   wide-align@1.1.5:
     dependencies:
       string-width: 4.2.3
-    optional: true
 
   win-guid@0.2.1: {}
 

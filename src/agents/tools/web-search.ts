@@ -1024,7 +1024,7 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
  */
 function normalizeFreshness(
   value: string | undefined,
-  provider: (typeof SEARCH_PROVIDERS)[number],
+  provider: string,
 ): string | undefined {
   if (!value) {
     return undefined;
@@ -1475,7 +1475,7 @@ async function runBraveLlmContextSearch(params: {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "X-Subscription-Token": params.apiKey,
+          "X-Subscription-Token": params.apiKey!,
         },
       },
     },
@@ -1609,7 +1609,7 @@ async function runWebSearch(params: {
     if (params.perplexityTransport === "chat_completions") {
       const { content, citations } = await runPerplexitySearch({
         query: params.query,
-        apiKey: params.apiKey,
+        apiKey: params.apiKey!,
         baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
         model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
         timeoutSeconds: params.timeoutSeconds,
@@ -1636,7 +1636,7 @@ async function runWebSearch(params: {
 
     const results = await runPerplexitySearchApi({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!,
       count: params.count,
       timeoutSeconds: params.timeoutSeconds,
       country: params.country,
@@ -1697,7 +1697,7 @@ async function runWebSearch(params: {
   if (params.provider === "kimi") {
     const { content, citations } = await runKimiSearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!,
       baseUrl: params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL,
       model: params.kimiModel ?? DEFAULT_KIMI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
@@ -1724,7 +1724,7 @@ async function runWebSearch(params: {
   if (params.provider === "gemini") {
     const geminiResult = await runGeminiSearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!,
       model: params.geminiModel ?? DEFAULT_GEMINI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
     });
@@ -1754,7 +1754,7 @@ async function runWebSearch(params: {
   if (effectiveBraveMode === "llm-context") {
     const { results: llmResults, sources } = await runBraveLlmContextSearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!,
       timeoutSeconds: params.timeoutSeconds,
       country: params.country,
       search_lang: params.search_lang,
@@ -1812,7 +1812,7 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
 
-  const mapped = await withTrustedWebSearchEndpoint(
+  const mapped = (await withTrustedWebSearchEndpoint(
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
@@ -1820,7 +1820,7 @@ async function runWebSearch(params: {
         method: "GET",
         headers: {
           Accept: "application/json",
-          "X-Subscription-Token": params.apiKey,
+          "X-Subscription-Token": params.apiKey!,
         },
       },
     },
@@ -1847,7 +1847,7 @@ async function runWebSearch(params: {
         };
       });
     },
-  );
+  )) as Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>;
 
   const payload = {
     query: params.query,
