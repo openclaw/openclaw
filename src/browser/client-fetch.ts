@@ -102,12 +102,34 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
-export const BROWSER_RATE_LIMIT_MESSAGE =
+const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
+  "Browser service rate limit reached. " +
+  "Wait for the current session to complete, or retry later.";
+
+const BROWSERBASE_RATE_LIMIT_MESSAGE =
   "Browserbase rate limit reached (max concurrent sessions). " +
   "Wait for the current session to complete, or upgrade your plan.";
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
+}
+
+function isBrowserbaseUrl(url: string): boolean {
+  if (!isAbsoluteHttp(url)) {
+    return false;
+  }
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "browserbase.com" || host.endsWith(".browserbase.com");
+  } catch {
+    return false;
+  }
+}
+
+export function resolveBrowserRateLimitMessage(url: string): string {
+  return isBrowserbaseUrl(url)
+    ? BROWSERBASE_RATE_LIMIT_MESSAGE
+    : BROWSER_SERVICE_RATE_LIMIT_MESSAGE;
 }
 
 function resolveBrowserFetchOperatorHint(url: string): string {
@@ -186,7 +208,9 @@ async function fetchHttpJson<T>(
       const text = await res.text().catch(() => "");
       if (isRateLimitStatus(res.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        throw new BrowserServiceError(`${BROWSER_RATE_LIMIT_MESSAGE} ${BROWSER_TOOL_MODEL_HINT}`);
+        throw new BrowserServiceError(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+        );
       }
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
@@ -283,7 +307,9 @@ export async function fetchBrowserJson<T>(
     if (result.status >= 400) {
       if (isRateLimitStatus(result.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        throw new BrowserServiceError(`${BROWSER_RATE_LIMIT_MESSAGE} ${BROWSER_TOOL_MODEL_HINT}`);
+        throw new BrowserServiceError(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+        );
       }
       const message =
         result.body && typeof result.body === "object" && "error" in result.body
