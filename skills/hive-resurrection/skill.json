@@ -1,0 +1,53 @@
+{
+  "name": "hive-resurrection",
+  "displayName": "蜂巢复活系统",
+  "version": "2.0.0",
+  "description": "多节点集群互相守护系统，支持自动诊断 + 修复 + 重启。内置 Doctor 诊断引擎，可精准识别依赖缺失、配置损坏、端口占用、磁盘满等问题并自动修复。",
+  "author": "柔水助手",
+  "license": "MIT",
+  "category": "survival",
+  "tags": ["集群", "高可用", "自动恢复", "看门狗", "守护进程", "诊断修复", "Doctor"],
+  "minNodeVersion": "18.0.0",
+  "platforms": ["linux", "macos", "windows"],
+  "main": "watchdog.js",
+  "files": [
+    "watchdog.js",
+    "monitor.js",
+    "doctor.js",
+    "config.example.json",
+    "install.sh",
+    "install.bat",
+    "hive-watchdog.service",
+    "hive-monitor.service",
+    "hive-watchdog.plist",
+    "hive-monitor.plist",
+    "README.md",
+    "RELEASE.md"
+  ],
+  "scripts": {
+    "install": "bash install.sh",
+    "start-watchdog": "node watchdog.js config.json",
+    "start-monitor": "node monitor.js config.json"
+  },
+  "config": {
+    "clusterSize": {
+      "min": 2,
+      "recommended": 3,
+      "description": "建议至少 2 个节点，推荐 3 个节点"
+    },
+    "watchdogPort": {
+      "default": 19000,
+      "description": "watchdog TCP 监听端口"
+    },
+    "healthCheckInterval": {
+      "default": 10000,
+      "description": "健康检查间隔 (毫秒)"
+    }
+  },
+  "metrics": {
+    "faultDetectionTime": "<5s",
+    "electionTime": "<3s",
+    "totalRecoveryTime": "<30s",
+    "successRate": ">99%"
+  }
+}
