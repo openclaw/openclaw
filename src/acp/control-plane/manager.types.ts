@@ -21,6 +21,8 @@ import type {
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "../runtime/types.js";
+import type { IAuditLogger } from "./audit/audit.types.js";
+import { createNullAuditLogger } from "./audit/audit-logger.null.js";
 
 export type AcpSessionResolution =
   | {
@@ -136,6 +138,7 @@ export type AcpSessionManagerDeps = {
   readSessionEntry: typeof readAcpSessionEntry;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
+  auditLogger?: IAuditLogger;
 };
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
@@ -143,6 +146,7 @@ export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   readSessionEntry: readAcpSessionEntry,
   upsertSessionMeta: upsertAcpSessionMeta,
   requireRuntimeBackend: requireAcpRuntimeBackend,
+  auditLogger: createNullAuditLogger(),
 };
 
 export type { AcpSessionRuntimeOptions, SessionAcpMeta, SessionEntry };

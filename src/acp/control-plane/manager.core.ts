@@ -71,6 +71,10 @@ import {
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
+import { AUDIT_EVENT_TYPES } from "./audit/index.js";
+import type { IAuditLogger } from "./audit/audit.types.js";
+import { createNullAuditLogger } from "./audit/audit-logger.null.js";
+import { extractAgentId } from "./audit/audit.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
@@ -90,8 +94,11 @@ export class AcpSessionManager {
   private readonly errorCountsByCode = new Map<string, number>();
   private evictedRuntimeCount = 0;
   private lastEvictedAt: number | undefined;
+  private readonly auditLogger: IAuditLogger;
 
-  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {}
+  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
+    this.auditLogger = deps.auditLogger ?? createNullAuditLogger();
+  }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
     const sessionKey = canonicalizeAcpSessionKey(params);
@@ -318,6 +325,21 @@ export class AcpSessionManager {
         mode: input.mode,
         cwd: effectiveCwd,
       });
+
+      // Audit log
+      await this.auditLogger.log({
+        actor: {}, // TODO: Extract from input
+        action: AUDIT_EVENT_TYPES.SESSION_INIT,
+        sessionKey,
+        agentId: agent,
+        details: {
+          mode: input.mode,
+          cwd: effectiveCwd,
+          backend: handle.backend || backend.id,
+        },
+        result: "success",
+      });
+
       return {
         runtime,
         handle,
@@ -1162,6 +1184,21 @@ export class AcpSessionManager {
         });
         metaCleared = true;
       }
+
+      // Audit log
+      await this.auditLogger.log({
+        actor: {}, // TODO: Extract from input
+        action: AUDIT_EVENT_TYPES.SESSION_CLOSE,
+        sessionKey,
+        agentId: extractAgentId(sessionKey),
+        details: {
+          reason: input.reason,
+          clearMeta: input.clearMeta,
+          runtimeClosed,
+          metaCleared,
+        },
+        result: "success",
+      });
 
       return {
         runtimeClosed,
