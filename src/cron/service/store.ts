@@ -8,6 +8,9 @@ import type { CronServiceState } from "./state.js";
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
     const stats = await fs.promises.stat(path);
+    if (!stats.isFile()) {
+      return null;
+    }
     return stats.mtimeMs;
   } catch {
     return null;
@@ -29,7 +32,7 @@ export async function ensureLoaded(
   // store has not changed.
   if (state.store && !opts?.forceReload) {
     const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-    if (fileMtimeMs === state.storeFileMtimeMs) {
+    if (fileMtimeMs === null || fileMtimeMs === state.storeFileMtimeMs) {
       return;
     }
   }
