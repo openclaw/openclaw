@@ -33,7 +33,8 @@ describe("normalizeFeishuExternalKey", () => {
     expect(normalizeFeishuExternalKey("a/../../b")).toBeUndefined();
     expect(normalizeFeishuExternalKey("a\\..\\b")).toBeUndefined();
     expect(normalizeFeishuExternalKey("./test")).toBeUndefined();
-    expect(normalizeFeishuExternalKey("a./b")).toBe("a./b"); // "." in middle is OK
-    expect(normalizeFeishuExternalKey("a../b")).toBe("a../b"); // ".." in middle without separators is OK
+    // Keys with path separators are always rejected (security)
+    expect(normalizeFeishuExternalKey("a./b")).toBeUndefined();
+    expect(normalizeFeishuExternalKey("a../b")).toBeUndefined();
   });
 });

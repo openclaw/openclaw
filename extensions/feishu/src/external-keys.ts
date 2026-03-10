@@ -12,14 +12,10 @@ export function normalizeFeishuExternalKey(value: unknown): string | undefined {
   if (CONTROL_CHARS_RE.test(normalized)) {
     return undefined;
   }
-  // Check for path traversal attacks by examining each path segment.
-  // This allows legitimate keys containing ".." as substrings (e.g., "img_v2_test..key")
-  // while blocking actual path traversal patterns (e.g., "../", "a/../b", "..\folder").
-  const pathParts = normalized.split(/[\/\\]/);
-  for (const part of pathParts) {
-    if (part === "." || part === "..") {
-      return undefined;
-    }
+  // Reject path separators to prevent path traversal attacks.
+  // Allow legitimate keys containing ".." as substrings (e.g., "img_v2_test..key").
+  if (normalized.includes("/") || normalized.includes("\\")) {
+    return undefined;
   }
   return normalized;
 }
