@@ -10,6 +10,7 @@ describe("Groq provider", () => {
   it("should include groq when GROQ_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await withEnvAsync({ GROQ_API_KEY: "test-key" }, async () => {
+      // pragma: allowlist secret
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.groq).toBeDefined();
       expect(providers?.groq?.apiKey).toBe("GROQ_API_KEY");
