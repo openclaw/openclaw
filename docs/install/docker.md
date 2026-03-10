@@ -487,6 +487,48 @@ responsive. If checks keep failing, Docker marks the container as `unhealthy`,
 and orchestration systems (Docker Compose restart policy, Swarm, Kubernetes,
 etc.) can automatically restart or replace it.
 
+If you are writing your own `docker-compose.yml` (instead of using the bundled
+one), add a healthcheck to the gateway service so Docker can detect and restart
+an unresponsive container:
+
+```yaml
+services:
+  openclaw-gateway:
+    # ... existing config ...
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s # check every 30 seconds
+      timeout: 5s # fail if no response within 5 seconds
+      retries: 5 # mark unhealthy after 5 consecutive failures
+      start_period: 20s # grace period for container startup
+```
+
+The built-in image already includes `node`, so the `node -e fetch(...)` probe
+does not require installing extra tools like `curl` or `wget`. If your custom
+image has `curl` available, the equivalent probe is:
+
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18789/healthz"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 30s
+```
+
+Pair the healthcheck with `restart: unless-stopped` so Docker Compose restarts
+the container if it exits or crashes. Note that the restart policy only triggers
+on container **exits** — it will not restart a container that is still running
+but marked `unhealthy`. Orchestrators such as Docker Swarm or Kubernetes can act
+on unhealthy status automatically.
+
 Authenticated deep health snapshot (gateway + channels):
 
 ```bash
