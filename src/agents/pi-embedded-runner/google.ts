@@ -17,13 +17,13 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
   sanitizeToolCallInputs,
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
