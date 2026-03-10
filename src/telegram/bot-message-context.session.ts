@@ -184,31 +184,49 @@ export async function buildTelegramInboundContextPayload(params: {
           mediaTypes: e.mediaTypes ? [...e.mediaTypes] : undefined,
         }))
       : [];
-  const inboundHistory =
-    historyEntries.length > 0
-      ? historyEntries.map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-          mediaPaths: entry.mediaPaths,
-          mediaTypes: entry.mediaTypes,
-        }))
-      : undefined;
-  // Touch history media files so they survive the 2-minute TTL cleanup
+  // Touch history media files so they survive the 2-minute TTL cleanup.
+  // Files older than DEFAULT_TTL_MS may already be deleted by cleanOldMedia
+  // (which runs on every saveMediaSource call), so filter out missing paths
+  // after touching to avoid injecting stale refs into context.
   const historyMediaPaths = historyEntries.flatMap((e) => e.mediaPaths ?? []);
+  const survivingMediaPaths = new Set<string>();
   if (historyMediaPaths.length > 0) {
     const { touchMediaFiles } = await import("../media/store.js");
-    await touchMediaFiles(historyMediaPaths);
+    const results = await touchMediaFiles(historyMediaPaths);
+    for (let i = 0; i < historyMediaPaths.length; i++) {
+      if (results[i].status === "fulfilled") {
+        survivingMediaPaths.add(historyMediaPaths[i]);
+      }
+    }
   }
+  // Build inbound history AFTER touching so we can filter stale media paths.
+  const inboundHistory =
+    historyEntries.length > 0
+      ? historyEntries.map((entry) => {
+          const paths = entry.mediaPaths?.filter((p) => survivingMediaPaths.has(p));
+          const types = paths
+            ? entry.mediaTypes?.filter((_, i) =>
+                entry.mediaPaths ? survivingMediaPaths.has(entry.mediaPaths[i]) : false,
+              )
+            : undefined;
+          return {
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+            mediaPaths: paths && paths.length > 0 ? paths : undefined,
+            mediaTypes: types && types.length > 0 ? types : undefined,
+          };
+        })
+      : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   // Merge history media into context so the media-understanding pipeline processes them.
   // History refs go into a separate array to avoid populating MediaPath (which triggers
   // sticker handling in bot-message-dispatch when stickerCacheHit already removed the sticker).
+  // Only include paths that survived the touch (file still exists on disk).
   const historyMediaRefs: TelegramMediaRef[] = historyEntries.flatMap((e) =>
-    (e.mediaPaths ?? []).map((p, i) => ({
-      path: p,
-      contentType: e.mediaTypes?.[i],
-    })),
+    (e.mediaPaths ?? [])
+      .map((p, i) => ({ path: p, contentType: e.mediaTypes?.[i] }))
+      .filter((ref) => survivingMediaPaths.has(ref.path)),
   );
   // Primary context media: current attachments + reply media (drives MediaPath/Sticker logic)
   const primaryMedia = [...currentMediaForContext, ...replyMedia];
