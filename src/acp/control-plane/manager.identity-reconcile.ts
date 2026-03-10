@@ -141,8 +141,10 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       // Re-check abort *inside* the mutator so that if the signal fires while
       // waiting on the updateSessionStore lock, we still no-op instead of
       // overwriting newer session state with stale reconcile data.
+      // Return undefined (not null) so upsertAcpSessionMeta treats this as a
+      // no-op rather than a delete operation.
       if (params.signal?.aborted) {
-        return null;
+        return undefined;
       }
       if (!entry) {
         return null;
