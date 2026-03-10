@@ -78,8 +78,8 @@ export const en: TranslationMap = {
       subtitle: "Where the dashboard connects and how it authenticates.",
       wsUrl: "WebSocket URL",
       token: "Gateway Token",
-      password: "Password (not stored)",
-      passwordPlaceholder: "system or shared password",
+      password: "Password (not stored)", // pragma: allowlist secret
+      passwordPlaceholder: "system or shared password", // pragma: allowlist secret
       sessionKey: "Default Session Key",
       language: "Language",
       connectHint: "Click Connect to apply connection changes.",

@@ -78,8 +78,8 @@ export const zh_CN: TranslationMap = {
       subtitle: "仪表板连接的位置及其身份验证方式。",
       wsUrl: "WebSocket URL",
       token: "网关令牌",
-      password: "密码 (不存储)",
-      passwordPlaceholder: "系统密码或共享密码",
+      password: "密码 (不存储)", // pragma: allowlist secret
+      passwordPlaceholder: "系统密码或共享密码", // pragma: allowlist secret
       sessionKey: "默认会话密钥",
       language: "语言",
       connectHint: "点击连接以应用连接更改。",
