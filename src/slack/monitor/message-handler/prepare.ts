@@ -758,7 +758,7 @@ export async function prepareSlackMessage(params: {
   };
 
   const mainScopedDmOwnerPin =
-    isDirectMessage && route.mainSessionKey === sessionKey && pinnedMainDmOwner && message.user
+    isDirectMessage && pinnedMainDmOwner && message.user
       ? {
           ownerRecipient: pinnedMainDmOwner,
           senderRecipient: message.user.toLowerCase(),

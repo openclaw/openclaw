@@ -6,7 +6,7 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 
-const _OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
+const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
 const OBSERVATION_COOKIE_VALUE = "session-cookie-token";
 
 afterEach(() => {
@@ -32,20 +32,20 @@ describe("buildApiErrorObservationFields", () => {
 
   it("forces token redaction for observation previews", () => {
     const observed = buildApiErrorObservationFields(
-      "Authorization: Bearer sk-abc-TEST-NOT-REAL-0000", // pragma: allowlist secret
+      `Authorization: Bearer ${OBSERVATION_BEARER_TOKEN}`,
     );
 
-    expect(observed.rawErrorPreview).not.toContain("sk-abc-TEST-NOT-REAL-0000");
-    expect(observed.rawErrorPreview).toContain("sk-abc");
+    expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
+    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
   it("redacts observation-only header and cookie formats", () => {
     const observed = buildApiErrorObservationFields(
-      "x-api-key: sk-abc-TEST-NOT-REAL-0000 Cookie: session=session-TEST-NOT-REAL-0000", // pragma: allowlist secret
+      `x-api-key: ${OBSERVATION_BEARER_TOKEN} Cookie: session=${OBSERVATION_COOKIE_VALUE}`,
     );
 
-    expect(observed.rawErrorPreview).not.toContain("session-TEST-NOT-REAL-0000");
+    expect(observed.rawErrorPreview).not.toContain(OBSERVATION_COOKIE_VALUE);
     expect(observed.rawErrorPreview).toContain("x-api-key: ***");
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
   });

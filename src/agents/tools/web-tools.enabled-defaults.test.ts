@@ -600,12 +600,11 @@ describe("web_search Perplexity lazy resolution", () => {
   });
 
   it("does not read Perplexity credentials while creating non-Perplexity tools", () => {
-    const keyProp = "api" + "Key";
     const perplexityConfig: Record<string, unknown> = {};
-    Object.defineProperty(perplexityConfig, keyProp, {
+    Object.defineProperty(perplexityConfig, "apiKey", {
       enumerable: true,
       get() {
-        throw new Error("perplexity-key-getter-called");
+        throw new Error("perplexity-apiKey-getter-called");
       },
     });
 
@@ -615,8 +614,8 @@ describe("web_search Perplexity lazy resolution", () => {
           web: {
             search: {
               provider: "gemini",
-              gemini: {},
-              perplexity: perplexityConfig as any,
+              gemini: { apiKey: "gemini-config-test" },
+              perplexity: perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
             },
           },
         },
@@ -628,20 +627,21 @@ describe("web_search Perplexity lazy resolution", () => {
   });
 
   it("defers Perplexity credential reads until execute", async () => {
-    const keyProp = "api" + "Key";
     const perplexityConfig: Record<string, unknown> = {};
-    Object.defineProperty(perplexityConfig, keyProp, {
+    Object.defineProperty(perplexityConfig, "apiKey", {
       enumerable: true,
       get() {
-        throw new Error("perplexity-key-getter-called");
+        throw new Error("perplexity-apiKey-getter-called");
       },
     });
 
-    const tool = createPerplexitySearchTool(perplexityConfig as any);
+    const tool = createPerplexitySearchTool(
+      perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
+    );
 
     expect(tool?.name).toBe("web_search");
     await expect(tool?.execute?.("call-1", { query: "test" })).rejects.toThrow(
-      /perplexity-key-getter-called/,
+      /perplexity-apiKey-getter-called/,
     );
   });
 });

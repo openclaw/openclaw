@@ -157,10 +157,10 @@ describe("runtime web tools resolution", () => {
     expect(resolvedConfig.tools?.web?.search?.apiKey).toBe("brave-precedence-key");
     expect(context.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: "tools.web.search.gemini.apiKey" }), // pragma: allowlist secret
-        expect.objectContaining({ path: "tools.web.search.grok.apiKey" }), // pragma: allowlist secret
-        expect.objectContaining({ path: "tools.web.search.kimi.apiKey" }), // pragma: allowlist secret
-        expect.objectContaining({ path: "tools.web.search.perplexity.apiKey" }), // pragma: allowlist secret
+        expect.objectContaining({ path: "tools.web.search.gemini.apiKey" }),
+        expect.objectContaining({ path: "tools.web.search.grok.apiKey" }),
+        expect.objectContaining({ path: "tools.web.search.kimi.apiKey" }),
+        expect.objectContaining({ path: "tools.web.search.perplexity.apiKey" }),
       ]),
     );
   });
@@ -201,7 +201,7 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.gemini.apiKey", // pragma: allowlist secret
+          path: "tools.web.search.gemini.apiKey",
         }),
       ]),
     );
@@ -236,7 +236,7 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.apiKey", // pragma: allowlist secret
+          path: "tools.web.search.apiKey",
         }),
       ]),
     );
@@ -408,7 +408,7 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
-          path: "tools.web.fetch.firecrawl.apiKey", // pragma: allowlist secret
+          path: "tools.web.fetch.firecrawl.apiKey",
         }),
       ]),
     );
@@ -443,7 +443,7 @@ describe("runtime web tools resolution", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-          path: "tools.web.fetch.firecrawl.apiKey", // pragma: allowlist secret
+          path: "tools.web.fetch.firecrawl.apiKey",
         }),
       ]),
     );
