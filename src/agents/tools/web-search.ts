@@ -272,8 +272,7 @@ type BraveSearchResponse = {
   };
 };
 
-type BraveLlmContextSnippet = { text: string };
-type BraveLlmContextResult = { url: string; title: string; snippets: BraveLlmContextSnippet[] };
+type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
 type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
   sources?: { url?: string; hostname?: string; date?: string }[];
@@ -1429,6 +1428,18 @@ async function runKimiSearch(params: {
   };
 }
 
+function mapBraveLlmContextResults(
+  data: BraveLlmContextResponse,
+): { url: string; title: string; snippets: string[]; siteName?: string }[] {
+  const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
+  return genericResults.map((entry) => ({
+    url: entry.url ?? "",
+    title: entry.title ?? "",
+    snippets: (entry.snippets ?? []).filter((s) => typeof s === "string" && s.length > 0),
+    siteName: resolveSiteName(entry.url) || undefined,
+  }));
+}
+
 async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
@@ -1477,13 +1488,7 @@ async function runBraveLlmContextSearch(params: {
       }
 
       const data = (await res.json()) as BraveLlmContextResponse;
-      const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
-      const mapped = genericResults.map((entry) => ({
-        url: entry.url ?? "",
-        title: entry.title ?? "",
-        snippets: (entry.snippets ?? []).map((s) => s.text ?? "").filter(Boolean),
-        siteName: resolveSiteName(entry.url) || undefined,
-      }));
+      const mapped = mapBraveLlmContextResults(data);
 
       return { results: mapped, sources: data.sources };
     },
@@ -2122,4 +2127,5 @@ export const __testing = {
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
+  mapBraveLlmContextResults,
 } as const;

@@ -694,7 +694,7 @@ describe("web_search external content wrapping", () => {
     const mockFetch = installBraveLlmContextFetch({
       title: "Context title",
       url: "https://example.com/ctx",
-      snippets: [{ text: "Context chunk one" }, { text: "Context chunk two" }],
+      snippets: ["Context chunk one", "Context chunk two"],
     });
 
     const tool = createWebSearchTool({
