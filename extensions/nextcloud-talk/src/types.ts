@@ -3,6 +3,7 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
+  OpenClawConfig,
   SecretInput,
 } from "openclaw/plugin-sdk/nextcloud-talk";
 
@@ -84,8 +85,8 @@ export type NextcloudTalkConfig = {
   defaultAccount?: string;
 } & NextcloudTalkAccountConfig;
 
-export type CoreConfig = {
-  channels?: {
+export type CoreConfig = OpenClawConfig & {
+  channels?: OpenClawConfig["channels"] & {
     "nextcloud-talk"?: NextcloudTalkConfig;
   };
   [key: string]: unknown;
