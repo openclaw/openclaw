@@ -5,6 +5,7 @@ import {
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
+  modelsAuthCleanCommand,
   modelsAuthLoginCommand,
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
@@ -372,6 +373,27 @@ export function registerModelsCli(program: Command) {
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("clean")
+    .description(
+      "Remove stale profiles from auth-profiles.json that are not configured in openclaw.json",
+    )
+    .option("--agent <id>", "Agent id to clean (default: main)")
+    .option("--dry-run", "Preview removals without writing changes")
+    .option("--json", "Output as JSON")
+    .action((opts) => {
+      runModelsCommand(async () => {
+        await modelsAuthCleanCommand(
+          {
+            agent: opts.agent as string | undefined,
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json),
           },
           defaultRuntime,
         );
