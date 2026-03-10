@@ -1,8 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withFileLock, type FileLockOptions } from "./file-lock.js";
 import { readJsonFile, writeJsonAtomic } from "./json-files.js";
 
 const STORE_FILENAME = "pending-inbound.json";
+
+/**
+ * Lock options for pending-inbound-store read-modify-write operations.
+ * Mirrors AUTH_STORE_LOCK_OPTIONS from auth-profiles.
+ */
+const PENDING_INBOUND_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 10,
+    factor: 2,
+    minTimeout: 100,
+    maxTimeout: 10_000,
+    randomize: true,
+  },
+  stale: 30_000,
+};
 
 /**
  * An inbound message captured during gateway drain.
@@ -13,6 +29,8 @@ export type PendingInboundEntry = {
   id: string;
   payload: unknown;
   capturedAt: number;
+  /** Resolved session key at capture time (used for accurate replay routing). */
+  sessionKey?: string;
 };
 
 /**
@@ -44,19 +62,22 @@ function resolveStorePath(stateDir: string): string {
 /**
  * Append (or overwrite by dedup key) a pending inbound entry.
  * Uses atomic write (tmp + rename) following the update-offset-store pattern.
+ * Wrapped in a file lock to prevent concurrent read-modify-write races.
  */
 export async function writePendingInbound(
   stateDir: string,
   entry: PendingInboundEntry,
 ): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  const existing = await readPendingInboundFile(filePath);
-  const key = storeKey(entry);
-  existing.entries[key] = entry;
-  await writeJsonAtomic(filePath, existing, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
+  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+    const existing = await readPendingInboundFile(filePath);
+    const key = storeKey(entry);
+    existing.entries[key] = entry;
+    await writeJsonAtomic(filePath, existing, {
+      mode: 0o600,
+      trailingNewline: true,
+      ensureDirMode: 0o700,
+    });
   });
 }
 
@@ -71,6 +92,8 @@ export async function readPendingInbound(stateDir: string): Promise<PendingInbou
 
 /**
  * Remove the pending inbound file entirely.
+ * @deprecated Use `clearPendingInboundEntries` or `clearActiveTurns` to avoid
+ * nuking data belonging to the other key.
  */
 export async function clearPendingInbound(stateDir: string): Promise<void> {
   const filePath = resolveStorePath(stateDir);
@@ -86,36 +109,80 @@ export async function clearPendingInbound(stateDir: string): Promise<void> {
 }
 
 /**
+ * Clear only the `entries` (pending inbound messages), leaving `activeTurns` intact.
+ */
+export async function clearPendingInboundEntries(stateDir: string): Promise<void> {
+  const filePath = resolveStorePath(stateDir);
+  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+    const existing = await readPendingInboundFile(filePath);
+    if (Object.keys(existing.entries).length === 0) {
+      return; // nothing to clear
+    }
+    existing.entries = {};
+    await writeJsonAtomic(filePath, existing, {
+      mode: 0o600,
+      trailingNewline: true,
+      ensureDirMode: 0o700,
+    });
+  });
+}
+
+/**
+ * Clear only the `activeTurns` key, leaving pending inbound `entries` intact.
+ */
+export async function clearAllActiveTurns(stateDir: string): Promise<void> {
+  const filePath = resolveStorePath(stateDir);
+  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+    const existing = await readPendingInboundFile(filePath);
+    if (!existing.activeTurns || Object.keys(existing.activeTurns).length === 0) {
+      return; // nothing to clear
+    }
+    existing.activeTurns = {};
+    await writeJsonAtomic(filePath, existing, {
+      mode: 0o600,
+      trailingNewline: true,
+      ensureDirMode: 0o700,
+    });
+  });
+}
+
+/**
  * Upsert an active-turn entry keyed by sessionId.
+ * Wrapped in a file lock to prevent concurrent read-modify-write races.
  */
 export async function writeActiveTurn(stateDir: string, entry: ActiveTurnEntry): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  const existing = await readPendingInboundFile(filePath);
-  if (!existing.activeTurns) {
-    existing.activeTurns = {};
-  }
-  existing.activeTurns[entry.sessionId] = entry;
-  await writeJsonAtomic(filePath, existing, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
+  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+    const existing = await readPendingInboundFile(filePath);
+    if (!existing.activeTurns) {
+      existing.activeTurns = {};
+    }
+    existing.activeTurns[entry.sessionId] = entry;
+    await writeJsonAtomic(filePath, existing, {
+      mode: 0o600,
+      trailingNewline: true,
+      ensureDirMode: 0o700,
+    });
   });
 }
 
 /**
  * Remove an active-turn entry by sessionId.
+ * Wrapped in a file lock to prevent concurrent read-modify-write races.
  */
 export async function clearActiveTurn(stateDir: string, sessionId: string): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  const existing = await readPendingInboundFile(filePath);
-  if (!existing.activeTurns) {
-    return;
-  }
-  delete existing.activeTurns[sessionId];
-  await writeJsonAtomic(filePath, existing, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
+  await withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+    const existing = await readPendingInboundFile(filePath);
+    if (!existing.activeTurns) {
+      return;
+    }
+    delete existing.activeTurns[sessionId];
+    await writeJsonAtomic(filePath, existing, {
+      mode: 0o600,
+      trailingNewline: true,
+      ensureDirMode: 0o700,
+    });
   });
 }
 

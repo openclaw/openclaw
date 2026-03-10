@@ -124,6 +124,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         isDirect: isDirectMessage,
       },
       capturedAt: Date.now(),
+      sessionKey: boundSessionKey ?? baseSessionKey,
     });
     return;
   }
