@@ -114,6 +114,7 @@ Validation:
 
 - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
 - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+- `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
 
 ## Provider config
 
