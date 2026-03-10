@@ -312,7 +312,7 @@ What they do:
 Other useful CLI checks: `openclaw status --all`, `openclaw logs --follow`,
 `openclaw gateway status`, `openclaw health --verbose`.
 
-Quick debug loop: [First 60 seconds if something's broken](#first-60-seconds-if-somethings-broken).
+Quick debug loop: [First 60 seconds if something is broken](#first-60-seconds-if-something-is-broken).
 Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
 ### What's the recommended way to install and set up OpenClaw
