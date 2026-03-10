@@ -198,20 +198,70 @@ describe("control UI routing", () => {
     expect(window.location.hash).toBe("");
   });
 
-  it("clears the current token when the gateway URL changes", async () => {
-    const app = mountApp("/ui/overview#token=abc123");
+  it("preserves a typed token while editing the gateway URL from overview", async () => {
+    const app = mountApp("/ui/overview");
+    await app.updateComplete;
+
+    const tokenInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="OPENCLAW_GATEWAY_TOKEN"]',
+    );
+    expect(tokenInput).not.toBeNull();
+
+    tokenInput!.value = "typed-token";
+    tokenInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await app.updateComplete;
 
     const gatewayUrlInput = app.querySelector<HTMLInputElement>(
       'input[placeholder="ws://100.x.y.z:18789"]',
     );
     expect(gatewayUrlInput).not.toBeNull();
+
     gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await app.updateComplete;
 
+    const nextTokenInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="OPENCLAW_GATEWAY_TOKEN"]',
+    );
+
     expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(app.settings.token).toBe("");
+    expect(app.settings.token).toBe("typed-token");
+    expect(nextTokenInput?.value).toBe("typed-token");
+  });
+
+  it("preserves the token when the gateway URL changes only by surrounding whitespace", async () => {
+    const app = mountApp("/ui/overview");
+    await app.updateComplete;
+
+    const tokenInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="OPENCLAW_GATEWAY_TOKEN"]',
+    );
+    expect(tokenInput).not.toBeNull();
+
+    tokenInput!.value = "typed-token";
+    tokenInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    const gatewayUrlInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="ws://100.x.y.z:18789"]',
+    );
+    expect(gatewayUrlInput).not.toBeNull();
+
+    gatewayUrlInput!.value = "ws://gateway.example/openclaw";
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    gatewayUrlInput!.value = "  ws://gateway.example/openclaw  ";
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    const nextTokenInput = app.querySelector<HTMLInputElement>(
+      'input[placeholder="OPENCLAW_GATEWAY_TOKEN"]',
+    );
+
+    expect(app.settings.gatewayUrl).toBe("  ws://gateway.example/openclaw  ");
+    expect(app.settings.token).toBe("typed-token");
+    expect(nextTokenInput?.value).toBe("typed-token");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {
