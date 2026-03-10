@@ -505,7 +505,7 @@ function readTarEntryInfo(entry: unknown): TarEntryInfo {
   return { path: p, type: t, size: s };
 }
 
-export function createTarEntrySafetyChecker(params: {
+export function createTarEntryPreflightChecker(params: {
   rootDir: string;
   stripComponents?: number;
   limits?: ArchiveExtractLimits;
@@ -570,7 +570,7 @@ export async function extractArchive(params: {
         await withStagedArchiveDestination({
           destinationRealDir,
           run: async (stagingDir) => {
-            const checkTarEntrySafety = createTarEntrySafetyChecker({
+            const checkTarEntrySafety = createTarEntryPreflightChecker({
               rootDir: destinationRealDir,
               stripComponents: params.stripComponents,
               limits,
