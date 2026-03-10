@@ -597,7 +597,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         contentType: res.headers.get("content-type"),
         maxChars: errorMaxChars,
       });
-      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, errorMaxChars);
+      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
     }
 

@@ -516,9 +516,10 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Web fetch failed (403):");
-    // Soft-block errors should be much shorter than the default 4000-char cap
-    // to avoid wasting LLM context tokens on login-wall boilerplate.
-    expect(message.length).toBeLessThan(1_000);
+    // Soft-block detail text is capped to SOFT_BLOCK_ERROR_MAX_CHARS (256) to
+    // avoid wasting LLM context tokens on login-wall boilerplate.
+    // The full repeated login-wall text (~5200 chars) must NOT survive.
+    expect(message).not.toContain(loginWallText);
     expect(message).not.toContain("<html");
   });
 
@@ -539,7 +540,8 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     expect(message).toContain("Web fetch failed (401):");
-    expect(message.length).toBeLessThan(1_000);
+    // Soft-block detail is capped — the full 3000-char body must not survive.
+    expect(message).not.toContain("x".repeat(3000));
   });
 
   it("keeps full error detail for non-soft-block errors (500)", async () => {
