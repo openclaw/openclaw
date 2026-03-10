@@ -98,6 +98,8 @@ export type HeartbeatSummary = {
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
+/** Maximum safe value for Node.js setTimeout (2^31 − 1 ms ≈ 24.8 days). */
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
 export { isCronSystemEvent };
 
 type HeartbeatAgentState = {
@@ -1054,8 +1056,7 @@ export function startHeartbeatRunner(opts: {
     }
     // Node.js setTimeout uses a 32-bit signed integer; values above 2^31-1
     // overflow to 1ms, causing a tight loop and massive log spam.
-    const MAX_TIMEOUT_MS = 2_147_483_647;
-    const delay = Math.min(Math.max(0, nextDue - now), MAX_TIMEOUT_MS);
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_SAFE_TIMEOUT_MS);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
