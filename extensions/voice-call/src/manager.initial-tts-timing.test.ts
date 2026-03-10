@@ -31,7 +31,7 @@ function injectCall(manager: CallManager, call: CallRecord): void {
 }
 
 describe("initial TTS timing", () => {
-  it("does not fire TTS on call.answered when streaming is enabled", async () => {
+  it("fires TTS on call.answered even when streaming is enabled (fallback for non-streaming providers)", async () => {
     const storePath = path.join(os.tmpdir(), `openclaw-voice-tts-timing-${Date.now()}`);
     fs.mkdirSync(storePath, { recursive: true });
 
@@ -64,7 +64,7 @@ describe("initial TTS timing", () => {
 
     injectCall(manager, call);
 
-    // Process call.answered event - this should NOT trigger TTS (streaming defers to onConnect)
+    // TTS fires on call.answered as fallback (works for all providers including non-streaming)
     manager.processEvent({
       id: "evt-answered",
       type: "call.answered",
@@ -75,11 +75,11 @@ describe("initial TTS timing", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(playTts).not.toHaveBeenCalled();
+    expect(playTts).toHaveBeenCalledTimes(1);
 
-    // The initial message must still be present (not consumed prematurely)
-    const updatedCall = manager.getCall(call.callId);
-    expect(updatedCall?.metadata?.initialMessage).toBe("Hello, this is a test call.");
+    // If onConnect also calls speakInitialMessage, it's a no-op (dedup via metadata deletion)
+    await manager.speakInitialMessage(call.providerCallId!);
+    expect(playTts).toHaveBeenCalledTimes(1);
   });
 
   it("fires TTS on call.answered when streaming is disabled", async () => {

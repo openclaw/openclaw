@@ -25,7 +25,7 @@ describe("CallManager notify and mapping", () => {
     expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
   });
 
-  it("defers initial TTS until media stream connects when streaming is enabled", async () => {
+  it("speaks initial message on answered even when streaming is enabled (fallback for non-streaming providers)", async () => {
     const { manager, provider } = await createManagerHarness(
       { streaming: { enabled: true, openaiApiKey: "sk-test" } },
       new FakeProvider("twilio"),
@@ -47,14 +47,13 @@ describe("CallManager notify and mapping", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // Streaming: TTS must NOT fire on call.answered - media stream isn't connected yet
-    expect(provider.playTtsCalls).toHaveLength(0);
-
-    // Simulate media stream connect calling speakInitialMessage
-    await manager.speakInitialMessage("call-uuid");
-
+    // TTS fires on call.answered as fallback (works for all providers)
     expect(provider.playTtsCalls).toHaveLength(1);
     expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
+
+    // If onConnect also calls speakInitialMessage, it's a no-op (dedup via metadata deletion)
+    await manager.speakInitialMessage("call-uuid");
+    expect(provider.playTtsCalls).toHaveLength(1);
   });
 
   it("speaks initial message on answered for non-streaming providers", async () => {

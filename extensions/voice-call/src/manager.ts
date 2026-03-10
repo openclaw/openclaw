@@ -256,11 +256,9 @@ export class CallManager {
       activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
-      onCallAnswered: this.config.streaming?.enabled
-        ? undefined
-        : (call) => {
-            this.maybeSpeakInitialMessageOnAnswered(call);
-          },
+      onCallAnswered: (call) => {
+        this.maybeSpeakInitialMessageOnAnswered(call);
+      },
     };
   }
 
@@ -272,8 +270,10 @@ export class CallManager {
   }
 
   /**
-   * For non-streaming providers (e.g. Plivo), speak the initial message
-   * immediately on call.answered since there is no media stream onConnect.
+   * Speak the initial message on call.answered as a fallback.
+   * For streaming providers, onConnect may also trigger speakInitialMessage;
+   * the dedup in speakInitialMessage (deletes metadata.initialMessage after
+   * first speak) prevents double-firing.
    */
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
     const initialMessage =
