@@ -754,7 +754,63 @@ describe("runWithModelFallback", () => {
     expect(message).toContain("API limit reached.");
     expect(message).toContain("/model");
     expect(message).toContain("openclaw models list --local");
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+    expect(((thrown as Error).cause as Error).message).toBe("rate limited");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows single non-limit failures without model switch guidance", async () => {
+    const cfg = makeCfg();
+    const run = vi.fn().mockRejectedValueOnce(new Error("No API key found for profile openai."));
+
+    let thrown: unknown;
+    try {
+      await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("No API key found for profile openai.");
+    expect(message).not.toContain("All models failed");
+    expect(message).not.toContain("API limit reached.");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not append model switch guidance when terminal failure is non-limit", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockRejectedValueOnce(new Error("No API key found for profile anthropic."));
+
+    let thrown: unknown;
+    try {
+      await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: ["anthropic/claude-haiku-3-5"],
+        run,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("All models failed (2):");
+    expect(message).not.toContain("API limit reached.");
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
+    expect(((thrown as Error).cause as Error).message).toContain("No API key found");
   });
 
   it("keeps explicit fallbacks reachable when models allowlist is present", async () => {
