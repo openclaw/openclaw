@@ -6,6 +6,7 @@ import {
   type ApiKeyCredential,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { buildVllmProvider } from "../agents/models-config.providers.discovery.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
@@ -38,6 +39,7 @@ type ManagedVllmProvider = {
   providerKey: string;
   profileId?: string;
   credential?: ApiKeyCredential;
+  configuredApiKey?: string;
   baseUrl: string;
   models: ModelDefinitionConfig[];
 };
@@ -61,6 +63,14 @@ function createManualModelDefinition(id: string): ModelDefinitionConfig {
     contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
     maxTokens: VLLM_DEFAULT_MAX_TOKENS,
   };
+}
+
+function resolveConfiguredScanApiKey(apiKey?: string): string | undefined {
+  const trimmed = apiKey?.trim();
+  if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function parseManualModelIds(raw: string): string[] {
@@ -112,6 +122,7 @@ function collectManagedVllmProviders(params: {
         providerKey,
         profileId: matchedProfile?.profileId,
         credential: matchedProfile?.credential,
+        configuredApiKey: typeof provider.apiKey === "string" ? provider.apiKey : undefined,
         baseUrl: normalizeBaseUrl(provider.baseUrl),
         models: Array.isArray(provider.models) ? provider.models : [],
       } satisfies ManagedVllmProvider;
@@ -235,9 +246,8 @@ function updateVllmProviderConfig(params: {
 }): OpenClawConfig {
   const providers = { ...params.cfg.models?.providers };
   const existingProvider = providers[params.providerKey];
-  const { apiKey: _ignoredApiKey, ...restProvider } = existingProvider ?? {};
   providers[params.providerKey] = {
-    ...restProvider,
+    ...existingProvider,
     baseUrl: params.baseUrl,
     api: "openai-completions",
     models: params.models,
@@ -275,12 +285,16 @@ async function saveVllmCredential(params: {
   baseUrl: string;
   apiKey?: string;
   existing?: ManagedVllmProvider;
+  allowMissingCredential?: boolean;
   agentDir?: string;
 }): Promise<void> {
   const profileId = params.existing?.profileId ?? buildProfileId(params.providerKey);
   const existingCredential = params.existing?.credential;
   const nextApiKey = params.apiKey?.trim();
   if (!nextApiKey && !existingCredential) {
+    if (params.allowMissingCredential) {
+      return;
+    }
     throw new Error("A vLLM API key is required for new endpoints.");
   }
 
@@ -361,6 +375,9 @@ async function configureEndpoint(params: {
   const providerKey =
     params.existing?.providerKey ??
     generateNextVllmProviderKey(Object.keys(params.cfg.models?.providers ?? {}));
+  const canKeepExistingApiKey = Boolean(
+    params.existing?.profileId || params.existing?.configuredApiKey?.trim(),
+  );
 
   const baseUrlRaw = await params.prompter.text({
     message: "vLLM base URL",
@@ -371,12 +388,12 @@ async function configureEndpoint(params: {
   const baseUrl = normalizeBaseUrl(String(baseUrlRaw ?? ""));
 
   const apiKeyRaw = await params.prompter.text({
-    message: params.existing?.profileId ? "vLLM API key (blank to keep current)" : "vLLM API key",
-    placeholder: params.existing?.profileId
+    message: canKeepExistingApiKey ? "vLLM API key (blank to keep current)" : "vLLM API key",
+    placeholder: canKeepExistingApiKey
       ? "Leave blank to keep the saved key"
       : "sk-... (or any non-empty string)",
     validate: (value) => {
-      if (params.existing?.profileId) {
+      if (canKeepExistingApiKey) {
         return undefined;
       }
       return value?.trim() ? undefined : "Required";
@@ -390,7 +407,8 @@ async function configureEndpoint(params: {
       agentDir: params.agentDir,
       authStore,
       profileId: params.existing?.profileId,
-    }));
+    })) ||
+    resolveConfiguredScanApiKey(params.existing?.configuredApiKey);
 
   const progress = params.prompter.progress("Scanning vLLM models...");
   const discoveredProvider = await buildVllmProvider({
@@ -414,6 +432,7 @@ async function configureEndpoint(params: {
     baseUrl,
     apiKey,
     existing: params.existing,
+    allowMissingCredential: canKeepExistingApiKey,
     agentDir: params.agentDir,
   });
 

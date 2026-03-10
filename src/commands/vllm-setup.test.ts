@@ -111,6 +111,103 @@ describe("promptAndConfigureVllm", () => {
     expect(result.modelRef).toBe("vllm/meta-llama/Meta-Llama-3-8B-Instruct");
   });
 
+  it("preserves an existing provider apiKey when updating an endpoint", async () => {
+    ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "vllm:default": {
+          type: "api_key",
+          provider: "vllm",
+          key: "stored-vllm-key", // pragma: allowlist secret
+          metadata: { kind: "vllm", baseUrl: "http://gpu-box:8000/v1" },
+        },
+      },
+    });
+    buildVllmProvider.mockResolvedValue({
+      baseUrl: "http://gpu-box:8000/v1",
+      api: "openai-completions",
+      models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+    });
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__manage_endpoint__")
+      .mockResolvedValueOnce("vllm")
+      .mockResolvedValueOnce("__endpoint_update__");
+    const text = vi.fn().mockResolvedValueOnce("http://gpu-box:8000/v1").mockResolvedValueOnce("");
+    const multiselect = vi.fn().mockResolvedValue(["meta-llama/Meta-Llama-3-8B-Instruct"]);
+    const prompter = makePrompter({ select, text: text as never, multiselect });
+    const config = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            apiKey: "VLLM_API_KEY",
+            models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptAndConfigureVllm({
+      cfg: config,
+      prompter,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("Expected a configured vLLM result");
+    }
+    expect(result.config.models?.providers?.vllm?.apiKey).toBe("VLLM_API_KEY");
+  });
+
+  it("allows blank API keys when an existing endpoint is config-backed", async () => {
+    buildVllmProvider.mockResolvedValue({
+      baseUrl: "http://gpu-box:8000/v1",
+      api: "openai-completions",
+      models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+    });
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__manage_endpoint__")
+      .mockResolvedValueOnce("vllm")
+      .mockResolvedValueOnce("__endpoint_update__");
+    const text = vi.fn().mockResolvedValueOnce("http://gpu-box:8000/v1").mockResolvedValueOnce("");
+    const multiselect = vi.fn().mockResolvedValue(["meta-llama/Meta-Llama-3-8B-Instruct"]);
+    const prompter = makePrompter({ select, text: text as never, multiselect });
+    const config = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            apiKey: "VLLM_API_KEY",
+            models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptAndConfigureVllm({
+      cfg: config,
+      prompter,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("Expected a configured vLLM result");
+    }
+    expect(buildVllmProvider).toHaveBeenCalledWith({
+      baseUrl: "http://gpu-box:8000/v1",
+      apiKey: "VLLM_API_KEY",
+    });
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+  });
+
   it("discovers models from the configured endpoint and lets the user choose multiple models", async () => {
     buildVllmProvider.mockResolvedValue({
       baseUrl: "http://127.0.0.1:8000/v1",
