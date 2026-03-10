@@ -48,6 +48,7 @@ describe("makeProxyFetch", () => {
     undiciFetch.mockResolvedValue({ ok: true });
 
     const proxyFetch = makeProxyFetch(proxyUrl);
+    expect(proxyAgentSpy).not.toHaveBeenCalled();
     await proxyFetch("https://api.example.com/v1/audio");
 
     expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
