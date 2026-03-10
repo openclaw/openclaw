@@ -169,6 +169,30 @@ export function buildMistralModelDefinition(): ModelDefinitionConfig {
   };
 }
 
+export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+export const GROQ_DEFAULT_MODEL_ID = "llama-3.3-70b-versatile";
+export const GROQ_DEFAULT_MODEL_REF = `groq/${GROQ_DEFAULT_MODEL_ID}`;
+export const GROQ_DEFAULT_CONTEXT_WINDOW = 131072;
+export const GROQ_DEFAULT_MAX_TOKENS = 8192;
+export const GROQ_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildGroqModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: GROQ_DEFAULT_MODEL_ID,
+    name: "Llama 3.3 70B Versatile",
+    reasoning: false,
+    input: ["text"],
+    cost: GROQ_DEFAULT_COST,
+    contextWindow: GROQ_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: GROQ_DEFAULT_MAX_TOKENS,
+  };
+}
+
 export function buildZaiModelDefinition(params: {
   id: string;
   name?: string;

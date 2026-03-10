@@ -31,6 +31,7 @@ import {
   buildMinimaxProvider,
   buildMoonshotProvider,
   buildNvidiaProvider,
+  buildGroqProvider,
   buildOpenAICodexProvider,
   buildOpenrouterProvider,
   buildQianfanProvider,
@@ -43,6 +44,7 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
+  buildGroqProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
   buildNvidiaProvider,
@@ -511,6 +513,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
     apiKey,
   })),
+  withApiKey("groq", async ({ apiKey }) => ({ ...buildGroqProvider(), apiKey })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),

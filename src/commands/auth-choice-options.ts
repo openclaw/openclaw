@@ -78,6 +78,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["mistral-api-key"],
   },
   {
+    value: "groq",
+    label: "Groq",
+    hint: "API key",
+    choices: ["groq-api-key"],
+  },
+  {
     value: "volcengine",
     label: "Volcano Engine",
     hint: "API key",
@@ -192,6 +198,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
   "cloudflare-ai-gateway-api-key": "Account ID + Gateway ID + API key",
   "venice-api-key": "Privacy-focused inference (uncensored models)",
   "together-api-key": "Access to Llama, DeepSeek, Qwen, and more open models",
+  "groq-api-key": "Fast OpenAI-compatible inference",
   "huggingface-api-key": "Inference Providers — OpenAI-compatible chat",
 };
 

@@ -16,6 +16,7 @@ import {
   applyKilocodeConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
+  applyGroqConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
   applyMinimaxConfig,
@@ -38,6 +39,7 @@ import {
   setByteplusApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
+  setGroqApiKey,
   setKilocodeApiKey,
   setKimiCodingApiKey,
   setLitellmApiKey,
@@ -415,6 +417,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyMistralConfig(nextConfig);
+  }
+
+  if (authChoice === "groq-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "groq",
+      cfg: baseConfig,
+      flagValue: opts.groqApiKey,
+      flagName: "--groq-api-key",
+      envVar: "GROQ_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setGroqApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "groq:default",
+      provider: "groq",
+      mode: "api_key",
+    });
+    return applyGroqConfig(nextConfig);
   }
 
   if (authChoice === "volcengine-api-key") {

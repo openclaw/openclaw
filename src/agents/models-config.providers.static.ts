@@ -126,6 +126,16 @@ const OPENROUTER_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const GROQ_DEFAULT_CONTEXT_WINDOW = 131072;
+const GROQ_DEFAULT_MAX_TOKENS = 8192;
+const GROQ_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -344,6 +354,42 @@ export function buildOpenrouterProvider(): ProviderConfig {
         cost: OPENROUTER_DEFAULT_COST,
         contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
         maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+export function buildGroqProvider(): ProviderConfig {
+  return {
+    baseUrl: GROQ_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "llama-3.3-70b-versatile",
+        name: "Llama 3.3 70B Versatile",
+        reasoning: false,
+        input: ["text"],
+        cost: GROQ_DEFAULT_COST,
+        contextWindow: GROQ_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GROQ_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "deepseek-r1-distill-llama-70b",
+        name: "DeepSeek R1 Distill Llama 70B",
+        reasoning: true,
+        input: ["text"],
+        cost: GROQ_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: 32768,
+      },
+      {
+        id: "qwen-qwq-32b",
+        name: "Qwen QwQ 32B",
+        reasoning: true,
+        input: ["text"],
+        cost: GROQ_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: 32768,
       },
     ],
   };

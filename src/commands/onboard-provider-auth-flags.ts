@@ -19,6 +19,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "veniceApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
+  | "groqApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
@@ -155,6 +156,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--huggingface-api-key",
     cliOption: "--huggingface-api-key <key>",
     description: "Hugging Face API key (HF token)",
+  },
+  {
+    optionKey: "groqApiKey",
+    authChoice: "groq-api-key",
+    cliFlag: "--groq-api-key",
+    cliOption: "--groq-api-key <key>",
+    description: "Groq API key",
   },
   {
     optionKey: "opencodeZenApiKey",

@@ -4,6 +4,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildGroqProvider,
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
@@ -33,6 +34,7 @@ import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
+  GROQ_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -61,10 +63,13 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
+  buildGroqModelDefinition,
   buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  GROQ_BASE_URL,
+  GROQ_DEFAULT_MODEL_ID,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
@@ -431,6 +436,31 @@ export function applyMistralProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyMistralConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMistralProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, MISTRAL_DEFAULT_MODEL_REF);
+}
+
+export function applyGroqProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[GROQ_DEFAULT_MODEL_REF] = {
+    ...models[GROQ_DEFAULT_MODEL_REF],
+    alias: models[GROQ_DEFAULT_MODEL_REF]?.alias ?? "Groq",
+  };
+
+  const defaultProvider = buildGroqProvider();
+  const defaultModel = buildGroqModelDefinition();
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "groq",
+    api: "openai-completions",
+    baseUrl: GROQ_BASE_URL,
+    defaultModels: defaultProvider.models ?? [defaultModel],
+    defaultModelId: GROQ_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyGroqConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyGroqProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, GROQ_DEFAULT_MODEL_REF);
 }
 
 export { KILOCODE_BASE_URL };

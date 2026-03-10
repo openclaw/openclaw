@@ -24,6 +24,7 @@ export type AuthChoice =
   | "venice-api-key"
   | "together-api-key"
   | "huggingface-api-key"
+  | "groq-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
@@ -74,6 +75,7 @@ export type AuthChoiceGroupId =
   | "qwen"
   | "together"
   | "huggingface"
+  | "groq"
   | "qianfan"
   | "xai"
   | "volcengine"
@@ -130,6 +132,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
+  groqApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   volcengineApiKey?: string;

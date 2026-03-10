@@ -69,6 +69,7 @@ describe("applyAuthChoice", () => {
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "MOONSHOT_API_KEY",
     "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
     "KIMI_API_KEY",
     "GEMINI_API_KEY",
     "XIAOMI_API_KEY",
@@ -463,6 +464,13 @@ describe("applyAuthChoice", () => {
       profileId: "moonshot:default",
       provider: "moonshot",
       modelPrefix: "moonshot/",
+    },
+    {
+      authChoice: "groq-api-key",
+      tokenProvider: "groq",
+      profileId: "groq:default",
+      provider: "groq",
+      modelPrefix: "groq/",
     },
     {
       authChoice: "mistral-api-key",
@@ -1319,6 +1327,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
+      { authChoice: "groq-api-key" as const, expectedProvider: "groq" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
