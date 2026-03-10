@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 
@@ -11,8 +11,6 @@ const localStorageStub = (() => {
     clear: vi.fn(() => store.clear()),
   };
 })();
-
-vi.stubGlobal("localStorage", localStorageStub);
 
 const { connectGateway, reconcileRecoveredChatRunState, resolveControlUiClientVersion } =
   await import("./app-gateway.ts");
@@ -137,7 +135,13 @@ function createHost() {
 
 describe("connectGateway", () => {
   beforeEach(() => {
+    localStorageStub.clear();
+    vi.stubGlobal("localStorage", localStorageStub);
     gatewayClientInstances.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -389,5 +393,22 @@ describe("reconcileRecoveredChatRunState", () => {
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
     expect(host.chatStreamStartedAt).toBeNull();
+  });
+
+  it("clears stale stream state when snapshot recovers a different active run", () => {
+    const host = {
+      sessionKey: "main",
+      chatRunId: "run-old",
+      chatStream: "partial old output",
+      chatStreamStartedAt: 456,
+    };
+
+    reconcileRecoveredChatRunState(host, {
+      activeChatRuns: [{ runId: "run-new", sessionKey: "main", startedAtMs: 789 }],
+    });
+
+    expect(host.chatRunId).toBe("run-new");
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamStartedAt).toBe(789);
   });
 });

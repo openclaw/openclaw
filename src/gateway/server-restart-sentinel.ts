@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -17,24 +15,9 @@ import {
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import { ensureGatewayTranscriptFile } from "./server-methods/chat-transcript-file.js";
 import { appendInjectedAssistantMessageToTranscript } from "./server-methods/chat-transcript-inject.js";
 import { loadSessionEntry } from "./session-utils.js";
-
-async function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }) {
-  await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
-  try {
-    await fs.access(params.transcriptPath);
-    return;
-  } catch {}
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: params.sessionId,
-    timestamp: new Date(0).toISOString(),
-    cwd: process.cwd(),
-  };
-  await fs.writeFile(params.transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
-}
 
 async function injectRestartNoticeIntoSession(params: { sessionKey: string; message: string }) {
   const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
@@ -46,7 +29,7 @@ async function injectRestartNoticeIntoSession(params: { sessionKey: string; mess
     sessionsDir: path.dirname(storePath),
     agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
   });
-  await ensureTranscriptFile({ transcriptPath, sessionId });
+  await ensureGatewayTranscriptFile({ transcriptPath, sessionId });
   const appended = appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     message: params.message,

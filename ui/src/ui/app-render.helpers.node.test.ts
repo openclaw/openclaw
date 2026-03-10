@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isCronSessionKey,
   parseSessionKey,
@@ -287,23 +287,54 @@ describe("isCronSessionKey", () => {
 });
 describe("renderTab chat navigation", () => {
   it("keeps last active chat session instead of forcing main when opening chat tab", () => {
+    const setTab = vi.fn();
+    const applySettings = vi.fn();
+    const loadAssistantIdentity = vi.fn(async () => undefined);
+    const resetToolStream = vi.fn();
+    const resetChatScroll = vi.fn();
     const state = {
       hello: { snapshot: { sessionDefaults: { mainSessionKey: "main", mainKey: "main" } } },
-      settings: { lastActiveSessionKey: "agent:main:telegram:direct:123" },
-      sessionKey: "agent:main:telegram:direct:123",
+      settings: {
+        lastActiveSessionKey: "agent:main:telegram:direct:123",
+        sessionKey: "main",
+      },
+      sessionKey: "main",
+      chatMessage: "hello",
+      chatStream: "partial",
+      chatRunId: "run-1",
       tab: "overview",
       chatHasAutoScrolled: false,
       connected: false,
-      setTab: () => undefined,
-      applySettings: () => undefined,
-      loadAssistantIdentity: async () => undefined,
-      resetToolStream: () => undefined,
-      resetChatScroll: () => undefined,
+      setTab,
+      applySettings,
+      loadAssistantIdentity,
+      resetToolStream,
+      resetChatScroll,
+      basePath: "",
     } as unknown as Parameters<typeof renderTab>[0];
 
-    const tpl = renderTab(state, "chat");
-    expect(String(tpl.strings?.[0] ?? "")).toContain("href=");
-    // helper should prefer lastActiveSessionKey; this assertion is indirect but stable enough for regression coverage
-    expect(state.settings.lastActiveSessionKey).toBe("agent:main:telegram:direct:123");
+    const tpl = renderTab(state, "chat") as unknown as { values?: unknown[] };
+    expect(tpl.values?.[0]).toBe("/chat");
+
+    const onClick = tpl.values?.[2] as ((event: MouseEvent) => void) | undefined;
+    expect(typeof onClick).toBe("function");
+    onClick?.({
+      defaultPrevented: false,
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      preventDefault: vi.fn(),
+    } as unknown as MouseEvent);
+
+    expect(state.sessionKey).toBe("agent:main:telegram:direct:123");
+    expect(applySettings).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:telegram:direct:123" }),
+    );
+    expect(loadAssistantIdentity).toHaveBeenCalled();
+    expect(resetToolStream).toHaveBeenCalled();
+    expect(resetChatScroll).toHaveBeenCalled();
+    expect(setTab).toHaveBeenCalledWith("chat");
   });
 });

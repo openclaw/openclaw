@@ -150,8 +150,15 @@ export function reconcileRecoveredChatRunState(
 ): void {
   const activeRun = resolveActiveChatRunForSession(snapshot, host.sessionKey);
   if (activeRun?.runId) {
+    const recoveredRunChanged = host.chatRunId !== activeRun.runId;
     host.chatRunId = activeRun.runId;
-    if (host.chatStreamStartedAt == null && typeof activeRun.startedAtMs === "number") {
+    if (recoveredRunChanged) {
+      host.chatStream = null;
+    }
+    if (
+      typeof activeRun.startedAtMs === "number" &&
+      (recoveredRunChanged || host.chatStreamStartedAt == null)
+    ) {
       host.chatStreamStartedAt = activeRun.startedAtMs;
     }
     return;

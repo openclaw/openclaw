@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("./chat-abort.js", () => ({
   abortChatRunById: vi.fn(() => ({ aborted: true })),
 }));
+vi.mock("./server-methods/chat-transcript-file.js", () => ({
+  ensureGatewayTranscriptFile: vi.fn(async () => undefined),
+}));
 vi.mock("./server-methods/chat-transcript-inject.js", () => ({
   appendInjectedAssistantMessageToTranscript: vi.fn(() => ({ ok: true })),
 }));
@@ -22,6 +25,7 @@ vi.mock("../config/sessions.js", () => ({
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
 const { abortChatRunById } = await import("./chat-abort.js");
+const { ensureGatewayTranscriptFile } = await import("./server-methods/chat-transcript-file.js");
 const { appendInjectedAssistantMessageToTranscript } =
   await import("./server-methods/chat-transcript-inject.js");
 
@@ -80,6 +84,9 @@ describe("createGatewayCloseHandler", () => {
     expect(abortChatRunById).toHaveBeenCalledWith(
       expect.objectContaining({ chatAbortControllers: expect.any(Map) }),
       expect.objectContaining({ runId: "run-1", sessionKey: "main", stopReason: "shutdown" }),
+    );
+    expect(ensureGatewayTranscriptFile).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptPath: "/tmp/sess.jsonl", sessionId: "sess-1" }),
     );
     expect(appendInjectedAssistantMessageToTranscript).toHaveBeenCalledWith(
       expect.objectContaining({

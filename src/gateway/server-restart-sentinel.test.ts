@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(() => ({ cfg: {}, storePath: "/tmp/sessions.json", entry: {} })),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionFilePath: vi.fn(() => "/tmp/sess.jsonl"),
+  ensureGatewayTranscriptFile: vi.fn(async () => undefined),
   appendInjectedAssistantMessageToTranscript: vi.fn(() => ({ ok: true })),
   resolveAnnounceTargetFromKey: vi.fn(() => null),
   deliveryContextFromSession: vi.fn(() => undefined),
@@ -54,8 +55,8 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: mocks.resolveSessionAgentId,
+vi.mock("./server-methods/chat-transcript-file.js", () => ({
+  ensureGatewayTranscriptFile: mocks.ensureGatewayTranscriptFile,
 }));
 
 vi.mock("./server-methods/chat-transcript-inject.js", () => ({
@@ -115,6 +116,9 @@ describe("scheduleRestartSentinelWake", () => {
     });
     await scheduleRestartSentinelWake({ deps: {} as never });
 
+    expect(mocks.ensureGatewayTranscriptFile).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptPath: "/tmp/sess.jsonl", sessionId: "sess-1" }),
+    );
     expect(mocks.appendInjectedAssistantMessageToTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         transcriptPath: "/tmp/sess.jsonl",

@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import type { WebSocketServer } from "ws";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
@@ -11,26 +9,9 @@ import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { ensureGatewayTranscriptFile } from "./server-methods/chat-transcript-file.js";
 import { appendInjectedAssistantMessageToTranscript } from "./server-methods/chat-transcript-inject.js";
 import { loadSessionEntry } from "./session-utils.js";
-
-async function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }) {
-  await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
-  try {
-    await fs.access(params.transcriptPath);
-    return;
-  } catch {
-    // create below
-  }
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: params.sessionId,
-    timestamp: new Date(0).toISOString(),
-    cwd: process.cwd(),
-  };
-  await fs.writeFile(params.transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
-}
 
 async function injectRestartAbortNotice(params: {
   sessionKey: string;
@@ -45,7 +26,7 @@ async function injectRestartAbortNotice(params: {
     sessionsDir: path.dirname(storePath),
     agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
   });
-  await ensureTranscriptFile({ transcriptPath, sessionId: params.sessionId });
+  await ensureGatewayTranscriptFile({ transcriptPath, sessionId: params.sessionId });
   const appended = appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     label: "OpenClaw",
@@ -140,6 +121,7 @@ export function createGatewayCloseHandler(params: {
       clearInterval(timer);
     }
     params.nodePresenceTimers.clear();
+    const restartNoticeJobs: Promise<unknown>[] = [];
     for (const [runId, entry] of params.chatAbortControllers.entries()) {
       abortChatRunById(
         {
@@ -154,12 +136,15 @@ export function createGatewayCloseHandler(params: {
         },
         { runId, sessionKey: entry.sessionKey, stopReason: "shutdown" },
       );
-      await injectRestartAbortNotice({
-        sessionKey: entry.sessionKey,
-        sessionId: entry.sessionId,
-        runId,
-      });
+      restartNoticeJobs.push(
+        injectRestartAbortNotice({
+          sessionKey: entry.sessionKey,
+          sessionId: entry.sessionId,
+          runId,
+        }),
+      );
     }
+    await Promise.allSettled(restartNoticeJobs);
     params.broadcast("shutdown", {
       reason,
       restartExpectedMs,

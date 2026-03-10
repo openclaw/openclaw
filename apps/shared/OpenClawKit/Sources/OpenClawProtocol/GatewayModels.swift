@@ -302,6 +302,7 @@ public struct Snapshot: Codable, Sendable {
     public let configpath: String?
     public let statedir: String?
     public let sessiondefaults: [String: AnyCodable]?
+    public let activechatruns: [[String: AnyCodable]]?
     public let authmode: AnyCodable?
     public let updateavailable: [String: AnyCodable]?
 
@@ -313,6 +314,7 @@ public struct Snapshot: Codable, Sendable {
         configpath: String?,
         statedir: String?,
         sessiondefaults: [String: AnyCodable]?,
+        activechatruns: [[String: AnyCodable]]?,
         authmode: AnyCodable?,
         updateavailable: [String: AnyCodable]?)
     {
@@ -323,6 +325,7 @@ public struct Snapshot: Codable, Sendable {
         self.configpath = configpath
         self.statedir = statedir
         self.sessiondefaults = sessiondefaults
+        self.activechatruns = activechatruns
         self.authmode = authmode
         self.updateavailable = updateavailable
     }
@@ -335,6 +338,7 @@ public struct Snapshot: Codable, Sendable {
         case configpath = "configPath"
         case statedir = "stateDir"
         case sessiondefaults = "sessionDefaults"
+        case activechatruns = "activeChatRuns"
         case authmode = "authMode"
         case updateavailable = "updateAvailable"
     }
