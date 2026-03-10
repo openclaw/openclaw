@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/findoo-datahub-plugin",
-  "version": "2026.3.2",
+  "version": "2026.3.10",
   "description": "Unified financial data source — free mode (CCXT/CoinGecko/DefiLlama/Yahoo) + full mode (172 DataHub endpoints)",
   "keywords": [
     "crypto",

@@ -316,6 +316,24 @@ export function registerAllTools(
         symbol: Type.Optional(
           Type.String({ description: "Coin ID, trading pair, or protocol slug" }),
         ),
+        interval: Type.Optional(
+          Type.String({
+            description:
+              "Time interval for OHLCV data. E.g. '1m','5m','15m','1h','1d'. Default: '1d'",
+          }),
+        ),
+        exchange: Type.Optional(
+          Type.String({
+            description:
+              "Crypto exchange name for CEX data (ccxt provider). E.g. 'binance','okx','bybit'. Default: 'binance'",
+          }),
+        ),
+        provider: Type.Optional(
+          Type.String({
+            description:
+              "Data provider override: ccxt (CEX), coingecko (coin/*), fmp, tiingo, yfinance, polygon",
+          }),
+        ),
         ...dateRangeParams,
       }),
       async execute(_toolCallId: string, params: Record<string, unknown>) {
