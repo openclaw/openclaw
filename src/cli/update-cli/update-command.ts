@@ -14,6 +14,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -260,7 +261,10 @@ async function refreshGatewayServiceEnv(params: {
     args.push("--json");
   }
 
-  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
+  const currentRoot =
+    (await resolveOpenClawPackageRoot({ argv1: process.argv[1] })) ?? params.result.root;
+
+  for (const candidate of resolveGatewayInstallEntrypointCandidates(currentRoot)) {
     if (!(await pathExists(candidate))) {
       continue;
     }
