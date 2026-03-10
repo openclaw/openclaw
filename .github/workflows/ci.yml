@@ -340,8 +340,13 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            git show "$BASE_SHA":.secrets.baseline > /tmp/.secrets.baseline.base
-            BASELINE=/tmp/.secrets.baseline.base
+            if git cat-file -e "$BASE_SHA:.secrets.baseline" 2>/dev/null; then
+              git show "$BASE_SHA":.secrets.baseline > /tmp/.secrets.baseline.base
+              BASELINE=/tmp/.secrets.baseline.base
+            else
+              echo "::warning::Base commit ($BASE_SHA) does not contain .secrets.baseline; using repository baseline from HEAD."
+              BASELINE=.secrets.baseline
+            fi
           else
             BASELINE=.secrets.baseline
           fi
