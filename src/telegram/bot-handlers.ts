@@ -48,6 +48,7 @@ import {
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
+  getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
@@ -262,8 +263,21 @@ export const registerTelegramHandlers = ({
         replyMedia,
       );
     },
-    onError: (err) => {
+    onError: (err, items) => {
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+      const chatId = items[0]?.msg.chat.id;
+      if (chatId != null) {
+        const threadId = items[0]?.msg.message_thread_id;
+        void bot.api
+          .sendMessage(
+            chatId,
+            "Something went wrong while processing your message. Please try again.",
+            threadId != null ? { message_thread_id: threadId } : undefined,
+          )
+          .catch((sendErr) => {
+            logVerbose(`telegram: error fallback send failed: ${String(sendErr)}`);
+          });
+      }
     },
   });
 
@@ -995,7 +1009,7 @@ export const registerTelegramHandlers = ({
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
     // These have no media and no text content to process.
-    const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
+    const hasText = Boolean(getTelegramTextParts(msg).text.trim());
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
       return;

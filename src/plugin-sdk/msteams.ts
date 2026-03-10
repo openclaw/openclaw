@@ -37,6 +37,10 @@ export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channe
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
+  splitOnboardingEntries,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
@@ -88,6 +92,10 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
+export {
+  evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "./group-access.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
 export { loadWebMedia } from "../web/media.js";
@@ -110,3 +118,4 @@ export {
   buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
+export { normalizeStringEntries } from "../shared/string-normalization.js";

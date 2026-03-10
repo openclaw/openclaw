@@ -65,6 +65,7 @@ cat ~/.openclaw/openclaw.json
 - Config normalization for legacy values.
 - OpenCode Zen provider override warnings (`models.providers.opencode`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+- Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
 - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
@@ -157,6 +158,25 @@ it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrat
 the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
 migrated via `openclaw doctor`.
+
+### 3b) Legacy cron store migrations
+
+Doctor also checks the cron job store (`~/.openclaw/cron/jobs.json` by default,
+or `cron.store` when overridden) for old job shapes that the scheduler still
+accepts for compatibility.
+
+Current cron cleanups include:
+
+- `jobId` → `id`
+- `schedule.cron` → `schedule.expr`
+- top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
+- top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
+- payload `provider` delivery aliases → explicit `delivery.channel`
+- simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
+
+Doctor only auto-migrates `notify: true` jobs when it can do so without
+changing behavior. If a job combines legacy notify fallback with an existing
+non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
 ### 4) State integrity checks (session persistence, routing, and safety)
 
@@ -278,6 +298,7 @@ Notes:
 - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
 - If token auth requires a token and the configured token SecretRef is unresolved, doctor blocks the install/repair path with actionable guidance.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, doctor blocks install/repair until mode is set explicitly.
+- For Linux user-systemd units, doctor token drift checks now include both `Environment=` and `EnvironmentFile=` sources when comparing service auth metadata.
 - You can always force a full rewrite via `openclaw gateway install --force`.
 
 ### 16) Gateway runtime + port diagnostics

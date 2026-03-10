@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
@@ -128,4 +129,50 @@ describe("loadWorkspaceSkillEntries", () => {
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "skips workspace skill directories that resolve outside the workspace root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const outsideDir = await createTempWorkspaceDir();
+      const escapedSkillDir = path.join(outsideDir, "outside-skill");
+      await writeSkill({
+        dir: escapedSkillDir,
+        name: "outside-skill",
+        description: "Outside",
+      });
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      await fs.symlink(escapedSkillDir, path.join(workspaceDir, "skills", "escaped-skill"), "dir");
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "skips workspace skill files that resolve outside the workspace root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const outsideDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: outsideDir,
+        name: "outside-file-skill",
+        description: "Outside file",
+      });
+      const skillDir = path.join(workspaceDir, "skills", "escaped-file");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(skillDir, "SKILL.md"));
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
+    },
+  );
 });
