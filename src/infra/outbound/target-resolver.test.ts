@@ -212,6 +212,35 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
+  it("preserves explicit user prefixes after stripping a provider prefix", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          defaultTargetKind: "group",
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "custom",
+      input: "custom:user:alice",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("normalized");
+      expect(result.target.to).toBe("custom:user:alice");
+      expect(result.target.kind).toBe("user");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
   it("strips explicit group prefixes before directory lookup when plugin looksLikeId returns false", async () => {
     const entry: ChannelDirectoryEntry = {
       kind: "group",
@@ -237,6 +266,43 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       cfg,
       channel: "custom",
       input: "group:family-room",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("directory");
+      expect(result.target.to).toBe("family-room");
+      expect(result.target.kind).toBe("group");
+    }
+    expect(mocks.listGroups).toHaveBeenCalledTimes(1);
+    expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("strips provider and explicit group prefixes before directory lookup", async () => {
+    const entry: ChannelDirectoryEntry = {
+      kind: "group",
+      id: "family-room",
+      name: "family-room",
+    };
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => false,
+          defaultTargetKind: "user",
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listGroupsLive.mockResolvedValue([entry]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "custom",
+      input: "custom:group:family-room",
     });
 
     expect(result.ok).toBe(true);
