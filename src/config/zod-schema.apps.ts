@@ -7,6 +7,7 @@ export const AgentAppPromptRoleSchema = z
 export const AgentAppRegistryEntrySchema = z
   .object({
     source: z.string(),
+    npmSource: z.string().optional(),
     version: z.string().optional(),
     enabled: z.boolean().optional(),
     workerScript: z.string().optional(),

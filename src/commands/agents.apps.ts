@@ -140,6 +140,7 @@ export async function agentsAppsInstallCommand(
         ...cfg.apps?.registry,
         [registryName]: {
           source,
+          ...(parsedSource.kind === "npm" ? { npmSource: parsedSource.source } : {}),
           enabled: true,
         },
       },
@@ -151,7 +152,11 @@ export async function agentsAppsInstallCommand(
   }
 
   await writeConfigFile(next);
-  if (previousEntry && previousEntry.source !== source) {
+  if (
+    previousEntry &&
+    previousEntry.source !== source &&
+    !stillReferencesAgentAppSource(next, previousEntry.source)
+  ) {
     await cleanupManagedAotuiAppArtifacts(previousEntry.source);
   }
 

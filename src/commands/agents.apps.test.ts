@@ -109,6 +109,7 @@ describe("agents apps commands", () => {
           "aotui-ide": {
             source:
               "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide",
+            npmSource: "npm:@agentina/aotui-ide",
             enabled: true,
           },
         },
@@ -198,6 +199,50 @@ describe("agents apps commands", () => {
 
     expect(installNpmAotuiPackageMock).not.toHaveBeenCalled();
     expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("does not remove replaced managed cache files while another registry alias still points at the old source", async () => {
+    const sharedSource =
+      "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/latest/node_modules/@agentina/aotui-ide";
+    const replacementSource =
+      "local:/tmp/.openclaw/agent-apps/npm/scope-agentina__aotui-ide/2.0.0/node_modules/@agentina/aotui-ide";
+    loadConfigMock.mockReturnValue({
+      apps: {
+        registry: {
+          ide: { source: sharedSource },
+          editor: { source: sharedSource },
+        },
+      },
+    });
+    installNpmAotuiPackageMock.mockResolvedValue({
+      localSource: replacementSource,
+    });
+
+    await agentsAppsInstallCommand(
+      {
+        source: "@agentina/aotui-ide@2.0.0",
+        as: "ide",
+        force: true,
+        select: false,
+      },
+      runtime,
+    );
+
+    expect(writeConfigFileMock).toHaveBeenCalledWith({
+      apps: {
+        registry: {
+          ide: {
+            source: replacementSource,
+            npmSource: "npm:@agentina/aotui-ide@2.0.0",
+            enabled: true,
+          },
+          editor: {
+            source: sharedSource,
+          },
+        },
+      },
+    });
+    expect(cleanupManagedAotuiAppArtifactsMock).not.toHaveBeenCalled();
   });
 
   it("uninstalls an Agent App, clears selections, and removes managed cache files", async () => {

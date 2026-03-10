@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
 
 const execFile = promisify(nodeExecFile);
+const NPM_INSTALL_TIMEOUT_MS = 120_000;
 
 export type ParsedLocalAotuiSource = {
   kind: "local";
@@ -313,8 +314,15 @@ async function runInstallCommand(
     return;
   }
   try {
-    await execFile(command, args, { cwd });
+    await execFile(command, args, { cwd, timeout: NPM_INSTALL_TIMEOUT_MS });
   } catch (error) {
+    const timedOut =
+      typeof error === "object" &&
+      error !== null &&
+      "killed" in error &&
+      (error as { killed?: unknown }).killed === true &&
+      "signal" in error &&
+      (error as { signal?: unknown }).signal === "SIGTERM";
     const stderr =
       typeof error === "object" &&
       error !== null &&
@@ -322,7 +330,11 @@ async function runInstallCommand(
       typeof (error as { stderr?: unknown }).stderr === "string"
         ? (error as { stderr: string }).stderr.trim()
         : "";
-    const reason = stderr ? `: ${stderr}` : "";
+    const reason = timedOut
+      ? `: timed out after ${Math.round(NPM_INSTALL_TIMEOUT_MS / 1000)}s`
+      : stderr
+        ? `: ${stderr}`
+        : "";
     throw new Error(`Failed to install npm package with "${command} ${args.join(" ")}"${reason}`, {
       cause: error,
     });

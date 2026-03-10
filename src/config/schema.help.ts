@@ -213,6 +213,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Single Agent App registry descriptor entry. Keep names stable so agent-level selections remain deterministic across config edits.",
   "apps.registry.*.source":
     'App source descriptor understood by the Agent Apps runtime registry (for example "npm:@agentina/aotui-ide").',
+  "apps.registry.*.npmSource":
+    'Original npm package spec recorded when the Agent App was installed from npm (for example "npm:@agentina/aotui-ide").',
   "apps.registry.*.version":
     "Optional package/version constraint for the app source when supported by the Agent Apps runtime registry.",
   "apps.registry.*.enabled":

@@ -68,6 +68,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "apps.registry": "Agent Apps Registry",
   "apps.registry.*": "Agent App Entry",
   "apps.registry.*.source": "Agent App Source",
+  "apps.registry.*.npmSource": "Agent App Original NPM Source",
   "apps.registry.*.version": "Agent App Version",
   "apps.registry.*.enabled": "Agent App Enabled",
   "apps.registry.*.workerScript": "Agent App Worker Script",

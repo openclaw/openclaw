@@ -3,6 +3,8 @@ export type AgentAppPromptRole = "user" | "assistant";
 export type AgentAppRegistryEntryConfig = {
   /** Stable registry name used by agent-level app selections. */
   source: string;
+  /** Original npm source spec when this entry was installed from npm. */
+  npmSource?: string;
   /** Optional package/version constraint for npm-backed app sources. */
   version?: string;
   /** Enable or disable this registry entry. Default: true. */

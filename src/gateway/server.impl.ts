@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isAotuiEnabled } from "../agent-apps/policy.js";
 import { startAotuiGatewayRuntime, stopAotuiGatewayRuntime } from "../agent-apps/runtime.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
@@ -565,7 +566,7 @@ export async function startGatewayServer(
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
-  if (!minimalTestGateway) {
+  if (!minimalTestGateway && isAotuiEnabled(cfgAtStart)) {
     try {
       await startAotuiGatewayRuntime(cfgAtStart);
       logAotui.info("started AOTUI gateway runtime");
