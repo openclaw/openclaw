@@ -100,9 +100,28 @@ export async function modelsAuthCleanCommand(
     configuredProfiles.add(id);
   }
 
+  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: opts.dryRun === true };
   const store = isDefaultAgent
-    ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
-    : loadAgentLocalAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+    ? ensureAuthProfileStore(agentDir, storeLoadOpts)
+    : loadAgentLocalAuthProfileStore(agentDir, storeLoadOpts);
+
+  // Also keep profiles referenced in store.order (per-agent overrides set via
+  // 'models auth order set'). These are not reflected in cfg.auth.order or
+  // cfg.auth.profiles, so they would be incorrectly treated as stale without
+  // this step.
+  const storeOrder = store.order;
+  if (storeOrder) {
+    for (const ids of Object.values(storeOrder)) {
+      if (Array.isArray(ids)) {
+        for (const id of ids) {
+          if (typeof id === "string" && id.trim()) {
+            configuredProfiles.add(id.trim());
+          }
+        }
+      }
+    }
+  }
+
   const storeProfileIds = Object.keys(store.profiles);
 
   const toRemove = storeProfileIds.filter((id) => !configuredProfiles.has(id));

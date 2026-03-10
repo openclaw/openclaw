@@ -540,7 +540,7 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
 
 export function ensureAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; readOnly?: boolean },
 ): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
@@ -571,7 +571,7 @@ export function ensureAuthProfileStore(
  */
 export function loadAgentLocalAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; readOnly?: boolean },
 ): AuthProfileStore {
   return loadAuthProfileStoreForAgent(agentDir, options);
 }

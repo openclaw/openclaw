@@ -141,33 +141,40 @@ describe("modelsAuthCleanCommand", () => {
     expect(capture.result.lastGood).not.toHaveProperty("anthropic");
   });
 
-  it("removes stale ids from order and deletes the key when the array becomes empty", async () => {
+  it("keeps profile referenced only in store.order even when not in cfg", async () => {
+    // anthropic:manual is in store.profiles and store.order, but NOT in cfg.
+    // The fix ensures store.order-referenced profiles are treated as configured (kept).
     const store = makeStore(["anthropic:me.com", "anthropic:manual"], {
       order: { anthropic: ["anthropic:manual"] },
     });
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
     mocks.ensureAuthProfileStore.mockReturnValue(store);
-    const capture = captureUpdater(store);
 
-    await modelsAuthCleanCommand({}, makeRuntime());
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
 
-    // order key deleted entirely because filtered list became empty
-    expect(capture.result.order).toBeUndefined();
+    // manual is kept because it's in store.order — no write needed
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
   });
 
-  it("keeps a non-empty order array when only some ids are stale", async () => {
+  it("keeps all store.order-referenced profiles alongside cfg-configured ones", async () => {
+    // anthropic:manual is in store.order (set via 'models auth order set') but not in cfg.
+    // It must be protected, so nothing is stale and the lock is never acquired.
     const store = makeStore(["anthropic:me.com", "anthropic:gmail", "anthropic:manual"], {
       order: { anthropic: ["anthropic:me.com", "anthropic:manual"] },
     });
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com", "anthropic:gmail"]));
     mocks.ensureAuthProfileStore.mockReturnValue(store);
-    const capture = captureUpdater(store);
 
-    await modelsAuthCleanCommand({}, makeRuntime());
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
 
-    expect(capture.result.order?.["anthropic"]).toEqual(["anthropic:me.com"]);
+    // All three profiles are kept (me.com/gmail via cfg, manual via store.order)
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
   });
 
   it("--dry-run does not call updateAuthProfileStoreWithLock", async () => {
@@ -179,6 +186,71 @@ describe("modelsAuthCleanCommand", () => {
     await modelsAuthCleanCommand({ dryRun: true }, makeRuntime());
 
     expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("--dry-run passes readOnly:true to ensureAuthProfileStore (default agent)", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({ dryRun: true }, makeRuntime());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+  });
+
+  it("--dry-run passes readOnly:true to loadAgentLocalAuthProfileStore (non-default agent)", async () => {
+    const store = makeStore(["anthropic:me.com"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({ agent: "worker", dryRun: true }, makeRuntime());
+
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("keeps profiles referenced only in store.order (not in cfg.auth.profiles or cfg.auth.order)", async () => {
+    // anthropic:store-override is in store.order (set via 'models auth order set')
+    // but NOT in openclaw.json auth.profiles or auth.order — must be treated as kept
+    const store = makeStore(["anthropic:me.com", "anthropic:store-override"], {
+      order: { anthropic: ["anthropic:me.com", "anthropic:store-override"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // Both profiles are kept — no stale entries — lock not acquired
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("removes profiles not in cfg or store.order even when store.order exists", async () => {
+    // anthropic:manual is in neither cfg nor store.order — should be removed
+    // anthropic:store-override is in store.order — should be kept
+    const store = makeStore(["anthropic:me.com", "anthropic:store-override", "anthropic:manual"], {
+      order: { anthropic: ["anthropic:me.com", "anthropic:store-override"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const capture = captureUpdater(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    expect(capture.result.profiles).not.toHaveProperty("anthropic:manual");
+    expect(capture.result.profiles).toHaveProperty("anthropic:me.com");
+    expect(capture.result.profiles).toHaveProperty("anthropic:store-override");
   });
 
   it("--dry-run logs the plan without writing", async () => {
