@@ -690,6 +690,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "tools.web.fetch.firecrawl.apiKey",
+    targetType: "tools.web.fetch.firecrawl.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.fetch.firecrawl.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "tools.web.search.apiKey",
     targetType: "tools.web.search.apiKey",
     configFile: "openclaw.json",

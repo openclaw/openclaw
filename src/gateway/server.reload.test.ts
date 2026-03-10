@@ -176,12 +176,14 @@ describe("gateway hot reload", () => {
   let prevSkipGmail: string | undefined;
   let prevSkipProviders: string | undefined;
   let prevOpenAiApiKey: string | undefined;
+  let prevGeminiApiKey: string | undefined;
 
   beforeEach(() => {
     prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     prevOpenAiApiKey = process.env.OPENAI_API_KEY;
+    prevGeminiApiKey = process.env.GEMINI_API_KEY;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -207,6 +209,11 @@ describe("gateway hot reload", () => {
       delete process.env.OPENAI_API_KEY;
     } else {
       process.env.OPENAI_API_KEY = prevOpenAiApiKey;
+    }
+    if (prevGeminiApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = prevGeminiApiKey;
     }
   });
 
@@ -409,6 +416,34 @@ describe("gateway hot reload", () => {
           selectedProfileId: "missing",
           lastUsedProfileByModel: {},
           usageStats: {},
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeWebSearchGeminiRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+                provider: "gemini",
+                gemini: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+                },
+              },
+            },
+          },
         },
         null,
         2,
@@ -628,6 +663,64 @@ describe("gateway hot reload", () => {
       expect(drainSystemEvents(sessionKey)).toEqual([]);
 
       process.env.OPENAI_API_KEY = "sk-recovered"; // pragma: allowlist secret
+      await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
+      const recoveredEvents = drainSystemEvents(sessionKey);
+      expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
+        true,
+      );
+    });
+  });
+
+  it("emits one-shot degraded and recovered system events for web search secret reload transitions", async () => {
+    await writeWebSearchGeminiRefConfig();
+    process.env.GEMINI_API_KEY = "gemini-startup-key"; // pragma: allowlist secret
+
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+      const sessionKey = resolveMainSessionKeyFromConfig();
+      const plan = {
+        changedPaths: ["tools.web.search.gemini.apiKey"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["tools.web.search.gemini.apiKey"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartBrowserControl: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartChannels: new Set(),
+        noopPaths: [],
+      };
+      const nextConfig = {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      };
+
+      delete process.env.GEMINI_API_KEY;
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      );
+      const degradedEvents = drainSystemEvents(sessionKey);
+      expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
+        true,
+      );
+
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
+      );
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
+
+      process.env.GEMINI_API_KEY = "gemini-recovered-key"; // pragma: allowlist secret
       await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
       const recoveredEvents = drainSystemEvents(sessionKey);
       expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
