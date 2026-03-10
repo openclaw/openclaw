@@ -536,6 +536,46 @@ docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
 - Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
 
+### Security hardening (gateway container)
+
+The default `docker-compose.yml` only hardens `openclaw-cli`. To apply
+defense-in-depth to the gateway container as well, add the following to the
+`openclaw-gateway` service:
+
+```yaml
+services:
+  openclaw-gateway:
+    # ... existing config ...
+
+    # ── Security hardening ──
+    read_only: true # immutable root filesystem
+    security_opt:
+      - no-new-privileges:true # prevent privilege escalation
+    cap_drop:
+      - ALL # drop all Linux capabilities
+    pids_limit: 256 # prevent fork bombs
+    deploy:
+      resources:
+        limits:
+          memory: 2g # cap memory to prevent OOM abuse
+    tmpfs:
+      - /tmp:size=256M,noexec,nosuid # writable scratch space
+      - /home/node/.npm:size=50M # npm runtime cache
+```
+
+Notes:
+
+- `read_only: true` requires `tmpfs` mounts for any path the gateway writes to
+  at runtime (`/tmp`, npm cache, dynamic config, etc.). If you add custom
+  volumes, verify the gateway can still start.
+- `cap_drop: [ALL]` is safe because the gateway runs as the unprivileged `node`
+  user and does not need any Linux capabilities.
+- Adjust the memory limit and `pids_limit` to match your host resources and
+  expected workload.
+- These settings are optional but recommended for VPS/public deployments.
+  On a personal workstation you may prefer the default permissive config for
+  easier debugging.
+
 ### Storage model
 
 - **Persistent host data:** Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths survive container replacement.
