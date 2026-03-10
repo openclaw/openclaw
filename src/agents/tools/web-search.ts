@@ -1159,6 +1159,27 @@ function isValidIsoDate(value: string): boolean {
   );
 }
 
+function decodeDuckDuckGoHtml(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x2F;/gi, "/")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#34;/g, '"');
+}
+
+function stripDuckDuckGoHtml(text: string): string {
+  return decodeDuckDuckGoHtml(
+    text
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
 function resolveSiteName(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
@@ -1174,6 +1195,105 @@ async function throwWebSearchApiError(res: Response, providerLabel: string): Pro
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;
   throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
+}
+
+async function runDuckDuckGoSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+  language?: string;
+  search_lang?: string;
+}): Promise<
+  Array<{
+    title: string;
+    url: string;
+    description: string;
+    siteName?: string;
+  }>
+> {
+  const url = new URL("https://html.duckduckgo.com/html/");
+  url.searchParams.set("q", params.query);
+  if (params.search_lang || params.language) {
+    url.searchParams.set("kl", (params.search_lang || params.language)!.toLowerCase());
+  }
+
+  const html = await withTrustedWebSearchEndpoint(
+    {
+      url: url.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+        },
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detail = (await readResponseText(res, { maxBytes: 64_000 })).text;
+        throw new Error(`DuckDuckGo Search error (${res.status}): ${detail || res.statusText}`);
+      }
+      return await res.text();
+    },
+  );
+
+  const blocks = Array.from(
+    html.matchAll(/<div[^>]+class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi),
+  );
+  const fallbackBlocks =
+    blocks.length > 0
+      ? blocks
+      : Array.from(
+          html.matchAll(
+            /<a[^>]+class="[^"]*result__a[^"]*"[^>]*>[\s\S]*?<\/a>[\s\S]*?(?=<a[^>]+class="[^"]*result__a[^"]*"|$)/gi,
+          ),
+        );
+
+  const results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    siteName?: string;
+  }> = [];
+
+  for (const match of fallbackBlocks) {
+    const chunk = match[1] || match[0] || "";
+    const titleMatch = chunk.match(
+      /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i,
+    );
+    if (!titleMatch) {
+      continue;
+    }
+
+    const rawUrl = decodeDuckDuckGoHtml(titleMatch[1] || "");
+    const title = stripDuckDuckGoHtml(titleMatch[2] || "");
+    let finalUrl = rawUrl;
+    try {
+      const parsed = new URL(rawUrl, "https://html.duckduckgo.com");
+      finalUrl = parsed.searchParams.get("uddg") || parsed.toString();
+    } catch {
+      // keep rawUrl
+    }
+
+    const snippetMatch =
+      chunk.match(/<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i) ||
+      chunk.match(/<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const description = stripDuckDuckGoHtml(snippetMatch?.[1] || "");
+    if (!title || !finalUrl) {
+      continue;
+    }
+    results.push({
+      title: wrapWebContent(title, "web_search"),
+      url: finalUrl,
+      description: description ? wrapWebContent(description, "web_search") : "",
+      siteName: resolveSiteName(finalUrl) || undefined,
+    });
+    if (results.length >= params.count) {
+      break;
+    }
+  }
+
+  return results;
 }
 
 async function runPerplexitySearchApi(params: {
@@ -1786,7 +1906,12 @@ async function runWebSearch(params: {
   }
 
   if (params.provider === "duckduckgo") {
-    const mapped = await runDuckDuckGoSearch(params);
+    const mapped: Array<{
+      title: string;
+      url: string;
+      description: string;
+      siteName?: string;
+    }> = await runDuckDuckGoSearch(params);
 
     const payload = {
       query: params.query,
@@ -2204,7 +2329,7 @@ export function createWebSearchTool(options?: {
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
+        apiKey: apiKey ?? "",
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,

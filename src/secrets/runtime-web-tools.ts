@@ -10,11 +10,18 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "duckduckgo"] as const;
-const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
+const WEB_SEARCH_PROVIDERS = [
+  "brave",
+  "gemini",
+  "grok",
+  "kimi",
+  "perplexity",
+  "duckduckgo",
+] as const;
+const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai"; // pragma: allowlist secret
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
-const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
-const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
+const PERPLEXITY_KEY_PREFIXES = ["pplx-"]; // pragma: allowlist secret
+const OPENROUTER_KEY_PREFIXES = ["sk-or-"]; // pragma: allowlist secret
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
@@ -534,7 +541,7 @@ export async function resolveRuntimeWebTools(params: {
 
     if (selectedProvider) {
       searchMetadata.selectedProvider = selectedProvider;
-      searchMetadata.selectedProviderKeySource = selectedResolution?.source;
+      searchMetadata.selectedProviderKeySource = selectedResolution?.source ?? "missing";
       if (!configuredProvider) {
         searchMetadata.providerSource = "auto-detect";
       }
