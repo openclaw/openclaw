@@ -5,9 +5,8 @@ import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-// We currently skip pruning tool results that contain images. Still, we count them (approx.) so
-// we start trimming prunable tool results earlier when image-heavy context is consuming the window.
 const IMAGE_CHAR_ESTIMATE = 8_000;
+const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
 function asText(text: string): TextContent {
   return { type: "text", text };
@@ -18,6 +17,22 @@ function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>)
   for (const block of content) {
     if (block.type === "text") {
       parts.push(block.text);
+    }
+  }
+  return parts;
+}
+
+function collectPrunableToolResultSegments(
+  content: ReadonlyArray<TextContent | ImageContent>,
+): string[] {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      parts.push(block.text);
+      continue;
+    }
+    if (block.type === "image") {
+      parts.push(PRUNED_CONTEXT_IMAGE_MARKER);
     }
   }
   return parts;
@@ -276,9 +291,6 @@ export function pruneContextMessages(params: {
       continue;
     }
     if (!isToolPrunable(msg.toolName)) {
-      continue;
-    }
-    if (hasImageBlocks(msg.content)) {
       continue;
     }
     prunableToolIndexes.push(i);

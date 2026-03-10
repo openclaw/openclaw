@@ -45,6 +45,19 @@ function makeAssistant(content: AssistantMessage["content"]): AgentMessage {
   };
 }
 
+function makeToolResult(
+  content: Array<
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+  >,
+): AgentMessage {
+  return {
+    role: "toolResult",
+    toolName: "read",
+    content,
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
 describe("pruneContextMessages", () => {
   it("does not crash on assistant message with malformed thinking block (missing thinking string)", () => {
     const messages: AgentMessage[] = [
