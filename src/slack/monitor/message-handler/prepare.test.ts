@@ -590,8 +590,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
+    const sessionKey = String(prepared?.ctxPayload.SessionKey ?? "");
+    expect(sessionKey).not.toBe("");
     const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    const entry = store[prepared!.ctxPayload.SessionKey];
+    const entry = store[sessionKey];
     expect(entry).toBeTruthy();
     expect(entry.deliveryContext).toMatchObject({
       channel: "slack",
@@ -624,8 +626,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     expect(prepared).toBeTruthy();
+    const sessionKey = String(prepared?.ctxPayload.SessionKey ?? "");
+    expect(sessionKey).not.toBe("");
     const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    const entry = store[prepared!.ctxPayload.SessionKey];
+    const entry = store[sessionKey];
     expect(entry).toBeTruthy();
     expect(entry.deliveryContext).toMatchObject({
       channel: "slack",
