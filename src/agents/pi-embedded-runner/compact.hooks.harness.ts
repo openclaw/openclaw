@@ -67,6 +67,18 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+export const sessionMessages: unknown[] = [
+  { role: "user", content: "hello", timestamp: 1 },
+  { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+  {
+    role: "toolResult",
+    toolCallId: "t1",
+    toolName: "exec",
+    content: [{ type: "text", text: "output" }],
+    isError: false,
+    timestamp: 3,
+  },
+];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 
@@ -134,6 +146,20 @@ export function resetCompactHooksHarnessMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
+  sessionMessages.splice(
+    0,
+    sessionMessages.length,
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  );
   sessionAbortCompactionMock.mockReset();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -176,18 +202,11 @@ export async function loadCompactHooksHarness(): Promise<{
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
-        messages: [
-          { role: "user", content: "hello", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-            timestamp: 3,
-          },
-        ],
+        messages: sessionMessages.map((message) =>
+          typeof structuredClone === "function"
+            ? structuredClone(message)
+            : JSON.parse(JSON.stringify(message)),
+        ),
         agent: {
           replaceMessages: vi.fn((messages: unknown[]) => {
             session.messages = [...(messages as typeof session.messages)];

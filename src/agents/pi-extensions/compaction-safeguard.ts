@@ -183,8 +183,68 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
-function isRealConversationMessage(message: AgentMessage): boolean {
-  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+const BOILERPLATE_REPLY_TEXT = new Set(["HEARTBEAT_OK", "NO_REPLY"]);
+const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
+
+function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return false;
+    }
+    return !BOILERPLATE_REPLY_TEXT.has(trimmed);
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  let sawNonTextBlock = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = (block as { type?: unknown }).type;
+    if (type !== "text") {
+      sawNonTextBlock = true;
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    const trimmed = text.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!BOILERPLATE_REPLY_TEXT.has(trimmed)) {
+      return true;
+    }
+  }
+  return sawNonTextBlock;
+}
+
+function isRealConversationMessage(
+  message: AgentMessage,
+  messages: AgentMessage[],
+  index: number,
+): boolean {
+  if (message.role === "user" || message.role === "assistant") {
+    return hasMeaningfulConversationContent(message);
+  }
+  if (message.role !== "toolResult") {
+    return false;
+  }
+  const start = Math.max(0, index - TOOL_RESULT_REAL_CONVERSATION_LOOKBACK);
+  for (let i = index - 1; i >= start; i -= 1) {
+    const candidate = messages[i];
+    if (!candidate || candidate.role !== "user") {
+      continue;
+    }
+    if (hasMeaningfulConversationContent(candidate)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function computeFileLists(fileOps: FileOperations): {
@@ -774,8 +834,12 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    const hasRealSummarizable = preparation.messagesToSummarize.some(isRealConversationMessage);
-    const hasRealTurnPrefix = preparation.turnPrefixMessages.some(isRealConversationMessage);
+    const hasRealSummarizable = preparation.messagesToSummarize.some((message, index, messages) =>
+      isRealConversationMessage(message, messages, index),
+    );
+    const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
+      isRealConversationMessage(message, messages, index),
+    );
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -1124,6 +1188,8 @@ export const __testing = {
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,

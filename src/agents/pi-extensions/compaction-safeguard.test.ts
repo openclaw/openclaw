@@ -1795,6 +1795,50 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
+
+  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "HEARTBEAT_OK" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t1",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(false);
+
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t2",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "please inspect the repo" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t2",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
 });
 
 async function expectWorkspaceSummaryEmptyForAgentsAlias(

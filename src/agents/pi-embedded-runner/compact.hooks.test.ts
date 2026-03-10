@@ -16,6 +16,7 @@ import {
   resetCompactHooksHarnessMocks,
   sanitizeSessionHistoryMock,
   sessionAbortCompactionMock,
+  sessionMessages,
   sessionCompactImpl,
   triggerInternalHook,
 } from "./compact.hooks.harness.js";
@@ -154,6 +155,20 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
     sessionAbortCompactionMock.mockReset();
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "hello", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    );
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -488,6 +503,64 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       reason: "post-compaction",
       sessionFiles: [TEST_SESSION_FILE],
     });
+  });
+
+  it("skips compaction when the transcript only contains boilerplate replies and tool output", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "HEARTBEAT_OK", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+        isError: false,
+        timestamp: 2,
+      },
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps compaction enabled when tool output follows a meaningful user request", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "please inspect the failing PR", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+        isError: false,
+        timestamp: 2,
+      },
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sessionCompactImpl).toHaveBeenCalled();
   });
 
   it("registers the Ollama api provider before compaction", async () => {
