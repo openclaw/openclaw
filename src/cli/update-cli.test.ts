@@ -609,6 +609,7 @@ describe("update-cli", () => {
   it("updateCommand refreshes service env from updated install root when available", async () => {
     const root = createCaseDir("openclaw-updated-root");
     const entryPath = path.join(root, "dist", "entry.js");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
 
     vi.mocked(runGatewayUpdate).mockResolvedValue({
@@ -628,6 +629,39 @@ describe("update-cli", () => {
     );
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runRestartScript).toHaveBeenCalled();
+  });
+
+  it("updateCommand uses current install root (not stale pre-update root) for service refresh", async () => {
+    const staleRoot = createCaseDir("openclaw-stale-root");
+    const currentRoot = createCaseDir("openclaw-current-root");
+    const currentEntry = path.join(currentRoot, "dist", "index.js");
+
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(currentRoot);
+    pathExists.mockImplementation(async (candidate: string) => candidate === currentEntry);
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      root: staleRoot,
+      steps: [],
+      durationMs: 100,
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({});
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), currentEntry, "gateway", "install", "--force"],
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
   });
 
   it("updateCommand falls back to restart when env refresh install fails", async () => {

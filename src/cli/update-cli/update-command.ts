@@ -1,5 +1,5 @@
-import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
+import path from "node:path";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -185,7 +186,10 @@ async function refreshGatewayServiceEnv(params: {
     args.push("--json");
   }
 
-  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
+  const currentRoot =
+    (await resolveOpenClawPackageRoot({ argv1: process.argv[1] })) ?? params.result.root;
+
+  for (const candidate of resolveGatewayInstallEntrypointCandidates(currentRoot)) {
     if (!(await pathExists(candidate))) {
       continue;
     }
