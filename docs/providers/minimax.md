@@ -31,8 +31,7 @@ MiniMax highlights these improvements in M2.5:
 
 - **Speed:** `MiniMax-M2.5-highspeed` is the official fast tier in MiniMax docs.
 - **Cost:** MiniMax pricing lists the same input cost and a higher output cost for highspeed.
-- **Compatibility:** OpenClaw still accepts legacy `MiniMax-M2.5-Lightning` configs, but prefer
-  `MiniMax-M2.5-highspeed` for new setup.
+- **Current model IDs:** use `MiniMax-M2.5` or `MiniMax-M2.5-highspeed`.
 
 ## Choose a setup
 
@@ -210,7 +209,6 @@ Make sure the model id is **case‑sensitive**:
 
 - `minimax/MiniMax-M2.5`
 - `minimax/MiniMax-M2.5-highspeed`
-- `minimax/MiniMax-M2.5-Lightning` (legacy)
 
 Then recheck with:
 

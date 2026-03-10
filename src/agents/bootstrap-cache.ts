@@ -20,6 +20,17 @@ export function clearBootstrapSnapshot(sessionKey: string): void {
   cache.delete(sessionKey);
 }
 
+export function clearBootstrapSnapshotOnSessionRollover(params: {
+  sessionKey?: string;
+  previousSessionId?: string;
+}): void {
+  if (!params.sessionKey || !params.previousSessionId) {
+    return;
+  }
+
+  clearBootstrapSnapshot(params.sessionKey);
+}
+
 export function clearAllBootstrapSnapshots(): void {
   cache.clear();
 }

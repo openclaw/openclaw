@@ -832,11 +832,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
-    const relativeIoPath = path.relative(workspaceDir, resolvedPath.ioPath);
+    const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
+    if (
+      !relativeWritePath ||
+      relativeWritePath.startsWith("..") ||
+      path.isAbsolute(relativeWritePath)
+    ) {
+      respondWorkspaceFileUnsafe(respond, name);
+      return;
+    }
     try {
       await writeFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: relativeIoPath,
+        rootDir: resolvedPath.workspaceReal,
+        relativePath: relativeWritePath,
         data: content,
         encoding: "utf8",
       });

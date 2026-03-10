@@ -35,7 +35,7 @@ import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -43,6 +43,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "../../security/dm-policy-shared.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -63,9 +64,12 @@ import {
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
-  resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
+import {
+  buildDiscordInboundAccessContext,
+  buildDiscordGroupSystemPrompt,
+} from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { sendTyping } from "./typing.js";
@@ -519,28 +523,37 @@ async function ensureDmComponentAuthorized(params: {
   }
 
   if (dmPolicy === "pairing") {
-    const { code, created } = await upsertChannelPairingRequest({
+    const pairingResult = await issuePairingChallenge({
       channel: "discord",
-      id: user.id,
-      accountId: ctx.accountId,
+      senderId: user.id,
+      senderIdLine: `Your Discord user id: ${user.id}`,
       meta: {
         tag: formatDiscordUserTag(user),
         name: user.username,
       },
+      upsertPairingRequest: async ({ id, meta }) =>
+        await upsertChannelPairingRequest({
+          channel: "discord",
+          id,
+          accountId: ctx.accountId,
+          meta,
+        }),
+      sendPairingReply: async (text) => {
+        await interaction.reply({
+          content: text,
+          ...replyOpts,
+        });
+      },
     });
-    try {
-      await interaction.reply({
-        content: created
-          ? buildPairingReply({
-              channel: "discord",
-              idLine: `Your Discord user id: ${user.id}`,
-              code,
-            })
-          : "Pairing already requested. Ask the bot owner to approve your code.",
-        ...replyOpts,
-      });
-    } catch {
-      // Interaction may have expired
+    if (!pairingResult.created) {
+      try {
+        await interaction.reply({
+          content: "Pairing already requested. Ask the bot owner to approve your code.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
     }
     return false;
   }
@@ -856,13 +869,14 @@ async function dispatchDiscordComponentEvent(params: {
     scope: channelCtx.isThread ? "thread" : "channel",
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
-  const groupSystemPrompt = channelConfig?.systemPrompt?.trim() || undefined;
-  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+  const { ownerAllowFrom } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
     allowNameMatching,
+    isGuild: !interactionCtx.isDirectMessage,
   });
+  const groupSystemPrompt = buildDiscordGroupSystemPrompt(channelConfig);
   const pinnedMainDmOwner = interactionCtx.isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: ctx.cfg.session?.dmScope,
@@ -1004,7 +1018,11 @@ async function dispatchDiscordComponentEvent(params: {
           replyToId,
           replyToMode,
           textLimit,
-          maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
+          maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+            cfg: ctx.cfg,
+            discordConfig: ctx.discordConfig,
+            accountId,
+          }),
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
           mediaLocalRoots,

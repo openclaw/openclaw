@@ -177,7 +177,6 @@ vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: mocks.prepareSecretsRuntimeSnapshot,
   activateSecretsRuntimeSnapshot: mocks.activateSecretsRuntimeSnapshot,
 }));
-
 vi.mock("../../infra/fs-safe.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../infra/fs-safe.js")>("../../infra/fs-safe.js");
@@ -863,7 +862,7 @@ describe("agents.files.get/set symlink safety", () => {
     },
   );
 
-  it("allows in-workspace symlink reads but rejects writes through symlink aliases", async () => {
+  it("allows in-workspace symlink reads and writes via resolved workspace root", async () => {
     const workspace = "/workspace/test-agent";
     const workspaceReal = path.resolve(workspace);
     const candidate = path.resolve(workspaceReal, "AGENTS.md");
@@ -925,10 +924,17 @@ describe("agents.files.get/set symlink safety", () => {
     });
     await setCall.promise;
     expect(setCall.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
+      true,
       expect.objectContaining({
-        message: expect.stringContaining('unsafe workspace file "AGENTS.md"'),
+        ok: true,
+        file: expect.objectContaining({ missing: false, content: "updated\n" }),
+      }),
+      undefined,
+    );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: workspaceReal,
+        relativePath: path.join("policies", "AGENTS.md"),
       }),
     );
   });

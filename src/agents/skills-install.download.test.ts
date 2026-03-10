@@ -48,7 +48,7 @@ const ZIP_SLIP_BUFFER = Buffer.from(
 );
 const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
   // Prebuilt archive containing ../outside-write/pwned.txt.
-  "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==",
+  "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==", // pragma: allowlist secret
   "base64",
 );
 
@@ -251,6 +251,47 @@ describe("installDownloadSpec extraction safety", () => {
       ),
     ).toBe("hi");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the lexical tools root is rebound before the final copy",
+    async () => {
+      const entry = buildEntry("base-rebind");
+      const safeRoot = resolveSkillToolsRootDir(entry);
+      const outsideRoot = path.join(workspaceDir, "outside-root");
+      await fs.mkdir(outsideRoot, { recursive: true });
+
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new Uint8Array(Buffer.from("payload")));
+              const reboundRoot = `${safeRoot}-rebound`;
+              await fs.rename(safeRoot, reboundRoot);
+              await fs.symlink(outsideRoot, safeRoot);
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+        release: async () => undefined,
+      });
+
+      const result = await installDownloadSpec({
+        entry,
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/payload.bin",
+          extract: false,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(await fileExists(path.join(outsideRoot, "runtime", "payload.bin"))).toBe(false);
+    },
+  );
 });
 
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {
