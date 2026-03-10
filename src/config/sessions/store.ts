@@ -745,8 +745,8 @@ export async function clearSessionModelFields(storePath: string): Promise<number
         continue;
       }
       if (entry.model || entry.modelProvider) {
-        entry.model = undefined;
-        entry.modelProvider = undefined;
+        delete entry.model;
+        delete entry.modelProvider;
         cleared++;
       }
     }

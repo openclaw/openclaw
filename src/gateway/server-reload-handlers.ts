@@ -5,8 +5,8 @@ import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
-import { clearSessionModelFields } from "../config/sessions/store.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { clearSessionModelFields } from "../config/sessions/store.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -122,8 +122,13 @@ export function createGatewayReloadHandlers(params: {
           const storePath = resolveStorePath(nextConfig.session?.store, { agentId });
           const cleared = await clearSessionModelFields(storePath);
           totalCleared += cleared;
-        } catch {
-          // Session store may not exist yet for some agents; skip silently.
+        } catch (err) {
+          // Session store may not exist yet for some agents — ignore ENOENT.
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            params.logReload.warn(
+              `failed to clear session models for agent ${agentId}: ${String(err)}`,
+            );
+          }
         }
       }
       if (totalCleared > 0) {
