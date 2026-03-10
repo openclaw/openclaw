@@ -1,3 +1,5 @@
+import { findCodeRegions } from "../shared/text/code-regions.js";
+
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -17,11 +19,28 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
+/** Collapse runs of spaces/tabs and strip leading/trailing line whitespace, but preserve code blocks verbatim. */
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  const regions = findCodeRegions(text);
+  if (regions.length === 0) {
+    return text
+      .replace(/[ \t]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .trim();
+  }
+
+  // Process only non-code segments; preserve code block content as-is.
+  let result = "";
+  let cursor = 0;
+  for (const region of regions) {
+    const before = text.slice(cursor, region.start);
+    result += before.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+    result += text.slice(region.start, region.end);
+    cursor = region.end;
+  }
+  const tail = text.slice(cursor);
+  result += tail.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+  return result.trim();
 }
 
 type StripInlineDirectiveTagsResult = {

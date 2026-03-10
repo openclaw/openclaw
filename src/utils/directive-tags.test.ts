@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  parseInlineDirectives,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
@@ -24,6 +25,68 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
     const result = stripInlineDirectiveTagsForDisplay(input);
     expect(result.changed).toBe(false);
     expect(result.text).toBe(input);
+  });
+});
+
+describe("normalizeDirectiveWhitespace (via parseInlineDirectives)", () => {
+  test("preserves indentation inside fenced code blocks", () => {
+    const input = [
+      "Here is some code:",
+      "",
+      "```python",
+      "def hello():",
+      "    print('hi')",
+      "    if True:",
+      "        return 1",
+      "```",
+    ].join("\n");
+    const result = parseInlineDirectives(input);
+    expect(result.text).toContain("    print('hi')");
+    expect(result.text).toContain("        return 1");
+  });
+
+  test("normalizes whitespace outside code blocks but not inside", () => {
+    const input = [
+      "  some   spaced   text  ",
+      "",
+      "```",
+      "  indented code",
+      "    more indent",
+      "```",
+      "",
+      "  trailing   spaces  ",
+    ].join("\n");
+    const result = parseInlineDirectives(input);
+    // Outside code: collapsed to single spaces, line whitespace stripped
+    expect(result.text).toMatch(/^some spaced text/);
+    expect(result.text).toMatch(/trailing spaces$/);
+    // Inside code: indentation preserved
+    expect(result.text).toContain("  indented code");
+    expect(result.text).toContain("    more indent");
+  });
+
+  test("handles directives alongside code blocks", () => {
+    const input = [
+      "[[audio_as_voice]]",
+      "Check this:",
+      "",
+      "```js",
+      "  const x = 1;",
+      "  if (x) {",
+      "    console.log(x);",
+      "  }",
+      "```",
+    ].join("\n");
+    const result = parseInlineDirectives(input);
+    expect(result.audioAsVoice).toBe(true);
+    expect(result.text).toContain("  const x = 1;");
+    expect(result.text).toContain("    console.log(x);");
+  });
+
+  test("still normalizes text without code blocks", () => {
+    const input = "  hello   world  \n  foo   bar  ";
+    const result = parseInlineDirectives(input);
+    expect(result.text).toBe("hello world\nfoo bar");
   });
 });
 
