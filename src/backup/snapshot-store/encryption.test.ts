@@ -27,7 +27,7 @@ describe("snapshot backup encryption", () => {
     const encrypted = await encryptArchiveToPayload({
       archivePath,
       payloadPath,
-      secret: "test-secret",
+      secret: "test-secret", // pragma: allowlist secret
     });
     encrypted.archive.archiveRoot = "fake-root";
     encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
@@ -35,7 +35,7 @@ describe("snapshot backup encryption", () => {
     await decryptPayloadToArchive({
       payloadPath,
       archivePath: restoredPath,
-      secret: "test-secret",
+      secret: "test-secret", // pragma: allowlist secret
       envelope: encrypted,
     });
 
@@ -52,7 +52,7 @@ describe("snapshot backup encryption", () => {
     const encrypted = await encryptArchiveToPayload({
       archivePath,
       payloadPath,
-      secret: "test-secret",
+      secret: "test-secret", // pragma: allowlist secret
     });
     encrypted.archive.archiveRoot = "fake-root";
     encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
@@ -62,7 +62,7 @@ describe("snapshot backup encryption", () => {
       decryptPayloadToArchive({
         payloadPath,
         archivePath: restoredPath,
-        secret: "test-secret",
+        secret: "test-secret", // pragma: allowlist secret
         envelope: encrypted,
       }),
     ).rejects.toThrow("Decrypted archive checksum mismatch.");
