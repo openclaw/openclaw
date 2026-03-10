@@ -28,6 +28,9 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     const prevObject = isPlainObject(prev) ? prev : {};
     const nextObject = isPlainObject(next) ? next : {};
     const keys = new Set([...Object.keys(prevObject), ...Object.keys(nextObject)]);
+    if (keys.size === 0) {
+      return [prefix || "<root>"];
+    }
     const paths: string[] = [];
     for (const key of keys) {
       const prevValue = prevObject[key];

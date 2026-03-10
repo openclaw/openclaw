@@ -827,15 +827,21 @@ export async function compactEmbeddedPiSessionDirect(
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
         }
-        try {
-          await reinitializeAotuiDesktopForCompaction({
-            sessionKey: params.sessionKey,
-            reason: "context_compaction",
-          });
-        } catch (err) {
-          log.warn(
-            `AOTUI desktop reinitialize failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
-          );
+        // Direct compaction only reaches this success path after transcript state
+        // has actually been compacted; keep the guard explicit so future edits do
+        // not accidentally reinitialize AOTUI on a no-op success path.
+        const compacted = true;
+        if (compacted) {
+          try {
+            await reinitializeAotuiDesktopForCompaction({
+              sessionKey: params.sessionKey,
+              reason: "context_compaction",
+            });
+          } catch (err) {
+            log.warn(
+              `AOTUI desktop reinitialize failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
+            );
+          }
         }
         // TODO(#9611): Consider exposing compaction summaries or post-compaction injection;
         // current events only report summary metadata.
@@ -883,7 +889,7 @@ export async function compactEmbeddedPiSessionDirect(
         }
         return {
           ok: true,
-          compacted: true,
+          compacted,
           result: {
             summary: result.summary,
             firstKeptEntryId: result.firstKeptEntryId,

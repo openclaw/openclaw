@@ -110,6 +110,14 @@ describe("diffConfigPaths", () => {
     };
     expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
   });
+
+  it("reports top-level object removal when the object side becomes empty", () => {
+    const prev = {
+      apps: {},
+    };
+    const next = {};
+    expect(diffConfigPaths(prev, next)).toContain("apps");
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
