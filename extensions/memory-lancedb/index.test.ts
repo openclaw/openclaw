@@ -218,6 +218,104 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("uses direct fetch for baseUrl embeddings and preserves configured dimensions", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: [0.1, 0.2, 0.3, 0.4] }],
+      }),
+    }));
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const openAiEmbeddingsCreate = vi.fn();
+
+    vi.resetModules();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: openAiEmbeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+            dimensions: 1024,
+            baseUrl: "http://localhost:4000/v1",
+          },
+          dbPath,
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerCli: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerService: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      expect(recallTool).toBeDefined();
+      await recallTool.execute("test-call-baseurl-fetch", { query: "hello fetch dimensions" });
+
+      expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "text-embedding-3-small",
+          input: "hello fetch dimensions",
+          dimensions: 1024,
+        }),
+      });
+      expect(openAiEmbeddingsCreate).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 

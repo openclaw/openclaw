@@ -162,6 +162,8 @@ class MemoryDB {
 
 class Embeddings {
   private client: OpenAI;
+  private apiKey: string;
+  private baseUrl?: string;
 
   constructor(
     apiKey: string,
@@ -169,10 +171,48 @@ class Embeddings {
     baseUrl?: string,
     private dimensions?: number,
   ) {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
 
+  private async embedViaFetch(text: string): Promise<number[]> {
+    if (!this.baseUrl) {
+      throw new Error("Direct fetch embedding path requires baseUrl");
+    }
+
+    const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}/embeddings`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.model,
+        input: text,
+        ...(this.dimensions ? { dimensions: this.dimensions } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Embedding request failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as {
+      data?: Array<{ embedding?: number[] }>;
+    };
+    const embedding = payload.data?.[0]?.embedding;
+    if (!Array.isArray(embedding)) {
+      throw new Error("Embedding response missing vector payload");
+    }
+    return embedding;
+  }
+
   async embed(text: string): Promise<number[]> {
+    if (this.baseUrl) {
+      return this.embedViaFetch(text);
+    }
+
     const params: { model: string; input: string; dimensions?: number } = {
       model: this.model,
       input: text,
