@@ -489,6 +489,82 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves root $include directives for additive writes when requested", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "plugins.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, '{ "$include": "./plugins.json" }\n', "utf-8");
+      await fs.writeFile(
+        includePath,
+        JSON.stringify(
+          {
+            plugins: {
+              entries: {
+                existing: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ).concat("\n"),
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      const pluginPath = path.join(home, "plugins", "discord");
+      await fs.mkdir(pluginPath, { recursive: true });
+
+      const next = structuredClone(snapshot.resolved);
+      next.plugins = {
+        ...next.plugins,
+        load: {
+          paths: [pluginPath],
+        },
+        entries: {
+          ...next.plugins?.entries,
+          discord: {
+            enabled: true,
+          },
+        },
+      };
+
+      await io.writeConfigFile(next, { preserveIncludes: true });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $include?: string;
+        plugins?: {
+          load?: { paths?: string[] };
+          entries?: Record<string, unknown>;
+        };
+      };
+      expect(persisted.$include).toBe("./plugins.json");
+      expect(persisted.plugins?.load?.paths).toEqual([pluginPath]);
+      expect(persisted.plugins?.entries?.discord).toEqual({
+        enabled: true,
+      });
+      expect(persisted.plugins?.entries).not.toHaveProperty("existing");
+
+      const included = JSON.parse(await fs.readFile(includePath, "utf-8")) as {
+        plugins?: { entries?: Record<string, unknown> };
+      };
+      expect(included.plugins?.entries).toEqual({
+        existing: {
+          enabled: true,
+        },
+      });
+    });
+  });
+
   it("appends config write audit JSONL entries with forensic metadata", async () => {
     await withSuiteHome(async (home) => {
       const { configPath, lines, last } = await writeGatewayPatchAndReadLastAuditEntry({

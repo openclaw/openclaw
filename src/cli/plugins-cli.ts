@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
@@ -153,11 +153,42 @@ function logSlotWarnings(warnings: string[]) {
   }
 }
 
+type PluginConfigWriteOptions = Parameters<typeof writeConfigFile>[1];
+
+async function readPluginConfigWriteContext(): Promise<{
+  config: OpenClawConfig;
+  writeOptions: PluginConfigWriteOptions;
+}> {
+  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+  if (!snapshot.valid) {
+    const details = snapshot.issues
+      .map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`)
+      .join("\n");
+    defaultRuntime.error(`Invalid config at ${snapshot.path}:\n${details || "- <root>: invalid"}`);
+    process.exit(1);
+  }
+  return {
+    config: snapshot.resolved,
+    writeOptions,
+  };
+}
+
+async function writePluginConfig(
+  config: OpenClawConfig,
+  writeOptions?: PluginConfigWriteOptions,
+): Promise<void> {
+  await writeConfigFile(config, {
+    ...writeOptions,
+    preserveIncludes: true,
+  });
+}
+
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning: string;
+  writeOptions?: PluginConfigWriteOptions;
 }) {
   const existing = params.config.plugins?.load?.paths ?? [];
   const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
@@ -189,7 +220,7 @@ async function installBundledPluginSource(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await writePluginConfig(next, params.writeOptions);
   logSlotWarnings(slotResult.warnings);
   defaultRuntime.log(theme.warn(params.warning));
   defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
@@ -208,7 +239,7 @@ async function runPluginInstallCommand(params: {
   }
   const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
   const resolved = resolveUserPath(normalized);
-  const cfg = loadConfig();
+  const { config: cfg, writeOptions } = await readPluginConfigWriteContext();
 
   if (fs.existsSync(resolved)) {
     if (opts.link) {
@@ -242,7 +273,7 @@ async function runPluginInstallCommand(params: {
       });
       const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await writePluginConfig(next, writeOptions);
       logSlotWarnings(slotResult.warnings);
       defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
       defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -272,7 +303,7 @@ async function runPluginInstallCommand(params: {
     });
     const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
     next = slotResult.config;
-    await writeConfigFile(next);
+    await writePluginConfig(next, writeOptions);
     logSlotWarnings(slotResult.warnings);
     defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
     defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -310,6 +341,7 @@ async function runPluginInstallCommand(params: {
       rawSpec: raw,
       bundledSource: bundledPreNpmPlan.bundledSource,
       warning: bundledPreNpmPlan.warning,
+      writeOptions,
     });
     return;
   }
@@ -334,6 +366,7 @@ async function runPluginInstallCommand(params: {
       rawSpec: raw,
       bundledSource: bundledFallbackPlan.bundledSource,
       warning: bundledFallbackPlan.warning,
+      writeOptions,
     });
     return;
   }
@@ -356,7 +389,7 @@ async function runPluginInstallCommand(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await writePluginConfig(next, writeOptions);
   logSlotWarnings(slotResult.warnings);
   defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
   defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -552,12 +585,12 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await readPluginConfigWriteContext();
       const enableResult = enablePluginInConfig(cfg, id);
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await writePluginConfig(next, writeOptions);
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
         defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
@@ -575,9 +608,9 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await readPluginConfigWriteContext();
       const next = setPluginEnabledInConfig(cfg, id, false);
-      await writeConfigFile(next);
+      await writePluginConfig(next, writeOptions);
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
 
@@ -590,7 +623,7 @@ export function registerPluginsCli(program: Command) {
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await readPluginConfigWriteContext();
       const report = buildPluginStatusReport({ config: cfg });
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
@@ -688,7 +721,7 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn(warning));
       }
 
-      await writeConfigFile(result.config);
+      await writePluginConfig(result.config, writeOptions);
 
       const removed: string[] = [];
       if (result.actions.entry) {
@@ -733,7 +766,7 @@ export function registerPluginsCli(program: Command) {
     .option("--all", "Update all tracked plugins", false)
     .option("--dry-run", "Show what would change without writing", false)
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await readPluginConfigWriteContext();
       const installs = cfg.plugins?.installs ?? {};
       const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
 
@@ -783,7 +816,7 @@ export function registerPluginsCli(program: Command) {
       }
 
       if (!opts.dryRun && result.changed) {
-        await writeConfigFile(result.config);
+        await writePluginConfig(result.config, writeOptions);
         defaultRuntime.log("Restart the gateway to load plugins.");
       }
     });

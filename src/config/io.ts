@@ -133,6 +133,11 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  /**
+   * Preserve existing `$include` directives when the write can be expressed as
+   * additive or overriding sibling keys on the current source document.
+   */
+  preserveIncludes?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -378,6 +383,47 @@ function createMergePatch(base: unknown, target: unknown): unknown {
   return patch;
 }
 
+function containsIncludeDirective(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => containsIncludeDirective(item));
+  }
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "$include")) {
+    return true;
+  }
+  return Object.values(value).some((item) => containsIncludeDirective(item));
+}
+
+function mergePatchHasDeletion(patch: unknown): boolean {
+  if (patch === null) {
+    return true;
+  }
+  if (!isPlainObject(patch)) {
+    return false;
+  }
+  return Object.values(patch).some((item) => mergePatchHasDeletion(item));
+}
+
+function preserveConfigIncludesOnWrite(params: {
+  parsed: unknown;
+  resolved: OpenClawConfig;
+  next: OpenClawConfig;
+}): Record<string, unknown> | null {
+  if (!containsIncludeDirective(params.parsed)) {
+    return null;
+  }
+
+  const patch = createMergePatch(params.resolved, params.next);
+  if (mergePatchHasDeletion(patch)) {
+    return null;
+  }
+
+  const preserved = applyMergePatch(params.parsed, patch);
+  return isPlainObject(preserved) ? preserved : null;
+}
+
 function collectEnvRefPaths(value: unknown, path: string, output: Map<string, string>): void {
   if (typeof value === "string") {
     if (containsEnvVarReference(value)) {
@@ -577,12 +623,13 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
-function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
+function stampConfigVersion(cfg: Record<string, unknown>): Record<string, unknown> {
   const now = new Date().toISOString();
+  const meta = isPlainObject(cfg.meta) ? cfg.meta : {};
   return {
     ...cfg,
     meta: {
-      ...cfg.meta,
+      ...meta,
       lastTouchedVersion: VERSION,
       lastTouchedAt: now,
     },
@@ -1153,7 +1200,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const stampedOutputConfig = stampConfigVersion(outputConfig);
+    const serializedOutputConfig =
+      options.preserveIncludes && snapshot.valid && snapshot.exists
+        ? (preserveConfigIncludesOnWrite({
+            parsed: snapshot.parsed,
+            resolved: snapshot.resolved,
+            next: outputConfig,
+          }) ?? outputConfig)
+        : outputConfig;
+    const stampedOutputConfig = stampConfigVersion(serializedOutputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
