@@ -19,9 +19,23 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
+type NotLoadedActionResult = {
+  result: "stopped" | "restarted";
+  message?: string;
+  warnings?: string[];
+  loaded?: boolean;
+};
+
+type NotLoadedActionContext = {
+  json: boolean;
+  stdout: NodeJS.WritableStream;
+  fail: (message: string, hints?: string[]) => void;
+};
+
 type RestartParams = {
   opts?: { json?: boolean };
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  onNotLoaded?: (ctx?: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 };
 
 const service = {

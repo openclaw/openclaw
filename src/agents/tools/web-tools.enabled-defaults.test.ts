@@ -4,6 +4,8 @@ import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
+const BRAVE_TEST_KEY = BRAVE_TEST_KEY; // pragma: allowlist secret
+
 function installMockFetch(payload: unknown) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve({
@@ -172,7 +174,7 @@ describe("web_search country and language parameters", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
   });
 
   afterEach(() => {
@@ -666,7 +668,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("wraps Brave result descriptions", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     installBraveResultsFetch({
       title: "Example",
       url: "https://example.com",
@@ -690,7 +692,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("uses Brave llm-context endpoint when mode is configured", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     const mockFetch = installBraveLlmContextFetch({
       title: "Context title",
       url: "https://example.com/ctx",
@@ -744,7 +746,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("rejects freshness in Brave llm-context mode", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     const mockFetch = installBraveLlmContextFetch({
       title: "unused",
       url: "https://example.com",
@@ -791,7 +793,7 @@ describe("web_search external content wrapping", () => {
       "unsupported_ui_lang",
     ],
   ])("%s", async (_name, input, expectedError) => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     const mockFetch = installBraveLlmContextFetch({
       title: "unused",
       url: "https://example.com",
@@ -820,7 +822,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     const url = "https://example.com/some-page";
     installBraveResultsFetch({
       title: "Example",
@@ -836,7 +838,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("does not wrap Brave site names", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     installBraveResultsFetch({
       title: "Example",
       url: "https://example.com/some/path",
@@ -850,7 +852,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("does not wrap Brave published ages", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", BRAVE_TEST_KEY);
     installBraveResultsFetch({
       title: "Example",
       url: "https://example.com",
