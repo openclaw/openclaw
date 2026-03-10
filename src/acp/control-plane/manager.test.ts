@@ -1298,4 +1298,75 @@ describe("AcpSessionManager", () => {
       }),
     ).rejects.toThrow("disk locked");
   });
+
+  it("skips ghost turns whose abort signal fired before the queue drained", async () => {
+    // Regression: runTurn() was not passing input.signal to withSessionActor(),
+    // so throwIfAborted() never fired when a timed-out turn finally got
+    // dequeued — causing the "ghost turn" to run anyway. refs #17258
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    // Turn A: blocks the actor queue until we release it.
+    let releaseTurnA!: () => void;
+    const turnABlocking = new Promise<void>((resolve) => {
+      releaseTurnA = resolve;
+    });
+    runtimeState.runTurn.mockImplementationOnce(async function* () {
+      await turnABlocking;
+      yield { type: "done" as const };
+    });
+    // Turn B: resolves immediately if it ever reaches the runtime.
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield { type: "done" as const };
+    });
+
+    const manager = new AcpSessionManager();
+
+    // Start Turn A — it will hold the queue.
+    const turnAPromise = manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "turn-a",
+      mode: "prompt",
+      requestId: "r-a",
+    });
+
+    // Wait until Turn A's runtime.runTurn has started so the queue is blocked.
+    await vi.waitFor(() => {
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    });
+
+    // Turn B: enqueue it with an already-aborted signal (simulates a turn whose
+    // withTimeout() fired while it was waiting in the queue).
+    const abortedController = new AbortController();
+    abortedController.abort(new Error("ACP turn timed out"));
+
+    const turnBPromise = manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "turn-b",
+      mode: "prompt",
+      requestId: "r-b",
+      signal: abortedController.signal,
+    });
+
+    // Unblock Turn A so the queue can drain into Turn B.
+    releaseTurnA();
+    await turnAPromise;
+
+    // Turn B should throw (ACP_TURN_FAILED / aborted), not silently execute.
+    await expect(turnBPromise).rejects.toThrow();
+
+    // Critical assertion: runtime.runTurn must have been called exactly once
+    // (for Turn A only). Turn B's ghost execution is prevented by throwIfAborted.
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
 });
