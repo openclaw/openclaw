@@ -1491,7 +1491,10 @@ export async function writeConfigFile(
         return false;
       }
       // If we had a refresh handler, make sure a brand new session hasn't replaced it.
-      if (capturedRefreshHandler && runtimeConfigSnapshotRefreshHandler !== capturedRefreshHandler) {
+      if (
+        capturedRefreshHandler &&
+        runtimeConfigSnapshotRefreshHandler !== capturedRefreshHandler
+      ) {
         return false;
       }
       return true;
