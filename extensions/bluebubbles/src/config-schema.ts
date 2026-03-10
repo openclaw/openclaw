@@ -1,5 +1,8 @@
-import { AllowFromEntrySchema, buildCatchallMultiAccountChannelSchema } from "openclaw/plugin-sdk";
 import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/bluebubbles";
+import {
+  AllowFromEntrySchema,
+  buildCatchallMultiAccountChannelSchema,
+} from "openclaw/plugin-sdk/channel-plugin-common";
 import { z } from "zod";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 

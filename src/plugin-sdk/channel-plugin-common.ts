@@ -10,7 +10,11 @@ export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  AllowFromEntrySchema,
+  buildCatchallMultiAccountChannelSchema,
+  buildChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
