@@ -19,6 +19,8 @@ export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
   completedAt: number | null;
+  attempt?: number;
+  maxAttempts?: number;
 };
 
 export type FallbackIndicatorStatus = {
@@ -98,9 +100,13 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
 
   // Show "compacting..." while active
   if (status.active) {
+    const attemptSuffix =
+      status.attempt != null && status.maxAttempts != null
+        ? `(${status.attempt}/${status.maxAttempts})`
+        : "";
     return html`
       <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
-        ${icons.loader} Compacting context...
+        ${icons.loader} Compacting context...${attemptSuffix ? ` ${attemptSuffix}` : ""}
       </div>
     `;
   }

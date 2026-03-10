@@ -16,6 +16,8 @@ export type CompactionSafeguardRuntimeValue = {
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;
+  /** Called before each chunk is summarized when context is split into multiple parts. */
+  onChunkProgress?: (current: number, total: number) => void;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

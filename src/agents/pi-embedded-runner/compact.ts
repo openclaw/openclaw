@@ -16,6 +16,7 @@ import {
   resolveContextEngine,
 } from "../../context-engine/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -616,6 +617,13 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        onChunkProgress: (current, total) => {
+          emitAgentEvent({
+            runId,
+            stream: "compaction",
+            data: { phase: "progress", attempt: current, maxAttempts: total },
+          });
+        },
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
