@@ -90,8 +90,7 @@ vi.mock("../../daemon/service.js", () => ({
 }));
 
 vi.mock("../../daemon/launchd.js", () => ({
-  launchAgentPlistExists: (env: Record<string, string | undefined>) =>
-    launchAgentPlistExists(env),
+  launchAgentPlistExists: (env: Record<string, string | undefined>) => launchAgentPlistExists(env),
   repairLaunchAgentBootstrap: (args: { env?: Record<string, string | undefined> }) =>
     repairLaunchAgentBootstrap(args),
 }));
