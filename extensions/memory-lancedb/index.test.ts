@@ -451,39 +451,39 @@ describe("memory plugin — namespace isolation", () => {
   test("memory_store tool tags entries with toolCtx.agentId", async () => {
     vi.resetModules();
     const { buildMockApiWithRows: _build } = { buildMockApiWithRows: buildMockApiWithRows };
-    const { mockApi, tools } = buildMockApiWithRows({ agentId: "finn" });
+    const { mockApi, tools } = buildMockApiWithRows({ agentId: "payments" });
     const { default: memoryPlugin } = await import("./index.js");
     // oxlint-disable-next-line typescript/no-explicit-any
     memoryPlugin.register(mockApi as any);
 
     const resolved = resolveTools(
       tools as Array<{ factory: unknown; opts: { name: string } }>,
-      "finn",
+      "payments",
     );
     // oxlint-disable-next-line typescript/no-explicit-any
     const storeTool = resolved["memory_store"] as any;
 
     await storeTool.execute("call-1", {
-      text: "FICOHSA deposit L.5000 — order #12345",
+      text: "Payment confirmed L.5000 — order #12345",
       category: "fact",
       importance: 0.9,
     });
 
     expect(storedRows.length).toBe(1);
-    expect(storedRows[0].agentId).toBe("finn");
-    expect(storedRows[0].text).toContain("FICOHSA");
+    expect(storedRows[0].agentId).toBe("payments");
+    expect(storedRows[0].text).toContain("Payment confirmed");
   });
 
   test("memory_store tool uses config namespace over toolCtx.agentId", async () => {
     vi.resetModules();
-    const { mockApi, tools } = buildMockApiWithRows({ agentId: "finn", namespace: "payments" });
+    const { mockApi, tools } = buildMockApiWithRows({ agentId: "payments", namespace: "payments" });
     const { default: memoryPlugin } = await import("./index.js");
     // oxlint-disable-next-line typescript/no-explicit-any
     memoryPlugin.register(mockApi as any);
 
     const resolved = resolveTools(
       tools as Array<{ factory: unknown; opts: { name: string } }>,
-      "finn",
+      "payments",
     );
     // oxlint-disable-next-line typescript/no-explicit-any
     const storeTool = resolved["memory_store"] as any;
@@ -497,10 +497,10 @@ describe("memory plugin — namespace isolation", () => {
     vi.resetModules();
     // Pre-seed DB with rows from two different agents
     const { mockApi, tools } = buildMockApiWithRows({
-      agentId: "sofi",
+      agentId: "support",
       searchResults: [
-        { id: "row-1", text: "Customer Elena likes floral scents", agentId: "sofi" },
-        { id: "row-2", text: "BAC deposit L.8000 ref 99001122", agentId: "finn" },
+        { id: "row-1", text: "User prefers dark mode interface", agentId: "support" },
+        { id: "row-2", text: "Payment received ref 99001122", agentId: "payments" },
         { id: "row-3", text: "Legacy row with no namespace", agentId: null },
       ],
     });
@@ -510,18 +510,18 @@ describe("memory plugin — namespace isolation", () => {
 
     const resolved = resolveTools(
       tools as Array<{ factory: unknown; opts: { name: string } }>,
-      "sofi",
+      "support",
     );
     // oxlint-disable-next-line typescript/no-explicit-any
     const recallTool = resolved["memory_recall"] as any;
 
-    const result = await recallTool.execute("call-3", { query: "customer preferences" });
+    const result = await recallTool.execute("call-3", { query: "user preferences" });
 
-    // Sofi should see her own row + the legacy row, but NOT finn's row
+    // Support agent should see its own row + the legacy row, but NOT payments agent's row
     const texts = result.details.memories.map((m: { text: string }) => m.text);
-    expect(texts).toContain("Customer Elena likes floral scents");
+    expect(texts).toContain("User prefers dark mode interface");
     expect(texts).toContain("Legacy row with no namespace"); // legacy visible to all
-    expect(texts).not.toContain("BAC deposit L.8000 ref 99001122"); // finn's — should be excluded
+    expect(texts).not.toContain("Payment received ref 99001122"); // payments agent's — should be excluded
   });
 
   test("memory_recall tool: global view when no agentId and no namespace", async () => {
@@ -529,8 +529,8 @@ describe("memory plugin — namespace isolation", () => {
     const { mockApi, tools } = buildMockApiWithRows({
       // No agentId, no namespace → global view
       searchResults: [
-        { id: "row-1", text: "Sofi memory", agentId: "sofi" },
-        { id: "row-2", text: "Finn memory", agentId: "finn" },
+        { id: "row-1", text: "Support agent memory", agentId: "support" },
+        { id: "row-2", text: "Payments agent memory", agentId: "payments" },
         { id: "row-3", text: "Untagged legacy", agentId: null },
       ],
     });
@@ -550,8 +550,8 @@ describe("memory plugin — namespace isolation", () => {
 
     // No agentId scoping → all rows visible
     const texts = result.details.memories.map((m: { text: string }) => m.text);
-    expect(texts).toContain("Sofi memory");
-    expect(texts).toContain("Finn memory");
+    expect(texts).toContain("Support agent memory");
+    expect(texts).toContain("Payments agent memory");
     expect(texts).toContain("Untagged legacy");
   });
 
@@ -560,8 +560,8 @@ describe("memory plugin — namespace isolation", () => {
     const { mockApi, hooks } = buildMockApiWithRows({
       autoRecall: true,
       searchResults: [
-        { id: "row-finn", text: "BAC deposit pending", agentId: "finn" },
-        { id: "row-sofi", text: "Customer support note", agentId: "sofi" },
+        { id: "row-payments", text: "Pending payment note", agentId: "payments" },
+        { id: "row-support", text: "Customer support note", agentId: "support" },
         { id: "row-legacy", text: "Shared legacy note", agentId: null },
       ],
     });
@@ -574,12 +574,12 @@ describe("memory plugin — namespace isolation", () => {
 
     const handler = beforeAgentStartHandlers[0];
 
-    // Fire hook as "finn" agent
-    const result = await handler({ prompt: "What deposits are pending?" }, { agentId: "finn" });
+    // Fire hook as "payments" agent
+    const result = await handler({ prompt: "What payments are pending?" }, { agentId: "payments" });
 
-    // Result should inject context; only finn's rows + legacy should be included
+    // Result should inject context; only payments agent's rows + legacy should be included
     expect(result?.prependContext).toBeDefined();
-    expect(result?.prependContext).toContain("BAC deposit pending");
+    expect(result?.prependContext).toContain("Pending payment note");
     expect(result?.prependContext).toContain("Shared legacy note");
     expect(result?.prependContext).not.toContain("Customer support note");
   });
@@ -604,23 +604,23 @@ describe("memory plugin — namespace isolation", () => {
         success: true,
         messages: [{ role: "user", content: "I always prefer dark mode. Remember this." }],
       },
-      { agentId: "lock" },
+      { agentId: "infra" },
     );
 
     expect(storedRows.length).toBeGreaterThan(0);
-    expect(storedRows[0].agentId).toBe("lock");
+    expect(storedRows[0].agentId).toBe("infra");
   });
 
   test("namespace=global disables per-agent scoping (all agents share pool)", async () => {
     vi.resetModules();
     const { mockApi, tools } = buildMockApiWithRows({
-      agentId: "finn",
+      agentId: "payments",
       namespace: "global",
       searchResults: [
         // _distance=0.3 → score=0.7: above recall threshold (0.1) but below
         // the duplicate-check threshold (0.95), so memory_store won't skip.
-        { id: "row-sofi", text: "Customer support note", agentId: "sofi", _distance: 0.3 },
-        { id: "row-finn", text: "Payment note", agentId: "finn", _distance: 0.3 },
+        { id: "row-support", text: "Customer support note", agentId: "support", _distance: 0.3 },
+        { id: "row-payments", text: "Payment note", agentId: "payments", _distance: 0.3 },
       ],
     });
     const { default: memoryPlugin } = await import("./index.js");
@@ -629,7 +629,7 @@ describe("memory plugin — namespace isolation", () => {
 
     const resolved = resolveTools(
       tools as Array<{ factory: unknown; opts: { name: string } }>,
-      "finn",
+      "payments",
     );
     // oxlint-disable-next-line typescript/no-explicit-any
     const recallTool = resolved["memory_recall"] as any;
@@ -646,7 +646,7 @@ describe("memory plugin — namespace isolation", () => {
     expect(storedRows[storedRows.length - 1].agentId).toBeUndefined();
 
     // Recall with namespace=global: search is called with agentId=undefined →
-    // filter !agentId → true → all rows returned, including sofi and finn rows.
+    // filter !agentId → true → all rows returned, including support and payments rows.
     const result = await recallTool.execute("call-global", { query: "anything" });
     expect(result.details).toBeDefined();
     const texts = result.details.memories?.map((m: { text: string }) => m.text) ?? [];
@@ -847,45 +847,45 @@ describeLive("memory plugin live tests", () => {
       };
     }
 
-    const finnTools: unknown[] = [];
-    const sofiTools: unknown[] = [];
+    const paymentsTools: unknown[] = [];
+    const supportTools: unknown[] = [];
 
-    // Register plugin twice — once for finn, once for sofi
+    // Register plugin twice — once for payments agent, once for support agent
     // oxlint-disable-next-line typescript/no-explicit-any
-    memoryPlugin.register(makeApi("finn", finnTools) as any);
+    memoryPlugin.register(makeApi("payments", paymentsTools) as any);
     // oxlint-disable-next-line typescript/no-explicit-any
-    memoryPlugin.register(makeApi("sofi", sofiTools) as any);
+    memoryPlugin.register(makeApi("support", supportTools) as any);
 
     // oxlint-disable-next-line typescript/no-explicit-any
-    const finnStore = (finnTools as any[]).find((t) => t.opts?.name === "memory_store")?.tool;
+    const paymentsStore = (paymentsTools as any[]).find((t) => t.opts?.name === "memory_store")?.tool;
     // oxlint-disable-next-line typescript/no-explicit-any
-    const sofiRecall = (sofiTools as any[]).find((t) => t.opts?.name === "memory_recall")?.tool;
+    const supportRecall = (supportTools as any[]).find((t) => t.opts?.name === "memory_recall")?.tool;
     // oxlint-disable-next-line typescript/no-explicit-any
-    const finnRecall = (finnTools as any[]).find((t) => t.opts?.name === "memory_recall")?.tool;
+    const paymentsRecall = (paymentsTools as any[]).find((t) => t.opts?.name === "memory_recall")?.tool;
 
-    // Finn stores a payment memory
-    await finnStore.execute("finn-store", {
-      text: "FICOHSA deposit L.12000 order #99887 confirmed",
+    // Payments agent stores a memory
+    await paymentsStore.execute("payments-store", {
+      text: "Payment confirmed order #99887",
       category: "fact",
       importance: 0.9,
     });
 
-    // Sofi tries to recall — should NOT see Finn's payment data
-    const sofiResult = await sofiRecall.execute("sofi-recall", {
-      query: "FICOHSA deposit payment order",
+    // Support agent tries to recall — should NOT see payments agent's data
+    const supportResult = await supportRecall.execute("support-recall", {
+      query: "payment order confirmed",
       limit: 5,
     });
 
-    const sofiTexts = sofiResult.details?.memories?.map((m: { text: string }) => m.text) ?? [];
-    expect(sofiTexts).not.toContain("FICOHSA deposit L.12000 order #99887 confirmed");
+    const supportTexts = supportResult.details?.memories?.map((m: { text: string }) => m.text) ?? [];
+    expect(supportTexts).not.toContain("Payment confirmed order #99887");
 
-    // Finn himself CAN recall his own memory
-    const finnResult = await finnRecall.execute("finn-recall", {
-      query: "FICOHSA deposit payment order",
+    // Payments agent CAN recall its own memory
+    const paymentsResult = await paymentsRecall.execute("payments-recall", {
+      query: "payment order confirmed",
       limit: 5,
     });
 
-    expect(finnResult.details?.count).toBeGreaterThan(0);
-    expect(finnResult.details?.memories?.[0]?.text).toContain("FICOHSA");
+    expect(paymentsResult.details?.count).toBeGreaterThan(0);
+    expect(paymentsResult.details?.memories?.[0]?.text).toContain("Payment confirmed");
   }, 90000);
 });
