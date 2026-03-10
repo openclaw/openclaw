@@ -118,8 +118,9 @@ async function resolveOllamaCookie(): Promise<string | undefined> {
   }
 
   // Priority 2: Cookie file (~/.openclaw/ollama-usage-cookie)
+  // Uses resolveOllamaCookiePath() which honors OPENCLAW_HOME
   try {
-    const cookiePath = path.join(os.homedir(), ".openclaw", "ollama-usage-cookie");
+    const cookiePath = resolveOllamaCookiePath();
     if (fs.existsSync(cookiePath)) {
       const cookie = fs.readFileSync(cookiePath, "utf-8").trim();
       return normalizeSecretInput(cookie) || undefined;
