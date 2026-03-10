@@ -1453,6 +1453,27 @@ describe("loadOpenClawPlugins", () => {
     expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toBeTruthy();
   });
 
+  it("resolves keyed-async-queue.js when loader runs from dist, not as subpath of index.js (regression #35869)", () => {
+    // Reproduces the v2026.3.2 failure mode: jiti resolved `openclaw/plugin-sdk/keyed-async-queue`
+    // as `/dist/plugin-sdk/index.js/keyed-async-queue` because the root alias pointed to index.js
+    // and there was no explicit scoped alias. Verify the direct file-system resolution works from
+    // a production dist/ loader path — i.e., it finds the keyed-async-queue.js file, not index.js.
+    const { root, distFile } = createPluginSdkAliasFixture({
+      srcFile: "keyed-async-queue.ts",
+      distFile: "keyed-async-queue.js",
+      srcBody: "module.exports = {};\n",
+      distBody: "module.exports = { KeyedAsyncQueue: function() {} };\n",
+    });
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "keyed-async-queue.ts",
+      distFile: "keyed-async-queue.js",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    // Must resolve to dist/plugin-sdk/keyed-async-queue.js, not anything containing index.js
+    expect(resolved).toBe(distFile);
+    expect(resolved).not.toContain("index.js");
+  });
+
   it("loads bundled plugin that imports openclaw/plugin-sdk/keyed-async-queue (regression #35869)", () => {
     const pluginDir = makeTempDir();
     writePlugin({

@@ -154,6 +154,20 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
       aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;
     }
   }
+  // Explicit alias for keyed-async-queue (#35869): guarantees the alias is present even
+  // when package.json export-map discovery fails in non-standard production layouts.
+  // Without this, jiti falls back to Node resolution which produced the invalid path
+  // `/dist/plugin-sdk/index.js/keyed-async-queue` in production (v2026.3.2 failure mode).
+  const kaqKey = "openclaw/plugin-sdk/keyed-async-queue";
+  if (!aliasMap[kaqKey]) {
+    const resolved = resolvePluginSdkAliasFile({
+      srcFile: "keyed-async-queue.ts",
+      distFile: "keyed-async-queue.js",
+    });
+    if (resolved) {
+      aliasMap[kaqKey] = resolved;
+    }
+  }
   return aliasMap;
 };
 
