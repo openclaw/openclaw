@@ -145,7 +145,7 @@ function throwFallbackFailureSummary(params: {
     // did not occur.
     if ((params.deduplicatedCount ?? 0) > 0 && params.lastError instanceof Error) {
       const hint =
-        ` (${params.deduplicatedCount} configured fallback(s) normalized to the same model and were skipped` +
+        ` (${params.deduplicatedCount} configured fallback${params.deduplicatedCount === 1 ? "" : "s"} normalized to the same model and ${params.deduplicatedCount === 1 ? "was" : "were"} skipped` +
         ` — configure a fallback with a different model to enable failover)`;
       const wrapped = new Error(params.lastError.message + hint, {
         cause: params.lastError,
