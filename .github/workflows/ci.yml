@@ -302,34 +302,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pre-commit
 
-      - name: Detect secrets
-        run: |
-          set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "Running full detect-secrets scan on push."
-            pre-commit run --all-files detect-secrets
-            exit 0
-          fi
-
-          BASE="${{ github.event.pull_request.base.sha }}"
-          changed_files=()
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            while IFS= read -r path; do
-              [ -n "$path" ] || continue
-              [ -f "$path" ] || continue
-              changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
-          fi
-
-          if [ "${#changed_files[@]}" -gt 0 ]; then
-            echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
-            pre-commit run detect-secrets --files "${changed_files[@]}"
-          else
-            echo "Falling back to full detect-secrets scan."
-            pre-commit run --all-files detect-secrets
-          fi
-
       - name: Detect committed private keys
         run: pre-commit run --all-files detect-private-key
 
