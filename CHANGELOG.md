@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
+- Cron/webhook enrichment: include `jobName` and `callerSessionKey` in the finished-event webhook payload so receivers can correlate the callback to the originating job and caller session without an extra API round-trip.
 
 ### Breaking
 
