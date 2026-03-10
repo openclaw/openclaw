@@ -87,8 +87,13 @@ function extractStepFromObject(node: ts.Expression): PipelineStep | undefined {
     }
   }
 
-  if (!label && !paramName) {
-    return undefined;
+  if (!label || !paramName) {
+    const { line, character } = node.getSourceFile().getLineAndCharacterOfPosition(node.getStart());
+    throw new Error(
+      `[parse-pipeline] Pipeline step at ${node.getSourceFile().fileName}:${line + 1}:${
+        character + 1
+      } is missing ${!label ? "label" : "policy"} metadata`,
+    );
   }
   return { label, paramName, stripPluginOnlyAllowlist };
 }
