@@ -20,7 +20,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
-import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
+import { sanitizeForPromptLiteral, wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
@@ -43,6 +43,8 @@ const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
 const MIN_ASK_OVERLAP_TOKENS_FOR_DOUBLE_MATCH = 3;
+const MAX_EMERGENCY_ERROR_MESSAGE_CHARS = 200;
+const MAX_EMERGENCY_PRIOR_SUMMARY_CHARS = 4000;
 const REQUIRED_SUMMARY_SECTIONS = [
   "## Decisions",
   "## Open TODOs",
@@ -711,6 +713,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
+    let preservedTurnsSection = "";
+    let droppedSummary: string | undefined;
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
@@ -762,8 +766,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
           ? preparation.tokensBefore
           : undefined;
-
-      let droppedSummary: string | undefined;
 
       if (tokensBefore !== undefined) {
         const summarizableTokens =
@@ -833,7 +835,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       messagesToSummarize = summaryTargetMessages;
-      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
         .slice(-10)
@@ -969,12 +971,66 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      // Re-throw abort errors so signal cancellation doesn't trigger emergency fallback.
+      // Check signal state first (covers all abort reasons including TimeoutError),
+      // then fall back to name check for cases where signal is unavailable.
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        throw error;
+      }
+      const rawErrorMessage = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Compaction summarization failed; using emergency fallback to avoid stuck session: ${rawErrorMessage}`,
       );
-      return { cancel: true };
+      // Sanitize error message before embedding in LLM context to prevent prompt injection / secret leakage.
+      const sanitizedErrorMessage = sanitizeForPromptLiteral(rawErrorMessage);
+      const errorMessage =
+        sanitizedErrorMessage.length > MAX_EMERGENCY_ERROR_MESSAGE_CHARS
+          ? sanitizedErrorMessage.slice(0, MAX_EMERGENCY_ERROR_MESSAGE_CHARS) + "..."
+          : sanitizedErrorMessage;
+      // Emergency fallback: return a static summary instead of cancelling.
+      // Cancelling leaves the session at its current (oversized) context,
+      // causing a compaction-fail-retry loop on every subsequent message.
+      const effectivePrior = droppedSummary ?? preparation.previousSummary;
+      // Truncate carried-forward summary to prevent unbounded nesting across repeated failures.
+      const clampedPrior =
+        effectivePrior && effectivePrior.length > MAX_EMERGENCY_PRIOR_SUMMARY_CHARS
+          ? effectivePrior.slice(0, MAX_EMERGENCY_PRIOR_SUMMARY_CHARS) + "\n[…truncated]"
+          : effectivePrior;
+      const priorContext = clampedPrior
+        ? `\n\nPrior summary (carried forward):\n${clampedPrior}`
+        : "";
+      const splitTurnNote =
+        preparation.isSplitTurn && preparation.turnPrefixMessages?.length
+          ? `\n\n**Split-turn context lost:** ${preparation.turnPrefixMessages.length} turn-prefix message(s) could not be summarized due to the failure above.`
+          : "";
+      // Best-effort: include workspace critical rules (AGENTS.md Session Startup / Red Lines).
+      let workspaceCtx = "";
+      try {
+        workspaceCtx = await readWorkspaceContextForSummary();
+      } catch {
+        // best-effort; don't let this block the emergency return
+      }
+      // Intentionally lossy: when LLM summarization fails, we preserve whatever
+      // structured context we can extract (prior summary, recent turns, tool
+      // failures, file ops) rather than cancelling and leaving the session stuck
+      // in a compact-fail-compact loop. Some detail loss is the accepted tradeoff.
+      const emergencySummary =
+        `Emergency compaction: summarization failed (${errorMessage}). ` +
+        `History was cut at the SDK-computed boundary; content before that point is not summarized.` +
+        priorContext +
+        splitTurnNote +
+        preservedTurnsSection +
+        toolFailureSection +
+        fileOpsSummary +
+        workspaceCtx;
+      return {
+        compaction: {
+          summary: emergencySummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
   });
 }
