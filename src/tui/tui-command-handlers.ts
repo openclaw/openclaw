@@ -111,9 +111,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
 
       // Partition models: show configured/authenticated providers first.
-      // Skip partitioning in remote mode (--url) because loadConfig() returns
-      // local auth which doesn't reflect the remote gateway's credentials.
-      const hasAuth = opts.url ? () => false : createProviderAuthChecker({ cfg: loadConfig() });
+      // Skip partitioning in remote mode (--url or config gateway.mode=remote)
+      // because loadConfig() returns local auth which doesn't reflect the
+      // remote gateway's credentials.
+      const cfg = loadConfig();
+      const isRemote = opts.url || cfg.gateway?.mode === "remote";
+      const hasAuth = isRemote ? () => false : createProviderAuthChecker({ cfg });
       const items = partitionModelItems(models, hasAuth);
 
       const selector = createSearchableSelectList(items, 9);
