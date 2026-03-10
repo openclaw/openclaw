@@ -722,7 +722,7 @@ extension TestChatTransportState {
 
         try await waitUntil("two model patches complete") {
             let patched = await transport.patchedModels()
-            return patched.count == 2
+            return patched == ["openai/gpt-5.4", "openai/gpt-5.4-pro", "openai/gpt-5.4-pro"]
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")

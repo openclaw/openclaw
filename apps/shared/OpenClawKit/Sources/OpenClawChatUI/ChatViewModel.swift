@@ -528,7 +528,13 @@ public final class OpenClawChatViewModel {
             try await self.transport.setSessionModel(
                 sessionKey: sessionKey,
                 model: nextModelRef)
-            guard sessionKey == self.sessionKey, requestID == self.modelSelectionRequestID else { return }
+            guard sessionKey == self.sessionKey else { return }
+            guard requestID == self.modelSelectionRequestID else {
+                let latest = self.modelRef(forSelectionID: self.modelSelectionID)
+                guard latest != nextModelRef else { return }
+                try? await self.transport.setSessionModel(sessionKey: sessionKey, model: latest)
+                return
+            }
             self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
         } catch {
             guard sessionKey == self.sessionKey, requestID == self.modelSelectionRequestID else { return }
