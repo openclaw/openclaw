@@ -22,6 +22,7 @@ _마이봇과 지니의 프로젝트 총 목록. 새 프로젝트 시작 시 여
 | 14  | MAITB (AI 기술 블로그/콘텐츠)                | [memory/maitb.md](memory/maitb.md)                   | 🟢 진행중 | 2025       |
 | 15  | MAIPnID (AI P&ID 도면 분석)                  | [memory/maipnid.md](memory/maipnid.md)               | 🟢 진행중 | 2025       |
 | 16  | M.AI.UPbit (AI 디지털 자산 분석)             | [memory/maiupbit.md](memory/maiupbit.md)             | 🟢 진행중 | 2024       |
+| 17  | MAIPID (AI PID 도면 인식 및 분석)            | [memory/maipid.md](memory/maipid.md)                 | 🟢 진행중 | 2026-03-09 |
 
 ### 개발 환경 요약
 
@@ -43,6 +44,7 @@ _마이봇과 지니의 프로젝트 총 목록. 새 프로젝트 시작 시 여
 | MAITB           | `C:\TEST\MAITB`          | [jini92/MAITB](https://github.com/jini92/MAITB)                   | MAIBOT 직접 | TBD                    |
 | MAIPnID         | `C:\TEST\MAIPnID`        | [jini92/MAIPnID](https://github.com/jini92/MAIPnID)               | MAIBOT 직접 | TBD                    |
 | M.AI.UPbit      | `C:\TEST\M.AI.UPbit`     | [jini92/M.AI.UPbit](https://github.com/jini92/M.AI.UPbit)         | MAIBOT 직접 | TBD                    |
+| MAIPID          | `C:\TEST\MAIPID`         | [jini92/MAIPID](https://github.com/jini92/MAIPID)                 | MAIBOT 직접 | TBD                    |
 | MAIBOT (메인)   | `C:\MAIBOT`              | [jini92/MAIBOT](https://github.com/jini92/MAIBOT)                 | MAIBOT 직접 | —                      |
 
 ## 개발 방식 (전체 프로젝트 공통)

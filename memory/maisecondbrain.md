@@ -106,6 +106,7 @@ Mnemo
 - 2026-02-21: **Stage 2/5/6 자동화** — 기회 스코어링 + 배포 스킬 + KPI 대시보드
 - 2026-02-24: **Daily Enrichment (cron)** — 3,395 볼트 + 36 memory 파싱 → struct 27 + related 17 + content 57 보강 | 그래프 3,486 노드 39,590 엣지 (1 컴포넌트!) | 스텁 50개 생성 | 임베딩 3,423개(+29 new) | 외부지식 22개 수집 | 대시보드 2개 갱신 | 84초 완료
 - 2026-02-25: **Daily Enrichment (cron)** — 3,442 볼트 + 37 memory 파싱 → struct 34 + content 84 보강 | 그래프 2,918 노드 32,034 엣지 (1 컴포넌트) | 스텁 50개 생성 | 임베딩 3,471개(+9 new) | 외부지식 22개 수집 | 기회 100건(황금 0) | 대시보드 7섹션 갱신 | 89초 완료
+- 2026-03-10: **Daily Enrichment (cron)** — 3,758 볼트 + 48 memory 파싱 → struct 41 + related 34 + content 90 보강 | 그래프 3,243 노드 35,594 엣지 (1 컴포넌트) | 스텁 50개 생성 | 임베딩 3,798개(+40 new) | 외부지식 22개 수집 | 기회 100건(황금 0) | 대시보드 7섹션 갱신 | 117초 완료
 - 2026-02-24: **Stage 2 DISCOVER 자동화 완성** — daily_enrich.py에 10단계(기회 스캔) 추가 + 주간 기회 리뷰 크론 등록 (월 07:30 KST) | 지식 수집 → 기회 탐지 → 스코어링 → 프로젝트 도출 풀 파이프라인 완성
 - 2026-02-24: **온톨로지 v2** — 엔티티 분류 보강(tool 618개, concept 163개, decision 3개 새로 분류) + 의미적 관계 자동 추출(uses 1,144 / derived_from 807 / alternatives 278 / supports 249 / contradicts 3 = 총 2,481 엣지) + 가비지 노드 745개 정리(3,511→2,893) + 밀도 0.0029→0.0038(+30%)
 - 2026-02-24: **Phase 3.5 person 추출** — extract_persons.py(llama3.1:8b) 생성, 12 person stubs (Sam Altman, Jensen Huang, 김철수, 이진희 등), cleanup_person_stubs.py로 오탐(Morgan Stanley, Temasek 등) 제거

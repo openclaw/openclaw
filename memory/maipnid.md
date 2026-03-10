@@ -3,7 +3,7 @@
 ## 기본 정보
 
 - **GitHub:** https://github.com/jini92/MAIPnID
-- **로컬:** `C:\TEST\MAIPnID` (TBD)
+- **로컬:** `C:\TEST\MAIPnID`
 - **언어:** Python
 - **상태:** 🟢 진행중
 - **시작일:** 2025 (추정)
