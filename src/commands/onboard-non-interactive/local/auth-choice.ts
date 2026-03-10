@@ -12,6 +12,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
+  applyClawpaneConfig,
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
@@ -34,6 +35,7 @@ import {
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setClawpaneApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
@@ -921,6 +923,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyHuggingfaceConfig(nextConfig);
+  }
+
+  if (authChoice === "clawpane-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "clawpane",
+      cfg: baseConfig,
+      flagValue: opts.clawpaneApiKey,
+      flagName: "--clawpane-api-key",
+      envVar: "CLAWPANE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setClawpaneApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "clawpane:default",
+      provider: "clawpane",
+      mode: "api_key",
+    });
+    return applyClawpaneConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {

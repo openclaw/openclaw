@@ -49,6 +49,7 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "clawpane-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -76,6 +77,7 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
+  | "clawpane"
   | "volcengine"
   | "byteplus"
   | "custom";
@@ -135,6 +137,7 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  clawpaneApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

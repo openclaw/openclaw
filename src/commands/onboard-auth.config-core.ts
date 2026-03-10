@@ -61,10 +61,14 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
+  buildClawpaneModelDefinition,
   buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  CLAWPANE_BASE_URL,
+  CLAWPANE_DEFAULT_MODEL_REF,
+  CLAWPANE_MODEL_IDS,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
@@ -536,6 +540,22 @@ export function applyAuthProfileConfig(
       ...(order ? { order } : {}),
     },
   };
+}
+
+export function applyClawpaneProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const clawpaneModels = CLAWPANE_MODEL_IDS.map((id) => buildClawpaneModelDefinition(id));
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: { ...cfg.agents?.defaults?.models },
+    providerId: "clawpane",
+    api: "openai-completions",
+    baseUrl: CLAWPANE_BASE_URL,
+    catalogModels: clawpaneModels,
+  });
+}
+
+export function applyClawpaneConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyClawpaneProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, CLAWPANE_DEFAULT_MODEL_REF);
 }
 
 export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
