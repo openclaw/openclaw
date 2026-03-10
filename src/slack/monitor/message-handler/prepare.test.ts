@@ -553,7 +553,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("skips thread reply when autoReplyOnParticipation is false despite participation", async () => {
-    vi.mocked(hasSlackThreadParticipation).mockReturnValue(true);
+    vi.mocked(hasSlackThreadParticipation).mockReturnValueOnce(true);
 
     const slackCtx = createInboundSlackCtx({
       cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
@@ -572,8 +572,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, message);
     expect(prepared).toBeNull();
-
-    vi.mocked(hasSlackThreadParticipation).mockReturnValue(false);
   });
 
   it("creates thread session for top-level DM when replyToMode=all", async () => {
