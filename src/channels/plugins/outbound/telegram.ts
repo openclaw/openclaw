@@ -1,4 +1,4 @@
-import { parseAdaptiveCardMarkers } from "../../../cards/parse.js";
+import { parseAdaptiveCardMarkers, stripCardMarkers } from "../../../cards/parse.js";
 import { telegramStrategy } from "../../../cards/strategies/telegram.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
@@ -69,6 +69,8 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "telegram", ...result };
       }
+      // Card markers present but rendering failed; strip markers to avoid leaking raw JSON
+      text = parsed.fallbackText || stripCardMarkers(text);
     }
 
     const result = await send(to, text, {

@@ -1,4 +1,4 @@
-import { parseAdaptiveCardMarkers } from "../../../cards/parse.js";
+import { parseAdaptiveCardMarkers, stripCardMarkers } from "../../../cards/parse.js";
 import { slackStrategy } from "../../../cards/strategies/slack.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -118,6 +118,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "slack" as const, ...result };
       }
+      // Card markers present but no blocks rendered (unsupported elements).
+      // Use fallback text to avoid leaking raw markers to the user.
+      text = parsed.fallbackText || stripCardMarkers(text);
     }
 
     return await sendSlackOutboundMessage({

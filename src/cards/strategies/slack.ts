@@ -30,18 +30,21 @@ function renderTextBlock(el: AcElement): unknown {
   };
 }
 
-function renderFactSet(el: AcElement): unknown {
+function renderFactSet(el: AcElement): unknown[] {
   const facts = el.facts as Array<{ title?: string; value?: string }> | undefined;
   if (!facts?.length) {
-    return null;
+    return [];
   }
-  return {
-    type: "section",
-    fields: facts.map((f) => ({
-      type: "mrkdwn",
-      text: `*${f.title ?? ""}*\n${f.value ?? ""}`,
-    })),
-  };
+  const fields = facts.map((f) => ({
+    type: "mrkdwn",
+    text: `*${f.title ?? ""}*\n${f.value ?? ""}`,
+  }));
+  // Slack limits section blocks to 10 fields; split into chunks if needed
+  const blocks: unknown[] = [];
+  for (let i = 0; i < fields.length; i += 10) {
+    blocks.push({ type: "section", fields: fields.slice(i, i + 10) });
+  }
+  return blocks;
 }
 
 function renderImage(el: AcElement): unknown {
@@ -61,10 +64,8 @@ function renderElement(el: AcElement): unknown[] {
   switch (el.type) {
     case "TextBlock":
       return [renderTextBlock(el)];
-    case "FactSet": {
-      const block = renderFactSet(el);
-      return block ? [block] : [];
-    }
+    case "FactSet":
+      return renderFactSet(el);
     case "Image": {
       const block = renderImage(el);
       return block ? [block] : [];
@@ -102,10 +103,14 @@ function renderActions(actions: unknown[]): unknown[] {
       continue;
     }
     if (action.type === "Action.OpenUrl") {
+      const url = str(action.url);
+      if (!url) {
+        continue; // skip: Slack rejects link buttons with an empty URL
+      }
       buttons.push({
         type: "button",
         text: { type: "plain_text", text: label },
-        url: str(action.url),
+        url,
       });
     } else if (action.type === "Action.Submit") {
       const actionId = typeof action.id === "string" ? action.id : `ac_submit_${buttons.length}`;

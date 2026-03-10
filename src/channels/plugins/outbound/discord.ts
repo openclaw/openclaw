@@ -1,4 +1,4 @@
-import { parseAdaptiveCardMarkers } from "../../../cards/parse.js";
+import { parseAdaptiveCardMarkers, stripCardMarkers } from "../../../cards/parse.js";
 import { discordStrategy } from "../../../cards/strategies/discord.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -111,6 +111,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "discord", ...result };
       }
+      // Card markers present but rendering failed; strip markers to avoid leaking raw JSON
+      text = parsed.fallbackText || stripCardMarkers(text);
     }
 
     if (!silent) {

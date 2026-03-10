@@ -86,11 +86,21 @@ function renderActions(actions: unknown[]): InlineButton[][] {
       continue;
     }
     if (action.type === "Action.OpenUrl") {
-      buttons.push({ text: label, url: str(action.url) });
+      const url = str(action.url);
+      if (!url) {
+        continue; // skip: Telegram rejects inline buttons with an empty URL
+      }
+      buttons.push({ text: label, url });
     } else if (action.type === "Action.Submit") {
       // Encode action data as callback_data (Telegram limit: 64 bytes)
-      const data = action.data != null ? JSON.stringify(action.data) : label;
-      buttons.push({ text: label, callback_data: data.slice(0, 64) });
+      const raw = action.data != null ? JSON.stringify(action.data) : label;
+      // Truncate by UTF-8 byte length, not character count
+      const encoder = new TextEncoder();
+      let truncated = raw;
+      while (encoder.encode(truncated).byteLength > 64) {
+        truncated = truncated.slice(0, -1);
+      }
+      buttons.push({ text: label, callback_data: truncated });
     }
   }
   if (buttons.length === 0) {
