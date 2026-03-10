@@ -18,6 +18,7 @@ import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveNeverReply } from "../config/group-policy.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -490,10 +491,35 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
+  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+
+  // neverReply: store group messages as pending history context without replying.
+  if (isGroup && resolveNeverReply({ cfg, channel: "line", accountId: account.accountId })) {
+    logVerbose("line: group message stored for context (neverReply: true)");
+    const historyKey = groupId ?? roomId;
+    const rawText = message.type === "text" ? message.text : "";
+    const senderId =
+      event.source.type === "group" || event.source.type === "room"
+        ? (event.source.userId ?? "unknown")
+        : "unknown";
+    if (historyKey && context.groupHistories) {
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: context.groupHistories,
+        historyKey,
+        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        entry: {
+          sender: `user:${senderId}`,
+          body: rawText || `<${message.type}>`,
+          timestamp: event.timestamp,
+        },
+      });
+    }
+    return;
+  }
+
   // Mention gating: skip group messages that don't @mention the bot when required.
   // Default requireMention to true (consistent with all other channels) unless
   // the group config explicitly sets it to false.
-  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
   if (isGroup) {
     const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
     const requireMention = groupConfig?.requireMention !== false;
