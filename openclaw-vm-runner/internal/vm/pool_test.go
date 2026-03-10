@@ -45,9 +45,10 @@ func TestPool_Acquire(t *testing.T) {
 	p.ready <- "/tmp/snap/pool-abc12345"
 
 	ctx := context.Background()
-	path, err := p.Acquire(ctx)
+	path, release, err := p.Acquire(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/snap/pool-abc12345", path)
+	release()
 }
 
 func TestPool_Acquire_Timeout(t *testing.T) {
@@ -57,7 +58,7 @@ func TestPool_Acquire_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	_, err := p.Acquire(ctx)
+	_, _, err := p.Acquire(ctx)
 	assert.Error(t, err, "Acquire should fail when context is cancelled on empty pool")
 }
 
@@ -154,9 +155,10 @@ func TestPool_Replenish(t *testing.T) {
 	assert.Equal(t, 2, p.Len())
 
 	// Acquire one to trigger replenishment.
-	path, err := p.Acquire(ctx)
+	path, release, err := p.Acquire(ctx)
 	require.NoError(t, err)
 	assert.NotEmpty(t, path)
+	release()
 
 	// Wait for replenisher to refill.
 	deadline := time.After(5 * time.Second)
@@ -194,9 +196,10 @@ func TestPool_Shutdown(t *testing.T) {
 	paths := make([]string, 0, 3)
 	// Drain to collect paths, then re-add.
 	for i := 0; i < 3; i++ {
-		path, err := p.Acquire(ctx)
+		path, release, err := p.Acquire(ctx)
 		require.NoError(t, err)
 		paths = append(paths, path)
+		release()
 	}
 
 	// Re-add them for shutdown to clean up.
@@ -421,8 +424,9 @@ func TestPool_Metrics(t *testing.T) {
 	assert.Equal(t, int64(2), readyCount.Value(), "ready count should be 2 after warmup")
 
 	// Acquire one.
-	_, err := p.Acquire(ctx)
+	_, release, err := p.Acquire(ctx)
 	require.NoError(t, err)
+	release()
 
 	// Acquire total should have incremented by 1.
 	acquireAfter := expvar.Get("snapshot_pool_acquire_total").(*expvar.Int).Value()

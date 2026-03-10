@@ -11,6 +11,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// shellEscape wraps a single argument in single quotes, escaping any embedded
+// single quotes. This prevents shell injection when arguments are concatenated
+// into a single command string for sh -lc.
+func shellEscape(arg string) string {
+	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
+}
+
 // execBridge implements ExecServiceServer by forwarding commands to the envd
 // ProcessService inside a Firecracker VM via a cached vsock gRPC connection.
 type execBridge struct {
@@ -61,8 +68,13 @@ func (s *execBridge) Exec(stream pb.ExecService_ExecServer) error {
 	// 4. Create envd ProcessService client.
 	envdClient := envdpb.NewProcessServiceClient(conn)
 
-	// 5. Convert command: join repeated string into single shell command.
-	shellCmd := strings.Join(startExec.GetCommand(), " ")
+	// 5. Convert command: shell-escape each argument before joining to prevent injection.
+	rawArgs := startExec.GetCommand()
+	escapedArgs := make([]string, len(rawArgs))
+	for i, arg := range rawArgs {
+		escapedArgs[i] = shellEscape(arg)
+	}
+	shellCmd := strings.Join(escapedArgs, " ")
 
 	// 6. Convert timeout: ms -> sec.
 	timeoutSec := startExec.GetTimeoutMs() / 1000

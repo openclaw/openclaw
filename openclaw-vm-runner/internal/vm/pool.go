@@ -67,6 +67,8 @@ type Pool struct {
 	logger         *slog.Logger
 	evictMu        sync.Mutex
 	currentVersion string
+	leasedMu       sync.Mutex
+	leased         map[string]struct{}
 }
 
 // NewPool creates a new Pool with the given configuration.
@@ -96,6 +98,7 @@ func NewPool(size int, snapshotDir string, diskLimitBytes int64, createVM Create
 		healthCheck:    healthCheck,
 		done:           make(chan struct{}),
 		logger:         logger,
+		leased:         make(map[string]struct{}),
 	}
 }
 
@@ -111,14 +114,27 @@ func (p *Pool) Len() int {
 
 // Acquire returns a ready snapshot directory path from the pool.
 // It blocks until a snapshot is available or the context is cancelled.
-func (p *Pool) Acquire(ctx context.Context) (string, error) {
+// The caller MUST call the returned release function when the snapshot
+// is no longer needed (after restore completes or fails) to allow
+// eviction to reclaim the directory if necessary.
+func (p *Pool) Acquire(ctx context.Context) (string, func(), error) {
 	select {
 	case path := <-p.ready:
 		metricPoolAcquireTotal.Add(1)
 		metricPoolReadyCount.Set(int64(len(p.ready)))
-		return path, nil
+
+		p.leasedMu.Lock()
+		p.leased[path] = struct{}{}
+		p.leasedMu.Unlock()
+
+		release := func() {
+			p.leasedMu.Lock()
+			delete(p.leased, path)
+			p.leasedMu.Unlock()
+		}
+		return path, release, nil
 	case <-ctx.Done():
-		return "", fmt.Errorf("pool acquire: %w", ctx.Err())
+		return "", nil, fmt.Errorf("pool acquire: %w", ctx.Err())
 	}
 }
 
@@ -385,6 +401,13 @@ drained:
 		}
 		if readySet[d.path] {
 			continue // never evict ready snapshots
+		}
+		// Never evict leased (in-flight restore) snapshots.
+		p.leasedMu.Lock()
+		_, isLeased := p.leased[d.path]
+		p.leasedMu.Unlock()
+		if isLeased {
+			continue
 		}
 		if err := os.RemoveAll(d.path); err != nil {
 			p.logger.Warn("eviction failed", "dir", d.path, "error", err)

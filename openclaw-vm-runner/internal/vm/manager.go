@@ -138,10 +138,11 @@ func (m *Manager) trySnapshotRestore(ctx context.Context, req *CreateRequest) (*
 	acquireCtx, cancel := context.WithTimeout(ctx, snapshotAcquireTimeout)
 	defer cancel()
 
-	snapDir, err := m.pool.Acquire(acquireCtx)
+	snapDir, release, err := m.pool.Acquire(acquireCtx)
 	if err != nil {
 		return nil, fmt.Errorf("pool acquire: %w", err)
 	}
+	defer release()
 
 	cid := m.nextCID()
 	entry, err := m.snapshotter.RestoreEntry(ctx, snapDir, req.SandboxID, cid)

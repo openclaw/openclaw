@@ -1,6 +1,7 @@
 package envd
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/big"
@@ -47,8 +48,9 @@ func DefaultURLPolicy() *URLPolicy {
 }
 
 // Validate checks a raw URL against protocol, IP, and domain blocklists.
+// It resolves hostnames via DNS and blocks any that resolve to private/internal IPs.
 // Returns nil for safe URLs, an error describing the block reason otherwise.
-func (p *URLPolicy) Validate(rawURL string) error {
+func (p *URLPolicy) Validate(ctx context.Context, rawURL string) error {
 	if rawURL == "" {
 		return fmt.Errorf("invalid URL: empty")
 	}
@@ -113,6 +115,17 @@ func (p *URLPolicy) Validate(rawURL string) error {
 			return fmt.Errorf("blocked IP address (hex): %s", hostname)
 		}
 		return nil
+	}
+
+	// Hostname is not an IP literal — resolve via DNS and check all resulting IPs.
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", hostname)
+	if err != nil {
+		return fmt.Errorf("DNS resolution failed for %s: %w", hostname, err)
+	}
+	for _, ip := range ips {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("blocked IP address (resolved %s -> %s)", hostname, ip.String())
+		}
 	}
 
 	return nil

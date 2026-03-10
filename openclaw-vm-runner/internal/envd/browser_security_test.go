@@ -31,7 +31,7 @@ func TestValidateURL_BlockedProtocols(t *testing.T) {
 	}
 	for _, u := range blocked {
 		t.Run(u, func(t *testing.T) {
-			err := policy.Validate(u)
+			err := policy.Validate(context.Background(), u)
 			require.Error(t, err, "expected blocked protocol for %s", u)
 			assert.Contains(t, err.Error(), "blocked protocol")
 		})
@@ -47,7 +47,7 @@ func TestValidateURL_AllowedProtocols(t *testing.T) {
 	}
 	for _, u := range allowed {
 		t.Run(u, func(t *testing.T) {
-			err := policy.Validate(u)
+			err := policy.Validate(context.Background(), u)
 			assert.NoError(t, err, "expected allowed URL %s", u)
 		})
 	}
@@ -55,7 +55,7 @@ func TestValidateURL_AllowedProtocols(t *testing.T) {
 
 func TestValidateURL_MetadataEndpoint(t *testing.T) {
 	policy := DefaultURLPolicy()
-	err := policy.Validate("http://169.254.169.254/latest/meta-data/")
+	err := policy.Validate(context.Background(), "http://169.254.169.254/latest/meta-data/")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "blocked")
 }
@@ -64,21 +64,21 @@ func TestValidateURL_MetadataIPEncodings(t *testing.T) {
 	policy := DefaultURLPolicy()
 
 	// Decimal encoding of 169.254.169.254 = 2852039166
-	err := policy.Validate("http://2852039166/")
+	err := policy.Validate(context.Background(), "http://2852039166/")
 	require.Error(t, err, "decimal-encoded metadata IP should be blocked")
 
 	// Hex encoding of 169.254.169.254 = 0xA9FEA9FE
-	err = policy.Validate("http://0xA9FEA9FE/")
+	err = policy.Validate(context.Background(), "http://0xA9FEA9FE/")
 	require.Error(t, err, "hex-encoded metadata IP should be blocked")
 }
 
 func TestValidateURL_LoopbackBlocked(t *testing.T) {
 	policy := DefaultURLPolicy()
 
-	err := policy.Validate("http://127.0.0.1/")
+	err := policy.Validate(context.Background(), "http://127.0.0.1/")
 	require.Error(t, err, "loopback 127.0.0.1 should be blocked")
 
-	err = policy.Validate("http://localhost/")
+	err = policy.Validate(context.Background(), "http://localhost/")
 	require.Error(t, err, "localhost should be blocked")
 }
 
@@ -93,7 +93,7 @@ func TestValidateURL_PrivateIPBlocked(t *testing.T) {
 	}
 	for _, u := range tests {
 		t.Run(u, func(t *testing.T) {
-			err := policy.Validate(u)
+			err := policy.Validate(context.Background(), u)
 			require.Error(t, err, "private IP should be blocked: %s", u)
 		})
 	}
@@ -102,20 +102,20 @@ func TestValidateURL_PrivateIPBlocked(t *testing.T) {
 func TestValidateURL_ValidPublicURL(t *testing.T) {
 	policy := DefaultURLPolicy()
 
-	err := policy.Validate("https://google.com")
+	err := policy.Validate(context.Background(), "https://google.com")
 	assert.NoError(t, err)
 
-	err = policy.Validate("http://93.184.216.34/")
+	err = policy.Validate(context.Background(), "http://93.184.216.34/")
 	assert.NoError(t, err)
 }
 
 func TestValidateURL_EmptyAndMalformed(t *testing.T) {
 	policy := DefaultURLPolicy()
 
-	err := policy.Validate("")
+	err := policy.Validate(context.Background(), "")
 	require.Error(t, err, "empty URL should be rejected")
 
-	err = policy.Validate("not-a-url")
+	err = policy.Validate(context.Background(), "not-a-url")
 	require.Error(t, err, "malformed URL should be rejected")
 }
 

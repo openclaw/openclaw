@@ -24,6 +24,7 @@ func main() {
 	var err error
 
 	if *useTCP {
+		log.Println("WARNING: TCP mode is for development only — gRPC API is unauthenticated on localhost")
 		addr := fmt.Sprintf("localhost:%d", *port)
 		lis, err = net.Listen("tcp", addr)
 		if err != nil {

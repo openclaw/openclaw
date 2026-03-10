@@ -64,10 +64,10 @@ export class ExecBrowserHelper {
    */
   private parseResult<T>(stdout: string): T {
     const startIdx = stdout.indexOf(RESULT_START);
-    const endIdx = stdout.indexOf(RESULT_END);
+    const endIdx = stdout.lastIndexOf(RESULT_END);
 
     let jsonStr: string;
-    if (startIdx !== -1 && endIdx !== -1) {
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
       jsonStr = stdout.substring(startIdx + RESULT_START.length, endIdx).trim();
     } else {
       jsonStr = stdout.trim();
@@ -76,7 +76,8 @@ export class ExecBrowserHelper {
     try {
       return JSON.parse(jsonStr) as T;
     } catch {
-      throw new Error(`Failed to parse Playwright result. Raw stdout: ${stdout}`);
+      const truncated = stdout.length > 4096 ? stdout.slice(0, 4096) + "... [truncated]" : stdout;
+      throw new Error(`Failed to parse Playwright result. Raw stdout: ${truncated}`);
     }
   }
 

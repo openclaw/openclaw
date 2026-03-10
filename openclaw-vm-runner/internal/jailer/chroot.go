@@ -1,11 +1,13 @@
 package jailer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"syscall"
 )
 
 var validVMID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9\-]*$`)
@@ -77,22 +79,32 @@ func validateVMID(vmID string) error {
 	return nil
 }
 
-// linkOrCopy attempts a hard link; falls back to file copy if cross-device.
+// linkOrCopy attempts a hard link; falls back to file copy only on cross-device errors.
 func linkOrCopy(src, dst string) error {
-	if err := os.Link(src, dst); err == nil {
-		return nil
+	if err := os.Link(src, dst); err != nil {
+		if errors.Is(err, syscall.EXDEV) {
+			return copyFile(src, dst)
+		}
+		return err
 	}
-	return copyFile(src, dst)
+	return nil
 }
 
 func copyFile(src, dst string) error {
+	// Verify dst does not already exist (e.g. as a symlink).
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	}
+
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	// Use O_EXCL to atomically ensure the file is created new, and O_WRONLY
+	// instead of os.Create to avoid following symlinks placed at dst.
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		return err
 	}

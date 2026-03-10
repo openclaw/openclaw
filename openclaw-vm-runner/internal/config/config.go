@@ -50,7 +50,7 @@ func DefaultServiceConfig() *ServiceConfig {
 		LogLevel:         "info",
 		SnapshotPoolSize: 5,
 		SnapshotDir:      "/var/lib/openclaw/snapshots",
-		VNCProxyPort:        6080,
+		VNCProxyPort:        0,
 		SnapshotDiskLimitMB: 5120,
 	}
 }

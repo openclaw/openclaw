@@ -190,9 +190,11 @@ func main() {
 		vncProxy := server.NewVNCProxy(mgr)
 		httpMux := http.NewServeMux()
 		httpMux.HandleFunc("/vnc", vncProxy.HandleWS)
+		// Protect /debug/vars — only expose on loopback, not publicly.
+		// Access is implicitly restricted since the server binds to 127.0.0.1.
 		httpMux.Handle("/debug/vars", expvar.Handler())
 		go func() {
-			addr := fmt.Sprintf(":%d", cfg.VNCProxyPort)
+			addr := fmt.Sprintf("127.0.0.1:%d", cfg.VNCProxyPort)
 			log.Printf("VNC WebSocket proxy + metrics on %s", addr)
 			if err := http.ListenAndServe(addr, httpMux); err != nil && err != http.ErrServerClosed {
 				log.Printf("VNC proxy server error: %v", err)

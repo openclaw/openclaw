@@ -171,8 +171,8 @@ func (s *BrowserServer) Launch(ctx context.Context, req *pb.LaunchRequest) (*pb.
 
 // Navigate loads a URL in the browser.
 func (s *BrowserServer) Navigate(ctx context.Context, req *pb.NavigateRequest) (*pb.NavigateResponse, error) {
-	// Validate URL before navigation (SSRF prevention).
-	if err := s.urlPolicy.Validate(req.GetUrl()); err != nil {
+	// Validate URL before navigation (SSRF prevention, including DNS resolution).
+	if err := s.urlPolicy.Validate(ctx, req.GetUrl()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "blocked URL: %v", err)
 	}
 
@@ -196,12 +196,21 @@ func (s *BrowserServer) Navigate(ctx context.Context, req *pb.NavigateRequest) (
 	}
 
 	var title string
-	var url string
-	if err := chromedp.Run(runCtx, chromedp.Title(&title), chromedp.Location(&url)); err != nil {
+	var finalURL string
+	if err := chromedp.Run(runCtx, chromedp.Title(&title), chromedp.Location(&finalURL)); err != nil {
 		return nil, status.Errorf(codes.Internal, "get page info after navigate: %v", err)
 	}
 
-	return &pb.NavigateResponse{Url: url, Title: title}, nil
+	// Post-navigation SSRF check: if Chromium followed a redirect, validate the final URL.
+	if finalURL != req.GetUrl() {
+		if err := s.urlPolicy.Validate(ctx, finalURL); err != nil {
+			// Navigate away from the blocked page to prevent data exfiltration.
+			_ = chromedp.Run(runCtx, chromedp.Navigate("about:blank"))
+			return nil, status.Errorf(codes.InvalidArgument, "blocked redirect URL: %v", err)
+		}
+	}
+
+	return &pb.NavigateResponse{Url: finalURL, Title: title}, nil
 }
 
 // Click clicks an element matching a CSS selector.

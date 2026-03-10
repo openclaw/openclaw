@@ -138,11 +138,19 @@ func (s *Snapshotter) RestoreEntry(ctx context.Context, dir string, newSandboxID
 		return nil, fmt.Errorf("failed to read snapshot metadata: %w", err)
 	}
 
-	// 2. Build artifact paths
+	// 2. Validate metadata ranges to prevent negative values wrapping to huge uint32.
+	if meta.VcpuCount < 1 || meta.VcpuCount > 32 {
+		return nil, fmt.Errorf("invalid snapshot metadata: vcpu_count %d out of range [1, 32]", meta.VcpuCount)
+	}
+	if meta.MemSizeMib < 128 || meta.MemSizeMib > 65536 {
+		return nil, fmt.Errorf("invalid snapshot metadata: mem_size_mib %d out of range [128, 65536]", meta.MemSizeMib)
+	}
+
+	// 3. Build artifact paths
 	memPath := filepath.Join(dir, "memory.bin")
 	snapPath := filepath.Join(dir, "vmstate.snap")
 
-	// 3. Validate artifact files exist
+	// 4. Validate artifact files exist
 	if _, err := os.Stat(memPath); err != nil {
 		return nil, fmt.Errorf("snapshot memory file missing: %w", err)
 	}
@@ -150,7 +158,7 @@ func (s *Snapshotter) RestoreEntry(ctx context.Context, dir string, newSandboxID
 		return nil, fmt.Errorf("snapshot vmstate file missing: %w", err)
 	}
 
-	// 4. Build CreateRequest and VMConfig for the restore factory
+	// 5. Build CreateRequest and VMConfig for the restore factory
 	mgrCfg := s.mgr.Config()
 	req := &CreateRequest{
 		SandboxID:  newSandboxID,
@@ -168,7 +176,7 @@ func (s *Snapshotter) RestoreEntry(ctx context.Context, dir string, newSandboxID
 		VsockPath:       filepath.Join(mgrCfg.SocketDir, newSandboxID+"-vsock.sock"),
 	}
 
-	// 5. Call restore factory
+	// 6. Call restore factory
 	entry, err := s.restoreFactory(ctx, req, vmCfg, memPath, snapPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to restore VM %s: %w", newSandboxID, err)
@@ -233,19 +241,33 @@ func hashBytes(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// hashFile returns the hex-encoded SHA256 of the file at path using streaming
+// I/O to avoid loading the entire file into memory.
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // writeMetadata writes a metadata.json file into dir containing snapshot metadata
 // derived from the artifacts and VMConfig.
 func writeMetadata(dir string, artifacts *SnapshotArtifacts, cfg *VMConfig) error {
-	// Compute rootfs hash.
-	rootfsData, err := os.ReadFile(cfg.RootfsPath)
+	// Compute rootfs hash using streaming I/O to avoid loading entire rootfs into memory.
+	rootfsHash, err := hashFile(cfg.RootfsPath)
 	if err != nil {
 		// If rootfs is not at cfg.RootfsPath, try artifacts.RootfsPath.
-		rootfsData, err = os.ReadFile(artifacts.RootfsPath)
+		rootfsHash, err = hashFile(artifacts.RootfsPath)
 		if err != nil {
-			return fmt.Errorf("read rootfs for metadata: %w", err)
+			return fmt.Errorf("hash rootfs for metadata: %w", err)
 		}
 	}
-	rootfsHash := hashBytes(rootfsData)
 
 	// Compute config hash.
 	cfgBytes, err := json.Marshal(cfg)
