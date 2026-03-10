@@ -225,6 +225,15 @@ export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 
+OPENCLAW_JSON="$OPENCLAW_CONFIG_DIR/openclaw.json"
+if [[ ! -f "$OPENCLAW_JSON" ]]; then
+  cat >"$OPENCLAW_JSON" <<EOF
+{ "gateway": { "mode": "local", "bind": "${OPENCLAW_GATEWAY_BIND}" } }
+EOF
+  chmod 600 "$OPENCLAW_JSON" 2>/dev/null || true
+  echo "Created $OPENCLAW_JSON (minimal gateway.mode=local)."
+fi
+
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
 if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
