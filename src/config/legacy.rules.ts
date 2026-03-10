@@ -17,6 +17,32 @@ function hasLegacyThreadBindingTtlInAccounts(value: unknown): boolean {
   );
 }
 
+function hasLegacyBindingMatchAccountID(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    const match = isRecord(entry.match) ? entry.match : undefined;
+    return Boolean(match) && Object.prototype.hasOwnProperty.call(match, "accountID");
+  });
+}
+
+function hasLegacySessionSendPolicyRuleProvider(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((rule) => {
+    if (!isRecord(rule)) {
+      return false;
+    }
+    const match = isRecord(rule.match) ? rule.match : undefined;
+    return Boolean(match) && Object.prototype.hasOwnProperty.call(match, "provider");
+  });
+}
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
@@ -99,6 +125,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
       "routing.allowFrom was removed; use channels.whatsapp.allowFrom instead (auto-migrated on load).",
   },
   {
+    path: ["routing", "groupChat", "historyLimit"],
+    message:
+      "routing.groupChat.historyLimit was moved; use messages.groupChat.historyLimit instead (auto-migrated on load).",
+  },
+  {
     path: ["routing", "bindings"],
     message: "routing.bindings was moved; use top-level bindings instead (auto-migrated on load).",
   },
@@ -153,6 +184,25 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["memorySearch"],
     message:
       "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+  },
+  {
+    path: ["bindings"],
+    issuePath: "bindings[].match.accountID",
+    message:
+      "bindings[].match.accountID was renamed to bindings[].match.accountId (auto-migrated on load).",
+    match: (value) => hasLegacyBindingMatchAccountID(value),
+  },
+  {
+    path: ["session", "sendPolicy", "rules"],
+    issuePath: "session.sendPolicy.rules[].match.provider",
+    message:
+      "session.sendPolicy.rules[].match.provider was renamed to match.channel (auto-migrated on load).",
+    match: (value) => hasLegacySessionSendPolicyRuleProvider(value),
+  },
+  {
+    path: ["messages", "queue", "byProvider"],
+    message:
+      "messages.queue.byProvider was renamed to messages.queue.byChannel (auto-migrated on load).",
   },
   {
     path: ["tools", "bash"],

@@ -11,6 +11,7 @@ async function expectLoadRejectionPreservesField(params: {
   config: unknown;
   readValue: (parsed: unknown) => unknown;
   expectedValue: unknown;
+  expectedIssuePath?: string;
 }) {
   await withTempHome(async (home) => {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -21,34 +22,9 @@ async function expectLoadRejectionPreservesField(params: {
 
     expect(snap.valid).toBe(false);
     expect(snap.issues.length).toBeGreaterThan(0);
-
-    const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
-    expect(params.readValue(parsed)).toBe(params.expectedValue);
-  });
-}
-
-async function expectLoadWarningPreservesField(params: {
-  config: unknown;
-  readValue: (parsed: unknown) => unknown;
-  expectedValue: unknown;
-  warningKey: string;
-}) {
-  await withTempHome(async (home) => {
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify(params.config, null, 2), "utf-8");
-
-    const snap = await readConfigFileSnapshot();
-
-    expect(snap.valid).toBe(true);
-    expect(snap.issues).toHaveLength(0);
-    expect(
-      snap.warnings.some(
-        (warning) =>
-          warning.message.toLowerCase().includes("unknown config key ignored") &&
-          warning.message.includes(`"${params.warningKey}"`),
-      ),
-    ).toBe(true);
+    if (params.expectedIssuePath) {
+      expect(snap.issues.some((issue) => issue.path === params.expectedIssuePath)).toBe(true);
+    }
 
     const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
     expect(params.readValue(parsed)).toBe(params.expectedValue);
@@ -370,8 +346,8 @@ describe("legacy config detection", () => {
       expectedValue: "slack",
     });
   });
-  it("warns for bindings[].match.accountID on load and preserves source value", async () => {
-    await expectLoadWarningPreservesField({
+  it("rejects bindings[].match.accountID on load and preserves source value", async () => {
+    await expectLoadRejectionPreservesField({
       config: {
         bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "work" } }],
       },
@@ -379,7 +355,7 @@ describe("legacy config detection", () => {
         (parsed as { bindings?: Array<{ match?: { accountID?: string } }> }).bindings?.[0]?.match
           ?.accountID,
       expectedValue: "work",
-      warningKey: "accountID",
+      expectedIssuePath: "bindings[].match.accountID",
     });
   });
   it("accepts bindings[].comment on load", () => {
@@ -392,55 +368,49 @@ describe("legacy config detection", () => {
       expectedValue: "primary route",
     });
   });
-  it("warns for session.sendPolicy.rules[].match.provider on load", async () => {
-    await withSnapshotForConfig(
-      {
+  it("rejects session.sendPolicy.rules[].match.provider on load", async () => {
+    await expectLoadRejectionPreservesField({
+      config: {
         session: {
           sendPolicy: {
             rules: [{ action: "deny", match: { provider: "telegram" } }],
           },
         },
       },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
-        expect(ctx.snapshot.issues).toHaveLength(0);
-        expect(
-          ctx.snapshot.warnings.some(
-            (warning) =>
-              warning.message.toLowerCase().includes("unknown config key ignored") &&
-              warning.message.includes('"provider"'),
-          ),
-        ).toBe(true);
-        const parsed = ctx.parsed as {
-          session?: { sendPolicy?: { rules?: Array<{ match?: { provider?: string } }> } };
-        };
-        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.provider).toBe("telegram");
-      },
-    );
+      readValue: (parsed) =>
+        (
+          parsed as {
+            session?: { sendPolicy?: { rules?: Array<{ match?: { provider?: string } }> } };
+          }
+        ).session?.sendPolicy?.rules?.[0]?.match?.provider,
+      expectedValue: "telegram",
+      expectedIssuePath: "session.sendPolicy.rules[].match.provider",
+    });
   });
-  it("warns for messages.queue.byProvider on load", async () => {
-    await withSnapshotForConfig(
-      { messages: { queue: { byProvider: { whatsapp: "queue" } } } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
-        expect(ctx.snapshot.issues).toHaveLength(0);
-        expect(
-          ctx.snapshot.warnings.some(
-            (warning) =>
-              warning.message.toLowerCase().includes("unknown config key ignored") &&
-              warning.message.includes('"byProvider"'),
-          ),
-        ).toBe(true);
-
-        const parsed = ctx.parsed as {
-          messages?: {
-            queue?: {
-              byProvider?: Record<string, unknown>;
-            };
-          };
-        };
-        expect(parsed.messages?.queue?.byProvider?.whatsapp).toBe("queue");
+  it("rejects messages.queue.byProvider on load", async () => {
+    await expectLoadRejectionPreservesField({
+      config: { messages: { queue: { byProvider: { whatsapp: "queue" } } } },
+      readValue: (parsed) =>
+        (parsed as { messages?: { queue?: { byProvider?: Record<string, unknown> } } }).messages
+          ?.queue?.byProvider?.whatsapp,
+      expectedValue: "queue",
+      expectedIssuePath: "messages.queue.byProvider",
+    });
+  });
+  it("rejects routing.groupChat.historyLimit on load", async () => {
+    await expectLoadRejectionPreservesField({
+      config: {
+        routing: {
+          groupChat: {
+            historyLimit: 12,
+          },
+        },
       },
-    );
+      readValue: (parsed) =>
+        (parsed as { routing?: { groupChat?: { historyLimit?: number } } }).routing?.groupChat
+          ?.historyLimit,
+      expectedValue: 12,
+      expectedIssuePath: "routing.groupChat.historyLimit",
+    });
   });
 });

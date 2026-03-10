@@ -33,7 +33,7 @@ export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): Legac
           continue;
         }
       }
-      issues.push({ path: rule.path.join("."), message: rule.message });
+      issues.push({ path: rule.issuePath ?? rule.path.join("."), message: rule.message });
     }
   }
   return issues;
