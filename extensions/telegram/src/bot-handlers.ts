@@ -72,6 +72,7 @@ import {
   isTelegramExecApprovalClientEnabled,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -1776,7 +1777,16 @@ export const registerTelegramHandlers = ({
           if (drainRequireMention) {
             const mentionRegexes = buildMentionRegexes(cfg, drainRoute.agentId);
             const botUsername = event.ctx.me?.username?.toLowerCase();
+            const botId = event.ctx.me?.id;
             const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+            // Mirror the implicit-mention logic from resolveTelegramInboundBody:
+            // a reply to a (non-service) bot message counts as an implicit mention,
+            // matching the normal (non-drain) message processing path.
+            const replyFromId = event.msg.reply_to_message?.from?.id;
+            const replyToBotMessage = botId != null && replyFromId === botId;
+            const isReplyToServiceMessage =
+              replyToBotMessage && isTelegramForumServiceMessage(event.msg.reply_to_message);
+            const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
             if (canDetectMention) {
               const messageText = event.msg.text ?? event.msg.caption ?? "";
               const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
@@ -1793,7 +1803,8 @@ export const registerTelegramHandlers = ({
                   canResolveExplicit: Boolean(botUsername),
                 },
               });
-              if (!wasMentioned) {
+              const effectiveWasMentioned = wasMentioned || implicitMention;
+              if (!effectiveWasMentioned) {
                 logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
                 return;
               }
