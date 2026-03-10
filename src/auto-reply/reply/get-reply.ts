@@ -10,6 +10,16 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import {
+  initializeLangfuseAgentHooks,
+  redactPayload,
+  truncateString,
+} from "../../observability/langfuse-agent-hooks.js";
+import {
+  withLangfuseRequestScope,
+  type LangfuseRequestScope,
+} from "../../observability/langfuse-request-scope.js";
+import { getLangfuseInstrumentation, type LangfuseHandle } from "../../observability/langfuse.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -43,6 +53,9 @@ function loadStageSandboxMediaRuntime() {
   stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
   return stageSandboxMediaRuntimePromise;
 }
+
+// Register global agent event listener for tool span tracking once at startup.
+initializeLangfuseAgentHooks();
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -429,49 +442,161 @@ export async function getReplyFromConfig(
     });
   }
 
-  return runPreparedReply({
-    ctx,
-    sessionCtx,
-    cfg,
-    agentId,
-    agentDir,
-    agentCfg,
-    sessionCfg,
-    commandAuthorized,
-    command,
-    commandSource,
-    allowTextCommands,
-    directives,
-    defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel,
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    execOverrides,
-    elevatedEnabled,
-    elevatedAllowed,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    modelState,
-    provider,
-    model,
-    perMessageQueueMode,
-    perMessageQueueOptions,
-    typing,
-    opts: resolvedOpts,
-    defaultProvider,
-    defaultModel,
-    timeoutMs,
-    isNewSession,
-    resetTriggered,
-    systemSent,
-    sessionEntry,
-    sessionStore,
+  // Build Langfuse root trace metadata from the available context.
+  const traceInput = redactPayload({
+    body: truncateString(ctx.Body ?? "", 2_000),
     sessionKey,
-    sessionId,
-    storePath,
-    workspaceDir,
-    abortedLastRun,
+    messageId: ctx.MessageSid,
+    senderId: ctx.From,
+    channel: ctx.Provider,
+    surface: ctx.Surface,
+    chatType: ctx.ChatType,
+    agentId,
+    accountId: ctx.AccountId,
+    to: ctx.To,
+    isHeartbeat: opts?.isHeartbeat ?? false,
   });
+
+  const instrumentation = await getLangfuseInstrumentation();
+  if (!instrumentation.enabled) {
+    // Langfuse disabled — skip trace, run normally.
+    return runPreparedReply({
+      ctx,
+      sessionCtx,
+      cfg,
+      agentId,
+      agentDir,
+      agentCfg,
+      sessionCfg,
+      commandAuthorized,
+      command,
+      commandSource,
+      allowTextCommands,
+      directives,
+      defaultActivation,
+      resolvedThinkLevel,
+      resolvedVerboseLevel,
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      execOverrides,
+      elevatedEnabled,
+      elevatedAllowed,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      modelState,
+      provider,
+      model,
+      perMessageQueueMode,
+      perMessageQueueOptions,
+      typing,
+      opts: resolvedOpts,
+      defaultProvider,
+      defaultModel,
+      timeoutMs,
+      isNewSession,
+      resetTriggered,
+      systemSent,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId,
+      storePath,
+      workspaceDir,
+      abortedLastRun,
+    });
+  }
+
+  const traceHandle: LangfuseHandle = instrumentation.startTrace({
+    name: "request",
+    input: traceInput,
+    metadata: {
+      sessionKey,
+      agentId,
+      provider,
+      model,
+      isHeartbeat: opts?.isHeartbeat ?? false,
+    },
+  });
+
+  const scope: LangfuseRequestScope = {
+    trace: traceHandle,
+    requestName: "request",
+    metadata: { sessionKey, agentId },
+  };
+
+  let result: ReplyPayload | ReplyPayload[] | undefined;
+  try {
+    result = await withLangfuseRequestScope(scope, () =>
+      runPreparedReply({
+        ctx,
+        sessionCtx,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        sessionCfg,
+        commandAuthorized,
+        command,
+        commandSource,
+        allowTextCommands,
+        directives,
+        defaultActivation,
+        resolvedThinkLevel,
+        resolvedVerboseLevel,
+        resolvedReasoningLevel,
+        resolvedElevatedLevel,
+        execOverrides,
+        elevatedEnabled,
+        elevatedAllowed,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        modelState,
+        provider,
+        model,
+        perMessageQueueMode,
+        perMessageQueueOptions,
+        typing,
+        opts: resolvedOpts,
+        defaultProvider,
+        defaultModel,
+        timeoutMs,
+        isNewSession,
+        resetTriggered,
+        systemSent,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        sessionId,
+        storePath,
+        workspaceDir,
+        abortedLastRun,
+      }),
+    );
+
+    // Collect output text for trace.
+    const outputText = (() => {
+      if (!result) {
+        return undefined;
+      }
+      const payloads = Array.isArray(result) ? result : [result];
+      const texts = payloads
+        .map((p) => (typeof p.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join("\n");
+      return texts ? truncateString(texts, 2_000) : undefined;
+    })();
+
+    traceHandle.end({
+      output: outputText,
+      metadata: {
+        replyKind: result ? (Array.isArray(result) ? "multi" : "single") : "none",
+      },
+    });
+    return result;
+  } catch (error) {
+    traceHandle.captureError(error, { phase: "runPreparedReply" });
+    throw error;
+  }
 }

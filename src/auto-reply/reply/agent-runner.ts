@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -19,6 +20,12 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  clearRunToolSpans,
+  endModelGeneration,
+  errorModelGeneration,
+  startModelGeneration,
+} from "../../observability/langfuse-agent-hooks.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -399,13 +406,26 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  // Pre-generate runId so we can clean up tool spans in the finally block even
+  // if runAgentTurnWithFallback throws before returning it.
+  const preGeneratedRunId = opts?.runId ?? crypto.randomUUID();
+  const optsWithRunId = opts ? { ...opts, runId: preGeneratedRunId } : { runId: preGeneratedRunId };
+
+  // Start a Langfuse model generation span before the agent turn.
+  const generationStartedAt = Date.now();
+  const generationHandle = startModelGeneration({
+    provider: followupRun.run.provider,
+    model: followupRun.run.model,
+    prompt: commandBody,
+  });
+
   try {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
       sessionCtx,
-      opts,
+      opts: optsWithRunId,
       typingSignals,
       blockReplyPipeline,
       blockStreamingEnabled,
@@ -426,6 +446,13 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      // Short-circuit path (e.g. context overflow recovered). End generation with no usage.
+      endModelGeneration(generationHandle, {
+        outputText: runOutcome.payload.text,
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+        durationMs: Date.now() - generationStartedAt,
+      });
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -777,6 +804,20 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    // Close the Langfuse generation span with output and usage data.
+    const outputText = finalPayloads
+      .map((p) => (typeof p.text === "string" ? p.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    endModelGeneration(generationHandle, {
+      outputText: outputText || undefined,
+      provider: providerUsed,
+      model: modelUsed,
+      durationMs: Date.now() - generationStartedAt,
+      usage,
+      fallbackAttemptCount: fallbackAttempts.length,
+    });
+
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
@@ -786,8 +827,11 @@ export async function runReplyAgent(params: {
     // Keep the followup queue moving even when an unexpected exception escapes
     // the run path; the caller still receives the original error.
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    errorModelGeneration(generationHandle, error);
     throw error;
   } finally {
+    // Clean up any open tool spans (handles exception paths where tool.result never fires).
+    clearRunToolSpans(preGeneratedRunId);
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires
