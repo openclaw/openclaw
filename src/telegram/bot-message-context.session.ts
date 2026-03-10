@@ -192,14 +192,19 @@ export async function buildTelegramInboundContextPayload(params: {
     await touchMediaFiles(historyMediaPaths);
   }
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  // Merge history media into context so the media-understanding pipeline processes them
+  // Merge history media into context so the media-understanding pipeline processes them.
+  // History refs go into a separate array to avoid populating MediaPath (which triggers
+  // sticker handling in bot-message-dispatch when stickerCacheHit already removed the sticker).
   const historyMediaRefs: TelegramMediaRef[] = historyEntries.flatMap((e) =>
     (e.mediaPaths ?? []).map((p, i) => ({
       path: p,
       contentType: e.mediaTypes?.[i],
     })),
   );
-  const contextMedia = [...currentMediaForContext, ...replyMedia, ...historyMediaRefs];
+  // Primary context media: current attachments + reply media (drives MediaPath/Sticker logic)
+  const primaryMedia = [...currentMediaForContext, ...replyMedia];
+  // Full context media: primary + history (drives MediaPaths for media-understanding pipeline)
+  const contextMedia = [...primaryMedia, ...historyMediaRefs];
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: bodyText,
@@ -243,9 +248,9 @@ export async function buildTelegramInboundContextPayload(params: {
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
-    MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
+    MediaPath: primaryMedia.length > 0 ? primaryMedia[0]?.path : undefined,
+    MediaType: primaryMedia.length > 0 ? primaryMedia[0]?.contentType : undefined,
+    MediaUrl: primaryMedia.length > 0 ? primaryMedia[0]?.path : undefined,
     MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaTypes: contextMedia.length > 0 ? contextMedia.map((m) => m.contentType) : undefined,
