@@ -360,19 +360,33 @@ export function resolveMemoryBackendConfig(params: {
 /**
  * Check if the QMD binary is available on the system PATH.
  * Returns the resolved command path if available, null otherwise.
+ *
+ * @param command - The command to check (default: "qmd")
+ * @param timeoutMs - Timeout in milliseconds (default: 5000)
+ * @param cwd - Working directory for the command (default: undefined, uses process.cwd())
+ * @returns Object indicating availability and path or error message
  */
 export async function checkQmdBinaryAvailable(
   command = "qmd",
   timeoutMs = 5000,
+  cwd?: string,
 ): Promise<{ available: true; path: string } | { available: false; error: string }> {
   const isWindows = process.platform === "win32";
-  const resolvedCommand = isWindows && !path.extname(command) ? `${command}.cmd` : command;
+  // Only append .cmd for known shim names (qmd, npm, npx) to avoid breaking
+  // custom executables that rely on PATHEXT resolution (e.g., my-qmd-wrapper -> my-qmd-wrapper.exe)
+  const knownShims = ["qmd", "npm", "npx"];
+  const resolvedCommand =
+    isWindows && !path.extname(command) && knownShims.includes(command)
+      ? `${command}.cmd`
+      : command;
 
   try {
     // Try to run `qmd --version` to verify the binary works
+    // Use the provided cwd to ensure relative paths are resolved correctly
     await execFileAsync(resolvedCommand, ["--version"], {
       timeout: timeoutMs,
       encoding: "utf8",
+      cwd,
     });
     return { available: true, path: resolvedCommand };
   } catch (err) {

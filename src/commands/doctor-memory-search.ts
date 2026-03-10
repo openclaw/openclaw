@@ -42,7 +42,8 @@ export async function noteMemorySearchHealth(
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig.backend === "qmd") {
     const qmdCommand = backendConfig.qmd?.command ?? "qmd";
-    const checkResult = await checkQmdBinaryAvailable(qmdCommand);
+    // Use agent workspace as cwd to ensure relative paths (e.g., ./bin/qmd) resolve correctly
+    const checkResult = await checkQmdBinaryAvailable(qmdCommand, 5000, agentDir);
     if (!checkResult.available) {
       note(
         [
