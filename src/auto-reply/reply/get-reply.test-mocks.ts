@@ -4,6 +4,7 @@ export function registerGetReplyCommonMocks(): void {
   vi.mock("../../agents/agent-scope.js", () => ({
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+    resolveRunModelFallbacksOverride: vi.fn(() => undefined),
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   }));
@@ -20,9 +21,14 @@ export function registerGetReplyCommonMocks(): void {
   vi.mock("../../channels/model-overrides.js", () => ({
     resolveChannelModelOverride: vi.fn(() => undefined),
   }));
-  vi.mock("../../config/config.js", () => ({
-    loadConfig: vi.fn(() => ({})),
-  }));
+  vi.mock("../../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: vi.fn(() => ({})),
+      STATE_DIR: "/tmp/openclaw-state",
+    };
+  });
   vi.mock("../../runtime.js", () => ({
     defaultRuntime: { log: vi.fn() },
   }));
