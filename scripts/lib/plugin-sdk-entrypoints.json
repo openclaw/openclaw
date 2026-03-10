@@ -118,5 +118,6 @@
   "zalouser",
   "speech",
   "state-paths",
-  "tool-send"
+  "tool-send",
+  "backup"
 ]
