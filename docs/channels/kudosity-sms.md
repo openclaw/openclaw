@@ -2,6 +2,7 @@
 summary: "Cloud SMS channel via Kudosity — send and receive SMS messages"
 read_when:
   - Working on Kudosity SMS channel features
+tab: Channels
 title: "Kudosity SMS"
 ---
 
@@ -36,6 +37,7 @@ The Kudosity SMS channel lets your OpenClaw agent send and receive SMS messages 
     ```
 
     Select **SMS Kudosity** from the channel list and follow the prompts.
+
   </Step>
 </Steps>
 
@@ -46,7 +48,7 @@ Add to your OpenClaw config file:
 ```yaml
 channels:
   kudosity-sms:
-    apiKey: "your-kudosity-api-key"
+    apiKey: "your-kudosity-api-key" # pragma: allowlist secret
     sender: "+61400000000"
 ```
 
@@ -57,13 +59,13 @@ Or use environment variables:
 
 ## Capabilities
 
-| Feature | Supported |
-|---------|-----------|
-| Text messages | ✅ |
-| Media/MMS | ❌ (graceful degradation — sends caption text) |
-| Threads | ❌ |
-| Groups | ❌ |
-| Reactions | ❌ |
+| Feature       | Supported                                      |
+| ------------- | ---------------------------------------------- |
+| Text messages | ✅                                             |
+| Media/MMS     | ❌ (graceful degradation — sends caption text) |
+| Threads       | ❌                                             |
+| Groups        | ❌                                             |
+| Reactions     | ❌                                             |
 
 ## Resources
 

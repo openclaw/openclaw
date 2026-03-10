@@ -12,7 +12,7 @@ import type { KudosityConfig, SMSResponse } from "./kudosity-api.js";
 // ─── Test Fixtures ───────────────────────────────────────────────────────────
 
 const TEST_CONFIG: KudosityConfig = {
-  apiKey: "test-api-key-123",
+  apiKey: "test-api-key-123", // pragma: allowlist secret
   sender: "+61400000000",
 };
 

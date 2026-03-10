@@ -6,7 +6,13 @@
  * Telegram, Slack, and other channel onboarding adapters.
  */
 
-import type { ChannelOnboardingAdapter } from "openclaw/plugin-sdk/kudosity-sms";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingConfigureContext,
+  ChannelOnboardingResult,
+  ChannelOnboardingStatus,
+  ChannelOnboardingStatusContext,
+} from "openclaw/plugin-sdk/kudosity-sms";
 import { validateApiKey, type KudosityConfig } from "./kudosity-api.js";
 
 const CHANNEL_ID = "kudosity-sms";
@@ -207,7 +213,7 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
           ...prev.channels?.[CHANNEL_KEY],
           enabled: true,
           apiKey: apiKey.trim(),
-          sender: sender.trim(),
+          sender: sender.trim().replace(/[\s\-\(\)]/g, ""),
         },
       },
     };

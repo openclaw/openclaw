@@ -12,7 +12,7 @@ const BASE_URL = "https://api.transmitmessage.com";
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface KudosityConfig {
-  apiKey: string;
+  apiKey: string; // pragma: allowlist secret
   sender: string;
 }
 
