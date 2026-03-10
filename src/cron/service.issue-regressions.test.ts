@@ -25,10 +25,12 @@ import {
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import { enqueueRun, run } from "./service/ops.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
+import * as timeoutPolicy from "./service/timeout-policy.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
   executeJobCore,
+  executeJobCoreWithTimeout,
   onTimer,
   runMissedJobs,
 } from "./service/timer.js";
@@ -1302,6 +1304,54 @@ describe("Cron issue regressions", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("keeps outer timeout enforcement for main-session wake-now jobs", async () => {
+    vi.useRealTimers();
+    const timeoutSpy = vi.spyOn(timeoutPolicy, "resolveCronJobTimeoutMs").mockReturnValue(20);
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runHeartbeatOnce = vi.fn(
+      async (): Promise<HeartbeatRunResult> => ({
+        status: "skipped",
+        reason: "requests-in-flight",
+      }),
+    );
+    const mainJob: CronJob = {
+      id: "main-wrapper-timeout",
+      name: "main wrapper timeout",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+    const state = createCronServiceState({
+      cronEnabled: false,
+      storePath: "/tmp/openclaw-cron-main-timeout/jobs.json",
+      log: noopLogger,
+      nowMs: () => Date.now(),
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runHeartbeatOnce,
+      wakeNowHeartbeatBusyMaxWaitMs: DEFAULT_JOB_TIMEOUT_MS * 2,
+      wakeNowHeartbeatBusyRetryDelayMs: 60_000,
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+
+    try {
+      await expect(executeJobCoreWithTimeout(state, mainJob)).rejects.toThrow(
+        "cron: job execution timed out",
+      );
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+      expect(runHeartbeatOnce).toHaveBeenCalled();
+      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {

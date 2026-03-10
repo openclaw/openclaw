@@ -632,7 +632,10 @@ export async function onTimer(state: CronServiceState) {
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       try {
-        const result = await executeJobCore(state, job);
+        const result =
+          job.sessionTarget === "isolated" && job.payload.kind === "agentTurn"
+            ? await executeJobCore(state, job)
+            : await executeJobCoreWithTimeout(state, job);
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
