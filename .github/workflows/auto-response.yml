@@ -5,6 +5,7 @@ on:
     types: [opened, edited, labeled]
   issue_comment:
     types: [created]
+  # zizmor: ignore[dangerous-triggers] Maintainer-applied labels need target-repo write access; this workflow does not check out or execute PR code.
   pull_request_target:
     types: [labeled]
 
