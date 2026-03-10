@@ -28,7 +28,17 @@ export const updateHandlers: GatewayRequestHandlers = {
     const { deliveryContext: extractedDeliveryContext, threadId: extractedThreadId } =
       extractDeliveryInfo(sessionKey);
     const paramsDeliveryContext = parseDeliveryContextFromParams(params);
-    const deliveryContext = paramsDeliveryContext ?? extractedDeliveryContext;
+    // When live channel/to is present but accountId is missing (e.g. /tools/invoke without
+    // x-openclaw-account-id), fall back to the session-extracted account so the sentinel is
+    // not written without account context — which would cause deliveries to use the channel
+    // default account and misroute in multi-account setups. See config.ts for the same pattern.
+    const deliveryContext =
+      paramsDeliveryContext != null
+        ? {
+            ...paramsDeliveryContext,
+            accountId: paramsDeliveryContext.accountId ?? extractedDeliveryContext?.accountId,
+          }
+        : extractedDeliveryContext;
     const threadId = paramsDeliveryContext?.threadId ?? extractedThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
