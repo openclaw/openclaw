@@ -166,6 +166,41 @@ Notes:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"`
 
+## Browser Use (hosted remote CDP)
+
+[Browser Use](https://www.browser-use.com) is a cloud browser platform with
+anti-detect stealth, CAPTCHA solving, persistent profiles, and residential
+proxies.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browseruse",
+    remoteCdpTimeoutMs: 5000,
+    remoteCdpHandshakeTimeoutMs: 15000,
+    profiles: {
+      browseruse: {
+        // All Browser Use session params can be added as query params.
+        // See: https://docs.browser-use.com/cloud/api-v2/browsers/create-browser-session
+        cdpUrl: "wss://your-proxy-host:9223?apiKey=<BROWSER_USE_API_KEY>&timeout=240&profileId=<PROFILE_ID>&proxyCountryCode=us",
+        color: "#ff750e",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://www.browser-use.com) and copy your **API Key** from the
+  dashboard.
+- Replace `<BROWSER_USE_API_KEY>` with your real Browser Use API key.
+- All [Browser Use session parameters](https://docs.browser-use.com/cloud/api-v2/browsers/create-browser-session)
+  (timeout, profileId, proxyCountryCode, screen size, custom proxy, etc.)
+  are passed as query params in the `cdpUrl`.
+- See [browser-use.com](https://www.browser-use.com) for more information.
+
 ## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
@@ -205,7 +240,8 @@ the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
   discover the WebSocket debugger URL, then connects.
 - **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
   skipping `/json/version`. Use this for services like
-  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  [Browser Use](https://www.browser-use.com),
+  [Browserbase](https://www.browserbase.com), or any provider that hands you a
   WebSocket URL.
 
 ### Browserbase
