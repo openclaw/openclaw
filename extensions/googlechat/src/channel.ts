@@ -1,9 +1,9 @@
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
-  buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   collectAllowlistProviderGroupPolicyWarnings,
   createScopedAccountConfigAccessors,
+  createScopedDmSecurityResolver,
   formatNormalizedAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import {
@@ -82,6 +82,14 @@ const googleChatConfigBase = createScopedChannelConfigBase<ResolvedGoogleChatAcc
     "botUser",
     "name",
   ],
+});
+
+const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleChatAccount>({
+  channelKey: "googlechat",
+  resolvePolicy: (account) => account.config.dm?.policy,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  allowFromPathSuffix: "dm.",
+  normalizeEntry: (raw) => formatAllowFromEntry(raw),
 });
 
 export const googlechatDock: ChannelDock = {
@@ -170,18 +178,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     ...googleChatConfigAccessors,
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "googlechat",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dm?.policy,
-        allowFrom: account.config.dm?.allowFrom ?? [],
-        allowFromPathSuffix: "dm.",
-        normalizeEntry: (raw) => formatAllowFromEntry(raw),
-      });
-    },
+    resolveDmPolicy: resolveGoogleChatDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       const warnings = collectAllowlistProviderGroupPolicyWarnings({
         cfg,
