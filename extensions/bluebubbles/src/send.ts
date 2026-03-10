@@ -436,9 +436,12 @@ export async function sendMessageBlueBubbles(
     tempGuid: crypto.randomUUID(),
     message: strippedText,
   };
+  const isPlainSend = !wantsReplyThread && !wantsEffect;
+  const forcePrivateApiTransport = privateApiEnabled && isPlainSend;
+  const usePrivateApiTransport = forcePrivateApiTransport || privateApiDecision.canUsePrivateApi;
   // Prefer private-api transport whenever available. This avoids legacy AppleScript
   // fallback failures on newer macOS/BlueBubbles combinations.
-  if (privateApiEnabled) {
+  if (usePrivateApiTransport) {
     payload.method = "private-api";
   }
 
@@ -458,15 +461,35 @@ export async function sendMessageBlueBubbles(
     path: "/api/v1/message/text",
     password,
   });
-  const res = await blueBubblesFetchWithTimeout(
+  const requestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  } as const;
+  let res = await blueBubblesFetchWithTimeout(
     url,
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      ...requestInit,
       body: JSON.stringify(payload),
     },
     opts.timeoutMs,
   );
+  if (!res.ok && forcePrivateApiTransport) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.method;
+    res = await blueBubblesFetchWithTimeout(
+      url,
+      {
+        ...requestInit,
+        body: JSON.stringify(fallbackPayload),
+      },
+      opts.timeoutMs,
+    );
+    if (res.ok) {
+      warnBlueBubbles(
+        "Private API text send failed; retried with legacy transport for compatibility.",
+      );
+    }
+  }
   if (!res.ok) {
     const errorText = await res.text();
     throw new Error(`BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`);

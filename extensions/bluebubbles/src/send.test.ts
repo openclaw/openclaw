@@ -469,6 +469,45 @@ describe("send", () => {
       expect(body.effectId).toBeUndefined();
     });
 
+    it("falls back to legacy transport when cached private-api plain send fails", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      mockResolvedHandleTarget();
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          text: () => Promise.resolve("Private API unavailable"),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-uuid-fallback" } })),
+        });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-uuid-fallback");
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+        const firstSend = mockFetch.mock.calls[1];
+        const firstBody = JSON.parse(firstSend[1].body);
+        expect(firstBody.method).toBe("private-api");
+        const fallbackSend = mockFetch.mock.calls[2];
+        const fallbackBody = JSON.parse(fallbackSend[1].body);
+        expect(fallbackBody.method).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Private API text send failed"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it("strips markdown formatting from outbound messages", async () => {
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-stripped" } });
