@@ -173,7 +173,12 @@ export {
   WEBHOOK_IN_FLIGHT_DEFAULTS,
 } from "./webhook-request-guards.js";
 export type { WebhookBodyReadProfile, WebhookInFlightLimiter } from "./webhook-request-guards.js";
-export { keepHttpServerTaskAlive, waitUntilAbort } from "./channel-lifecycle.js";
+export {
+  createAccountStatusSink,
+  keepHttpServerTaskAlive,
+  runPassiveAccountLifecycle,
+  waitUntilAbort,
+} from "./channel-lifecycle.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
