@@ -215,6 +215,9 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
           }
+          if (postModeRaw === "off" && sessionTarget === "main") {
+            throw new Error("--post-mode off only applies to isolated jobs.");
+          }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
             (sessionTarget !== "isolated" || payload.kind !== "agentTurn")

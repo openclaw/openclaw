@@ -430,12 +430,19 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
-  const { deliveryRequested, resolvedDelivery, toolPolicy } = await resolveCronDeliveryContext({
+  const deliveryContext = await resolveCronDeliveryContext({
     cfg: cfgWithAgentDefaults,
     job: params.job,
     agentId,
     deliveryContract,
   });
+  const { resolvedDelivery, toolPolicy } = deliveryContext;
+  // When postToMainMode is "off", suppress the announce/delivery relay to the
+  // main session. The isolated agent still runs and its output is recorded in
+  // CronEvent for audit, but nothing is posted back to the main session.
+  // Failure alerts use a separate path (emitFailureAlert) and are unaffected.
+  const deliveryRequested =
+    params.job.postToMainMode === "off" ? false : deliveryContext.deliveryRequested;
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();

@@ -1050,14 +1050,6 @@ export async function executeJobCore(
             : 'main job requires payload.kind="systemEvent"',
       };
     }
-    // When postToMainMode is "off", skip posting to the main session entirely.
-    // The job still succeeds — output is recorded in CronEvent for audit.
-    // Note: failure alerts (via failureAlert config) use a separate code path
-    // (emitFailureAlert) and are NOT suppressed by postToMainMode.
-    if (job.postToMainMode === "off") {
-      return { status: "ok", summary: text };
-    }
-
     // Preserve the job session namespace for main-target reminders so heartbeat
     // routing can deliver follow-through in the originating channel/thread.
     // Downstream gateway wiring canonicalizes/guards this key per agent.
