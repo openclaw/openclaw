@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -18,7 +21,17 @@ const baseRequest = {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
+
+const emptyRegistry = createTestRegistry([]);
+const defaultRegistry = createTestRegistry([
+  {
+    pluginId: "telegram",
+    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+    source: "test",
+  },
+]);
 
 function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
   const firstCall = deliver.mock.calls[0]?.[0] as
@@ -32,7 +45,7 @@ const TARGETS_CFG = {
     exec: {
       enabled: true,
       mode: "targets",
-      targets: [{ channel: "telegram", to: "123" }],
+      targets: [{ channel: "slack", to: "U123" }],
     },
   },
 } as OpenClawConfig;
@@ -128,6 +141,14 @@ async function expectSessionFilterRequestResult(params: {
 }
 
 describe("exec approval forwarder", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(defaultRegistry);
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
+
   it("forwards to session target and resolves", async () => {
     vi.useFakeTimers();
     const cfg = {
@@ -159,10 +180,104 @@ describe("exec approval forwarder", () => {
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips telegram forwarding when telegram exec approvals handler is enabled", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
+        },
+      },
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "telegram", to: "-100999", threadId: 77 }),
+    });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "-100999",
+          turnSourceThreadId: "77",
+          turnSourceAccountId: "default",
+        },
+      }),
+    ).resolves.toBe(false);
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("attaches explicit telegram buttons in forwarded telegram fallback payloads", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({ cfg });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceChannel: "discord",
+          turnSourceTo: "channel:123",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        payloads: [
+          expect.objectContaining({
+            channelData: {
+              execApproval: expect.objectContaining({
+                approvalId: "req-1",
+              }),
+              telegram: {
+                buttons: [
+                  [
+                    { text: "Allow Once", callback_data: "/approve req-1 allow-once" },
+                    { text: "Allow Always", callback_data: "/approve req-1 allow-always" },
+                  ],
+                  [{ text: "Deny", callback_data: "/approve req-1 deny" }],
+                ],
+              },
+            },
+          }),
+        ],
+      }),
+    );
   });
 
   it("formats single-line commands as inline code", async () => {
@@ -170,8 +285,13 @@ describe("exec approval forwarder", () => {
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
 
-    expect(getFirstDeliveryText(deliver)).toContain("Command: `echo hello`");
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("🔒 Exec approval required");
+    expect(text).toContain("Command: `echo hello`");
+    expect(text).toContain("Expires in: 5s");
+    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
   it("formats complex commands as fenced code blocks", async () => {
@@ -187,8 +307,9 @@ describe("exec approval forwarder", () => {
         },
       }),
     ).resolves.toBe(true);
+    await Promise.resolve();
 
-    expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
+    expect(getFirstDeliveryText(deliver)).toContain("```\necho `uname`\necho done\n```");
   });
 
   it("returns false when forwarding is disabled", async () => {
@@ -334,7 +455,8 @@ describe("exec approval forwarder", () => {
         },
       }),
     ).resolves.toBe(true);
+    await Promise.resolve();
 
-    expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
+    expect(getFirstDeliveryText(deliver)).toContain("````\necho ```danger```\n````");
   });
 });
