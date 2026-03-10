@@ -126,8 +126,13 @@ export function resolveSessionStoreEntry(params: {
   const directHit = params.store[normalizedKey];
   if (directHit) {
     const legacyKeys: string[] = [];
-    if (trimmedKey !== normalizedKey && Object.prototype.hasOwnProperty.call(params.store, trimmedKey)) {
-      legacyKeys.push(trimmedKey);
+    for (const storeKey of Object.keys(params.store)) {
+      if (storeKey === normalizedKey) {
+        continue;
+      }
+      if (storeKey.toLowerCase() === normalizedKey) {
+        legacyKeys.push(storeKey);
+      }
     }
     return { normalizedKey, existing: directHit, legacyKeys };
   }
@@ -539,6 +544,7 @@ export async function saveSessionStore(
 ): Promise<void> {
   await withSessionStoreLock(storePath, async () => {
     await saveSessionStoreUnlocked(storePath, store, opts);
+    LOCKED_STORE_CACHE.delete(storePath);
   });
 }
 
@@ -550,19 +556,15 @@ export async function updateSessionStore<T>(
   return await withSessionStoreLock(storePath, async () => {
     const locked = LOCKED_STORE_CACHE.get(storePath);
     const store = locked
-      ? { ...locked.store }
+      ? structuredClone(locked.store)
       : loadSessionStore(storePath, { skipCache: true });
     if (locked) {
       locked.lastAccessAt = Date.now();
     }
-    const snapshotJson = JSON.stringify(store);
     const result = await mutator(store);
-    const dirty = JSON.stringify(store) !== snapshotJson;
-    if (dirty) {
-      await saveSessionStoreUnlocked(storePath, store, opts);
-      LOCKED_STORE_CACHE.set(storePath, { store: { ...store }, lastAccessAt: Date.now() });
-      evictLockedStoreCacheIfNeeded();
-    }
+    await saveSessionStoreUnlocked(storePath, store, opts);
+    LOCKED_STORE_CACHE.set(storePath, { store: structuredClone(store), lastAccessAt: Date.now() });
+    evictLockedStoreCacheIfNeeded();
     return result;
   });
 }
@@ -587,10 +589,6 @@ type SessionStoreLockQueue = {
 };
 
 const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
-
-type LockedStoreCache = {
-  store: Record<string, SessionEntry>;
-};
 
 type LockedStoreCache = {
   store: Record<string, SessionEntry>;
@@ -816,12 +814,14 @@ export async function updateSessionStoreEntry(params: {
       return existing;
     }
     const next = mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
+    const result = await persistResolvedSessionEntry({
       storePath,
       store,
       resolved,
       next,
     });
+    LOCKED_STORE_CACHE.delete(storePath);
+    return result;
   });
 }
 
