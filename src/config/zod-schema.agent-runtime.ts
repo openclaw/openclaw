@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
@@ -16,7 +17,6 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 
 export const HeartbeatSchema = z
   .object({
@@ -160,19 +160,19 @@ const SandboxDockerSchema = z
           continue;
         }
 
-// Replace the colonCount block with:
-const windowsPrefix = /^[A-Za-z]:/;
-const parsed = splitSandboxBindSpec(bind);
-const source = (parsed ? parsed.host : bind).trim();
-if (!source.startsWith("/") && !windowsPrefix.test(source)) {
-  ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: ["binds", i],
-    message:
-      `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-      "Only absolute POSIX paths are supported for sandbox binds.",
-  });
-}
+        // Replace the colonCount block with:
+        const windowsPrefix = /^[A-Za-z]:/;
+        const parsed = splitSandboxBindSpec(bind);
+        const source = (parsed ? parsed.host : bind).trim();
+        if (!source.startsWith("/") && !windowsPrefix.test(source)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message:
+              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+              "Only absolute POSIX paths are supported for sandbox binds.",
+          });
+        }
         if (!source.startsWith("/") && !windowsPrefix.test(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
