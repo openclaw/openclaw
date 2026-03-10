@@ -1443,7 +1443,47 @@ describe("loadOpenClawPlugins", () => {
     const subpaths = __testing.listPluginSdkExportedSubpaths();
     expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
+    // regression #35869: keyed-async-queue must be in the scoped alias list
+    expect(subpaths).toContain("keyed-async-queue");
     expect(subpaths).not.toContain("root-alias");
+  });
+
+  it("resolvePluginSdkScopedAliasMap includes openclaw/plugin-sdk/keyed-async-queue (regression #35869)", () => {
+    const aliasMap = __testing.resolvePluginSdkScopedAliasMap();
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toBeTruthy();
+  });
+
+  it("loads bundled plugin that imports openclaw/plugin-sdk/keyed-async-queue (regression #35869)", () => {
+    const pluginDir = makeTempDir();
+    writePlugin({
+      id: "keyed-queue-consumer",
+      filename: "keyed-queue-consumer.cjs",
+      body: `
+const { KeyedAsyncQueue } = require("openclaw/plugin-sdk/keyed-async-queue");
+module.exports = {
+  id: "keyed-queue-consumer",
+  register() {
+    void new KeyedAsyncQueue();
+  },
+};`,
+      dir: pluginDir,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: pluginDir,
+      config: {
+        plugins: {
+          allow: ["keyed-queue-consumer"],
+          entries: { "keyed-queue-consumer": { enabled: true } },
+        },
+      },
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "keyed-queue-consumer");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.error).toBeUndefined();
   });
 
   it("falls back to src plugin-sdk alias when dist is missing in production", () => {

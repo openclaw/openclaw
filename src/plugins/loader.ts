@@ -162,6 +162,7 @@ export const __testing = {
   listPluginSdkExportedSubpaths,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
+  resolvePluginSdkScopedAliasMap,
 };
 
 function buildCacheKey(params: {
