@@ -124,15 +124,26 @@ export function createDiscordMessageHandler(
       // after debouncing.  The spread of last.data.message drops Carbon
       // Message prototype getters (mentionedUsers, mentionedRoles, etc.),
       // so we materialise them here as plain arrays.
-      const seenMentionIds = new Set<string>();
+      const seenUserIds = new Set<string>();
       const allMentionedUsers: Array<{ id: string }> = [];
+      const seenRoleIds = new Set<string>();
+      const allMentionedRoles: Array<{ id: string }> = [];
+      let anyMentionedEveryone = false;
       for (const entry of entries) {
-        const mentioned = entry.data.message.mentionedUsers ?? [];
-        for (const u of mentioned) {
-          if (u.id && !seenMentionIds.has(u.id)) {
-            seenMentionIds.add(u.id);
+        for (const u of entry.data.message.mentionedUsers ?? []) {
+          if (u.id && !seenUserIds.has(u.id)) {
+            seenUserIds.add(u.id);
             allMentionedUsers.push(u);
           }
+        }
+        for (const r of entry.data.message.mentionedRoles ?? []) {
+          if (r.id && !seenRoleIds.has(r.id)) {
+            seenRoleIds.add(r.id);
+            allMentionedRoles.push(r);
+          }
+        }
+        if (entry.data.message.mentionedEveryone) {
+          anyMentionedEveryone = true;
         }
       }
       const syntheticMessage = {
@@ -140,8 +151,8 @@ export function createDiscordMessageHandler(
         content: combinedBaseText,
         attachments: [],
         mentionedUsers: allMentionedUsers,
-        mentionedRoles: last.data.message.mentionedRoles ?? [],
-        mentionedEveryone: last.data.message.mentionedEveryone ?? false,
+        mentionedRoles: allMentionedRoles,
+        mentionedEveryone: anyMentionedEveryone,
         message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
         messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
         rawData: {
