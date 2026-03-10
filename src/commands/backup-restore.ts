@@ -192,15 +192,21 @@ function buildCoveredAssetArchivePath(params: {
   kind: BackupAssetKind;
   coveredSourcePath: string;
   backupStateDir: string | undefined;
+  backupStateCanonicalDir: string | undefined;
   stateArchivePath: string | undefined;
   entryPaths: Set<string>;
   entryTypeByPath: Map<string, string>;
 }): string | undefined {
-  if (!params.backupStateDir || !params.stateArchivePath) {
+  if ((!params.backupStateDir && !params.backupStateCanonicalDir) || !params.stateArchivePath) {
     return undefined;
   }
 
-  const backupStateAliases = buildPathAliases(path.resolve(params.backupStateDir));
+  const backupStateAliases = [
+    ...(params.backupStateDir ? buildPathAliases(path.resolve(params.backupStateDir)) : []),
+    ...(params.backupStateCanonicalDir
+      ? buildPathAliases(path.resolve(params.backupStateCanonicalDir))
+      : []),
+  ];
   const coveredSourceAliases = buildPathAliases(path.resolve(params.coveredSourcePath));
 
   for (const backupStateAlias of backupStateAliases) {
@@ -296,9 +302,8 @@ function buildCoveredAssetManifestEntries(params: {
   const manifest = verifiedArchive.manifest;
   const supportedCoveredKinds: BackupAssetKind[] = ["config", "credentials"];
   const explicitKinds = new Set(manifest.assets.map((asset) => asset.kind));
-  const stateAssetArchivePath = manifest.assets.find(
-    (asset) => asset.kind === "state",
-  )?.archivePath;
+  const stateAsset = manifest.assets.find((asset) => asset.kind === "state");
+  const stateAssetArchivePath = stateAsset?.archivePath;
   const synthesized: BackupManifestAsset[] = [];
 
   for (const kind of supportedCoveredKinds) {
@@ -328,6 +333,7 @@ function buildCoveredAssetManifestEntries(params: {
       kind,
       coveredSourcePath,
       backupStateDir: manifest.paths?.stateDir,
+      backupStateCanonicalDir: stateAsset?.sourcePath,
       stateArchivePath: stateAssetArchivePath,
       entryPaths: verifiedArchive.entryPaths,
       entryTypeByPath: verifiedArchive.entryTypeByPath,
@@ -396,13 +402,15 @@ function rewriteWorkspacePathsInConfig(
 async function buildWorkspaceBaseMapping(
   workspaceAssets: BackupManifestAsset[],
   backupStateDir: string | undefined,
+  backupStateCanonicalDir: string | undefined,
   currentStateDir: string,
 ): Promise<Map<string, string> | null> {
-  if (!backupStateDir) {
+  const backupStateSource = backupStateCanonicalDir ?? backupStateDir;
+  if (!backupStateSource) {
     return null;
   }
 
-  const oldBaseDir = path.dirname(await canonicalizePath(backupStateDir));
+  const oldBaseDir = path.dirname(path.resolve(backupStateSource));
   const currentBaseDir = path.dirname(path.resolve(currentStateDir));
   const mapping = new Map<string, string>();
 
@@ -424,6 +432,7 @@ async function resolveWorkspaceRestoreTargets(params: {
   workspaceAssets: BackupManifestAsset[];
   manifestWorkspaceDirs: string[] | undefined;
   backupStateDir: string | undefined;
+  backupStateCanonicalDir: string | undefined;
   currentStateDir: string;
 }): Promise<Map<string, WorkspaceRestoreTarget>> {
   if (params.workspaceAssets.length === 0) {
@@ -483,6 +492,7 @@ async function resolveWorkspaceRestoreTargets(params: {
   const remappedFromBackupBase = await buildWorkspaceBaseMapping(
     orderedAssets,
     params.backupStateDir,
+    params.backupStateCanonicalDir,
     params.currentStateDir,
   );
   if (remappedFromBackupBase) {
@@ -535,11 +545,13 @@ async function buildRestoreItems(params: {
   const currentOauthDir = path.resolve(resolveOAuthDir());
 
   const workspaceAssets = manifest.assets.filter((asset) => asset.kind === "workspace");
+  const stateAsset = manifest.assets.find((asset) => asset.kind === "state");
   const workspaceTargets: Map<string, WorkspaceRestoreTarget> = params.includeWorkspace
     ? await resolveWorkspaceRestoreTargets({
         workspaceAssets,
         manifestWorkspaceDirs: manifest.paths?.workspaceDirs,
         backupStateDir: manifest.paths?.stateDir,
+        backupStateCanonicalDir: stateAsset?.sourcePath,
         currentStateDir,
       })
     : new Map<string, WorkspaceRestoreTarget>();
