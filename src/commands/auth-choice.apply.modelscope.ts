@@ -43,7 +43,7 @@ export async function applyAuthChoiceModelScope(
       setModelScopeApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     noteMessage: [
       "ModelScope provides OpenAI-compatible chat completions.",
-      "Get your API key from Alibaba Cloud DashScope console.",
+      "Get your API key from the ModelScope console: https://modelscope.cn/docs/model-service/API-Inference/intro",
     ].join("\n"),
     noteTitle: "ModelScope",
   });
