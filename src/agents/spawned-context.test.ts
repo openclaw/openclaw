@@ -44,13 +44,66 @@ describe("mapToolContextToSpawnedRunMetadata", () => {
 });
 
 describe("resolveSpawnedWorkspaceInheritance", () => {
-  it("prefers explicit workspaceDir when provided", () => {
+  it("prefers explicit workspaceDir when provided (same-agent)", () => {
     const resolved = resolveSpawnedWorkspaceInheritance({
       config: {},
       requesterSessionKey: "agent:main:subagent:parent",
+      targetAgentId: "main",
       explicitWorkspaceDir: " /tmp/explicit ",
     });
     expect(resolved).toBe("/tmp/explicit");
+  });
+
+  it("returns undefined for cross-agent spawn when target has explicit workspace", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "orchestrator", workspace: "/home/node/.openclaw/workspace/orchestrator" },
+          { id: "programmer", workspace: "/home/node/.openclaw/workspace/programmer" },
+        ],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: cfg,
+      requesterSessionKey: "agent:orchestrator:subagent:parent",
+      targetAgentId: "programmer",
+      explicitWorkspaceDir: "/home/node/.openclaw/workspace/orchestrator",
+    });
+    expect(resolved).toBeUndefined();
+  });
+
+  it("inherits when cross-agent spawn but target has no workspace configured", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "orchestrator", workspace: "/home/node/.openclaw/workspace/orchestrator" },
+          { id: "helper" },
+        ],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: cfg,
+      requesterSessionKey: "agent:orchestrator:subagent:parent",
+      targetAgentId: "helper",
+      explicitWorkspaceDir: "/home/node/.openclaw/workspace/orchestrator",
+    });
+    expect(resolved).toBe("/home/node/.openclaw/workspace/orchestrator");
+  });
+
+  it("inherits requester workspace for same-agent spawn", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", workspace: "/home/node/.openclaw/workspace/main" }],
+      },
+    };
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config: cfg,
+      requesterSessionKey: "agent:main:subagent:parent",
+      targetAgentId: "main",
+      explicitWorkspaceDir: undefined,
+    });
+    expect(resolved).toContain("workspace");
+    expect(resolved).toContain("main");
   });
 
   it("returns undefined for missing requester context", () => {

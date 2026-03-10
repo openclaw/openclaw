@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
@@ -59,18 +59,33 @@ export function mapToolContextToSpawnedRunMetadata(
 export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   requesterSessionKey?: string;
+  targetAgentId?: string;
   explicitWorkspaceDir?: string | null;
 }): string | undefined {
-  const explicit = normalizeOptionalText(params.explicitWorkspaceDir);
-  if (explicit) {
-    return explicit;
-  }
   const requesterAgentId = params.requesterSessionKey
     ? parseAgentSessionKey(params.requesterSessionKey)?.agentId
     : undefined;
-  return requesterAgentId
+  const targetId = params.targetAgentId ? normalizeAgentId(params.targetAgentId) : undefined;
+  const explicit = normalizeOptionalText(params.explicitWorkspaceDir);
+  const requesterWorkspace = requesterAgentId
     ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(requesterAgentId))
     : undefined;
+
+  // Cross-agent spawn: target differs from requester → use target's workspace only
+  // when target has explicit workspace in agents.list; otherwise inherit.
+  if (targetId && requesterAgentId && targetId !== normalizeAgentId(requesterAgentId)) {
+    const targetWorkspace = resolveAgentConfig(params.config, targetId)?.workspace;
+    const targetHasExplicitWorkspace =
+      typeof targetWorkspace === "string" && targetWorkspace.trim().length > 0;
+    if (targetHasExplicitWorkspace) {
+      return undefined;
+    }
+  }
+
+  if (explicit) {
+    return explicit;
+  }
+  return requesterWorkspace;
 }
 
 export function resolveIngressWorkspaceOverrideForSpawnedRun(
