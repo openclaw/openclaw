@@ -281,13 +281,14 @@ export function createExecApprovalHandlers(
         return;
       }
       if ("ambiguous" in resolved) {
-        const short = resolved.ambiguous.map((id) => id.slice(0, 8)).join(", ");
+        const short = resolved.ambiguous.join(", ");
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, `ambiguous approval id prefix, matches: ${short}`),
         );
         return;
+      }
       }
       const fullId = resolved.id;
       const snapshot = manager.getSnapshot(fullId);
