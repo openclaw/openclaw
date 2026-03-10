@@ -327,11 +327,17 @@ jobs:
             # Filter out test files from detect-secrets scan
             filtered_files=()
             for file in "${changed_files[@]}"; do
-              if [[ ! "$file" =~ .*\.test\.ts$ ]]; then
-                filtered_files+=("$file")
-              fi
+              case "$file" in
+                *.test.ts)
+                  echo "Skipping test file: $file"
+                  ;;
+                *)
+                  filtered_files+=("$file")
+                  ;;
+              esac
             done
             if [ "${#filtered_files[@]}" -gt 0 ]; then
+              echo "Scanning ${#filtered_files[@]} non-test file(s)"
               pre-commit run detect-secrets --files "${filtered_files[@]}"
             else
               echo "All changed files are test files, skipping detect-secrets."
