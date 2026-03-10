@@ -18,8 +18,11 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+const { listAccountIds, listConfiguredAccountIds, resolveDefaultAccountId } =
+  createAccountListHelpers("discord");
 export const listDiscordAccountIds = listAccountIds;
+/** Returns only explicitly-configured account IDs, never the implicit "default" fallback. */
+export const listConfiguredDiscordAccountIds = listConfiguredAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
 export function resolveDiscordAccountConfig(

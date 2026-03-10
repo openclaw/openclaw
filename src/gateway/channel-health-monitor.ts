@@ -260,6 +260,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
             );
+            // Record the attempt time even on failure so the exponential
+            // cooldown is respected on the next check cycle; without this,
+            // lastRestartAt stays at its previous value and the cooldown
+            // guard is bypassed, causing rapid retries on persistent failures.
+            record.lastRestartAt = now;
+            restartRecords.set(key, record);
           }
         }
       }

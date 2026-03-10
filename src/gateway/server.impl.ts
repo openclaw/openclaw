@@ -21,7 +21,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { listDiscordAccountIds } from "../discord/accounts.js";
+import { listConfiguredDiscordAccountIds } from "../discord/accounts.js";
 import {
   evictPersistentState as evictDiscordPersistentState,
   markStable as markDiscordStable,
@@ -1066,7 +1066,14 @@ export async function startGatewayServer(
             }
             // Evict persistent state for discord accounts no longer in the new config.
             if (prevDiscordAccountIds.length > 0) {
-              const nextDiscordAccountIds = new Set(listDiscordAccountIds(prepared.config));
+              // Use listConfiguredDiscordAccountIds (not listDiscordAccountIds) so
+              // that removing Discord entirely produces an empty set and all
+              // previous account entries are evicted — listDiscordAccountIds
+              // falls back to ["default"] when no accounts are configured,
+              // which would prevent eviction of the implicit default account.
+              const nextDiscordAccountIds = new Set(
+                listConfiguredDiscordAccountIds(prepared.config),
+              );
               for (const id of prevDiscordAccountIds) {
                 if (!nextDiscordAccountIds.has(id)) {
                   evictDiscordPersistentState(id);
