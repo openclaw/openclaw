@@ -33,6 +33,7 @@ type NotLoadedActionResult = {
   result: "stopped" | "restarted";
   message?: string;
   warnings?: string[];
+  loaded?: boolean;
 };
 
 type NotLoadedActionContext = {
@@ -415,6 +416,8 @@ export async function runServiceRestart(params: {
       } catch {
         restarted = true;
       }
+    } else if (handledNotLoaded?.loaded !== undefined) {
+      restarted = handledNotLoaded.loaded;
     }
     emit({
       ok: true,

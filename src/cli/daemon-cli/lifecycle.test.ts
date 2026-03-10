@@ -2,6 +2,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const mockReadFileSync = vi.hoisted(() => vi.fn());
 const mockSpawnSync = vi.hoisted(() => vi.fn());
+const launchAgentPlistExists = vi.hoisted(() => vi.fn());
+const repairLaunchAgentBootstrap = vi.hoisted(() => vi.fn());
 
 type RestartHealthSnapshot = {
   healthy: boolean;
@@ -23,7 +25,9 @@ type RestartParams = {
 };
 
 const service = {
+  label: "LaunchAgent",
   readCommand: vi.fn(),
+  isLoaded: vi.fn(),
   restart: vi.fn(),
 };
 
@@ -85,6 +89,13 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
 
+vi.mock("../../daemon/launchd.js", () => ({
+  launchAgentPlistExists: (env: Record<string, string | undefined>) =>
+    launchAgentPlistExists(env),
+  repairLaunchAgentBootstrap: (args: { env?: Record<string, string | undefined> }) =>
+    repairLaunchAgentBootstrap(args),
+}));
+
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -105,6 +116,7 @@ vi.mock("./lifecycle-core.js", () => ({
 describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
+  const itDarwin = process.platform === "darwin" ? it : it.skip;
 
   beforeAll(async () => {
     ({ runDaemonRestart, runDaemonStop } = await import("./lifecycle.js"));
@@ -112,6 +124,7 @@ describe("runDaemonRestart health checks", () => {
 
   beforeEach(() => {
     service.readCommand.mockReset();
+    service.isLoaded.mockReset();
     service.restart.mockReset();
     runServiceRestart.mockReset();
     runServiceStop.mockReset();
@@ -132,6 +145,7 @@ describe("runDaemonRestart health checks", () => {
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
+    service.isLoaded.mockResolvedValue(true);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -174,6 +188,8 @@ describe("runDaemonRestart health checks", () => {
       stdout: "openclaw gateway --port 18789",
       stderr: "",
     });
+    launchAgentPlistExists.mockReset();
+    repairLaunchAgentBootstrap.mockReset();
   });
 
   afterEach(() => {
@@ -219,6 +235,33 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  itDarwin("bootstraps launchd when plist exists but service is not loaded", async () => {
+    runServiceRestart.mockImplementationOnce(async (params: RestartParams) => {
+      const fail = (message: string, hints?: string[]) => {
+        const err = new Error(message) as Error & { hints?: string[] };
+        err.hints = hints;
+        throw err;
+      };
+      const handled = await params.onNotLoaded?.({
+        json: Boolean(params.opts?.json),
+        stdout: process.stdout,
+        fail,
+      });
+      expect(handled?.result).toBe("restarted");
+      expect(handled?.message).toContain("LaunchAgent was not loaded");
+      return true;
+    });
+    findGatewayPidsOnPortSync.mockReturnValue([]);
+    launchAgentPlistExists.mockResolvedValue(true);
+    repairLaunchAgentBootstrap.mockResolvedValue({ ok: true });
+    service.isLoaded.mockResolvedValue(true);
+
+    await runDaemonRestart({ json: true });
+
+    expect(launchAgentPlistExists).toHaveBeenCalledTimes(1);
+    expect(repairLaunchAgentBootstrap).toHaveBeenCalledTimes(1);
   });
 
   it("signals an unmanaged gateway process on stop", async () => {
