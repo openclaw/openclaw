@@ -26,6 +26,34 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   byteplus: ["BYTEPLUS_API_KEY"],
 };
 
+const EXTRA_PROVIDER_AUTH_ENV_VARS = [
+  "VOYAGE_API_KEY",
+  "GROQ_API_KEY",
+  "DEEPGRAM_API_KEY",
+  "CEREBRAS_API_KEY",
+  "NVIDIA_API_KEY",
+  "COPILOT_GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "CHUTES_OAUTH_TOKEN",
+  "CHUTES_API_KEY",
+  "QWEN_OAUTH_TOKEN",
+  "QWEN_PORTAL_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "OLLAMA_API_KEY",
+  "VLLM_API_KEY",
+] as const;
+
+export function listKnownProviderAuthEnvVarNames(): string[] {
+  return [
+    ...new Set([
+      ...Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys),
+      ...EXTRA_PROVIDER_AUTH_ENV_VARS,
+    ]),
+  ];
+}
+
 export function listKnownSecretEnvVarNames(): string[] {
   return [...new Set(Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys))];
 }

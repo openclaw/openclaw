@@ -98,6 +98,11 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof msteamsSdk.loadOutboundMediaFromUrl).toBe("function");
   });
 
+  it("exports acpx helpers", async () => {
+    const acpxSdk = await import("openclaw/plugin-sdk/acpx");
+    expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
+  });
+
   it("resolves bundled extension subpaths", async () => {
     for (const { id, load } of bundledExtensionSubpathLoaders) {
       const mod = await load();

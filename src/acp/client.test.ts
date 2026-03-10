@@ -4,9 +4,11 @@ import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
   resolvePermissionRequest,
+  shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
@@ -109,6 +111,77 @@ describe("resolveAcpClientSpawnEnv", () => {
 
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
     expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("strips provider auth env vars for the default OpenClaw bridge", () => {
+    const stripKeys = new Set(["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"]);
+    const env = resolveAcpClientSpawnEnv(
+      {
+        OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
+        GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
+        HF_TOKEN: "hf-secret",
+        OPENCLAW_API_KEY: "keep-me",
+        PATH: "/usr/bin",
+      },
+      { stripKeys },
+    );
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.HF_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_API_KEY).toBe("keep-me");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+
+  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+    const env = resolveAcpClientSpawnEnv({
+      OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
+      GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
+      HF_TOKEN: "hf-secret",
+      OPENCLAW_API_KEY: "keep-me",
+    });
+
+    expect(env.OPENAI_API_KEY).toBe("openai-secret");
+    expect(env.GITHUB_TOKEN).toBe("gh-secret");
+    expect(env.HF_TOKEN).toBe("hf-secret");
+    expect(env.OPENCLAW_API_KEY).toBe("keep-me");
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+});
+
+describe("shouldStripProviderAuthEnvVarsForAcpServer", () => {
+  it("strips provider auth env vars for the default bridge", () => {
+    expect(shouldStripProviderAuthEnvVarsForAcpServer()).toBe(true);
+  });
+
+  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+    expect(shouldStripProviderAuthEnvVarsForAcpServer("custom-acp-server")).toBe(false);
+  });
+});
+
+describe("buildAcpClientStripKeys", () => {
+  it("always includes active skill env keys", () => {
+    const stripKeys = buildAcpClientStripKeys({
+      serverCommand: "custom-acp-server",
+      activeSkillEnvKeys: ["SKILL_SECRET", "OPENAI_API_KEY"],
+    });
+
+    expect(stripKeys.has("SKILL_SECRET")).toBe(true);
+    expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("GITHUB_TOKEN")).toBe(false);
+  });
+
+  it("adds provider auth env vars for the default bridge", () => {
+    const stripKeys = buildAcpClientStripKeys({
+      activeSkillEnvKeys: ["SKILL_SECRET"],
+    });
+
+    expect(stripKeys.has("SKILL_SECRET")).toBe(true);
+    expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("GITHUB_TOKEN")).toBe(true);
+    expect(stripKeys.has("HF_TOKEN")).toBe(true);
+    expect(stripKeys.has("OPENCLAW_API_KEY")).toBe(false);
   });
 });
 
