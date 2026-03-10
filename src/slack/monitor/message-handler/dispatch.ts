@@ -301,6 +301,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
 
+      // Flush in-flight draft stream operations before inspecting draft state.
+      // Without this, fast model responses may check messageId() while the
+      // initial chat.postMessage is still pending, causing deliverNormally to
+      // post a duplicate alongside the draft (double-response bug).
+      if (previewStreamingEnabled) {
+        await draftStream.flush();
+      }
+
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
