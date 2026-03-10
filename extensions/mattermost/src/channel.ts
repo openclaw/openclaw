@@ -9,6 +9,7 @@ import {
   applySetupAccountConfigPatch,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
+  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   migrateBaseNameToDefaultAccount,
@@ -500,8 +501,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
+      statusSink({
         baseUrl: account.baseUrl,
         botTokenSource: account.botTokenSource,
       });
@@ -513,7 +517,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
       });
     },
   },

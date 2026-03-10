@@ -21,6 +21,7 @@ import {
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
+  createAccountStatusSink,
   formatNormalizedAllowFromEntries,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
@@ -369,8 +370,11 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     startAccount: async (ctx) => {
       const account = ctx.account;
       const webhookPath = resolveWebhookPathFromConfig(account.config);
-      ctx.setStatus({
-        accountId: account.accountId,
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
+      statusSink({
         baseUrl: account.baseUrl,
       });
       ctx.log?.info(`[${account.accountId}] starting provider (webhook=${webhookPath})`);
@@ -379,7 +383,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
         webhookPath,
       });
     },
