@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import type { BoundDeliveryRouter } from "../../infra/outbound/bound-delivery-router.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -53,7 +55,40 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  requester?: ConversationRef;
+  boundDeliveryRouter?: BoundDeliveryRouter;
 }): AcpDispatchDeliveryCoordinator {
+  // Resolve thread binding for ACP sessions spawned from external channels
+  let shouldRouteToOriginating = params.shouldRouteToOriginating;
+  let originatingChannel = params.originatingChannel;
+  let originatingTo = params.originatingTo;
+  let bindingFailedClosed = false;
+  let bindingFailReason = "";
+
+  if (params.boundDeliveryRouter && !shouldRouteToOriginating) {
+    const sessionKey = params.ctx.SessionKey?.trim();
+    if (sessionKey) {
+      const resolution = params.boundDeliveryRouter.resolveDestination({
+        eventKind: "task_completion",
+        targetSessionKey: sessionKey,
+        requester: params.requester,
+        failClosed: true,
+      });
+      if (resolution.mode === "bound" && resolution.binding) {
+        shouldRouteToOriginating = true;
+        originatingChannel = resolution.binding.conversation.channel;
+        originatingTo = resolution.binding.conversation.conversationId;
+        logVerbose(
+          `dispatch-acp: binding resolved to ${originatingChannel}:${originatingTo} (${resolution.reason})`,
+        );
+      } else if (resolution.reason !== "no-active-binding") {
+        bindingFailedClosed = true;
+        bindingFailReason = resolution.reason;
+        logVerbose(`dispatch-acp: binding resolution failed closed: ${resolution.reason}`);
+      }
+    }
+  }
+
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
@@ -78,7 +113,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     toolCallId: string,
   ): Promise<boolean> => {
-    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+    if (!shouldRouteToOriginating || !originatingChannel || !originatingTo) {
       return false;
     }
     const handle = state.toolMessageByCallId.get(toolCallId);
@@ -140,7 +175,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+    if (bindingFailedClosed) {
+      throw new Error(
+        `ACP delivery blocked: binding resolution failed closed (${bindingFailReason})`,
+      );
+    }
+
+    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
@@ -151,8 +192,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
       const result = await routeReply({
         payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
+        channel: originatingChannel,
+        to: originatingTo,
         sessionKey: params.ctx.SessionKey,
         accountId: params.ctx.AccountId,
         threadId: params.ctx.MessageThreadId,
@@ -166,9 +207,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
+          channel: originatingChannel,
           accountId: params.ctx.AccountId,
-          to: params.originatingTo,
+          to: originatingTo,
           ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
           messageId: result.messageId,
         });
