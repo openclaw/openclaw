@@ -246,7 +246,11 @@ export function deriveAotuiRegistryName(params: {
 }
 
 function parseLocalSource(localPathInput: string, cwd: string): ParsedLocalAotuiSource {
-  const expanded = expandHomePath(localPathInput.trim());
+  const trimmed = localPathInput.trim();
+  if (!trimmed) {
+    throw new Error("local app source path cannot be empty");
+  }
+  const expanded = expandHomePath(trimmed);
   const absolutePath = path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
   return {
     kind: "local",
@@ -281,7 +285,7 @@ function sanitizePackageName(value: string): string {
 }
 
 function sanitizeSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return value.replace(/^\.+/, "_").replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 async function ensureInstallWorkspace(workspaceRoot: string): Promise<void> {

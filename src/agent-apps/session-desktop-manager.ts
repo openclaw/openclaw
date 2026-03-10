@@ -54,7 +54,11 @@ export class InMemorySessionDesktopManager implements SessionDesktopManager {
 
     const pending = this.pendingCreates.get(sessionKey);
     if (pending) {
-      await pending;
+      try {
+        await pending;
+      } catch {
+        return await this.ensureDesktop(input);
+      }
       const current = this.records.get(sessionKey);
       if (current) {
         return await this.rebindExistingDesktop(current, input);

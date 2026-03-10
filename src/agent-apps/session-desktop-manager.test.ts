@@ -213,4 +213,41 @@ describe("InMemorySessionDesktopManager", () => {
     expect(reset.sessionId).toBe("session_2");
     expect(manager.getDesktop("agent:main:discord:channel:dev")?.desktopId).toBe("dt_reset");
   });
+
+  it("retries after a shared pending create fails", async () => {
+    let createCalls = 0;
+    kernel.createDesktop.mockImplementation(async () => {
+      createCalls += 1;
+      return createCalls === 1 ? "dt_failed" : "dt_retried";
+    });
+    let afterCreateCalls = 0;
+    const manager = new InMemorySessionDesktopManager(kernel as never, {
+      afterCreate: async () => {
+        afterCreateCalls += 1;
+        if (afterCreateCalls === 1) {
+          throw new Error("install failed");
+        }
+      },
+    });
+
+    const firstPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_1",
+      agentId: "main",
+    });
+    const secondPromise = manager.ensureDesktop({
+      sessionKey: "agent:main:discord:channel:dev",
+      sessionId: "session_2",
+      agentId: "main",
+    });
+
+    await expect(firstPromise).rejects.toThrow("install failed");
+    const second = await secondPromise;
+
+    expect(kernel.destroyDesktop).toHaveBeenCalledWith("dt_failed");
+    expect(kernel.createDesktop).toHaveBeenCalledTimes(2);
+    expect(second.desktopId).toBe("dt_retried");
+    expect(second.sessionId).toBe("session_2");
+    expect(manager.getDesktop("agent:main:discord:channel:dev")?.desktopId).toBe("dt_retried");
+  });
 });

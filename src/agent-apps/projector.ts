@@ -409,7 +409,7 @@ function projectStructuredMessages(snapshot: CachedSnapshot, meta: DesktopRecord
           viewId: view.viewId,
           viewType: view.viewType,
           viewName: view.viewName,
-          markup: view.markup,
+          markup: normalizeDesktopInstructionContent(view.markup),
         }),
         timestamp: view.timestamp ?? snapshot.createdAt,
       });
@@ -422,7 +422,7 @@ function projectStructuredMessages(snapshot: CachedSnapshot, meta: DesktopRecord
         markup: wrapAppMarkup({
           appId: fragment.appId,
           appName: fragment.appName,
-          markup: fragment.markup.trim(),
+          markup: normalizeDesktopInstructionContent(fragment.markup.trim()),
         }),
         timestamp: fragment.timestamp ?? snapshot.createdAt,
       });

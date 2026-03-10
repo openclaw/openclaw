@@ -43,15 +43,37 @@ export class DefaultAotuiKernelService implements AotuiKernelService {
       return;
     }
 
+    const errors: unknown[] = [];
+    const stopReason = reason ?? "service_stop";
     try {
       if (this.desktopManager) {
-        await this.desktopManager.destroyAll(reason ?? "service_stop");
+        try {
+          await this.desktopManager.destroyAll(stopReason);
+        } catch (err) {
+          errors.push(err);
+        }
+      }
+      if (this.kernel) {
+        try {
+          await this.kernel.shutdown(stopReason);
+        } catch (err) {
+          errors.push(err);
+        }
       }
     } finally {
       this.desktopManager = undefined;
       this.appRegistry = undefined;
       this.kernel = undefined;
       this.started = false;
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(
+        errors,
+        `AOTUI kernel service stop failed with ${errors.length} error(s)`,
+      );
     }
   }
 

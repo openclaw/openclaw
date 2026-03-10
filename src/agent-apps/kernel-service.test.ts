@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   const destroyAll = vi.fn(async () => undefined);
   const desktopManager = { destroyAll };
-  const createRuntime = vi.fn(() => ({ getDesktop: vi.fn() }));
+  const shutdown = vi.fn(async () => undefined);
+  const createRuntime = vi.fn(() => ({ getDesktop: vi.fn(), shutdown }));
   const AppRegistry = vi.fn(function MockAppRegistry() {
     return {
       loadFromEntries: vi.fn(async () => undefined),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => {
   return {
     destroyAll,
     desktopManager,
+    shutdown,
     createRuntime,
     AppRegistry,
     resolveAotuiRegistryEntries,
@@ -53,9 +55,22 @@ describe("DefaultAotuiKernelService", () => {
     mocks.resolveAotuiAgentAppNames.mockReturnValue([]);
     mocks.isAotuiEnabled.mockReturnValue(true);
     mocks.destroyAll.mockResolvedValue(undefined);
+    mocks.shutdown.mockResolvedValue(undefined);
   });
 
-  it("cleans up local service state even when destroyAll fails", async () => {
+  it("shuts down the runtime after destroying desktops", async () => {
+    const { createOpenClawKernelService } = await import("./kernel-service.js");
+    const service = createOpenClawKernelService();
+    await service.start();
+
+    await service.stop("shutdown");
+
+    expect(mocks.destroyAll).toHaveBeenCalledWith("shutdown");
+    expect(mocks.shutdown).toHaveBeenCalledWith("shutdown");
+    expect(service.isStarted()).toBe(false);
+  });
+
+  it("cleans up local service state and still shuts down the runtime when destroyAll fails", async () => {
     const { createOpenClawKernelService } = await import("./kernel-service.js");
     const service = createOpenClawKernelService();
     await service.start();
@@ -63,6 +78,7 @@ describe("DefaultAotuiKernelService", () => {
 
     await expect(service.stop("shutdown")).rejects.toThrow("destroy failed");
 
+    expect(mocks.shutdown).toHaveBeenCalledWith("shutdown");
     expect(service.isStarted()).toBe(false);
     expect(() => service.getKernel()).toThrow("AOTUI kernel service has not been started");
     expect(() => service.getDesktopManager()).toThrow("AOTUI kernel service has not been started");

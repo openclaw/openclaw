@@ -50,6 +50,15 @@ describe("Agent App install helpers", () => {
     });
   });
 
+  it("rejects empty local sources", () => {
+    expect(() => parseAotuiInstallSource("local:", "/tmp/work")).toThrow(
+      "local app source path cannot be empty",
+    );
+    expect(() => parseAotuiInstallSource("local:   ", "/tmp/work")).toThrow(
+      "local app source path cannot be empty",
+    );
+  });
+
   it("derives registry names from aliases, npm packages, and local paths", () => {
     expect(
       deriveAotuiRegistryName({
@@ -94,6 +103,31 @@ describe("Agent App install helpers", () => {
     expect(result.localSource).toBe(`local:${result.installedPath}`);
     expect(result.resolvedVersion).toBe("1.2.3");
     expect(commandRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes leading-dot version segments so installs stay inside the per-package cache dir", async () => {
+    const cacheRoot = await import("node:fs/promises").then((fs) =>
+      fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-apps-")),
+    );
+    const commandRunner = vi.fn(async (_command: string, _args: string[], cwd: string) => {
+      const pkgDir = path.join(cwd, "node_modules", "@agentina", "aotui-ide");
+      await import("node:fs/promises").then((fs) => fs.mkdir(pkgDir, { recursive: true }));
+      await import("node:fs/promises").then((fs) =>
+        fs.writeFile(
+          path.join(pkgDir, "package.json"),
+          JSON.stringify({ name: "@agentina/aotui-ide", version: ".." }),
+          "utf-8",
+        ),
+      );
+    });
+
+    const result = await installNpmAotuiPackage("@agentina/aotui-ide@..", {
+      cacheRoot,
+      commandRunner,
+    });
+
+    expect(result.installRoot).toBe(path.join(cacheRoot, "scope-agentina__aotui-ide", "_"));
+    expect(result.installRoot).not.toBe(cacheRoot);
   });
 
   it("only cleans up managed local app artifacts under the OpenClaw cache root", async () => {
