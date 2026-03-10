@@ -56,7 +56,7 @@ SecretRefs 仅在有效活动的表面上进行验证。
 表面状态：
 
 - `active`：SecretRef 是有效认证表面的一部分，必须解析。
-- `active`：SecretRef 在该运行时被忽略，因为另一个认证表面获胜，或
+- `inactive`：SecretRef 在该运行时被忽略，因为另一个认证表面获胜，或
   因为远程认证被禁用/未激活。
 
 这些条目使用 `SECRETS_GATEWAY_AUTH_SURFACE` 记录，包括活动表面策略使用的原因，因此您可以看到凭证为何被视为活动或非活动。
