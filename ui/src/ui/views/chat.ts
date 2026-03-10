@@ -567,7 +567,10 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     if (normalized.role.toLowerCase() === "toolresult" && !props.showThinking) {
       continue;
     }
-    if (normalized.role.toLowerCase() === "toolresult" && !props.showTools) {
+    if (
+      ["tool", "function", "toolresult"].includes(normalized.role.toLowerCase()) &&
+      !props.showTools
+    ) {
       continue;
     }
 
