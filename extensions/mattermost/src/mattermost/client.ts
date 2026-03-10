@@ -263,26 +263,30 @@ function isRetryableError(error: Error): boolean {
   }
 
   // Retry on 5xx server errors FIRST (before checking 4xx)
+  // Use "mattermost api" prefix to avoid matching port numbers (e.g., :443) or IP octets
   // This prevents misclassification when a 5xx error detail contains a 4xx substring
-  // e.g., "503 Service Unavailable: upstream returned 404"
-  if (/\b5\d{2}\b/.test(message)) {
+  // e.g., "Mattermost API 503: upstream returned 404"
+  if (/mattermost api 5\d{2}\b/.test(message)) {
     return true;
   }
 
   // Check for explicit 4xx status codes - these are client errors and should NOT be retried
   // (except 429 which is handled above)
-  const clientErrorMatch = message.match(/\b4\d{2}\b/);
+  // Use "mattermost api" prefix to avoid matching port numbers like :443
+  const clientErrorMatch = message.match(/mattermost api (4\d{2})\b/);
   if (clientErrorMatch) {
-    const statusCode = parseInt(clientErrorMatch[0], 10);
+    const statusCode = parseInt(clientErrorMatch[1], 10);
     if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
       return false;
     }
   }
 
-  // Retry on network/transient errors only if no explicit HTTP status code is present
-  // This avoids false positives like "400 Bad Request: connection timed out"
-  const hasExplicitStatusCode = /\b\d{3}\b/.test(message);
-  if (hasExplicitStatusCode) {
+  // Retry on network/transient errors only if no explicit Mattermost API status code is present
+  // This avoids false positives like:
+  // - "400 Bad Request: connection timed out" (has status code)
+  // - "connect ECONNRESET 104.18.32.10:443" (has port number, not status)
+  const hasMattermostApiStatusCode = /mattermost api \d{3}\b/.test(message);
+  if (hasMattermostApiStatusCode) {
     return false;
   }
 

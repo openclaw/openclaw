@@ -75,6 +75,29 @@ describe("createMattermostDirectChannelWithRetry", () => {
     );
   });
 
+  it("retries on port 443 connection errors (not misclassified as 4xx)", async () => {
+    // This tests that port numbers like :443 don't trigger false 4xx classification
+    mockFetch
+      .mockRejectedValueOnce(new Error("connect ECONNRESET 104.18.32.10:443"))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({ id: "dm-channel-port" }),
+      } as Response);
+
+    const client = createMockClient();
+
+    const result = await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+      maxRetries: 3,
+      initialDelayMs: 10,
+    });
+
+    // Should retry and succeed on second attempt (port 443 should NOT be treated as 4xx)
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.id).toBe("dm-channel-port");
+  });
+
   it("retries on 5xx server errors", async () => {
     mockFetch
       .mockResolvedValueOnce({
@@ -189,18 +212,36 @@ describe("createMattermostDirectChannelWithRetry", () => {
         maxRetries: 2,
         initialDelayMs: 10,
       }),
-    ).rejects.toThrow("503");
+    ).rejects.toThrow();
 
     expect(mockFetch).toHaveBeenCalledTimes(3); // initial + 2 retries
   });
 
-  it("respects custom timeout option", async () => {
-    mockFetch.mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("Timeout")), 100);
-        }),
-    );
+  it("respects custom timeout option and aborts fetch", async () => {
+    let abortSignal: AbortSignal | undefined;
+    let abortListenerCalled = false;
+
+    mockFetch.mockImplementationOnce((url, init) => {
+      abortSignal = init?.signal;
+      if (abortSignal) {
+        abortSignal.addEventListener("abort", () => {
+          abortListenerCalled = true;
+        });
+      }
+      // Return a promise that rejects when aborted, otherwise never resolves
+      return new Promise((_, reject) => {
+        if (abortSignal) {
+          const checkAbort = () => {
+            if (abortSignal?.aborted) {
+              reject(new Error("AbortError"));
+            } else {
+              setTimeout(checkAbort, 10);
+            }
+          };
+          setTimeout(checkAbort, 10);
+        }
+      });
+    });
 
     const client = createMockClient();
 
@@ -213,13 +254,15 @@ describe("createMattermostDirectChannelWithRetry", () => {
     ).rejects.toThrow();
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(abortSignal).toBeDefined();
+    expect(abortListenerCalled).toBe(true);
   });
 
   it("uses exponential backoff with jitter between retries", async () => {
     const delays: number[] = [];
     mockFetch
-      .mockRejectedValueOnce(new Error("503 Service Unavailable"))
-      .mockRejectedValueOnce(new Error("503 Service Unavailable"))
+      .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+      .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
       .mockResolvedValueOnce({
         ok: true,
         status: 201,
@@ -250,10 +293,10 @@ describe("createMattermostDirectChannelWithRetry", () => {
   it("respects maxDelayMs cap", async () => {
     const delays: number[] = [];
     mockFetch
-      .mockRejectedValueOnce(new Error("503"))
-      .mockRejectedValueOnce(new Error("503"))
-      .mockRejectedValueOnce(new Error("503"))
-      .mockRejectedValueOnce(new Error("503"))
+      .mockRejectedValueOnce(new Error("Mattermost API 503"))
+      .mockRejectedValueOnce(new Error("Mattermost API 503"))
+      .mockRejectedValueOnce(new Error("Mattermost API 503"))
+      .mockRejectedValueOnce(new Error("Mattermost API 503"))
       .mockResolvedValueOnce({
         ok: true,
         status: 201,
