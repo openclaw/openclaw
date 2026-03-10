@@ -748,6 +748,22 @@ export async function prepareSlackMessage(params: {
     );
   };
 
+  const mainScopedDmOwnerPin =
+    isDirectMessage &&
+    route.mainSessionKey === sessionKey &&
+    pinnedMainDmOwner &&
+    message.user
+      ? {
+          ownerRecipient: pinnedMainDmOwner,
+          senderRecipient: message.user.toLowerCase(),
+          onSkip: ({ ownerRecipient, senderRecipient }) => {
+            logVerbose(
+              `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+            );
+          },
+        }
+      : undefined;
+
   await recordInboundSession({
     storePath,
     sessionKey,
@@ -758,23 +774,7 @@ export async function prepareSlackMessage(params: {
       to: slackTo,
       accountId: route.accountId,
       threadId: threadContext.messageThreadId,
-      // Preserve pinned-owner behavior for main-scoped DMs: do not let non-owner
-      // senders overwrite the main-session delivery route.
-      mainDmOwnerPin:
-        isDirectMessage &&
-        route.mainSessionKey === sessionKey &&
-        pinnedMainDmOwner &&
-        message.user
-          ? {
-              ownerRecipient: pinnedMainDmOwner,
-              senderRecipient: message.user.toLowerCase(),
-              onSkip: ({ ownerRecipient, senderRecipient }) => {
-                logVerbose(
-                  `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                );
-              },
-            }
-          : undefined,
+      mainDmOwnerPin: mainScopedDmOwnerPin,
     },
     onRecordError: handleRecordInboundError,
   });
