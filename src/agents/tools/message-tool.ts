@@ -13,19 +13,19 @@ import {
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot, loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { POLL_CREATION_PARAM_DEFS, POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { isGatewayMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
@@ -585,6 +585,109 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+function resolveTargetChannelHint(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  const separatorIndex = trimmed.indexOf(":");
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  const channel = normalizeMessageChannel(trimmed.slice(0, separatorIndex));
+  if (!channel || !isGatewayMessageChannel(channel)) {
+    return undefined;
+  }
+  return channel;
+}
+
+const EXPLICIT_CHANNEL_HINT_SENTINELS = new Set(["all", "last"]);
+
+function resolveExplicitChannelHint(value: unknown): string | undefined {
+  const channel = normalizeMessageChannel(typeof value === "string" ? value : undefined);
+  if (
+    !channel ||
+    EXPLICIT_CHANNEL_HINT_SENTINELS.has(channel) ||
+    !isGatewayMessageChannel(channel)
+  ) {
+    return undefined;
+  }
+  return channel;
+}
+
+function resolveAllTargetChannelHints(params: {
+  args: Record<string, unknown>;
+  currentChannelProvider?: string;
+}): string[] {
+  const hints = new Set<string>();
+
+  const addHint = (value: unknown) => {
+    const ch = resolveTargetChannelHint(value as string);
+    if (ch) {
+      hints.add(ch);
+    }
+  };
+
+  const explicit = resolveExplicitChannelHint(params.args.channel);
+  if (explicit) {
+    hints.add(explicit);
+  }
+
+  addHint(params.args.target);
+  addHint(params.args.to);
+
+  // Collect hints from all entries in the targets array (broadcast may span multiple channels)
+  const targets = readStringArrayParam({ targets: params.args.targets }, "targets");
+  if (targets) {
+    for (const t of targets) {
+      addHint(t);
+    }
+  }
+
+  const currentHint = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentHint) {
+    hints.add(currentHint);
+  }
+
+  return [...hints];
+}
+
+function resolveMessageToolConfig(params: {
+  args: Record<string, unknown>;
+  capturedConfig?: OpenClawConfig;
+  currentChannelProvider?: string;
+}): OpenClawConfig {
+  const runtimeSnapshot = getRuntimeConfigSnapshot();
+  if (!runtimeSnapshot) {
+    return params.capturedConfig ?? loadConfig();
+  }
+
+  // Runtime snapshots are process-global state. Clone once per tool invocation so
+  // long-running sends observe a stable config even if the live snapshot refreshes.
+  const cfg = structuredClone(runtimeSnapshot);
+  if (!params.capturedConfig) {
+    return cfg;
+  }
+
+  // Graft ALL channel configs that are missing from the runtime snapshot but present
+  // in the captured config. This covers broadcast flows where targets span multiple
+  // channels (e.g. ["telegram:...", "discord:..."]).
+  const channels = resolveAllTargetChannelHints(params);
+  const missingChannels = channels.filter(
+    (ch) => cfg.channels?.[ch] == null && params.capturedConfig!.channels?.[ch] != null,
+  );
+  if (missingChannels.length === 0) {
+    return cfg;
+  }
+
+  const grafted: Record<string, unknown> = {};
+  for (const ch of missingChannels) {
+    grafted[ch] = structuredClone(params.capturedConfig.channels![ch]);
+  }
+  cfg.channels = { ...cfg.channels, ...grafted };
+  return cfg;
+}
+
 function filterActionsForContext(params: {
   actions: ChannelMessageActionName[];
   channel?: string;
@@ -704,7 +807,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const cfg = options?.config ?? loadConfig();
+      const cfg = resolveMessageToolConfig({
+        args: params,
+        capturedConfig: options?.config,
+        currentChannelProvider: options?.currentChannelProvider,
+      });
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
