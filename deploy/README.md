@@ -38,7 +38,7 @@
 # 创建 openclaw-pack 目录并将其解压进去
 rm -rf openclaw-pack
 mkdir openclaw-pack
-tar -zxvf openclaw-2026.3.3.tgz -C openclaw-pack --strip-components=1
+tar -zxvf openclaw-2026.3.8.tgz -C openclaw-pack --strip-components=1
 
 # 进入解压后的主目录
 cd openclaw-pack
@@ -71,6 +71,7 @@ OPENCLAW_GATEWAY_TOKEN=test123
 FEISHU_APP_ID=cli_xxx你的AppID
 FEISHU_APP_SECRET=你的AppSecret
 NO_PROXY=open.feishu.cn,*.feishu.cn
+NEWSAPI_KEY="xxx"
 ```
 
 _提示：如果是第三方中转或其他支持 openai-completions 接口的提供商（如 DeepSeek/Ollama/Qwen 等），直接替换掉 OPENAI_BASE_URL 和对应的 OPENAI_API_KEY 即可。_

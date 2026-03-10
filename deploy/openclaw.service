@@ -13,6 +13,13 @@ RestartSec=5
 # 引入环境变量
 Environment="OPENCLAW_CONFIG_PATH=/path/to/package/openclaw.json"
 Environment="OPENCLAW_STATE_DIR=/path/to/package"
+# HTTP/HTTPS 代理配置
+Environment="http_proxy=http://127.0.0.1:10808"
+Environment="https_proxy=http://127.0.0.1:10808"
+Environment="all_proxy=socks5://127.0.0.1:10808"
+Environment="HTTP_PROXY=http://127.0.0.1:10808"
+Environment="HTTPS_PROXY=http://127.0.0.1:10808"
+Environment="ALL_PROXY=socks5://127.0.0.1:10808"
 
 [Install]
 WantedBy=multi-user.target

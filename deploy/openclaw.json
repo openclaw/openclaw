@@ -37,5 +37,15 @@
         }
       }
     }
+  },
+  "plugins": {
+    "entries": {
+      "newsapi": {
+        "enabled": true,
+        "config": {
+          "apiKey": "${NEWSAPI_KEY}"
+        }
+      }
+    }
   }
 }

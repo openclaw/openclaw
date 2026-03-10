@@ -1,0 +1,14 @@
+{
+  "id": "newsapi",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string", "minLength": 1 }
+    },
+    "required": ["apiKey"]
+  },
+  "uiHints": {
+    "apiKey": { "label": "NewsAPI Key", "sensitive": true }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/newsapi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NewsAPI integration for OpenClaw",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "typescript": "^5.5.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
