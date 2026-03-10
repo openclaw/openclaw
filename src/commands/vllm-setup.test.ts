@@ -103,6 +103,10 @@ describe("promptAndConfigureVllm", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("Expected a configured vLLM result");
+    }
     expect(text.mock.calls[0]?.[0]?.initialValue).toBe("http://gpu-box:8000/v1");
     expect(result.modelRef).toBe("vllm/meta-llama/Meta-Llama-3-8B-Instruct");
   });
@@ -128,6 +132,10 @@ describe("promptAndConfigureVllm", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("Expected a configured vLLM result");
+    }
     expect(buildVllmProvider).toHaveBeenCalledWith({
       baseUrl: "http://127.0.0.1:8000/v1",
       apiKey: "sk-vllm-test", // pragma: allowlist secret
@@ -182,6 +190,10 @@ describe("promptAndConfigureVllm", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("Expected a configured vLLM result");
+    }
     expect(result.modelRef).toBe("vllm-2/model-c");
     expect(result.config.models?.providers?.vllm).toBeDefined();
     expect(result.config.models?.providers?.["vllm-2"]).toMatchObject({
@@ -194,5 +206,48 @@ describe("promptAndConfigureVllm", () => {
         credential: expect.objectContaining({ provider: "vllm-2" }),
       }),
     );
+  });
+
+  it("lets the user exit after deleting the last vLLM endpoint", async () => {
+    ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "vllm:default": {
+          type: "api_key",
+          provider: "vllm",
+          key: "stored-vllm-key", // pragma: allowlist secret
+          metadata: { kind: "vllm", baseUrl: "http://gpu-a:8000/v1" },
+        },
+      },
+    });
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__manage_endpoint__")
+      .mockResolvedValueOnce("vllm")
+      .mockResolvedValueOnce("__endpoint_delete__")
+      .mockResolvedValueOnce("__done__");
+    const confirm = vi.fn().mockResolvedValue(true);
+    const prompter = makePrompter({ select, confirm });
+    const config = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://gpu-a:8000/v1",
+            api: "openai-completions",
+            models: [makeModel("model-a")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptAndConfigureVllm({
+      cfg: config,
+      prompter,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result).toBeNull();
+    expect(updateAuthProfileStoreWithLock).toHaveBeenCalled();
   });
 });

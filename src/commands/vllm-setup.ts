@@ -27,9 +27,12 @@ const VLLM_MANAGED_KIND = "vllm";
 const VLLM_ACTION_USE_EXISTING = "__use_existing_model__";
 const VLLM_ACTION_ADD_ENDPOINT = "__add_endpoint__";
 const VLLM_ACTION_MANAGE_ENDPOINT = "__manage_endpoint__";
+const VLLM_ACTION_DONE = "__done__";
 const VLLM_ENDPOINT_USE_MODEL = "__endpoint_use_model__";
 const VLLM_ENDPOINT_UPDATE = "__endpoint_update__";
 const VLLM_ENDPOINT_DELETE = "__endpoint_delete__";
+
+type VllmSetupResult = { config: OpenClawConfig; modelId: string; modelRef: string };
 
 type ManagedVllmProvider = {
   providerKey: string;
@@ -457,7 +460,7 @@ export async function promptAndConfigureVllm(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   agentDir?: string;
-}): Promise<{ config: OpenClawConfig; modelId: string; modelRef: string }> {
+}): Promise<VllmSetupResult | null> {
   let nextConfig = params.cfg;
 
   while (true) {
@@ -465,25 +468,25 @@ export async function promptAndConfigureVllm(params: {
       cfg: nextConfig,
       agentDir: params.agentDir,
     });
-
-    if (providers.length === 0) {
-      return await configureEndpoint({
-        cfg: nextConfig,
-        prompter: params.prompter,
-        agentDir: params.agentDir,
-      });
-    }
-
     const hasConfiguredModels = providers.some((provider) => provider.models.length > 0);
     const action = await params.prompter.select({
-      message: "vLLM setup",
+      message: providers.length === 0 ? "No vLLM endpoints configured" : "vLLM setup",
       options: [
-        ...(hasConfiguredModels
+        ...(providers.length > 0
           ? [
+              ...(hasConfiguredModels
+                ? [
+                    {
+                      value: VLLM_ACTION_USE_EXISTING,
+                      label: "Use a configured vLLM model",
+                      hint: "Select from already saved endpoints/models",
+                    },
+                  ]
+                : []),
               {
-                value: VLLM_ACTION_USE_EXISTING,
-                label: "Use a configured vLLM model",
-                hint: "Select from already saved endpoints/models",
+                value: VLLM_ACTION_MANAGE_ENDPOINT,
+                label: "Manage existing vLLM endpoints",
+                hint: "Update models, change base URL, or delete an endpoint",
               },
             ]
           : []),
@@ -493,13 +496,18 @@ export async function promptAndConfigureVllm(params: {
           hint: "Configure another base URL and import models",
         },
         {
-          value: VLLM_ACTION_MANAGE_ENDPOINT,
-          label: "Manage existing vLLM endpoints",
-          hint: "Update models, change base URL, or delete an endpoint",
+          value: VLLM_ACTION_DONE,
+          label: "Done / go back",
+          hint:
+            providers.length === 0 ? "Exit without configuring vLLM" : "Keep current vLLM setup",
         },
       ],
       initialValue: hasConfiguredModels ? VLLM_ACTION_USE_EXISTING : VLLM_ACTION_ADD_ENDPOINT,
     });
+
+    if (action === VLLM_ACTION_DONE) {
+      return null;
+    }
 
     if (action === VLLM_ACTION_USE_EXISTING) {
       return await promptConfiguredVllmModel({
