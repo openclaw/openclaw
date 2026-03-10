@@ -6,11 +6,11 @@
  * @date 2026-03-09
  */
 
-export { ChainMemoryManager } from "./manager";
-export { ProviderWrapper } from "./wrapper";
-export { AsyncWriteQueue } from "./async-queue";
-export { CircuitBreaker } from "./circuit-breaker";
-export { HealthMonitor } from "./health-monitor";
+export { ChainMemoryManager } from "./manager.js";
+export { ProviderWrapper } from "./wrapper.js";
+export { AsyncWriteQueue } from "./async-queue.js";
+export { CircuitBreaker } from "./circuit-breaker.js";
+export { HealthMonitor } from "./health-monitor.js";
 
 export type {
   ProviderConfig,
@@ -26,4 +26,4 @@ export type {
   WriteMode,
   CircuitBreakerState,
   HealthStatus,
-} from "./types";
+} from "./types.js";

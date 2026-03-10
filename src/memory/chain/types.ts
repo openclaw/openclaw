@@ -170,6 +170,8 @@ export interface ChainManagerStatus {
  */
 export interface ChainManagerOptions {
   config: ChainConfig;
-  getBackendManager: (backend: string, config?: unknown) => MemorySearchManager;
-  getPluginManager?: (plugin: string, config?: unknown) => MemorySearchManager; // Newly added：Support plugin
+  // Async factory for builtin/qmd backends
+  getBackendManager: (backend: string, config?: unknown) => Promise<MemorySearchManager>;
+  // Async factory for plugins
+  getPluginManager?: (plugin: string, config?: unknown) => Promise<MemorySearchManager>;
 }

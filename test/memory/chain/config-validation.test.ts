@@ -8,7 +8,8 @@
  * @date 2026-03-09
  */
 
-import { validateChainConfig } from "../src/config-validator";
+import { describe, it, expect } from "vitest";
+import { validateChainConfig } from "../../../src/config-validator.js";
 
 describe("Config Validation (Zod)", () => {
   describe("Priority Validation", () => {

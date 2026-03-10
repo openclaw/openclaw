@@ -50,7 +50,10 @@ export async function getMemorySearchManager(params: {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "chain" && resolved.chain) {
     const { ChainMemoryManager } = await import("./chain/manager.js");
-    const manager = new ChainMemoryManager({
+    const { MemoryIndexManager } = await loadManagerRuntime();
+    const { QmdMemoryManager } = await import("./qmd-manager.js");
+
+    const manager = await ChainMemoryManager.create({
       config: {
         providers: resolved.chain.providers,
         global: resolved.chain.global ?? {
@@ -60,9 +63,33 @@ export async function getMemorySearchManager(params: {
           healthCheckInterval: 30000,
         },
       },
-      getBackendManager: (backend: string, _config?: unknown) => {
-        // TODO: Implement backend manager factory
-        throw new Error(`Backend ${backend} not implemented yet`);
+      getBackendManager: async (backend: string, providerConfig?: unknown) => {
+        switch (backend) {
+          case "builtin": {
+            const result = await MemoryIndexManager.get(params);
+            if (!result) {
+              throw new Error("Failed to create builtin memory manager");
+            }
+            return result;
+          }
+          case "qmd": {
+            const qmdResult = await QmdMemoryManager.create({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              resolved,
+              mode: "full",
+            });
+            if (!qmdResult) {
+              throw new Error("Failed to create qmd memory manager");
+            }
+            return qmdResult;
+          }
+          default:
+            throw new Error(
+              `Unknown backend '${backend}' for chain memory. ` +
+                `Supported: builtin, qmd. Provider config: ${JSON.stringify(providerConfig)}`,
+            );
+        }
       },
     });
     return { manager };

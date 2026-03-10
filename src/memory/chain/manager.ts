@@ -9,6 +9,7 @@
  */
 
 import { validateChainConfig } from "../../config-validator.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   MemorySearchManager,
   MemorySearchResult,
@@ -26,10 +27,13 @@ import type {
 } from "./types.js";
 import { ProviderWrapper as ProviderWrapperClass } from "./wrapper.js";
 
+const log = createSubsystemLogger("chain-memory");
+
 /**
  * Chain Memory Manager
  *
- * Implement multi-provider coordination with fault isolation and degradation
+ * Implement multi-provider coordination with fault isolation and degradation.
+ * Use ChainMemoryManager.create() to initialize.
  */
 export class ChainMemoryManager implements MemorySearchManager {
   private config: ChainConfig;
@@ -39,19 +43,12 @@ export class ChainMemoryManager implements MemorySearchManager {
   private fallback?: ProviderWrapperClass;
   private asyncQueue: AsyncWriteQueue;
   private healthMonitor: HealthMonitor;
-  private getBackendManager: (backend: string, config?: unknown) => MemorySearchManager;
-  private getPluginManager?: (plugin: string, config?: unknown) => MemorySearchManager; // Newly added
 
-  constructor(options: ChainManagerOptions) {
-    // Validate configuration
-    const validated = validateChainConfig(options.config);
-    this.config = {
-      providers: validated.providers,
-      global: validated.global,
-    };
-
-    this.getBackendManager = options.getBackendManager;
-    this.getPluginManager = options.getPluginManager; // Newly added
+  /**
+   * Private constructor - use create() factory method instead
+   */
+  private constructor(config: ChainConfig) {
+    this.config = config;
 
     // Initialize async queue
     this.asyncQueue = new AsyncWriteQueue({
@@ -60,96 +57,124 @@ export class ChainMemoryManager implements MemorySearchManager {
       maxRetries: 3,
     });
 
-    // SetQueue Processor
-    // TODO: Async write queue needs redesign
-    // The current MemorySearchManager interface doesn't have add/update/delete methods
-    // We need to either:
-    // 1. Extend the interface with write methods
-    // 2. Use sync() with appropriate parameters
-    // 3. Implement a different approach for dual-write
+    // Set queue processor
+    // Note: Async write is a placeholder for future implementation
+    // MemorySearchManager interface doesn't have add/update/delete methods yet
     this.asyncQueue.setProcessor(async (task: AsyncWriteTask) => {
       const provider = this.providers.get(task.providerName);
       if (!provider) {
         throw new Error(`Provider ${task.providerName} not found`);
       }
 
-      // TODO: Implement proper write operations
-      // Currently disabled to prevent runtime errors
-      console.warn(
-        `Async write operation '${task.operation}' for provider '${task.providerName}' is not yet implemented. ` +
-          `Task ID: ${task.id}`,
+      // Placeholder: log warning but don't fail
+      // This feature will be implemented when MemorySearchManager interface
+      // is extended with write methods
+      log.warn(
+        `Async write operation '${task.operation}' for provider '${task.providerName}' ` +
+          `is not yet implemented. Task ID: ${task.id}`,
       );
-
-      // Placeholder: no actual operation performed
-      // This prevents the queue from crashing while we redesign the async write feature
     });
 
-    // InitializeHealth Monitor
+    // Initialize health monitor
     this.healthMonitor = new HealthMonitor({
       checkIntervalMs: this.config.global.healthCheckInterval,
       timeoutMs: this.config.global.defaultTimeout,
     });
-
-    // Initialize providers
-    this.initializeProviders();
-
-    // StartHealth Monitor
-    this.healthMonitor.start();
   }
 
   /**
-   * Initialize providers
+   * Factory method to create and initialize ChainMemoryManager
    */
-  private initializeProviders(): void {
+  static async create(options: ChainManagerOptions): Promise<ChainMemoryManager> {
+    // Validate configuration
+    const validated = validateChainConfig(options.config);
+    const config: ChainConfig = {
+      providers: validated.providers,
+      global: validated.global,
+    };
+
+    const manager = new ChainMemoryManager(config);
+
+    // Initialize providers asynchronously
+    await manager.initializeProviders(options);
+
+    // Start health monitor
+    manager.healthMonitor.start();
+
+    return manager;
+  }
+
+  /**
+   * Initialize providers asynchronously
+   */
+  private async initializeProviders(options: ChainManagerOptions): Promise<void> {
     for (const providerConfig of this.config.providers) {
       // Skip disabled provider
       if (providerConfig.enabled === false) {
+        log.info(`Skipping disabled provider: ${providerConfig.name}`);
         continue;
       }
 
-      // Get underlying manager, support backend or plugin plugin）
       let manager: MemorySearchManager;
 
-      if (providerConfig.backend) {
-        // Use backend
-        manager = this.getBackendManager(providerConfig.backend, providerConfig);
-      } else if (providerConfig.plugin) {
-        // Use plugin
-        if (!this.getPluginManager) {
+      try {
+        if (providerConfig.backend) {
+          // Use backend factory
+          manager = await options.getBackendManager(providerConfig.backend, providerConfig);
+        } else if (providerConfig.plugin) {
+          // Use plugin factory
+          if (!options.getPluginManager) {
+            throw new Error(
+              `getPluginManager not provided but plugin '${providerConfig.plugin}' ` +
+                `specified for provider '${providerConfig.name}'`,
+            );
+          }
+          manager = await options.getPluginManager(providerConfig.plugin, providerConfig);
+        } else {
+          // Should not happen (validated by config-validator)
           throw new Error(
-            `getPluginManager not provided but plugin '${providerConfig.plugin}' specified for provider '${providerConfig.name}'`,
+            `Either backend or plugin must be specified for provider '${providerConfig.name}'`,
           );
         }
-        manager = this.getPluginManager(providerConfig.plugin, providerConfig);
-      } else {
-        // Should not happen (validated by config-validator)
-        throw new Error(
-          `Either backend or plugin must be specified for provider '${providerConfig.name}'`,
-        );
-      }
 
-      // Create wrapper
-      const wrapper = new ProviderWrapperClass(providerConfig, manager);
+        // Create wrapper
+        const wrapper = new ProviderWrapperClass(providerConfig, manager);
 
-      // Register to map
-      this.providers.set(providerConfig.name, wrapper);
+        // Register to map
+        this.providers.set(providerConfig.name, wrapper);
 
-      // Register toHealth Monitor
-      this.healthMonitor.registerProvider(wrapper);
+        // Register to health monitor
+        this.healthMonitor.registerProvider(wrapper);
 
-      // Classify by priority
-      if (providerConfig.priority === "primary") {
-        this.primary = wrapper;
-      } else if (providerConfig.priority === "secondary") {
-        this.secondary.push(wrapper);
-      } else if (providerConfig.priority === "fallback") {
-        this.fallback = wrapper;
+        // Classify by priority
+        if (providerConfig.priority === "primary") {
+          this.primary = wrapper;
+        } else if (providerConfig.priority === "secondary") {
+          this.secondary.push(wrapper);
+        } else if (providerConfig.priority === "fallback") {
+          this.fallback = wrapper;
+        }
+
+        log.info(`Initialized provider: ${providerConfig.name} (${providerConfig.priority})`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.error(`Failed to initialize provider '${providerConfig.name}': ${message}`);
+
+        // If this is the primary provider, rethrow the error
+        if (providerConfig.priority === "primary") {
+          throw new Error(
+            `Failed to initialize primary provider '${providerConfig.name}': ${message}`,
+            { cause: error },
+          );
+        }
+        // For non-primary providers, log and continue
+        // They will be marked as unavailable
       }
     }
   }
 
   /**
-   * Search memory
+   * Search memory with automatic fallback
    */
   async search(
     query: string,
@@ -160,18 +185,21 @@ export class ChainMemoryManager implements MemorySearchManager {
       try {
         return await this.primary.search(query, options);
       } catch (error) {
-        // Primary Failure，Try fallback
-        console.error(`Primary search failed:`, error);
+        log.warn(
+          `Primary search failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 
-    // Try secondary
+    // Try secondary providers in order
     for (const provider of this.secondary) {
       if (provider.isAvailable()) {
         try {
           return await provider.search(query, options);
         } catch (error) {
-          console.error(`Secondary ${provider.config.name} search failed:`, error);
+          log.warn(
+            `Secondary ${provider.config.name} search failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       }
     }
@@ -181,28 +209,46 @@ export class ChainMemoryManager implements MemorySearchManager {
       try {
         return await this.fallback.search(query, options);
       } catch (error) {
-        console.error(`Fallback search failed:`, error);
+        log.warn(
+          `Fallback search failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 
-    // All providers returned empty
+    // All providers failed, return empty results
+    log.warn("All providers failed for search operation");
     return [];
   }
 
   /**
-   * Read file
+   * Read file with automatic fallback
    */
   async readFile(options: {
     relPath: string;
     from?: number;
     lines?: number;
   }): Promise<{ path: string; text: string }> {
-    // Try primary (through wrapper for consistency)
+    // Try primary
     if (this.primary && this.primary.isAvailable()) {
       try {
         return await this.primary.readFile(options);
       } catch (error) {
-        console.error(`Primary readFile failed:`, error);
+        log.warn(
+          `Primary readFile failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    // Try secondary providers
+    for (const provider of this.secondary) {
+      if (provider.isAvailable()) {
+        try {
+          return await provider.readFile(options);
+        } catch (error) {
+          log.warn(
+            `Secondary ${provider.config.name} readFile failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
     }
 
@@ -211,7 +257,9 @@ export class ChainMemoryManager implements MemorySearchManager {
       try {
         return await this.fallback.readFile(options);
       } catch (error) {
-        console.error(`Fallback readFile failed:`, error);
+        log.warn(
+          `Fallback readFile failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 
@@ -223,7 +271,6 @@ export class ChainMemoryManager implements MemorySearchManager {
    */
   status(): MemoryProviderStatus {
     const providerStats = Array.from(this.providers.values()).map((p) => p.getStats());
-
     const queueStatus = this.asyncQueue.getStatus();
 
     return {
@@ -282,7 +329,7 @@ export class ChainMemoryManager implements MemorySearchManager {
    * Close manager
    */
   async close(): Promise<void> {
-    // StopHealth Monitor
+    // Stop health monitor
     this.healthMonitor.stop();
 
     // Wait for async queue to complete
@@ -298,15 +345,17 @@ export class ChainMemoryManager implements MemorySearchManager {
           await provider.close();
         }
       } catch (error) {
-        console.error(`Failed to close provider ${name}:`, error);
+        log.error(
+          `Failed to close provider ${name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
   }
 
   /**
-   * Get provider
+   * Get provider by name
    */
-  getProvider(name: string) {
+  getProvider(name: string): ProviderWrapperClass | undefined {
     return this.providers.get(name);
   }
 
@@ -318,7 +367,7 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * Reset providerCircuit Breaker
+   * Reset provider circuit breaker
    */
   resetCircuitBreaker(providerName: string): boolean {
     const provider = this.providers.get(providerName);
@@ -338,7 +387,7 @@ export class ChainMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * RetryItems in dead letter queue
+   * Retry item in dead letter queue
    */
   retryDeadLetter(taskId: string): boolean {
     return this.asyncQueue.retryDeadLetter(taskId);
