@@ -68,6 +68,7 @@ async function resolveBackupSearchRoots(searchPath?: string): Promise<string[]> 
   }
 
   const roots = new Set<string>();
+  roots.add(await canonicalizeSearchRoot(process.cwd()));
   const homeDir = resolveHomeDir();
   if (homeDir) {
     const backupsDir = path.join(homeDir, DEFAULT_BACKUP_DIRNAME);

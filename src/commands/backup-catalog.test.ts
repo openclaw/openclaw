@@ -159,7 +159,7 @@ describe("backup catalog", () => {
     }
   });
 
-  it("uses the default Backups directory instead of the current working directory", async () => {
+  it("prefers the newest validated backup from the current working directory or Backups", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const backupsDir = path.join(tempHome.home, "Backups");
     const cwdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-catalog-cwd-"));
@@ -175,19 +175,19 @@ describe("backup catalog", () => {
         error: vi.fn(),
         exit: vi.fn(),
       };
-      const trusted = await backupCreateCommand(runtime, {
+      await backupCreateCommand(runtime, {
         output: backupsDir,
         nowMs: Date.parse("2026-03-09T00:00:00.000Z"),
       });
-      await backupCreateCommand(runtime, {
+      const newest = await backupCreateCommand(runtime, {
         output: cwdDir,
-        nowMs: Date.parse("2099-01-01T00:00:00.000Z"),
+        nowMs: Date.parse("2026-03-10T00:00:00.000Z"),
       });
 
       process.chdir(cwdDir);
       const resolved = await resolveLatestBackupArchiveForRestore({});
 
-      expect(resolved).toBe(await fs.realpath(trusted.archivePath));
+      expect(resolved).toBe(await fs.realpath(newest.archivePath));
     } finally {
       process.chdir(previousCwd);
       await fs.rm(cwdDir, { recursive: true, force: true });
