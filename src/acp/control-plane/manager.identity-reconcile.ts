@@ -43,6 +43,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         run: async () =>
           await params.runtime.getStatus!({
             handle: params.handle,
+            ...(params.signal ? { signal: params.signal } : {}),
           }),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "Could not read ACP runtime status.",
