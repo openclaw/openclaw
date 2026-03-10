@@ -7,6 +7,7 @@ import {
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveProviderConnectTimeoutMs,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -556,6 +557,69 @@ describe("resolveOllamaCompatNumCtxEnabled", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveProviderConnectTimeoutMs", () => {
+  it("returns provider-specific connect timeout when configured", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            connectTimeoutMs: 120_000,
+            models: [],
+          },
+        },
+      },
+    };
+    expect(resolveProviderConnectTimeoutMs({ config: cfg, providerId: "ollama" })).toBe(120_000);
+  });
+
+  it("matches provider timeout by normalized provider id", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "my-ollama": {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            connectTimeoutMs: 90_000,
+            models: [],
+          },
+        },
+      },
+    };
+    expect(resolveProviderConnectTimeoutMs({ config: cfg, providerId: "My_Ollama" })).toBe(90_000);
+  });
+
+  it("returns undefined when timeout is missing or invalid", () => {
+    const missingCfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    expect(resolveProviderConnectTimeoutMs({ config: missingCfg, providerId: "openai" })).toBe(
+      undefined,
+    );
+
+    const invalidCfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            connectTimeoutMs: 0,
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveProviderConnectTimeoutMs({ config: invalidCfg, providerId: "openai" })).toBe(
+      undefined,
+    );
   });
 });
 

@@ -414,6 +414,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.mode": "Model Catalog Mode",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
+  "models.providers.*.connectTimeoutMs": "Model Provider Connect Timeout (ms)",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",

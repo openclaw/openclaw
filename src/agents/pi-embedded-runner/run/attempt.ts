@@ -205,6 +205,43 @@ export function resolveOllamaCompatNumCtxEnabled(params: {
   return true;
 }
 
+export function resolveProviderConnectTimeoutMs(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}): number | undefined {
+  const providerId = params.providerId?.trim();
+  if (!providerId) {
+    return undefined;
+  }
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const resolveTimeout = (candidate?: { connectTimeoutMs?: unknown }): number | undefined => {
+    const raw = candidate?.connectTimeoutMs;
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      return undefined;
+    }
+    const timeoutMs = Math.floor(raw);
+    if (timeoutMs < 1) {
+      return undefined;
+    }
+    return timeoutMs;
+  };
+  const direct = providers[providerId];
+  const directTimeout = resolveTimeout(direct);
+  if (directTimeout !== undefined) {
+    return directTimeout;
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return resolveTimeout(candidate);
+    }
+  }
+  return undefined;
+}
+
 export function shouldInjectOllamaCompatNumCtx(params: {
   model: { api?: string; provider?: string; baseUrl?: string };
   config?: OpenClawConfig;
@@ -749,7 +786,13 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
-  ensureGlobalUndiciStreamTimeouts();
+  const providerConnectTimeoutMs = resolveProviderConnectTimeoutMs({
+    config: params.config,
+    providerId: params.provider,
+  });
+  ensureGlobalUndiciStreamTimeouts(
+    providerConnectTimeoutMs !== undefined ? { timeoutMs: providerConnectTimeoutMs } : undefined,
+  );
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
