@@ -59,6 +59,16 @@ export function getBaselineProcessEnv(): NodeJS.ProcessEnv {
   return { ...(baselineProcessEnv ?? process.env) };
 }
 
+/**
+ * Test-only helper to reset the lazily captured baseline environment snapshot.
+ */
+export function _resetBaselineEnvForTesting(): void {
+  if (process.env.NODE_ENV !== "test") {
+    return;
+  }
+  baselineProcessEnv = undefined;
+}
+
 function acquireActiveSkillEnvKey(key: string, value: string): boolean {
   const active = activeSkillEnvEntries.get(key);
   if (active) {

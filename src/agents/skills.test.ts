@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -12,7 +12,11 @@ import {
   buildWorkspaceSkillSnapshot,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
-import { getActiveSkillEnvKeys, getBaselineProcessEnv } from "./skills/env-overrides.js";
+import {
+  _resetBaselineEnvForTesting,
+  getActiveSkillEnvKeys,
+  getBaselineProcessEnv,
+} from "./skills/env-overrides.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
@@ -238,6 +242,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
 });
 
 describe("applySkillEnvOverrides", () => {
+  beforeEach(() => {
+    _resetBaselineEnvForTesting();
+  });
+
   it("sets and restores env vars", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "env-skill");

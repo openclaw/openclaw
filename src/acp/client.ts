@@ -352,6 +352,8 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
 
 type AcpClientSpawnEnvOptions = {
   stripKeys?: Iterable<string>;
+  preserveRuntimeKeys?: readonly string[];
+  runtimeEnv?: NodeJS.ProcessEnv;
 };
 
 export function resolveAcpClientSpawnEnv(
@@ -359,6 +361,17 @@ export function resolveAcpClientSpawnEnv(
   options: AcpClientSpawnEnvOptions = {},
 ): NodeJS.ProcessEnv {
   const env = omitEnvKeysCaseInsensitive(baseEnv, options.stripKeys ?? []);
+
+  if (options.preserveRuntimeKeys && options.preserveRuntimeKeys.length > 0) {
+    const runtimeEnv = options.runtimeEnv ?? process.env;
+    for (const key of options.preserveRuntimeKeys) {
+      const value = runtimeEnv[key];
+      if (typeof value === "string") {
+        env[key] = value;
+      }
+    }
+  }
+
   env.OPENCLAW_SHELL = "acp-client";
   return env;
 }
@@ -512,7 +525,11 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
     stripProviderAuthEnvVars,
     activeSkillEnvKeys: getActiveSkillEnvKeys(),
   });
-  const spawnEnv = resolveAcpClientSpawnEnv(getBaselineProcessEnv(), { stripKeys });
+  const spawnEnv = resolveAcpClientSpawnEnv(getBaselineProcessEnv(), {
+    stripKeys,
+    preserveRuntimeKeys: ["PATH", "Path", "PATHEXT"],
+    runtimeEnv: process.env,
+  });
   const spawnInvocation = resolveAcpClientSpawnInvocation(
     { serverCommand, serverArgs: effectiveArgs },
     {
