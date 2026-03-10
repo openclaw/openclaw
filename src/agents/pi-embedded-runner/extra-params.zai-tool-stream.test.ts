@@ -22,7 +22,10 @@ type ToolStreamCase = {
 function runToolStreamCase(params: ToolStreamCase) {
   const payload: Record<string, unknown> = { model: params.model.id, messages: [] };
   const baseStreamFn: StreamFn = (model, _context, options) => {
-    options?.onPayload?.(payload, model);
+    const nextPayload = options?.onPayload?.(payload, model);
+    if (nextPayload !== undefined) {
+      Object.assign(payload, nextPayload);
+    }
     return {} as ReturnType<StreamFn>;
   };
   const agent = { streamFn: baseStreamFn };

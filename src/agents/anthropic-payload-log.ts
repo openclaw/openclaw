@@ -145,7 +145,8 @@ export function createAnthropicPayloadLogger(params: {
           payload: redactedPayload,
           payloadDigest: digest(redactedPayload),
         });
-        return options?.onPayload?.(payload, model);
+        const nextPayload = options?.onPayload?.(payload, model);
+        return nextPayload === undefined ? payload : nextPayload;
       };
       return streamFn(model, context, {
         ...options,

@@ -520,7 +520,10 @@ describe("wrapOllamaCompatNumCtx", () => {
     let payloadSeen: Record<string, unknown> | undefined;
     const baseFn = vi.fn((_model, _context, options) => {
       const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
-      options?.onPayload?.(payload, _model);
+      const nextPayload = options?.onPayload?.(payload, _model);
+      if (nextPayload !== undefined) {
+        Object.assign(payload, nextPayload as Record<string, unknown>);
+      }
       payloadSeen = payload;
       return {} as never;
     });
