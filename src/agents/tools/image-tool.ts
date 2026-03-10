@@ -298,6 +298,11 @@ export function createImageTool(options?: {
     compression: compressionConfig,
   });
 
+  // Debug log for compression settings
+  console.log(
+    `[image-tool] compression config: ${JSON.stringify(compressionConfig)} -> settings: ${JSON.stringify(compressionSettings)}`,
+  );
+
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
@@ -455,36 +460,69 @@ export function createImageTool(options?: {
               };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
-        const media = isDataUrl
-          ? decodeDataUrl(resolvedImage)
-          : sandboxConfig
-            ? await loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
-                sandboxValidated: true,
-                readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-                skipOptimization: !compressionSettings.optimize,
-                maxSideOverride: compressionSettings.maxSide,
-                qualityOverride: compressionSettings.quality,
-              })
-            : await loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
-                localRoots,
-                skipOptimization: !compressionSettings.optimize,
-                maxSideOverride: compressionSettings.maxSide,
-                qualityOverride: compressionSettings.quality,
-              });
-        if (media.kind !== "image") {
-          throw new Error(`Unsupported media type: ${media.kind}`);
-        }
+        // Process image and apply compression if enabled
+        let imageBuffer: Buffer;
+        let imageMimeType: string;
 
-        const mimeType =
-          ("contentType" in media && media.contentType) ||
-          ("mimeType" in media && media.mimeType) ||
-          "image/png";
-        const base64 = media.buffer.toString("base64");
+        if (isDataUrl) {
+          // Decode data URL and apply compression if enabled
+          const decoded = decodeDataUrl(resolvedImage);
+          if (
+            compressionSettings.optimize &&
+            compressionSettings.maxSide &&
+            compressionSettings.quality
+          ) {
+            console.log(
+              `[media] Compressing data URL image: maxSide=${compressionSettings.maxSide}, quality=${compressionSettings.quality}`,
+            );
+            const { resizeToJpeg } = await import("../../media/image-ops.js");
+            const compressed = await resizeToJpeg({
+              buffer: decoded.buffer,
+              maxSide: compressionSettings.maxSide,
+              quality: compressionSettings.quality,
+              withoutEnlargement: true,
+            });
+            console.log(
+              `[media] Data URL compressed: ${decoded.buffer.length} -> ${compressed.length} bytes`,
+            );
+            imageBuffer = compressed;
+            imageMimeType = "image/jpeg";
+          } else {
+            imageBuffer = decoded.buffer;
+            imageMimeType = decoded.mimeType;
+          }
+        } else if (sandboxConfig) {
+          const media = await loadWebMedia(resolvedPath ?? resolvedImage, {
+            maxBytes,
+            sandboxValidated: true,
+            readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+            skipOptimization: !compressionSettings.optimize,
+            maxSideOverride: compressionSettings.maxSide,
+            qualityOverride: compressionSettings.quality,
+          });
+          if (media.kind !== "image") {
+            throw new Error(`Unsupported media type: ${media.kind}`);
+          }
+          imageBuffer = media.buffer;
+          imageMimeType = media.contentType ?? "image/png";
+        } else {
+          const media = await loadWebMedia(resolvedPath ?? resolvedImage, {
+            maxBytes,
+            localRoots,
+            skipOptimization: !compressionSettings.optimize,
+            maxSideOverride: compressionSettings.maxSide,
+            qualityOverride: compressionSettings.quality,
+          });
+          if (media.kind !== "image") {
+            throw new Error(`Unsupported media type: ${media.kind}`);
+          }
+          imageBuffer = media.buffer;
+          imageMimeType = media.contentType ?? "image/png";
+        }
+        const base64 = imageBuffer.toString("base64");
         loadedImages.push({
           base64,
-          mimeType,
+          mimeType: imageMimeType,
           resolvedImage,
           ...(resolvedPathInfo.rewrittenFrom
             ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }

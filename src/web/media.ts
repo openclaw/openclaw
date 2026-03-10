@@ -316,6 +316,9 @@ async function loadWebMediaInternal(
 
       // Use custom settings if both overrides provided
       if (maxSideOverride !== undefined && qualityOverride !== undefined) {
+        console.log(
+          `[media] Using compression overrides: maxSide=${maxSideOverride}, quality=${qualityOverride}`,
+        );
         const originalSize = params.buffer.length;
         const optimized = await optimizeImageToJpegWithOverrides(params.buffer, cap, {
           contentType: params.contentType,
@@ -323,6 +326,9 @@ async function loadWebMediaInternal(
           maxSide: maxSideOverride,
           quality: qualityOverride,
         });
+        console.log(
+          `[media] Compressed: ${originalSize} -> ${optimized.optimizedSize} bytes (side=${optimized.resizeSide}, q=${optimized.quality})`,
+        );
         logOptimizedImage({
           originalSize,
           optimized: {
