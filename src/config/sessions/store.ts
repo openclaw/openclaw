@@ -726,6 +726,37 @@ async function withSessionStoreLock<T>(
   return await promise;
 }
 
+/**
+ * Clear persisted model/provider fields from all session entries that do not
+ * have an explicit user-set model override.  This forces sessions to re-resolve
+ * the default model from the current config on their next turn, which is the
+ * desired behavior when the operator changes the default model via config.
+ */
+export async function clearSessionModelFields(storePath: string): Promise<number> {
+  return await withSessionStoreLock(storePath, async () => {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    let cleared = 0;
+    for (const [, entry] of Object.entries(store)) {
+      if (!entry) {
+        continue;
+      }
+      // Preserve explicit user-set overrides (/model command).
+      if (entry.modelOverride || entry.providerOverride) {
+        continue;
+      }
+      if (entry.model || entry.modelProvider) {
+        entry.model = undefined;
+        entry.modelProvider = undefined;
+        cleared++;
+      }
+    }
+    if (cleared > 0) {
+      await saveSessionStoreUnlocked(storePath, store, { skipMaintenance: true });
+    }
+    return cleared;
+  });
+}
+
 export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
