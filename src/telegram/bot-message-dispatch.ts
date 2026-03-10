@@ -38,8 +38,8 @@ import {
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneName,
+  type LanePreviewDisposition,
 } from "./lane-delivery.js";
-import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -240,9 +240,9 @@ export const dispatchTelegramMessage = async ({
     answer: createDraftLane("answer", canStreamAnswerDraft),
     reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
   };
-  const finalizedPreviewByLane: Record<LaneName, boolean> = {
-    answer: false,
-    reasoning: false,
+  const previewDispositionByLane: Record<LaneName, LanePreviewDisposition> = {
+    answer: "transient",
+    reasoning: "transient",
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
@@ -289,7 +289,7 @@ export const dispatchTelegramMessage = async ({
       // so it remains visible across tool boundaries.
       const materializedId = await answerLane.stream?.materialize?.();
       const previewMessageId = materializedId ?? answerLane.stream?.messageId();
-      if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
+      if (typeof previewMessageId === "number" && previewDispositionByLane.answer === "transient") {
         archivedAnswerPreviews.push({
           messageId: previewMessageId,
           textSnapshot: answerLane.lastPartialText,
@@ -302,7 +302,7 @@ export const dispatchTelegramMessage = async ({
     resetDraftLaneState(answerLane);
     if (didForceNewMessage) {
       // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
-      finalizedPreviewByLane.answer = false;
+      previewDispositionByLane.answer = "transient";
     }
     return didForceNewMessage;
   };
@@ -332,7 +332,7 @@ export const dispatchTelegramMessage = async ({
   const ingestDraftLaneSegments = async (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
     const hasAnswerSegment = split.segments.some((segment) => segment.lane === "answer");
-    if (hasAnswerSegment && finalizedPreviewByLane.answer) {
+    if (hasAnswerSegment && previewDispositionByLane.answer !== "transient") {
       // Some providers can emit the first partial of a new assistant message before
       // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
       // the previously finalized preview message with the next message's text.
@@ -470,7 +470,7 @@ export const dispatchTelegramMessage = async ({
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
     archivedAnswerPreviews,
-    finalizedPreviewByLane,
+    previewDispositionByLane,
     draftMaxChars,
     applyTextToPayload,
     sendPayload,
@@ -479,32 +479,13 @@ export const dispatchTelegramMessage = async ({
       await lane.stream?.stop();
     },
     editPreview: async ({ messageId, text, previewButtons }) => {
-      try {
-        await editMessageTelegram(chatId, messageId, text, {
-          api: bot.api,
-          cfg,
-          accountId: route.accountId,
-          linkPreview: telegramCfg.linkPreview,
-          buttons: previewButtons,
-        });
-      } catch (err) {
-        // Post-connect network errors (timeout, connection reset) mean the edit
-        // may have already landed on Telegram's server. Swallow these to prevent
-        // the fallback chain from sending a duplicate message via sendPayload.
-        // Only re-throw pre-connect errors (DNS, connection refused — edit
-        // definitely never reached Telegram) and API errors (400/500 — Telegram
-        // explicitly rejected the edit).
-        if (isSafeToRetrySendError(err)) {
-          throw err;
-        }
-        if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
-          logVerbose(
-            `telegram: preview edit may have succeeded despite network error; treating as delivered to avoid duplicate (${String(err)})`,
-          );
-          return;
-        }
-        throw err;
-      }
+      await editMessageTelegram(chatId, messageId, text, {
+        api: bot.api,
+        cfg,
+        accountId: route.accountId,
+        linkPreview: telegramCfg.linkPreview,
+        buttons: previewButtons,
+      });
     },
     deletePreviewMessage: async (messageId) => {
       await bot.api.deleteMessage(chatId, messageId);
@@ -616,7 +597,7 @@ export const dispatchTelegramMessage = async ({
             }
             if (info.kind === "final") {
               if (reasoningLane.hasStreamedMessage) {
-                finalizedPreviewByLane.reasoning = true;
+                previewDispositionByLane.reasoning = "finalized";
               }
               reasoningStepState.resetForNextStep();
             }
@@ -694,7 +675,7 @@ export const dispatchTelegramMessage = async ({
                 reasoningStepState.resetForNextStep();
                 if (skipNextAnswerMessageStartRotation) {
                   skipNextAnswerMessageStartRotation = false;
-                  finalizedPreviewByLane.answer = false;
+                  previewDispositionByLane.answer = "transient";
                   return;
                 }
                 await rotateAnswerLaneForNewAssistantMessage();
@@ -702,7 +683,7 @@ export const dispatchTelegramMessage = async ({
                 // Even when no forceNewMessage happened (e.g. prior answer had no
                 // streamed partials), the next partial belongs to a fresh lifecycle
                 // and must not trigger late pre-rotation mid-message.
-                finalizedPreviewByLane.answer = false;
+                previewDispositionByLane.answer = "transient";
               })
           : undefined,
         onReasoningEnd: reasoningLane.stream
@@ -751,7 +732,8 @@ export const dispatchTelegramMessage = async ({
           (p) => p.deleteIfUnused === false && p.messageId === activePreviewMessageId,
         );
       const shouldClear =
-        !finalizedPreviewByLane[laneState.laneName] && !hasBoundaryFinalizedActivePreview;
+        previewDispositionByLane[laneState.laneName] === "transient" &&
+        !hasBoundaryFinalizedActivePreview;
       const existing = streamCleanupStates.get(stream);
       if (!existing) {
         streamCleanupStates.set(stream, { shouldClear });

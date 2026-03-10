@@ -1921,12 +1921,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    // The edit was attempted (and may have succeeded server-side).
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
-    // The fix: no fallback sendPayload via deliverReplies for the final text,
-    // because the editPreview callback swallowed the network timeout.
-    // deliverReplies should NOT have been called with the "Final answer" text
-    // (it would only be called if the fallback chain fired).
     const deliverCalls = deliverReplies.mock.calls;
     const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
       (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
@@ -1936,7 +1931,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(false);
   });
 
-  it("keeps preview on pre-connect error during final edit (lane deliverer treats as delivered)", async () => {
+  it("falls back to sendPayload on pre-connect error during final edit", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1947,9 +1942,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
     deliverReplies.mockResolvedValue({ delivered: true });
-    // Pre-connect error: edit never reached Telegram. The dispatch-level
-    // callback re-throws it, but the lane deliverer catches it and treats
-    // the final edit failure as delivered to avoid a duplicate message.
     const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
     (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
     editMessageTelegram.mockRejectedValue(preConnectErr);
@@ -1957,7 +1949,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
-    // Lane deliverer keeps the preview — no fallback sendPayload.
+    const deliverCalls = deliverReplies.mock.calls;
+    const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
+      (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
+        (r: { text?: string }) => r.text === "Final answer",
+      ),
+    );
+    expect(finalTextSentViaDeliverReplies).toBe(true);
+  });
+
+  it("keeps preview when Telegram reports the final edit target missing", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockRejectedValue(new Error("400: Bad Request: message to edit not found"));
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     const deliverCalls = deliverReplies.mock.calls;
     const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
       (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
