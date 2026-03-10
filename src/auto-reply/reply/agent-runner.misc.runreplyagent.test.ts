@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  OVERLOADED_ERROR_USER_MESSAGE,
+  RATE_LIMIT_ERROR_USER_MESSAGE,
+} from "../../agents/pi-embedded-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -1698,9 +1702,7 @@ describe("runReplyAgent overloaded/rate-limit error surfacing", () => {
     const result = await runPromise;
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
+    expect(payload?.text).toBe(OVERLOADED_ERROR_USER_MESSAGE);
   });
 
   it("surfaces friendly rate-limit message for 429 errors", async () => {
@@ -1712,7 +1714,7 @@ describe("runReplyAgent overloaded/rate-limit error surfacing", () => {
     const result = await runPromise;
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(payload?.text).toBe(RATE_LIMIT_ERROR_USER_MESSAGE);
   });
 
   it("surfaces friendly message for overloaded keyword in non-HTTP error", async () => {
@@ -1721,8 +1723,6 @@ describe("runReplyAgent overloaded/rate-limit error surfacing", () => {
     const result = await runPromise;
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
+    expect(payload?.text).toBe(OVERLOADED_ERROR_USER_MESSAGE);
   });
 });

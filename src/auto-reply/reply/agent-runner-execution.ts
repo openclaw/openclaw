@@ -13,6 +13,8 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
+  OVERLOADED_ERROR_USER_MESSAGE,
+  RATE_LIMIT_ERROR_USER_MESSAGE,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -622,9 +624,9 @@ export async function runAgentTurnWithFallback(params: {
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
           : isOverloaded
-            ? "The AI service is temporarily overloaded. Please try again in a moment."
+            ? OVERLOADED_ERROR_USER_MESSAGE
             : isRateLimit
-              ? "⚠️ API rate limit reached. Please try again later."
+              ? RATE_LIMIT_ERROR_USER_MESSAGE
               : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
