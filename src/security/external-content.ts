@@ -160,6 +160,8 @@ function foldMarkerText(input: string): string {
 
 function replaceMarkers(content: string): string {
   const folded = foldMarkerText(content);
+  // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
+  // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
   if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
     return content;
   }
