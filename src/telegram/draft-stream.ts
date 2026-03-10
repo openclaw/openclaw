@@ -342,7 +342,9 @@ export function createTelegramDraftStream(params: {
 
   const forceNewMessage = () => {
     // Boundary rotation may call stop() to finalize the previous draft.
-    // Re-open the stream lifecycle for the next assistant segment.
+    // Re-open the stream lifecycle for the next assistant segment, including
+    // clear()-based rotations that marked the previous lifecycle as stopped.
+    streamState.stopped = false;
     streamState.final = false;
     generation += 1;
     streamMessageId = undefined;

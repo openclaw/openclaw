@@ -691,43 +691,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("rotates on message start after preview finalization falls back to a normal send", async () => {
-    let messageId: number | undefined = 999;
-    let nextMessageId = 1001;
-    let finalized = false;
-    const answerDraftStream = {
-      update: vi.fn().mockImplementation(() => {
-        if (finalized) {
-          return;
-        }
-        if (messageId == null) {
-          messageId = nextMessageId++;
-        }
-      }),
-      flush: vi.fn().mockResolvedValue(undefined),
-      messageId: vi.fn().mockImplementation(() => messageId),
-      previewMode: vi.fn().mockReturnValue("message"),
-      previewRevision: vi.fn().mockReturnValue(0),
-      lastDeliveredText: vi.fn().mockReturnValue(""),
-      clear: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockImplementation(async () => {
-        finalized = true;
-      }),
-      materialize: vi.fn().mockImplementation(async () => messageId),
-      forceNewMessage: vi.fn().mockImplementation(() => {
-        finalized = false;
-        messageId = undefined;
-      }),
+    const { createTelegramDraftStream: createRealTelegramDraftStream } =
+      await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+    const bot = createBot();
+    const answerApi = bot.api as unknown as {
+      sendMessage: ReturnType<typeof vi.fn>;
+      deleteMessage: ReturnType<typeof vi.fn>;
     };
+    answerApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 1001 })
+      .mockResolvedValueOnce({ message_id: 1002 });
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
-      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce((params) =>
+        createRealTelegramDraftStream({
+          ...(params as Parameters<typeof createRealTelegramDraftStream>[0]),
+          api: bot.api,
+        }),
+      )
       .mockImplementationOnce(() => reasoningDraftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onPartialReply?.({
+          text: "Message A partial that is definitely long enough",
+        });
         await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await replyOptions?.onPartialReply?.({
+          text: "Message B partial that is definitely long enough",
+        });
         await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -737,9 +729,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockRejectedValueOnce(new Error("500: preview edit failed"))
       .mockResolvedValueOnce({ ok: true, chatId: "123", messageId: "1001" });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
 
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerApi.deleteMessage).toHaveBeenCalledWith(123, 1001);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Message A final" })],
@@ -748,10 +740,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
       2,
       123,
-      1001,
+      1002,
       "Message B final",
       expect.any(Object),
     );
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 
   it("does not force new message on first assistant message start", async () => {
