@@ -81,6 +81,7 @@ export function parseBindTargetPath(bind: string): string {
 
 /**
  * Normalize a POSIX path: resolve `.`, `..`, collapse `//`, strip trailing `/`.
+ * If it starts with the drive letter, convert it to the upper case.
  */
 export function normalizeHostPath(raw: string): string {
   return normalizeSandboxHostPath(raw);
