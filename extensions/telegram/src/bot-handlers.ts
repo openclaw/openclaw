@@ -154,8 +154,28 @@ export const registerTelegramHandlers = ({
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
 
+  const DEFAULT_DOCUMENT_BATCH_WINDOW_MS = 1500;
+  const documentBatchWindowMs =
+    typeof opts.testTimings?.documentBatchFlushMs === "number" &&
+    Number.isFinite(opts.testTimings.documentBatchFlushMs)
+      ? Math.max(10, Math.floor(opts.testTimings.documentBatchFlushMs))
+      : typeof telegramCfg.documentBatchWindowMs === "number" &&
+          Number.isFinite(telegramCfg.documentBatchWindowMs)
+        ? Math.max(0, Math.floor(telegramCfg.documentBatchWindowMs))
+        : DEFAULT_DOCUMENT_BATCH_WINDOW_MS;
+
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
+
+  type DocumentBatchEntry = {
+    key: string;
+    messages: Array<{ msg: Message; ctx: TelegramContext }>;
+    timer: ReturnType<typeof setTimeout> | null;
+    sendOversizeWarning: boolean;
+    oversizeLogMessage: string;
+  };
+  const documentBatchBuffer = new Map<string, DocumentBatchEntry>();
+  let documentBatchProcessing: Promise<void> = Promise.resolve();
 
   type TextFragmentEntry = {
     key: string;
@@ -457,6 +477,78 @@ export const registerTelegramHandlers = ({
     entry.timer = setTimeout(async () => {
       await runTextFragmentFlush(entry);
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
+  };
+
+  // Flush buffered document messages as a single processMessage call.
+  // Documents sent in quick succession lack media_group_id, so we batch them manually.
+  const processDocumentBatch = async (entry: DocumentBatchEntry) => {
+    try {
+      entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
+
+      const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
+      const primaryEntry = captionMsg ?? entry.messages[0];
+      const chatId = primaryEntry.msg.chat.id;
+
+      const allMedia: TelegramMediaRef[] = [];
+      for (const { ctx, msg } of entry.messages) {
+        let media;
+        try {
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        } catch (mediaErr) {
+          // Send the same oversize warning the non-batched path sends
+          if (isMediaSizeLimitError(mediaErr)) {
+            if (entry.sendOversizeWarning) {
+              const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                    reply_to_message_id: msg.message_id,
+                  }),
+              }).catch(() => {});
+            }
+            logger.warn({ chatId, error: String(mediaErr) }, entry.oversizeLogMessage);
+            continue;
+          }
+          if (!isRecoverableMediaGroupError(mediaErr)) {
+            throw mediaErr;
+          }
+          runtime.log?.(
+            warn(`document batch: skipping file that failed to fetch: ${String(mediaErr)}`),
+          );
+          continue;
+        }
+        if (media) {
+          allMedia.push({
+            path: media.path,
+            contentType: media.contentType,
+            stickerMetadata: media.stickerMetadata,
+          });
+        }
+      }
+
+      const storeAllowFrom = await loadStoreAllowFrom();
+      const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
+    } catch (err) {
+      runtime.error?.(danger(`document batch handler failed: ${String(err)}`));
+    }
+  };
+
+  const scheduleDocumentBatchFlush = (entry: DocumentBatchEntry) => {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    entry.timer = setTimeout(async () => {
+      documentBatchBuffer.delete(entry.key);
+      documentBatchProcessing = documentBatchProcessing
+        .then(async () => {
+          await processDocumentBatch(entry);
+        })
+        .catch(() => undefined);
+      await documentBatchProcessing;
+    }, documentBatchWindowMs);
   };
 
   const loadStoreAllowFrom = async () =>
@@ -988,6 +1080,32 @@ export const registerTelegramHandlers = ({
           }, mediaGroupTimeoutMs),
         };
         mediaGroupBuffer.set(mediaGroupId, entry);
+      }
+      return;
+    }
+
+    // Document batch handling – documents sent in quick succession lack media_group_id,
+    // so we buffer them per-chat+sender and flush as a single processMessage call.
+    // Skip batching when sender is unknown (channel posts, anonymous admins) to avoid
+    // merging unrelated documents under a shared "unknown" key.
+    const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
+    if (!mediaGroupId && msg.document && documentBatchWindowMs > 0 && docSenderId) {
+      const docThreadId = resolvedThreadId ?? dmThreadId ?? 0;
+      const docBatchKey = `doc:${chatId}:${docSenderId}:${docThreadId}`;
+      const existing = documentBatchBuffer.get(docBatchKey);
+      if (existing) {
+        existing.messages.push({ msg, ctx });
+        scheduleDocumentBatchFlush(existing);
+      } else {
+        const entry: DocumentBatchEntry = {
+          key: docBatchKey,
+          messages: [{ msg, ctx }],
+          timer: null,
+          sendOversizeWarning,
+          oversizeLogMessage,
+        };
+        documentBatchBuffer.set(docBatchKey, entry);
+        scheduleDocumentBatchFlush(entry);
       }
       return;
     }

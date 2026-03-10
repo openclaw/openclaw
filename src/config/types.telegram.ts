@@ -187,6 +187,12 @@ export type TelegramAccountConfig = {
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
   /**
+   * Batch window (ms) for document files sent in quick succession by the same sender.
+   * Telegram sends documents as individual messages (no media_group_id), so this buffer
+   * collects them into a single agent turn. Set to 0 to disable. Default: 1500.
+   */
+  documentBatchWindowMs?: number;
+  /**
    * Per-channel outbound response prefix override.
    *
    * When set, this takes precedence over the global `messages.responsePrefix`.
