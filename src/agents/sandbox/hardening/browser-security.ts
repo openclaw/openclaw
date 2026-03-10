@@ -103,14 +103,16 @@ function isPrivateIP(hostname: string): boolean {
     return true;
   }
 
-  // Check IPv6 ULA (fc00::/7 — addresses starting with fc or fd)
-  if (/^f[cd]/i.test(h)) {
-    return true;
-  }
-
-  // Check IPv6 link-local (fe80::/10)
-  if (/^fe[89ab]/i.test(h)) {
-    return true;
+  // Check IPv6 ULA (fc00::/7) and link-local (fe80::/10).
+  // Only match actual IPv6 literals (must contain ':') to avoid false
+  // positives on DNS names like "facebook.com" or "fdc.gov".
+  if (h.includes(":")) {
+    if (/^f[cd]/i.test(h)) {
+      return true;
+    }
+    if (/^fe[89ab]/i.test(h)) {
+      return true;
+    }
   }
 
   return false;

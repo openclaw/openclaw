@@ -153,10 +153,13 @@ func (s *OrphanSweeper) sweep() {
 	for vmID, reason := range orphans {
 		s.logger.Warn("destroying orphan VM", "vm_id", vmID, "reason", reason)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := s.destroyer.DestroyVM(ctx, vmID); err != nil {
-			s.logger.Error("failed to destroy orphan VM", "vm_id", vmID, "error", err)
-		}
+		err := s.destroyer.DestroyVM(ctx, vmID)
 		cancel()
+		if err != nil {
+			// Keep in registry so the next sweep retries cleanup.
+			s.logger.Error("failed to destroy orphan VM, will retry next sweep", "vm_id", vmID, "error", err)
+			continue
+		}
 		s.registry.Remove(vmID)
 		s.stats.OrphansDestroyed.Add(1)
 	}
