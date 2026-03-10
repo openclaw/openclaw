@@ -21,6 +21,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   xai: ["XAI_API_KEY"],
   mistral: ["MISTRAL_API_KEY"],
   kilocode: ["KILOCODE_API_KEY"],
+  modelstudio: ["MODELSTUDIO_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
   byteplus: ["BYTEPLUS_API_KEY"],
 };

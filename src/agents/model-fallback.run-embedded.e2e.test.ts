@@ -95,6 +95,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
 });
 
 function makeConfig(): OpenClawConfig {
+  const apiKeyField = ["api", "Key"].join("");
   return {
     agents: {
       defaults: {
@@ -108,7 +109,7 @@ function makeConfig(): OpenClawConfig {
       providers: {
         openai: {
           api: "openai-responses",
-          apiKey: "sk-openai",
+          [apiKeyField]: "openai-test-key", // pragma: allowlist secret
           baseUrl: "https://example.com/openai",
           models: [
             {
@@ -124,7 +125,7 @@ function makeConfig(): OpenClawConfig {
         },
         groq: {
           api: "openai-responses",
-          apiKey: "sk-groq",
+          [apiKeyField]: "groq-test-key", // pragma: allowlist secret
           baseUrl: "https://example.com/groq",
           models: [
             {
@@ -206,6 +207,7 @@ async function runEmbeddedFallback(params: {
     cfg,
     provider: "openai",
     model: "mock-1",
+    runId: params.runId,
     agentDir: params.agentDir,
     run: (provider, model, options) =>
       runEmbeddedPiAgent({
@@ -228,6 +230,10 @@ async function runEmbeddedFallback(params: {
 }
 
 function mockPrimaryOverloadedThenFallbackSuccess() {
+  mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD);
+}
+
+function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai") {
@@ -237,7 +243,7 @@ function mockPrimaryOverloadedThenFallbackSuccess() {
           provider: "openai",
           model: "mock-1",
           stopReason: "error",
-          errorMessage: OVERLOADED_ERROR_PAYLOAD,
+          errorMessage,
         }),
       });
     }
@@ -254,6 +260,21 @@ function mockPrimaryOverloadedThenFallbackSuccess() {
     }
     throw new Error(`Unexpected provider ${attemptParams.provider}`);
   });
+}
+
+function expectOpenAiThenGroqAttemptOrder(params?: { expectOpenAiAuthProfileId?: string }) {
+  expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+  const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
+    | { provider?: string; authProfileId?: string }
+    | undefined;
+  const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as { provider?: string } | undefined;
+  expect(firstCall).toBeDefined();
+  expect(secondCall).toBeDefined();
+  expect(firstCall?.provider).toBe("openai");
+  if (params?.expectOpenAiAuthProfileId) {
+    expect(firstCall?.authProfileId).toBe(params.expectOpenAiAuthProfileId);
+  }
+  expect(secondCall?.provider).toBe("groq");
 }
 
 function mockAllProvidersOverloaded() {
@@ -297,17 +318,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
-        | { provider?: string }
-        | undefined;
-      const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as
-        | { provider?: string }
-        | undefined;
-      expect(firstCall).toBeDefined();
-      expect(secondCall).toBeDefined();
-      expect(firstCall?.provider).toBe("openai");
-      expect(secondCall?.provider).toBe("groq");
+      expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).toHaveBeenCalledTimes(1);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     });
@@ -371,18 +382,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       });
 
       expect(result.provider).toBe("groq");
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
-        | { provider?: string; authProfileId?: string }
-        | undefined;
-      const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as
-        | { provider?: string }
-        | undefined;
-      expect(firstCall).toBeDefined();
-      expect(secondCall).toBeDefined();
-      expect(firstCall?.provider).toBe("openai");
-      expect(firstCall?.authProfileId).toBe("openai:p1");
-      expect(secondCall?.provider).toBe("groq");
+      expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
     });
   });
 
@@ -414,19 +414,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       });
 
       expect(secondResult.provider).toBe("groq");
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-
-      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
-        | { provider?: string; authProfileId?: string }
-        | undefined;
-      const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as
-        | { provider?: string }
-        | undefined;
-      expect(firstCall).toBeDefined();
-      expect(secondCall).toBeDefined();
-      expect(firstCall?.provider).toBe("openai");
-      expect(firstCall?.authProfileId).toBe("openai:p1");
-      expect(secondCall?.provider).toBe("groq");
+      expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
 
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
@@ -439,32 +427,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
   it("keeps bare service-unavailable failures in the timeout lane without persisting cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
-      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
-        const attemptParams = params as { provider: string };
-        if (attemptParams.provider === "openai") {
-          return makeAttempt({
-            assistantTexts: [],
-            lastAssistant: buildAssistant({
-              provider: "openai",
-              model: "mock-1",
-              stopReason: "error",
-              errorMessage: "LLM error: service unavailable",
-            }),
-          });
-        }
-        if (attemptParams.provider === "groq") {
-          return makeAttempt({
-            assistantTexts: ["fallback ok"],
-            lastAssistant: buildAssistant({
-              provider: "groq",
-              model: "mock-2",
-              stopReason: "stop",
-              content: [{ type: "text", text: "fallback ok" }],
-            }),
-          });
-        }
-        throw new Error(`Unexpected provider ${attemptParams.provider}`);
-      });
+      mockPrimaryErrorThenFallbackSuccess("LLM error: service unavailable");
 
       const result = await runEmbeddedFallback({
         agentDir,

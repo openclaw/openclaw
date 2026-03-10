@@ -80,6 +80,24 @@ NODE
   fi
 }
 
+read_env_gateway_token() {
+  local env_path="$1"
+  local line=""
+  local token=""
+  if [[ ! -f "$env_path" ]]; then
+    return 0
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if [[ "$line" == OPENCLAW_GATEWAY_TOKEN=* ]]; then
+      token="${line#OPENCLAW_GATEWAY_TOKEN=}"
+    fi
+  done <"$env_path"
+  if [[ -n "$token" ]]; then
+    printf '%s' "$token"
+  fi
+}
+
 ensure_control_ui_allowed_origins() {
   if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
     return 0
@@ -219,14 +237,20 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
-  elif command -v openssl >/dev/null 2>&1; then
-    OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
   else
-    OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
+    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
+    if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
+      OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
+      echo "Reusing gateway token from $ROOT_DIR/.env"
+    elif command -v openssl >/dev/null 2>&1; then
+      OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+    else
+      OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
 )"
+    fi
   fi
 fi
 export OPENCLAW_GATEWAY_TOKEN

@@ -21,13 +21,14 @@ type AgentRunParams = {
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
 type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
+  memoryFlushWritePath?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
@@ -592,6 +593,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expect(onToolResult).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("preserves channelData on forwarded tool results", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+      channelData: {
+        execApproval: {
+          approvalId: "117ba06d-1111-2222-3333-444444444444",
+          approvalSlug: "117ba06d",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+        },
+      },
+    });
   });
 
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
@@ -1577,9 +1612,14 @@ describe("runReplyAgent memory flush", () => {
       const flushCall = calls[0];
       expect(flushCall?.prompt).toContain("Write notes.");
       expect(flushCall?.prompt).toContain("NO_REPLY");
+      expect(flushCall?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(flushCall?.prompt).toContain("MEMORY.md");
+      expect(flushCall?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
       expect(flushCall?.extraSystemPrompt).toContain("extra system");
       expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
+      expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
     });
   });
@@ -1667,9 +1707,17 @@ describe("runReplyAgent memory flush", () => {
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-      const calls: Array<{ prompt?: string }> = [];
+      const calls: Array<{
+        prompt?: string;
+        extraSystemPrompt?: string;
+        memoryFlushWritePath?: string;
+      }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
+        calls.push({
+          prompt: params.prompt,
+          extraSystemPrompt: params.extraSystemPrompt,
+          memoryFlushWritePath: params.memoryFlushWritePath,
+        });
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
           return { payloads: [], meta: {} };
         }
@@ -1696,6 +1744,10 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
       expect(calls[0]?.prompt).toContain("Current time:");
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[0]?.prompt).toContain("MEMORY.md");
+      expect(calls[0]?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
+      expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -1952,3 +2004,4 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 });
+import type { ReplyPayload } from "../types.js";

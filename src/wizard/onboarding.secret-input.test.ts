@@ -19,7 +19,7 @@ describe("resolveOnboardingSecretInputString", () => {
       value: "${OPENCLAW_GATEWAY_PASSWORD}",
       path: "gateway.auth.password",
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: "gateway-secret",
+        OPENCLAW_GATEWAY_PASSWORD: "gateway-secret", // pragma: allowlist secret
       },
     });
 
