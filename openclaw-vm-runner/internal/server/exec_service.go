@@ -78,7 +78,7 @@ func (s *execBridge) Exec(stream pb.ExecService_ExecServer) error {
 
 	// 6. Convert timeout: ms -> sec (ceiling division to preserve sub-second timeouts).
 	timeoutMs := startExec.GetTimeoutMs()
-	var timeoutSec int64
+	var timeoutSec uint32
 	if timeoutMs > 0 {
 		timeoutSec = (timeoutMs + 999) / 1000
 	}

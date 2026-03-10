@@ -82,7 +82,7 @@ func TestE2E_BrowserPipeline(t *testing.T) {
 	// 2. Set up bufconn gRPC server with sandbox + browser services.
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
-	pb.RegisterSandboxServiceServer(srv, server.NewSandboxServer(mgr))
+	pb.RegisterSandboxServiceServer(srv, server.NewSandboxServer(mgr, nil))
 	pb.RegisterBrowserServiceServer(srv, server.NewBrowserServer(mgr, connCache, 0))
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.Stop()

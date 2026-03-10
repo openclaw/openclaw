@@ -28,7 +28,7 @@ func NewRealMachineFactory(jl *jailer.JailedLauncher) MachineFactory {
 		}
 
 		// Prepare the jail: allocate UID, create chroot, get JailerConfig
-		jcfg, _, err := jl.PrepareJail(ctx, launchCfg)
+		jcfg, launchResult, err := jl.PrepareJail(ctx, launchCfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare jail for %s: %w", req.SandboxID, err)
 		}
@@ -83,6 +83,11 @@ func NewRealMachineFactory(jl *jailer.JailedLauncher) MachineFactory {
 			return nil, fmt.Errorf("failed to start firecracker machine for %s: %w", req.SandboxID, err)
 		}
 
+		// Update jail entry with real PID for orphan sweeper liveness checks
+		if pid, pidErr := machine.PID(); pidErr == nil {
+			launchResult.PID = pid
+		}
+
 		return &MachineEntry{
 			ID:         req.SandboxID,
 			CreatedAt:  time.Now(),
@@ -119,7 +124,7 @@ func NewRealRestoreFactory(jl *jailer.JailedLauncher) SnapshotRestoreFactory {
 		}
 
 		// Prepare the jail: allocate UID, create chroot, get JailerConfig
-		jcfg, _, err := jl.PrepareJail(ctx, launchCfg)
+		jcfg, launchResult, err := jl.PrepareJail(ctx, launchCfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare jail for restore %s: %w", req.SandboxID, err)
 		}
@@ -175,6 +180,11 @@ func NewRealRestoreFactory(jl *jailer.JailedLauncher) SnapshotRestoreFactory {
 			cancel()
 			_ = jl.ReleaseJail(req.SandboxID)
 			return nil, fmt.Errorf("failed to start restored machine %s: %w", req.SandboxID, err)
+		}
+
+		// Update jail entry with real PID for orphan sweeper liveness checks
+		if pid, pidErr := machine.PID(); pidErr == nil {
+			launchResult.PID = pid
 		}
 
 		return &MachineEntry{

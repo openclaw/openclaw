@@ -52,12 +52,11 @@ export async function checkFirecrackerHealth(
   // Phase 3: gRPC health check
   try {
     const resp = await healthClient.check({});
-    // status 1 = SERVING in grpc.health.v1.HealthCheckResponse
-    const status = (resp as { status?: number })?.status;
-    if (status !== undefined && status !== 1) {
+    // Require SERVING (1); reject NOT_SERVING, UNKNOWN, and SERVICE_UNKNOWN.
+    if (resp.status !== HEALTH_SERVING) {
       return {
         available: false,
-        message: `vm-runner health check returned non-serving status: ${status}`,
+        message: `vm-runner health check returned non-serving status: ${resp.status}`,
       };
     }
   } catch {

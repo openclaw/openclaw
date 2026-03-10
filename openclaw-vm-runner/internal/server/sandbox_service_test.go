@@ -78,7 +78,7 @@ func setupTestServer(t *testing.T, mgr VMManager) pb.SandboxServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	s := grpc.NewServer()
-	pb.RegisterSandboxServiceServer(s, NewSandboxServer(mgr))
+	pb.RegisterSandboxServiceServer(s, NewSandboxServer(mgr, nil))
 
 	go func() {
 		if err := s.Serve(lis); err != nil {

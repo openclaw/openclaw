@@ -61,6 +61,20 @@ describe("checkFirecrackerHealth", () => {
     expect(result.message).toContain("vm-runner health check failed");
   });
 
+  it("returns unavailable when gRPC health check returns NOT_SERVING", async () => {
+    // /dev/kvm succeeds
+    mockAccess.mockResolvedValueOnce(undefined);
+    // socket succeeds
+    mockAccess.mockResolvedValueOnce(undefined);
+    // gRPC health check succeeds but returns NOT_SERVING (2)
+    mockHealthClient.check.mockResolvedValueOnce({ status: 2 });
+
+    const result = await checkFirecrackerHealth(mockHealthClient as unknown as HealthClient);
+
+    expect(result.available).toBe(false);
+    expect(result.message).toContain("non-serving status");
+  });
+
   it("returns available when all three checks pass", async () => {
     // /dev/kvm succeeds
     mockAccess.mockResolvedValueOnce(undefined);
