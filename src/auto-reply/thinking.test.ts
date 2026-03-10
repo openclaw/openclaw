@@ -98,6 +98,10 @@ describe("supportsXHighThinking", () => {
     expect(supportsXHighThinking("vercel-ai-gateway", "openai/gpt-5.4")).toBe(true);
   });
 
+  it("enables xhigh for provider aliases whose model id is in the allowlist", () => {
+    expect(supportsXHighThinking("openai-compatible", "gpt-5.3-codex-spark")).toBe(true);
+  });
+
   it("does not enable xhigh for unrelated proxy model ids", () => {
     expect(supportsXHighThinking("vercel-ai-gateway", "openai/gpt-4.1-mini")).toBe(false);
   });

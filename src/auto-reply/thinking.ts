@@ -55,7 +55,6 @@ function buildXHighLookupCandidates(
     return { refs, ids };
   }
 
-  ids.add(normalizedModel);
   const normalizedProvider = normalizeProviderId(provider);
   if (normalizedProvider) {
     refs.add(`${normalizedProvider}/${normalizedModel}`);
@@ -67,6 +66,8 @@ function buildXHighLookupCandidates(
     if (trailingId) {
       ids.add(trailingId);
     }
+  } else {
+    ids.add(normalizedModel);
   }
 
   return { refs, ids };
