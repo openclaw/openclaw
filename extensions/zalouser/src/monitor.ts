@@ -384,6 +384,21 @@ async function processMessage(
     return;
   }
 
+  const peer = isGroup
+    ? { kind: "group" as const, id: chatId }
+    : { kind: "direct" as const, id: senderId };
+
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg: config,
+    channel: "zalouser",
+    accountId: account.accountId,
+    peer: {
+      // Keep DM peer kind as "direct" so session keys follow dmScope and UI labels stay DM-shaped.
+      kind: peer.kind,
+      id: peer.id,
+    },
+  });
+
   if (
     isGroup &&
     resolveNeverReply({ cfg: config, channel: "zalouser", accountId: account.accountId })
@@ -391,7 +406,7 @@ async function processMessage(
     logVerbose(core, runtime, "zalouser: group message stored for context (neverReply: true)");
     recordPendingHistoryEntryIfEnabled({
       historyMap: historyState.groupHistories,
-      historyKey: chatId,
+      historyKey: route.sessionKey,
       limit: historyState.historyLimit,
       entry: rawBody
         ? {
@@ -471,20 +486,6 @@ async function processMessage(
     return;
   }
 
-  const peer = isGroup
-    ? { kind: "group" as const, id: chatId }
-    : { kind: "direct" as const, id: senderId };
-
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: config,
-    channel: "zalouser",
-    accountId: account.accountId,
-    peer: {
-      // Keep DM peer kind as "direct" so session keys follow dmScope and UI labels stay DM-shaped.
-      kind: peer.kind,
-      id: peer.id,
-    },
-  });
   const historyKey = isGroup ? route.sessionKey : undefined;
 
   const requireMention = isGroup

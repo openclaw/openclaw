@@ -291,12 +291,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         historyMap: conversationHistories,
         historyKey: conversationId,
         limit: historyLimit,
-        entry: {
-          sender: senderName,
-          body: rawBody,
-          timestamp: parseMSTeamsActivityTimestamp(activity.timestamp)?.getTime(),
-          messageId: activity.id ?? undefined,
-        },
+        entry: rawBody
+          ? {
+              sender: senderName,
+              body: rawBody,
+              timestamp: parseMSTeamsActivityTimestamp(activity.timestamp)?.getTime(),
+              messageId: activity.id ?? undefined,
+            }
+          : null,
       });
       return;
     }

@@ -1365,6 +1365,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
 
+    const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
+
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+      teamId,
+      peer: {
+        kind,
+        id: kind === "direct" ? senderId : channelId,
+      },
+    });
+
     if (
       kind !== "direct" &&
       resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
@@ -1373,7 +1386,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       const trimmed = rawText.trim();
       recordPendingHistoryEntryIfEnabled({
         historyMap: channelHistories,
-        historyKey: channelId,
+        historyKey: route.sessionKey,
         limit: historyLimit,
         entry: trimmed
           ? {
@@ -1397,22 +1410,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
 
-    const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
     const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
     const channelDisplay =
       payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
     const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
-
-    const route = core.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: "mattermost",
-      accountId: account.accountId,
-      teamId,
-      peer: {
-        kind,
-        id: kind === "direct" ? senderId : channelId,
-      },
-    });
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
