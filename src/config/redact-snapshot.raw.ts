@@ -1,18 +1,44 @@
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 
+/**
+ * Redacts sensitive values from a raw config string.
+ * Filters out empty/null/undefined values to prevent RangeError (#41247).
+ *
+ * Note: When `params.raw` is not a string (e.g., null, number), it is
+ * converted to a string via `String(params.raw ?? "")` and returned
+ * without redaction. This is a silent fallback for invalid input.
+ */
 export function replaceSensitiveValuesInRaw(params: {
   raw: string;
   sensitiveValues: string[];
   redactedSentinel: string;
 }): string {
-  // FIX #41247: Filter out empty strings to prevent RangeError
+  // Defensive: validate input types
+  if (typeof params.raw !== "string") {
+    return String(params.raw ?? "");
+  }
+
+  // Defensive: normalize and filter sensitive values
+  // Empty strings cause RangeError in String.replaceAll (#41247)
   const values = [...params.sensitiveValues]
-    .filter((v) => v && v.length > 0)
+    .filter((v): v is string => typeof v === "string" && v.length > 0)
     .toSorted((a, b) => b.length - a.length);
+
+  // Early return if no valid values to redact
+  if (values.length === 0) {
+    return params.raw;
+  }
+
+  // Defensive: ensure sentinel is valid
+  const sentinel =
+    typeof params.redactedSentinel === "string" && params.redactedSentinel.length > 0
+      ? params.redactedSentinel
+      : "__REDACTED__";
+
   let result = params.raw;
   for (const value of values) {
-    result = result.replaceAll(value, params.redactedSentinel);
+    result = result.replaceAll(value, sentinel);
   }
   return result;
 }
