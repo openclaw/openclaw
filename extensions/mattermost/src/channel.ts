@@ -157,15 +157,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     }
 
     const message = typeof params.message === "string" ? params.message : "";
-    // The message tool passes the reply target as "replyTo", not "replyToId".
-    // handleSendAction reads params.replyTo into a local var but never writes
-    // it back, so the plugin handler must check both property names.
-    const replyToId =
-      typeof params.replyToId === "string"
-        ? params.replyToId
-        : typeof params.replyTo === "string"
-          ? params.replyTo
-          : undefined;
+    // Match the shared runner semantics: trim empty reply IDs away before
+    // falling back from replyToId to replyTo on direct plugin calls.
+    const replyToId = readMattermostReplyToId(params);
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
@@ -208,6 +202,18 @@ const meta = {
   order: 65,
   quickstartAllowFrom: true,
 } as const;
+
+function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
+  const readNormalizedValue = (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  };
+
+  return readNormalizedValue(params.replyToId) ?? readNormalizedValue(params.replyTo);
+}
 
 function normalizeAllowEntry(entry: string): string {
   return entry
