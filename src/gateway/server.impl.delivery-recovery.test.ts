@@ -34,7 +34,6 @@ beforeEach(() => {
 });
 
 describe("delivery recovery target resolution", () => {
-
   it("skips legacy entries without accountId when channel has no configured accounts", () => {
     hoisted.getChannelPlugin.mockReturnValue({
       id: "synologychat",
