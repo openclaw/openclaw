@@ -730,3 +730,68 @@ describe("validateAnthropicTurns strips orphaned tool_result blocks", () => {
     expect((result[1] as { content: unknown }).content).toBe("legacy-content");
   });
 });
+
+describe("validateAnthropicTurns tool pairing across consecutive user messages", () => {
+  it("preserves tool_result in a later consecutive user message (merged before stripping)", () => {
+    // Regression: assistant(toolUse) -> user(text) -> user(toolResult)
+    // The toolResult is valid after merging the two user messages.
+    const msgs = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tu-1", name: "read_file" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "some context" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "toolResult", toolUseId: "tu-1" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = validateAnthropicTurns(msgs);
+
+    // After merge: assistant(toolUse) -> user(text + toolResult)
+    expect(result).toHaveLength(2);
+    const userContent = (result[1] as { content: { type: string; toolUseId?: string }[] }).content;
+    // toolResult must survive - it pairs with the assistant's toolUse
+    const toolResults = userContent.filter((b) => b.type === "toolResult");
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0].toolUseId).toBe("tu-1");
+    // toolUse must also survive in the assistant message
+    const assistantContent = (result[0] as { content: { type: string; id?: string }[] }).content;
+    const toolUses = assistantContent.filter((b) => b.type === "toolUse");
+    expect(toolUses).toHaveLength(1);
+  });
+
+  it("preserves tool_result when system message sits between assistant and user", () => {
+    // Regression: assistant(toolUse) -> system -> user(toolResult)
+    // The backward search should skip system messages.
+    const msgs = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tu-2", name: "bash" }],
+      },
+      {
+        role: "system",
+        content: [{ type: "text", text: "system marker" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "toolResult", toolUseId: "tu-2" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = validateAnthropicTurns(msgs);
+
+    // system message stays, toolResult must survive
+    const userMsgs = result.filter((m) => (m as { role: string }).role === "user");
+    expect(userMsgs.length).toBeGreaterThanOrEqual(1);
+    const userContent = (userMsgs[0] as { content: { type: string; toolUseId?: string }[] })
+      .content;
+    const toolResults = userContent.filter((b) => b.type === "toolResult");
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0].toolUseId).toBe("tu-2");
+  });
+});
