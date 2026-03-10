@@ -55,3 +55,24 @@ describe("message action sandbox media hydration", () => {
     }
   });
 });
+
+describe("hydrateAttachmentParamsForAction — send action", () => {
+  it("normalizes inline data-URL buffers for send actions", async () => {
+    const args: Record<string, unknown> = {
+      buffer: "data:image/png;base64,QUJD",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg: {} as OpenClawConfig,
+      channel: "telegram",
+      args,
+      action: "send",
+      mediaPolicy: { allow: true },
+    });
+
+    expect(args).toMatchObject({
+      buffer: "QUJD",
+      contentType: "image/png",
+    });
+  });
+});

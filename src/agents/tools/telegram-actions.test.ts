@@ -802,3 +802,37 @@ describe("handleTelegramAction per-account gating", () => {
     );
   });
 });
+
+describe("handleTelegramAction buffer forwarding", () => {
+  beforeEach(() => {
+    sendMessageTelegram.mockClear();
+  });
+
+  it("forwards inline attachment buffers", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        buffer: "QUJD",
+        filename: "note.txt",
+        contentType: "text/plain",
+      },
+      cfg,
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "",
+      expect.objectContaining({
+        token: "tok",
+        buffer: "QUJD",
+        filename: "note.txt",
+        contentType: "text/plain",
+      }),
+    );
+  });
+});
