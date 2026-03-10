@@ -734,6 +734,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
+    defineChatCommand({
+      key: "detect",
+      nativeName: "detect",
+      description: "Detect deepfakes in media URLs or attachments using Resemble AI.",
+      textAlias: "/detect",
+      category: "media",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "url",
+          description: "Media URL",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
     ...listChannelDocks()
       .filter((dock) => dock.capabilities.nativeCommands)
       .map((dock) => defineDockCommand(dock)),
