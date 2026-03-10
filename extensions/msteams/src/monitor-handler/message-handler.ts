@@ -286,7 +286,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       !isDirectMessage &&
       resolveNeverReply({ cfg, channel: "msteams", accountId: DEFAULT_ACCOUNT_ID })
     ) {
-      log.debug?.("dropping group message (neverReply)");
+      log.debug?.("msteams: group message stored for context (neverReply: true)");
       recordPendingHistoryEntryIfEnabled({
         historyMap: conversationHistories,
         historyKey: conversationId,

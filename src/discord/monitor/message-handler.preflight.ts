@@ -571,7 +571,7 @@ export async function preflightDiscordMessage(
     isGuildMessage &&
     resolveNeverReply({ cfg: freshCfg, channel: "discord", accountId: resolvedAccountId })
   ) {
-    logDebug("[discord-preflight] drop: neverReply");
+    logDebug("[discord-preflight] group message stored for context (neverReply: true)");
     recordPendingHistoryEntryIfEnabled({
       historyMap: params.guildHistories,
       historyKey: messageChannelId,

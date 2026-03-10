@@ -424,7 +424,7 @@ export async function prepareSlackMessage(params: {
     (isRoom || isGroupDm) &&
     resolveNeverReply({ cfg: ctx.cfg, channel: "slack", accountId: account.accountId })
   ) {
-    logVerbose("slack: drop message (neverReply)");
+    logVerbose("slack: group message stored for context (neverReply: true)");
     const pendingText = (message.text ?? "").trim();
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
