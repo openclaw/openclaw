@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
+- ACP/acpx: support custom ACP-compatible agents via `plugins.acpx.agentCommand` config option, allowing any agent process to be used without code changes. (#41945) Thanks @kimptoc.
 
 ### Breaking
 

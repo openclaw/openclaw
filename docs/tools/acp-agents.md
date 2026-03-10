@@ -536,6 +536,40 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+## Custom agent command
+
+By default, the agent ID (e.g. `claude`, `codex`) is passed to `acpx` as a positional subcommand, and `acpx` resolves it to a built-in agent binary. To use a custom ACP-compatible agent that `acpx` does not ship with, set `agentCommand`:
+
+```bash
+openclaw config set plugins.entries.acpx.config.agentCommand "npx --yes kilocode@latest"
+openclaw config set acp.defaultAgent kilocode
+```
+
+Or in JSON config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "agentCommand": "npx --yes kilocode@latest"
+        }
+      }
+    }
+  }
+}
+```
+
+When `agentCommand` is set, it is passed to `acpx` via `--agent <agentCommand>` for all session lifecycle operations (ensure, prompt, status, cancel, close, etc.). The `agentId` is still used for session naming and routing — only the spawned process changes.
+
+**Notes:**
+
+- If `mcpServers` are also configured, the custom agent command is automatically wrapped with the MCP proxy so configured MCP tools remain available.
+- Omitting `agentCommand` preserves the default behavior — `acpx` resolves the agent ID to its built-in command.
+- On Windows, paths with spaces work as-is since the value is passed as a single `--agent` argument (e.g. `"C:\\Program Files\\my-agent\\agent.exe --flag"`).
+
 ## Permission configuration
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
