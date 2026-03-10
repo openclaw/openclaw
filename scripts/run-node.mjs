@@ -193,6 +193,11 @@ const checkNodeModules = (deps) => {
     return { ok: false, reason: `build tool '${compiler}' is not in node_modules/.bin` };
   }
 
+  const tsdownPkg = path.join(deps.cwd, "node_modules", compiler);
+  if (!deps.fs.existsSync(tsdownPkg)) {
+    return { ok: false, reason: `build tool '${compiler}' stub exists but package is not installed` };
+  }
+
   return { ok: true };
 };
 
@@ -295,18 +300,18 @@ export async function runNodeMain(params = {}) {
     return await runOpenClaw(deps);
   }
 
-  logRunner("Building TypeScript (dist is stale).", deps);
-  const buildPlan = resolvePnpmCommand(deps);
-  if (!buildPlan) {
-    logRunner("Neither pnpm nor corepack was found in PATH.", deps);
-    return 1;
-  }
   const depsCheck = checkNodeModules(deps);
   if (!depsCheck.ok) {
     logRunner(
       `Dependencies are missing or incomplete (${depsCheck.reason}); run \`pnpm install\` in the project root to restore them.`,
       deps,
     );
+    return 1;
+  }
+  logRunner("Building TypeScript (dist is stale).", deps);
+  const buildPlan = resolvePnpmCommand(deps);
+  if (!buildPlan) {
+    logRunner("Neither pnpm nor corepack was found in PATH.", deps);
     return 1;
   }
   const build = deps.spawn(buildPlan.command, buildPlan.args, {
