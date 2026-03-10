@@ -312,7 +312,15 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    let end = Math.min(ir.text.length, cursor + normalizedLimit);
+    // When we are not at the very end of the text, try to break at the last
+    // whitespace within the allowed window so words are not split mid-token.
+    if (end < ir.text.length) {
+      const lastSpace = ir.text.lastIndexOf(" ", end);
+      if (lastSpace > cursor) {
+        end = lastSpace;
+      }
+    }
     chunks.push({
       text: ir.text.slice(cursor, end),
       styles: sliceStyleSpans(ir.styles, cursor, end),
