@@ -193,4 +193,42 @@ describe("backup catalog", () => {
       await fs.rm(cwdDir, { recursive: true, force: true });
     }
   });
+
+  it("finds default backups that were written to the home directory fallback", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const previousCwd = process.cwd();
+
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      process.chdir(stateDir);
+      const created = await backupCreateCommand(runtime, {
+        nowMs: Date.parse("2026-03-11T00:00:00.000Z"),
+      });
+      const resolved = await resolveLatestBackupArchiveForRestore({});
+
+      expect(created.archivePath).toBe(
+        path.join(tempHome.home, path.basename(created.archivePath)),
+      );
+      expect(resolved).toBe(await fs.realpath(created.archivePath));
+    } finally {
+      process.chdir(previousCwd);
+      await fs
+        .readdir(tempHome.home)
+        .then((entries) =>
+          Promise.all(
+            entries
+              .filter((entry) => entry.endsWith(".tar.gz"))
+              .map((entry) => fs.rm(path.join(tempHome.home, entry), { force: true })),
+          ),
+        );
+    }
+  });
 });

@@ -147,6 +147,25 @@ async function canonicalizePath(targetPath: string): Promise<string> {
   }
 }
 
+async function pathExistsOrDanglingSymlink(targetPath: string): Promise<boolean> {
+  try {
+    await fs.lstat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveRestoreLiveTargetPath(targetPath: string): Promise<string> {
+  const targetStats = await fs.lstat(targetPath).catch(() => null);
+  if (!targetStats?.isSymbolicLink()) {
+    return targetPath;
+  }
+
+  const linkTarget = await fs.readlink(targetPath);
+  return await canonicalizePath(path.resolve(path.dirname(targetPath), linkTarget));
+}
+
 function normalizeConfigWorkspacePath(value: string): string {
   return path.resolve(resolveUserPath(value));
 }
@@ -550,10 +569,14 @@ async function assertRestoreTargetsReady(params: {
 
   for (const item of params.items) {
     const targetRealPath = await canonicalizePath(item.targetPath);
-    const targetExists = await pathExists(item.targetPath);
+    const targetExists = await pathExistsOrDanglingSymlink(item.targetPath);
     if (targetExists && !params.force) {
       const isEmptyDirectory =
         item.targetType === "directory" &&
+        !(await fs
+          .lstat(item.targetPath)
+          .then((st) => st.isSymbolicLink())
+          .catch(() => false)) &&
         (await fs
           .readdir(item.targetPath)
           .then((entries) => entries.length === 0)
@@ -783,10 +806,7 @@ async function rollbackRestorePublication(items: RestoreTransactionItem[]): Prom
 async function publishRestorePlan(stagedItems: StagedBackupRestoreItem[]): Promise<void> {
   const transactionItems: RestoreTransactionItem[] = await Promise.all(
     stagedItems.map(async (item) => {
-      const targetStats = await fs.lstat(item.targetPath).catch(() => null);
-      const liveTargetPath = targetStats?.isSymbolicLink()
-        ? await canonicalizePath(item.targetPath)
-        : item.targetPath;
+      const liveTargetPath = await resolveRestoreLiveTargetPath(item.targetPath);
       return {
         ...item,
         liveTargetPath,
