@@ -47,8 +47,27 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     if (isDeepStrictEqual(prev, next)) {
       return [];
     }
+    if (shouldDiffArrayEntries(prev, next)) {
+      const paths: string[] = [];
+      const length = Math.max(prev.length, next.length);
+      for (let index = 0; index < length; index += 1) {
+        const childPrefix = prefix ? `${prefix}.${index}` : String(index);
+        const childPaths = diffConfigPaths(prev[index], next[index], childPrefix);
+        if (childPaths.length > 0) {
+          paths.push(...childPaths);
+        }
+      }
+      if (paths.length > 0) {
+        return paths;
+      }
+    }
   }
   return [prefix || "<root>"];
+}
+
+function shouldDiffArrayEntries(prev: unknown[], next: unknown[]): boolean {
+  const entries = [...prev, ...next].filter((entry) => entry !== undefined);
+  return entries.length > 0 && entries.every((entry) => isPlainObject(entry));
 }
 
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {

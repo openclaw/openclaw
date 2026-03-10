@@ -66,7 +66,21 @@ describe("diffConfigPaths", () => {
         },
       },
     };
-    expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths");
+    expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths.0.pattern");
+  });
+
+  it("reports nested agent list object changes at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal", "ide"] }],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
   });
 });
 
@@ -205,6 +219,25 @@ describe("buildGatewayReloadPlan", () => {
 
   it("requires gateway restart for per-agent Agent Apps selection changes", () => {
     const plan = buildGatewayReloadPlan(["agents.list.0.apps"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.apps");
+  });
+
+  it("requires gateway restart for diffed per-agent Agent Apps selection changes", () => {
+    const changedPaths = diffConfigPaths(
+      {
+        agents: {
+          list: [{ id: "default", apps: ["terminal"] }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "default", apps: ["terminal", "ide"] }],
+        },
+      },
+    );
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(changedPaths).toContain("agents.list.0.apps");
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("agents.list.0.apps");
   });
