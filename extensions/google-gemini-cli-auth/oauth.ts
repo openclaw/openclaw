@@ -60,10 +60,12 @@ function resolveEnv(keys: string[]): string | undefined {
 }
 
 let cachedGeminiCliCredentials: { clientId: string; clientSecret: string } | null = null;
+let geminiCliCredentialExtractError: string | null = null;
 
 /** @internal */
 export function clearCredentialsCache(): void {
   cachedGeminiCliCredentials = null;
+  geminiCliCredentialExtractError = null;
 }
 
 /** Extracts OAuth credentials from the installed Gemini CLI's bundled oauth2.js. */
@@ -72,16 +74,21 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     return cachedGeminiCliCredentials;
   }
 
-  try {
-    const geminiPath = findInPath("gemini");
-    if (!geminiPath) {
-      return null;
-    }
+  geminiCliCredentialExtractError = null;
 
+  const geminiPath = findInPath("gemini");
+  if (!geminiPath) {
+    geminiCliCredentialExtractError =
+      "Gemini CLI executable was not found in PATH (expected command: gemini).";
+    return null;
+  }
+
+  try {
     const resolvedPath = realpathSync(geminiPath);
     const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     let content: string | null = null;
+    let searched: string[] = [];
     for (const geminiCliDir of geminiCliDirs) {
       const searchPaths = [
         join(
@@ -105,6 +112,7 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
         ),
       ];
 
+      searched = searched.concat(searchPaths);
       for (const p of searchPaths) {
         if (existsSync(p)) {
           content = readFileSync(p, "utf8");
@@ -121,6 +129,12 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       }
     }
     if (!content) {
+      geminiCliCredentialExtractError = [
+        "Found Gemini CLI in PATH, but could not locate oauth2.js for credential extraction.",
+        `geminiPath=${geminiPath}`,
+        `resolvedPath=${resolvedPath}`,
+        `searched=${searched.join(", ")} (plus recursive findFile scan of each geminiCliDir with max depth 10)`,
+      ].join(" ");
       return null;
     }
 
@@ -130,10 +144,14 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
       return cachedGeminiCliCredentials;
     }
-  } catch {
-    // Gemini CLI not installed or extraction failed
+
+    geminiCliCredentialExtractError =
+      "oauth2.js was found, but failed to parse OAuth client id/secret from its contents.";
+    return null;
+  } catch (err) {
+    geminiCliCredentialExtractError = `Credential extraction failed: ${err instanceof Error ? err.message : String(err)}`;
+    return null;
   }
-  return null;
 }
 
 function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
@@ -209,8 +227,12 @@ function resolveOAuthClientConfig(): { clientId: string; clientSecret?: string }
   }
 
   // 3. No credentials available
+  const detail = geminiCliCredentialExtractError
+    ? ` Details: ${geminiCliCredentialExtractError}`
+    : "";
   throw new Error(
-    "Gemini CLI not found. Install it first: brew install gemini-cli (or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID.",
+    "Gemini CLI OAuth credentials could not be resolved. Install Gemini CLI (brew install gemini-cli or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID / GEMINI_CLI_OAUTH_CLIENT_SECRET." +
+      detail,
   );
 }
 
