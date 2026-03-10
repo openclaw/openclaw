@@ -382,4 +382,59 @@ describe("OpenClawAgentAdapter", () => {
       ),
     ).toEqual(["snap_install", "snap_refresh"]);
   });
+
+  it("reuses one external projection when messages and tools are requested sequentially", async () => {
+    const snapshot = createSnapshot("snap_shared");
+    kernel.acquireSnapshot.mockResolvedValue(snapshot);
+    const projector: AotuiSnapshotProjector = {
+      projectMessages: vi.fn(() => [createInjectedMessage("shared-view", "snap_shared")]),
+      projectToolBindings: vi.fn(() => [
+        {
+          toolName: "shared_tool",
+          description: "Shared tool",
+          parameters: { type: "object", properties: {} },
+          operation: {
+            context: {
+              appId: "app_1" as never,
+              snapshotId: "latest" as never,
+            },
+            name: "shared_tool" as never,
+            args: {},
+          },
+        },
+      ]),
+    };
+
+    const adapter = new OpenClawAgentAdapter({
+      sessionKey: desktopRecord.sessionKey,
+      sessionId: desktopRecord.sessionId,
+      agentId: desktopRecord.agentId,
+      ownerId: "run_shared",
+      kernel: kernel as never,
+      desktopManager: desktopManager as never,
+      agent,
+      baseTools: [baseTool],
+      projector,
+    });
+
+    await adapter.install();
+
+    const messages = await adapter.buildAotuiMessages();
+    const tools = await adapter.buildAotuiTools();
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "shared-view",
+    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["shared_tool"]);
+    expect(kernel.acquireSnapshot).toHaveBeenCalledTimes(2);
+    expect(kernel.releaseSnapshot).toHaveBeenCalledTimes(2);
+    expect(
+      (projector.projectMessages as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]?.id),
+    ).toEqual(["snap_shared", "snap_shared"]);
+    expect(
+      (projector.projectToolBindings as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call) => call[0]?.id,
+      ),
+    ).toEqual(["snap_shared", "snap_shared"]);
+  });
 });

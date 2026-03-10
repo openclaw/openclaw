@@ -97,6 +97,7 @@ export interface AotuiAgentAdapter {
   getSessionKey(): string;
   getDesktopRecord(): DesktopRecord;
   ensureDesktopReady(): Promise<void>;
+  buildAotuiProjection(): Promise<AotuiTurnProjection>;
   buildAotuiMessages(): Promise<AgentMessage[]>;
   buildAotuiTools(): Promise<AgentTool[]>;
   routeToolCall(toolName: string, args: unknown, toolCallId: string): Promise<unknown>;

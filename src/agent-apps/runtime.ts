@@ -12,6 +12,14 @@ export function getAotuiGatewayRuntime(): AotuiKernelService | null {
   return gatewayKernelService;
 }
 
+export function resetAotuiGatewayRuntimeForTesting(): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("resetAotuiGatewayRuntimeForTesting is only available in tests");
+  }
+  gatewayKernelService = null;
+  gatewayKernelServiceStart = null;
+}
+
 export async function startAotuiGatewayRuntime(
   config?: OpenClawConfig,
 ): Promise<AotuiKernelService> {

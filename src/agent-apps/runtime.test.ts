@@ -52,6 +52,8 @@ describe("AOTUI runtime registry", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    const runtime = await import("./runtime.js");
+    runtime.resetAotuiGatewayRuntimeForTesting();
     mocks.service.isEnabled.mockReturnValue(true);
     mocks.desktopManager.getDesktop.mockReturnValue(undefined);
     mocks.kernel.reinitializeDesktopApps.mockResolvedValue({ reinitializedAppIds: [] });

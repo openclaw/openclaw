@@ -54,6 +54,7 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
   private readonly baseTools: AgentTool[];
   private readonly projector: AotuiSnapshotProjector;
   private readonly bindingCache = new Map<string, AotuiToolBinding>();
+  private cachedExternalProjection?: AotuiTurnProjection;
   private originalTransformContext?: OpenClawAgentHandle["transformContext"];
   private desktopRecord?: DesktopRecord;
 
@@ -74,6 +75,7 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
         ? await this.originalTransformContext(messages, signal)
         : messages;
 
+      this.invalidateExternalProjection();
       const projection = await this.buildTurnProjection();
       this.applyProjection(projection);
       await this.options.desktopManager.touchDesktop(this.sessionKey, this.options.sessionId);
@@ -110,14 +112,24 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
   }
 
   async buildAotuiMessages() {
-    const projection = await this.buildTurnProjection();
+    const projection = await this.buildAotuiProjection();
     return projection.messages;
   }
 
   async buildAotuiTools(): Promise<AgentTool[]> {
-    const projection = await this.buildTurnProjection();
+    const projection = await this.buildAotuiProjection();
     this.applyProjection(projection);
+    this.invalidateExternalProjection();
     return projection.tools;
+  }
+
+  async buildAotuiProjection(): Promise<AotuiTurnProjection> {
+    if (this.cachedExternalProjection) {
+      return this.cachedExternalProjection;
+    }
+    const projection = await this.buildTurnProjection();
+    this.cachedExternalProjection = projection;
+    return projection;
   }
 
   async routeToolCall(toolName: string, args: unknown, toolCallId: string): Promise<unknown> {
@@ -170,6 +182,7 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
   }
 
   async refreshToolsAndContext(): Promise<void> {
+    this.invalidateExternalProjection();
     const projection = await this.buildTurnProjection();
     this.applyProjection(projection);
     await this.options.desktopManager.touchDesktop(this.sessionKey, this.options.sessionId);
@@ -203,6 +216,10 @@ export class OpenClawAgentAdapter implements AotuiAgentAdapter {
       this.bindingCache.set(binding.toolName, binding);
     }
     this.options.agent.setTools([...this.baseTools, ...projection.tools]);
+  }
+
+  private invalidateExternalProjection(): void {
+    this.cachedExternalProjection = undefined;
   }
 
   private async buildTurnProjection(): Promise<AotuiTurnProjection> {
