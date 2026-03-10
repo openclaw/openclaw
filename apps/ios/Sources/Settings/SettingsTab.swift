@@ -340,9 +340,9 @@ struct SettingsTab: View {
                                     .foregroundStyle(.secondary)
                             }
                             self.featureToggle(
-                                "Show Talk Button",
+                                "Show Talk Control",
                                 isOn: self.$talkButtonEnabled,
-                                help: "Shows the floating Talk button in the main interface.")
+                                help: "Shows the Talk control in the main toolbar.")
                             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                                 .lineLimit(2 ... 6)
                                 .textInputAutocapitalization(.sentences)

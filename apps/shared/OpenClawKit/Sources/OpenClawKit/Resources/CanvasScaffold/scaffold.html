@@ -113,18 +113,23 @@
         inset: 0;
         z-index: 2;
         display: flex;
-        align-items: stretch;
+        align-items: flex-start;
         justify-content: center;
-        padding: calc(var(--safe-top) + 22px) 18px calc(var(--safe-bottom) + 18px);
+        padding: calc(var(--safe-top) + 18px) 16px calc(var(--safe-bottom) + 18px);
         box-sizing: border-box;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
       }
 
       .shell {
         width: min(100%, 760px);
         display: flex;
         flex-direction: column;
-        justify-content: center;
-        gap: 18px;
+        justify-content: flex-start;
+        gap: 16px;
+        min-height: 100%;
+        box-sizing: border-box;
       }
 
       .hero {
@@ -161,14 +166,24 @@
         font-weight: 700;
         letter-spacing: 0.06em;
         text-transform: uppercase;
+        max-width: 100%;
+        box-sizing: border-box;
       }
 
       .eyebrow-dot {
+        flex: 0 0 auto;
         width: 9px;
         height: 9px;
         border-radius: 999px;
         background: var(--state);
         box-shadow: 0 0 18px color-mix(in srgb, var(--state) 68%, transparent);
+      }
+
+      #openclaw-home-eyebrow {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .hero h1 {
@@ -218,6 +233,7 @@
         font-size: 24px;
         font-weight: 700;
         letter-spacing: -0.03em;
+        overflow-wrap: anywhere;
       }
 
       .meta-subtitle {
@@ -229,8 +245,9 @@
 
       .agent-focus {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 14px;
+        margin-top: 8px;
       }
 
       .agent-badge {
@@ -252,6 +269,7 @@
         font-size: 22px;
         font-weight: 700;
         letter-spacing: -0.03em;
+        overflow-wrap: anywhere;
       }
 
       .agent-focus .caption {
@@ -323,6 +341,7 @@
         font-size: 15px;
         font-weight: 700;
         line-height: 1.2;
+        overflow-wrap: anywhere;
       }
 
       .agent-row .caption {
@@ -384,8 +403,8 @@
 
       @media (max-width: 640px) {
         #openclaw-home {
-          padding-left: 14px;
-          padding-right: 14px;
+          padding-left: 12px;
+          padding-right: 12px;
         }
 
         .hero {
@@ -400,6 +419,64 @@
 
         .hero h1 {
           font-size: 34px;
+        }
+      }
+
+      @media (max-height: 760px) {
+        #openclaw-home {
+          padding-top: calc(var(--safe-top) + 14px);
+          padding-bottom: calc(var(--safe-bottom) + 12px);
+        }
+
+        .shell {
+          gap: 12px;
+        }
+
+        .hero {
+          border-radius: 24px;
+          padding: 16px 15px 15px;
+        }
+
+        .hero h1 {
+          margin-top: 14px;
+          font-size: clamp(28px, 8vw, 38px);
+        }
+
+        .hero p {
+          margin-top: 10px;
+          font-size: 15px;
+          line-height: 1.42;
+        }
+
+        .hero-grid {
+          margin-top: 18px;
+        }
+
+        .meta-card {
+          padding: 14px 14px 13px;
+        }
+
+        .meta-value {
+          font-size: 22px;
+        }
+
+        .agent-badge {
+          width: 50px;
+          height: 50px;
+          border-radius: 16px;
+          font-size: 22px;
+        }
+
+        .agent-focus .name {
+          font-size: 20px;
+        }
+
+        .section {
+          padding: 14px 14px 12px;
+        }
+
+        .section-header {
+          margin-bottom: 10px;
         }
       }
 
