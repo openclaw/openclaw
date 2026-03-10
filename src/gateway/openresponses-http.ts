@@ -28,6 +28,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { getGlobalPluginRegistry } from "../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -468,6 +469,115 @@ export async function handleOpenResponsesHttpRequest(
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
       : undefined;
+
+  // Run registered dispatch interceptors before starting the Agent.
+  const pluginRegistry = getGlobalPluginRegistry();
+  if (pluginRegistry && pluginRegistry.dispatchInterceptors.length > 0) {
+    for (const interceptor of pluginRegistry.dispatchInterceptors) {
+      const interceptorChunks: string[] = [];
+      const { intercepted } = await interceptor.intercept(
+        prompt.message ?? "",
+        {
+          sessionKey,
+          channelId: messageChannel,
+          userId: user,
+        },
+        {
+          sendBlock: (message: string) => {
+            interceptorChunks.push(message);
+          },
+          sendStreamChunk: (text: string) => {
+            interceptorChunks.push(text);
+          },
+          sendStreamDone: () => {
+            // Collected via interceptorChunks.
+          },
+        },
+      );
+      if (intercepted) {
+        const content = interceptorChunks.join("") || "Request intercepted.";
+        if (!stream) {
+          const response = createResponseResource({
+            id: responseId,
+            model,
+            status: "completed",
+            output: [
+              createAssistantOutputItem({ id: outputItemId, text: content, status: "completed" }),
+            ],
+          });
+          sendJson(res, 200, response);
+        } else {
+          setSseHeaders(res);
+          const initialResponse = createResponseResource({
+            id: responseId,
+            model,
+            status: "in_progress",
+            output: [],
+          });
+          writeSseEvent(res, { type: "response.created", response: initialResponse });
+          writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
+          const outputItem = createAssistantOutputItem({
+            id: outputItemId,
+            text: "",
+            status: "in_progress",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: outputItem,
+          });
+          writeSseEvent(res, {
+            type: "response.content_part.added",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "" },
+          });
+          writeSseEvent(res, {
+            type: "response.output_text.delta",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            delta: content,
+          });
+          writeSseEvent(res, {
+            type: "response.output_text.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            text: content,
+          });
+          writeSseEvent(res, {
+            type: "response.content_part.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: content },
+          });
+          const completedItem = createAssistantOutputItem({
+            id: outputItemId,
+            text: content,
+            status: "completed",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: completedItem,
+          });
+          const finalResponse = createResponseResource({
+            id: responseId,
+            model,
+            status: "completed",
+            output: [completedItem],
+          });
+          writeSseEvent(res, { type: "response.completed", response: finalResponse });
+          writeDone(res);
+          res.end();
+        }
+        return true;
+      }
+    }
+  }
 
   if (!stream) {
     try {
