@@ -713,7 +713,7 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
+      if (handler.sendPayload && (effectivePayload.channelData || effectivePayload.audioAsVoice)) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({

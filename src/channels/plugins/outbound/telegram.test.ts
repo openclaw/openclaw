@@ -139,4 +139,36 @@ describe("telegramOutbound", () => {
     expect(secondCallOpts?.buttons).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "123" });
   });
+
+  it("passes asVoice for audioAsVoice payload media", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-voice-1", chatId: "123" });
+    const sendPayload = telegramOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const payload: ReplyPayload = {
+      text: "voice caption",
+      mediaUrl: "https://example.com/note.ogg",
+      audioAsVoice: true,
+    };
+
+    await sendPayload!({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload,
+      mediaLocalRoots: ["/tmp/media"],
+      accountId: "default",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "voice caption",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/note.ogg",
+        mediaLocalRoots: ["/tmp/media"],
+        asVoice: true,
+      }),
+    );
+  });
 });

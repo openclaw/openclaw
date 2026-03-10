@@ -307,6 +307,30 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("routes telegram audioAsVoice media payloads through sendPayload", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: {
+        text: "voice caption",
+        mediaUrl: "https://example.com/note.ogg",
+        audioAsVoice: true,
+      },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "voice caption",
+      expect.objectContaining({
+        textMode: "html",
+        mediaUrl: "https://example.com/note.ogg",
+        asVoice: true,
+      }),
+    );
+  });
+
   it("scopes media local roots to the active agent workspace when agentId is provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
