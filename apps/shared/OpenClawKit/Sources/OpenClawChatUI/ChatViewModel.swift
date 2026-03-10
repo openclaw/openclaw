@@ -50,6 +50,7 @@ public final class OpenClawChatViewModel {
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
     private var modelSelectionRequestID: UInt64 = 0
+    private var thinkingSelectionRequestID: UInt64 = 0
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -492,10 +493,21 @@ public final class OpenClawChatViewModel {
 
         self.thinkingLevel = next
         self.onThinkingLevelChanged?(next)
+        self.thinkingSelectionRequestID &+= 1
+        let requestID = self.thinkingSelectionRequestID
+        let sessionKey = self.sessionKey
 
         do {
-            try await self.transport.setSessionThinking(sessionKey: self.sessionKey, thinkingLevel: next)
+            try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: next)
+            guard sessionKey == self.sessionKey else { return }
+            guard requestID == self.thinkingSelectionRequestID else {
+                let latest = self.thinkingLevel
+                guard latest != next else { return }
+                try? await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: latest)
+                return
+            }
         } catch {
+            guard sessionKey == self.sessionKey, requestID == self.thinkingSelectionRequestID else { return }
             // Best-effort. Persisting the user's local preference matters more than a patch error here.
         }
     }
@@ -507,17 +519,19 @@ public final class OpenClawChatViewModel {
         let previous = self.modelSelectionID
         self.modelSelectionRequestID &+= 1
         let requestID = self.modelSelectionRequestID
+        let sessionKey = self.sessionKey
+        let nextModelRef = self.modelRef(forSelectionID: next)
         self.modelSelectionID = next
         self.errorText = nil
 
         do {
             try await self.transport.setSessionModel(
-                sessionKey: self.sessionKey,
-                model: self.modelRef(forSelectionID: next))
-            guard requestID == self.modelSelectionRequestID else { return }
-            self.updateCurrentSessionModel(self.modelRef(forSelectionID: next))
+                sessionKey: sessionKey,
+                model: nextModelRef)
+            guard sessionKey == self.sessionKey, requestID == self.modelSelectionRequestID else { return }
+            self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
         } catch {
-            guard requestID == self.modelSelectionRequestID else { return }
+            guard sessionKey == self.sessionKey, requestID == self.modelSelectionRequestID else { return }
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
             chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
@@ -589,8 +603,8 @@ public final class OpenClawChatViewModel {
             modelID
     }
 
-    private func updateCurrentSessionModel(_ modelID: String?) {
-        if let index = self.sessions.firstIndex(where: { $0.key == self.sessionKey }) {
+    private func updateCurrentSessionModel(_ modelID: String?, sessionKey: String) {
+        if let index = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
             let current = self.sessions[index]
             self.sessions[index] = OpenClawChatSessionEntry(
                 key: current.key,
@@ -612,7 +626,7 @@ public final class OpenClawChatViewModel {
                 model: modelID,
                 contextTokens: current.contextTokens)
         } else {
-            let placeholder = self.placeholderSession(key: self.sessionKey)
+            let placeholder = self.placeholderSession(key: sessionKey)
             self.sessions.append(
                 OpenClawChatSessionEntry(
                     key: placeholder.key,
