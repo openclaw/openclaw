@@ -130,7 +130,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("emits duplicate warning for distinct plugins with same id in the same origin", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -146,11 +146,34 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirB,
-        origin: "global",
+        origin: "bundled",
       }),
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning for distinct roots when origins differ", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "cross-origin-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "cross-origin-plugin",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "cross-origin-plugin",
+        rootDir: dirB,
+        origin: "config",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

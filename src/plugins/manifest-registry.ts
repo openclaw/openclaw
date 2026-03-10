@@ -164,7 +164,8 @@ export function loadPluginManifestRegistry(params: {
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
-  const seenIds = new Map<string, SeenIdEntry>();
+  const seenRootsById = new Map<string, Map<string, SeenIdEntry>>();
+  const seenOriginsById = new Map<string, Map<PluginOrigin, Set<string>>>();
   const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
@@ -200,43 +201,53 @@ export function loadPluginManifestRegistry(params: {
         : manifestRes.manifestPath;
     })();
 
-    const existing = seenIds.get(manifest.id);
-    if (existing) {
-      // Check whether both candidates point to the same physical directory
-      // (e.g. via symlinks or different path representations). If so, this
-      // is a false-positive duplicate and can be silently skipped.
-      const samePath = existing.candidate.rootDir === candidate.rootDir;
-      const samePlugin = (() => {
-        if (samePath) {
-          return true;
-        }
-        const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
-        const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-        return Boolean(existingReal && candidateReal && existingReal === candidateReal);
-      })();
-      if (samePlugin) {
-        // Prefer higher-precedence origins even if candidates are passed in
-        // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = buildRecord({
-            manifest,
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-            schemaCacheKey,
-            configSchema,
-          });
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-        }
-        continue;
+    const rootKey = safeRealpathSync(candidate.rootDir, realpathCache) ?? candidate.rootDir;
+    const rootsForId = seenRootsById.get(manifest.id) ?? new Map<string, SeenIdEntry>();
+    if (!seenRootsById.has(manifest.id)) {
+      seenRootsById.set(manifest.id, rootsForId);
+    }
+    const originsForId = seenOriginsById.get(manifest.id) ?? new Map<PluginOrigin, Set<string>>();
+    if (!seenOriginsById.has(manifest.id)) {
+      seenOriginsById.set(manifest.id, originsForId);
+    }
+
+    const existingSameRoot = rootsForId.get(rootKey);
+    if (existingSameRoot) {
+      // Same physical plugin discovered through multiple origins/sources.
+      // Keep only one record and pick the highest-precedence origin.
+      if (
+        PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existingSameRoot.candidate.origin]
+      ) {
+        records[existingSameRoot.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        rootsForId.set(rootKey, {
+          candidate,
+          recordIndex: existingSameRoot.recordIndex,
+        });
       }
+      continue;
+    }
+
+    const rootsForOrigin = originsForId.get(candidate.origin) ?? new Set<string>();
+    const hadOriginRoot = rootsForOrigin.size > 0;
+    rootsForOrigin.add(rootKey);
+    originsForId.set(candidate.origin, rootsForOrigin);
+    rootsForId.set(rootKey, { candidate, recordIndex: records.length });
+
+    // Warn only when distinct roots collide within the same origin bucket.
+    // Cross-origin shadowing is expected and handled by precedence elsewhere.
+    if (hadOriginRoot) {
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
         source: candidate.source,
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
-    } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
 
     records.push(
