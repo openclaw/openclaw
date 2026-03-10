@@ -135,12 +135,18 @@ function parseSubagentDenyLists(srcDir: string): {
     throw new Error(`[parse-policies] Could not find SUBAGENT_TOOL_DENY_ALWAYS in ${filePath}`);
   }
   const denyAlways = parseStringArray(alwaysDecl.initializer);
+  if (denyAlways.length === 0) {
+    throw new Error(`[parse-policies] Error: SUBAGENT_TOOL_DENY_ALWAYS is empty in ${filePath}`);
+  }
 
   const leafDecl = findVariableDeclaration(sourceFile, "SUBAGENT_TOOL_DENY_LEAF");
   if (!leafDecl?.initializer) {
     throw new Error(`[parse-policies] Could not find SUBAGENT_TOOL_DENY_LEAF in ${filePath}`);
   }
   const denyLeaf = parseStringArray(leafDecl.initializer);
+  if (denyLeaf.length === 0) {
+    throw new Error(`[parse-policies] Error: SUBAGENT_TOOL_DENY_LEAF is empty in ${filePath}`);
+  }
 
   console.log(
     `[parse-policies] Parsed subagent deny lists: ${denyAlways.length} always, ${denyLeaf.length} leaf`,
