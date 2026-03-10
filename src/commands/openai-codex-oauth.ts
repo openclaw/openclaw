@@ -1,5 +1,5 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai/oauth";
-import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { loginOpenAICodex } from "@mariozechner/pi-ai";
 import { withTemporaryEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
