@@ -372,4 +372,22 @@ describe("models list/status", () => {
     expect(row.missing).toBe(false);
     expect(row.available).toBe(false);
   });
+
+  it("toModelRow defaults missing input to text for custom providers", async () => {
+    const row = toModelRow({
+      model: {
+        provider: "custom-openai",
+        id: "custom-model",
+        name: "Custom Model",
+        baseUrl: "https://example.com/v1",
+        contextWindow: 128000,
+      } as never,
+      key: "custom-openai/custom-model",
+      tags: [],
+      availableKeys: undefined,
+    });
+
+    expect(row.missing).toBe(false);
+    expect(row.input).toBe("text");
+  });
 });
