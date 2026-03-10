@@ -252,8 +252,13 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       // Adaptive card rendering: convert card markers to Telegram HTML + inline keyboard
       const acParsed = parseAdaptiveCardMarkers(text);
       if (acParsed) {
-        const rendered = renderTelegramCard(acParsed);
-        if (rendered.text) {
+        let rendered: ReturnType<typeof renderTelegramCard> | null = null;
+        try {
+          rendered = renderTelegramCard(acParsed);
+        } catch {
+          // strategy error -- fall through to fallback text
+        }
+        if (rendered?.text) {
           const buttons: TelegramInlineButtons | undefined = rendered.replyMarkup
             ? (rendered.replyMarkup.inline_keyboard as unknown as TelegramInlineButtons)
             : undefined;

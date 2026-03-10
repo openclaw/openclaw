@@ -20,13 +20,18 @@ function str(val: unknown, fallback = ""): string {
   return JSON.stringify(val);
 }
 
+/** Slack limits section text to 3000 chars. */
+function truncateMrkdwn(text: string, limit = 3000): string {
+  return text.length > limit ? text.slice(0, limit - 3) + "..." : text;
+}
+
 function renderTextBlock(el: AcElement): unknown {
   const text = str(el.text);
   const weight = el.weight as string | undefined;
   const formatted = weight === "Bolder" ? `*${text}*` : text;
   return {
     type: "section",
-    text: { type: "mrkdwn", text: formatted },
+    text: { type: "mrkdwn", text: truncateMrkdwn(formatted) },
   };
 }
 

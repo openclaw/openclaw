@@ -66,11 +66,16 @@ function acStr(val: unknown, fallback = ""): string {
   return JSON.stringify(val);
 }
 
+/** Slack limits section text to 3000 chars. */
+function truncateMrkdwn(text: string, limit = 3000): string {
+  return text.length > limit ? text.slice(0, limit - 3) + "..." : text;
+}
+
 function renderAcTextBlock(el: AcElement): unknown {
   const text = acStr(el.text);
   const weight = el.weight as string | undefined;
   const formatted = weight === "Bolder" ? `*${text}*` : text;
-  return { type: "section", text: { type: "mrkdwn", text: formatted } };
+  return { type: "section", text: { type: "mrkdwn", text: truncateMrkdwn(formatted) } };
 }
 
 function renderAcFactSet(el: AcElement): unknown[] {
@@ -349,8 +354,13 @@ export const slackOutbound: ChannelOutboundAdapter = {
       // Adaptive card rendering: convert card markers to Slack Block Kit
       const acParsed = parseAdaptiveCardMarkers(text);
       if (acParsed) {
-        const rendered = renderSlackCard(acParsed);
-        if (rendered.blocks.length > 0) {
+        let rendered: ReturnType<typeof renderSlackCard> | null = null;
+        try {
+          rendered = renderSlackCard(acParsed);
+        } catch {
+          // strategy error -- fall through to fallback text
+        }
+        if (rendered && rendered.blocks.length > 0) {
           const send =
             resolveOutboundSendDep<typeof sendMessageSlack>(deps, "slack") ?? sendMessageSlack;
           const threadTs = replyToId ?? (threadId != null ? String(threadId) : undefined);

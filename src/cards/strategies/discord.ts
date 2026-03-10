@@ -120,7 +120,21 @@ function buildEmbedFromBody(body: unknown[]): DiscordEmbed {
   }
 
   if (descParts.length > 0) {
-    embed.description = descParts.join("\n");
+    const desc = descParts.join("\n");
+    // Discord limits embed description to 4096 chars
+    embed.description = desc.length > 4096 ? desc.slice(0, 4093) + "..." : desc;
+  }
+
+  // Discord limits: title 256 chars, 25 fields max, field name/value 1024 chars
+  if (embed.title && embed.title.length > 256) {
+    embed.title = embed.title.slice(0, 253) + "...";
+  }
+  if (embed.fields) {
+    embed.fields = embed.fields.slice(0, 25).map((f) => ({
+      name: f.name.length > 1024 ? f.name.slice(0, 1021) + "..." : f.name || "\u200B",
+      value: f.value.length > 1024 ? f.value.slice(0, 1021) + "..." : f.value || "\u200B",
+      inline: f.inline,
+    }));
   }
 
   return embed;
