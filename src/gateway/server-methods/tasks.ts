@@ -100,10 +100,38 @@ export function saveTaskRegistry(registry: TaskRegistry, registryPath = getRegis
 export type SendToSessionFn = (sessionKey: string, message: string) => Promise<void>;
 
 /**
- * Inner implementation — do not call directly; use deliverTaskNotification() which
- * serialises concurrent calls for the same (taskId, idempotencyKey) via inFlightNotify.
+ * Run `fn` as the next step on the registry write queue for `registryKey`.
+ * Only the synchronous body of `fn` (a single registry read-modify-write)
+ * should be placed inside; async fan-out must happen outside.
  */
-async function _deliverTaskNotification(opts: {
+function withRegistryLock<T>(registryKey: string, fn: () => T): Promise<T> {
+  const tail = (registryWriteQueue.get(registryKey) ?? Promise.resolve()).then(fn);
+  const silentTail = tail.catch(() => undefined);
+  registryWriteQueue.set(registryKey, silentTail);
+  void silentTail.then(() => {
+    if (registryWriteQueue.get(registryKey) === silentTail) {
+      registryWriteQueue.delete(registryKey);
+    }
+  });
+  return tail;
+}
+
+/**
+ * Deliver a notification to all watchers of a task.
+ *
+ * The registry lock is held only for the two short critical sections:
+ *   1. Pre-flight: read registry, check idempotency, extract watcher list.
+ *   2. Post-flight: reload registry, re-check idempotency, write update.
+ * Fan-out (sendToSession calls) runs between them, outside the lock, so a
+ * slow or hung watcher on task A never blocks task B from starting.
+ *
+ * Idempotency guarantee: concurrent calls with the same (taskId, ikey) may
+ * both fan-out (duplicate delivery is acceptable), but only the first
+ * post-flight write succeeds — the second detects the key and returns skipped.
+ * For concurrent calls on *different* tasks, both writes land correctly because
+ * each post-flight section holds the lock exclusively.
+ */
+export async function deliverTaskNotification(opts: {
   taskId: string;
   event: string;
   message: string;
@@ -123,135 +151,94 @@ async function _deliverTaskNotification(opts: {
     sendToSession,
   } = opts;
 
-  // Default idempotency key is the event name (fires once per event type by default).
-  // Normalize empty/whitespace-only keys to undefined so callers with unset env vars
-  // (which produce "") don't accidentally collapse all future notifications.
+  // Normalize idempotency key: empty/whitespace falls back to event name.
   const rawKey = opts.idempotencyKey?.trim();
   const ikey = rawKey && rawKey.length > 0 ? rawKey : event;
 
-  const registry = loadTaskRegistry(registryPath);
-  const taskIndex = registry.tasks.findIndex((t) => t.id === taskId);
-  if (taskIndex === -1) {
-    return { delivered: [], failed: [], skipped: "task not found" };
+  const registryKey = registryPath;
+
+  // ── Critical section 1: pre-flight read + idempotency check ─────────────
+  const preCheck = await withRegistryLock(registryKey, () => {
+    const registry = loadTaskRegistry(registryPath);
+    const task = registry.tasks.find((t) => t.id === taskId);
+    if (!task) {
+      return { skip: "task not found" as const, watchers: [] };
+    }
+    if (Object.hasOwn(task.notifiedEvents, ikey)) {
+      return { skip: "already delivered" as const, watchers: [] };
+    }
+    return { skip: null, watchers: task.watchers ?? [] };
+  });
+
+  if (preCheck.skip !== null) {
+    return { delivered: [], failed: [], skipped: preCheck.skip };
   }
 
-  const task = registry.tasks[taskIndex];
-
-  // Idempotency: skip if this key was already delivered
-  if (Object.hasOwn(task.notifiedEvents, ikey)) {
-    return { delivered: [], failed: [], skipped: "already delivered" };
-  }
-
-  const watchers = task.watchers ?? [];
+  // ── Fan-out: outside the lock ────────────────────────────────────────────
   const delivered: string[] = [];
   const failed: string[] = [];
 
-  for (const watcher of watchers) {
+  for (const watcher of preCheck.watchers) {
     try {
       await sendToSession(watcher.sessionKey, message);
       delivered.push(watcher.sessionKey);
     } catch {
-      // Continue delivering to remaining watchers if one session fails
       failed.push(watcher.sessionKey);
     }
   }
 
-  // Only mark idempotency and log the event if ALL watchers succeeded (or there were none).
-  // If any watcher failed, leave the idempotency key unset so the caller can retry — failed
-  // watchers will be re-attempted and already-delivered watchers will receive a duplicate,
-  // but that is preferable to permanently silencing failed watchers.
-  const allSucceeded = failed.length === 0;
-
-  if (!allSucceeded) {
+  // Only persist if all watchers succeeded (or there were none).
+  // Partial failure leaves the idempotency key unset so callers can retry.
+  if (failed.length > 0) {
     return { delivered, failed };
   }
 
-  // Build the event log entry (only appended on full success to avoid duplicate log entries)
-  const newEvent: TaskEvent = {
-    event,
-    message,
-    ...(metadata ? { metadata } : {}),
-    timestamp: Date.now(),
-  };
+  // ── Critical section 2: post-flight reload + write ───────────────────────
+  return withRegistryLock(registryKey, () => {
+    const freshRegistry = loadTaskRegistry(registryPath);
+    const freshIndex = freshRegistry.tasks.findIndex((t) => t.id === taskId);
 
-  // Reload registry before writing to pick up any concurrent mutations (watch/unwatch/remove)
-  // that may have occurred during the async watcher sends above.
-  const freshRegistry = loadTaskRegistry(registryPath);
-  const freshIndex = freshRegistry.tasks.findIndex((t) => t.id === taskId);
-  if (freshIndex === -1) {
-    // Task was removed concurrently; discard — do not resurrect it.
-    return { delivered, failed };
-  }
-
-  const freshTask = freshRegistry.tasks[freshIndex];
-
-  // Re-check idempotency after reload: a concurrent tasks.notify with the same key may have
-  // completed its writes while our fan-out was in flight. Both callers passed the pre-send guard,
-  // but only the first writer wins here — the second returns skipped to prevent duplicate delivery.
-  if (Object.hasOwn(freshTask.notifiedEvents, ikey)) {
-    return { delivered: [], failed: [], skipped: "already delivered" };
-  }
-
-  const updatedEvents = [...freshTask.events, newEvent].slice(-MAX_TASK_EVENTS);
-
-  // Merge new idempotency key and cap the map to MAX_TASK_EVENTS entries.
-  // Entries are ordered by insertion; when over cap, drop oldest keys first.
-  // This prevents registry bloat for long-lived tasks that use unique keys (e.g. commit SHAs).
-  const mergedNotified = { ...freshTask.notifiedEvents, [ikey]: true };
-  const notifiedKeys = Object.keys(mergedNotified);
-  const cappedNotified: Record<string, boolean> =
-    notifiedKeys.length > MAX_TASK_EVENTS
-      ? Object.fromEntries(notifiedKeys.slice(-MAX_TASK_EVENTS).map((k) => [k, true]))
-      : mergedNotified;
-
-  const updatedTask: TaskEntry = {
-    ...freshTask,
-    updatedAt: Date.now(),
-    ...(status !== undefined ? { status } : {}),
-    events: updatedEvents,
-    notifiedEvents: cappedNotified,
-  };
-
-  freshRegistry.tasks[freshIndex] = updatedTask;
-  saveTaskRegistry(freshRegistry, registryPath);
-
-  return { delivered, failed };
-}
-
-/**
- * Deliver a notification to all watchers of a task.
- *
- * Serialised per registry file: all concurrent notify calls queue on the same
- * registry path so each read-modify-write completes before the next begins.
- * This prevents lost updates whether two calls target the same task (different
- * idempotency keys) or different tasks entirely — both write to the same file.
- *
- * Per-key idempotency is enforced inside _deliverTaskNotification; duplicate
- * calls with the same (taskId, idempotencyKey) return skipped without sending.
- */
-export function deliverTaskNotification(
-  opts: Parameters<typeof _deliverTaskNotification>[0],
-): Promise<ReturnType<typeof _deliverTaskNotification>> {
-  // Default registry path must match the inner function's default
-  const registryKey = opts.registryPath ?? getRegistryPath();
-
-  // Chain onto the existing tail for this registry file (or start fresh)
-  const tail = (registryWriteQueue.get(registryKey) ?? Promise.resolve()).then(() =>
-    _deliverTaskNotification(opts),
-  );
-
-  // Store the silenced tail so the chain survives errors from inner calls.
-  const silentTail = tail.catch(() => undefined);
-  registryWriteQueue.set(registryKey, silentTail);
-
-  // Prune map entry when no newer call has queued behind this one.
-  void silentTail.then(() => {
-    if (registryWriteQueue.get(registryKey) === silentTail) {
-      registryWriteQueue.delete(registryKey);
+    if (freshIndex === -1) {
+      // Task removed concurrently — discard without resurrecting.
+      return { delivered, failed };
     }
-  });
 
-  return tail;
+    const freshTask = freshRegistry.tasks[freshIndex];
+
+    // Re-check: a concurrent call with the same key may have written while
+    // our fan-out was in flight.
+    if (Object.hasOwn(freshTask.notifiedEvents, ikey)) {
+      return { delivered: [], failed: [], skipped: "already delivered" as const };
+    }
+
+    const newEvent: TaskEvent = {
+      event,
+      message,
+      ...(metadata ? { metadata } : {}),
+      timestamp: Date.now(),
+    };
+
+    const updatedEvents = [...freshTask.events, newEvent].slice(-MAX_TASK_EVENTS);
+
+    // Cap notifiedEvents to MAX_TASK_EVENTS, dropping oldest keys first.
+    const mergedNotified = { ...freshTask.notifiedEvents, [ikey]: true };
+    const notifiedKeys = Object.keys(mergedNotified);
+    const cappedNotified: Record<string, boolean> =
+      notifiedKeys.length > MAX_TASK_EVENTS
+        ? Object.fromEntries(notifiedKeys.slice(-MAX_TASK_EVENTS).map((k) => [k, true]))
+        : mergedNotified;
+
+    freshRegistry.tasks[freshIndex] = {
+      ...freshTask,
+      updatedAt: Date.now(),
+      ...(status !== undefined ? { status } : {}),
+      events: updatedEvents,
+      notifiedEvents: cappedNotified,
+    };
+
+    saveTaskRegistry(freshRegistry, registryPath);
+    return { delivered, failed };
+  });
 }
 
 export const taskHandlers: GatewayRequestHandlers = {
