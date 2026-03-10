@@ -1,4 +1,5 @@
 import CoreImage
+import Combine
 import OpenClawKit
 import PhotosUI
 import SwiftUI
@@ -68,6 +69,7 @@ struct OnboardingWizardView: View {
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var lastPairingAutoResumeAttemptAt: Date?
+    private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
     let onClose: () -> Void
@@ -132,7 +134,10 @@ struct OnboardingWizardView: View {
                     Button("Done") {
                         UIApplication.shared.sendAction(
                             #selector(UIResponder.resignFirstResponder),
-                            to: nil, from: nil, for: nil)
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
                     }
                 }
             }
@@ -271,6 +276,7 @@ struct OnboardingWizardView: View {
         }
         .onChange(of: self.appModel.gatewayServerName) { _, newValue in
             guard newValue != nil else { return }
+            self.showQRScanner = false
             self.statusLine = "Connected."
             if !self.didMarkCompleted, let selectedMode {
                 OnboardingStateStore.markCompleted(mode: selectedMode)
@@ -280,6 +286,9 @@ struct OnboardingWizardView: View {
         }
         .onChange(of: self.scenePhase) { _, newValue in
             guard newValue == .active else { return }
+            self.attemptAutomaticPairingResumeIfNeeded()
+        }
+        .onReceive(Self.pairingAutoResumeTicker) { _ in
             self.attemptAutomaticPairingResumeIfNeeded()
         }
     }
@@ -480,21 +489,7 @@ struct OnboardingWizardView: View {
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
             Toggle("Use TLS", isOn: self.$manualTLS)
-
-            Button {
-                Task { await self.connectManual() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                    }
-                } else {
-                    Text("Connect")
-                }
-            }
-            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+            self.manualConnectButton
         } header: {
             Text("Developer Local")
         } footer: {
@@ -622,22 +617,25 @@ struct OnboardingWizardView: View {
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-
-            Button {
-                Task { await self.connectManual() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                    }
-                } else {
-                    Text("Connect")
-                }
-            }
-            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+            self.manualConnectButton
         }
+    }
+
+    private var manualConnectButton: some View {
+        Button {
+            Task { await self.connectManual() }
+        } label: {
+            if self.connectingGatewayID == "manual" {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                    Text("Connecting…")
+                }
+            } else {
+                Text("Connect")
+            }
+        }
+        .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
     }
 
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
@@ -685,7 +683,16 @@ struct OnboardingWizardView: View {
         Task { await self.retryLastAttempt() }
     }
 
+    private func resumeAfterPairingApprovalInBackground() {
+        // Keep the pairing issue sticky to avoid visual flicker while we probe for approval.
+        self.appModel.gatewayAutoReconnectEnabled = true
+        self.appModel.gatewayPairingPaused = false
+        self.appModel.gatewayPairingRequestId = nil
+        Task { await self.retryLastAttempt(silent: true) }
+    }
+
     private func attemptAutomaticPairingResumeIfNeeded() {
+        guard self.scenePhase == .active else { return }
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
         guard self.connectingGatewayID == nil else { return }
@@ -695,14 +702,16 @@ struct OnboardingWizardView: View {
             return
         }
         self.lastPairingAutoResumeAttemptAt = now
-        self.resumeAfterPairingApproval()
+        self.resumeAfterPairingApprovalInBackground()
     }
 
     private func detectQRCode(from data: Data) -> String? {
         guard let ciImage = CIImage(data: data) else { return nil }
         let detector = CIDetector(
-            ofType: CIDetectorTypeQRCode, context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
         let features = detector?.features(in: ciImage) ?? []
         for feature in features {
             if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
@@ -837,11 +846,13 @@ struct OnboardingWizardView: View {
         await self.gatewayController.connectManual(host: host, port: self.manualPort, useTLS: self.manualTLS)
     }
 
-    private func retryLastAttempt() async {
-        self.connectingGatewayID = "retry"
+    private func retryLastAttempt(silent: Bool = false) async {
+        self.connectingGatewayID = silent ? "retry-auto" : "retry"
         // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
-        self.connectMessage = "Retrying…"
-        self.statusLine = "Retrying last connection…"
+        if !silent {
+            self.connectMessage = "Retrying…"
+            self.statusLine = "Retrying last connection…"
+        }
         defer { self.connectingGatewayID = nil }
         await self.gatewayController.connectLastKnown()
     }

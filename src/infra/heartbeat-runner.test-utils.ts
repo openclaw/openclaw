@@ -2,7 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveMainSessionKey } from "../config/sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 export type HeartbeatSessionSeed = {
   sessionId?: string;
@@ -19,18 +26,24 @@ export async function seedSessionStore(
 ): Promise<void> {
   await fs.writeFile(
     storePath,
-    JSON.stringify(
-      {
-        [sessionKey]: {
-          sessionId: session.sessionId ?? "sid",
-          updatedAt: session.updatedAt ?? Date.now(),
-          ...session,
-        },
+    JSON.stringify({
+      [sessionKey]: {
+        sessionId: session.sessionId ?? "sid",
+        updatedAt: session.updatedAt ?? Date.now(),
+        ...session,
       },
-      null,
-      2,
-    ),
+    }),
   );
+}
+
+export async function seedMainSessionStore(
+  storePath: string,
+  cfg: OpenClawConfig,
+  session: HeartbeatSessionSeed,
+): Promise<string> {
+  const sessionKey = resolveMainSessionKey(cfg);
+  await seedSessionStore(storePath, sessionKey, session);
+  return sessionKey;
 }
 
 export async function withTempHeartbeatSandbox<T>(
@@ -45,6 +58,7 @@ export async function withTempHeartbeatSandbox<T>(
   },
 ): Promise<T> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
+  await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
   const storePath = path.join(tmpDir, "sessions.json");
   const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
   const previousEnv = new Map<string, string | undefined>();
@@ -65,4 +79,28 @@ export async function withTempHeartbeatSandbox<T>(
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+}
+
+export async function withTempTelegramHeartbeatSandbox<T>(
+  fn: (ctx: {
+    tmpDir: string;
+    storePath: string;
+    replySpy: ReturnType<typeof vi.spyOn>;
+  }) => Promise<T>,
+  options?: {
+    prefix?: string;
+  },
+): Promise<T> {
+  return withTempHeartbeatSandbox(fn, {
+    prefix: options?.prefix,
+    unsetEnvVars: ["TELEGRAM_BOT_TOKEN"],
+  });
+}
+
+export function setupTelegramHeartbeatPluginRuntimeForTests() {
+  const runtime = createPluginRuntime();
+  setTelegramRuntime(runtime);
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+  );
 }

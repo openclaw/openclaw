@@ -123,4 +123,30 @@ describe("deliverReplies", () => {
       }),
     );
   });
+
+  it("records outbound text and message ids in sent-message cache", async () => {
+    const remember = vi.fn();
+    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+
+    await deliverReplies({
+      replies: [{ text: "first|second" }],
+      target: "chat_id:30",
+      client,
+      accountId: "acct-3",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+      sentMessageCache: { remember },
+    });
+
+    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", { text: "first|second" });
+    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
+      text: "first",
+      messageId: "imsg-1",
+    });
+    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
+      text: "second",
+      messageId: "imsg-1",
+    });
+  });
 });

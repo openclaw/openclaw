@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const callGatewayCli = vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
@@ -61,6 +61,7 @@ vi.mock("../../commands/health.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => ({}),
+  readBestEffortConfig: async () => ({}),
 }));
 
 vi.mock("../../infra/bonjour-discovery.js", () => ({
@@ -111,6 +112,16 @@ vi.mock("./discover.js", () => ({
 }));
 
 describe("gateway register option collisions", () => {
+  let registerGatewayCli: typeof import("./register.js").registerGatewayCli;
+  let sharedProgram: Command;
+
+  beforeAll(async () => {
+    ({ registerGatewayCli } = await import("./register.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    registerGatewayCli(sharedProgram);
+  });
+
   beforeEach(() => {
     resetRuntimeCapture();
     callGatewayCli.mockClear();
@@ -118,11 +129,7 @@ describe("gateway register option collisions", () => {
   });
 
   it("forwards --token to gateway call when parent and child option names collide", async () => {
-    const { registerGatewayCli } = await import("./register.js");
-    const program = new Command();
-    registerGatewayCli(program);
-
-    await program.parseAsync(["gateway", "call", "health", "--token", "tok_call", "--json"], {
+    await sharedProgram.parseAsync(["gateway", "call", "health", "--token", "tok_call", "--json"], {
       from: "user",
     });
 
@@ -136,11 +143,7 @@ describe("gateway register option collisions", () => {
   });
 
   it("forwards --token to gateway probe when parent and child option names collide", async () => {
-    const { registerGatewayCli } = await import("./register.js");
-    const program = new Command();
-    registerGatewayCli(program);
-
-    await program.parseAsync(["gateway", "probe", "--token", "tok_probe", "--json"], {
+    await sharedProgram.parseAsync(["gateway", "probe", "--token", "tok_probe", "--json"], {
       from: "user",
     });
 

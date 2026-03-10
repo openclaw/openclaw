@@ -35,6 +35,15 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 }
 ```
 
+## Thinking defaults (Claude 4.6)
+
+- Anthropic Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+- You can override per-message (`/think:<level>`) or in model params:
+  `agents.defaults.models["anthropic/<model>"].params.thinking`.
+- Related Anthropic docs:
+  - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
 ## Prompt caching (Anthropic API)
 
 OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
@@ -66,6 +75,42 @@ Use the `cacheRetention` parameter in your model config:
 ### Defaults
 
 When using Anthropic API Key authentication, OpenClaw automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
+
+### Per-agent cacheRetention overrides
+
+Use model-level params as your baseline, then override specific agents via `agents.list[].params`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-opus-4-6" },
+      models: {
+        "anthropic/claude-opus-4-6": {
+          params: { cacheRetention: "long" }, // baseline for most agents
+        },
+      },
+    },
+    list: [
+      { id: "research", default: true },
+      { id: "alerts", params: { cacheRetention: "none" } }, // override for this agent only
+    ],
+  },
+}
+```
+
+Config merge order for cache-related params:
+
+1. `agents.defaults.models["provider/model"].params`
+2. `agents.list[].params` (matching `id`, overrides by key)
+
+This lets one agent keep a long-lived cache while another agent on the same model disables caching to avoid write costs on bursty/low-reuse traffic.
+
+### Bedrock Claude notes
+
+- Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
+- Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
+- Anthropic API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock model refs when no explicit value is set.
 
 ### Legacy parameter
 
@@ -100,6 +145,18 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 
 OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
+
+This only activates when `params.context1m` is explicitly set to `true` for
+that model.
+
+Requirement: Anthropic must allow long-context usage on that credential
+(typically API key billing, or a subscription account with Extra Usage
+enabled). Otherwise Anthropic returns:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
+Note: Anthropic currently rejects `context-1m-*` beta requests when using
+OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
+context1m beta header for OAuth auth and keeps the required OAuth betas.
 
 ## Option B: Claude setup-token
 

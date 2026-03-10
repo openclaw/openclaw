@@ -12,6 +12,7 @@ import {
   listNativeCommandSpecsForConfig,
   normalizeCommandBody,
   parseCommandArgs,
+  resolveCommandArgChoices,
   resolveCommandArgMenu,
   serializeCommandArgs,
   shouldHandleTextCommands,
@@ -62,6 +63,20 @@ describe("commands registry", () => {
     expect(nativeDisabled.find((spec) => spec.name === "debug")).toBeFalsy();
   });
 
+  it("does not enable restricted commands from inherited flags", () => {
+    const inheritedCommands = Object.create({
+      config: true,
+      debug: true,
+      bash: true,
+    }) as Record<string, unknown>;
+    const commands = listChatCommandsForConfig({
+      commands: inheritedCommands as never,
+    });
+    expect(commands.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "debug")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "bash")).toBeFalsy();
+  });
+
   it("appends skill commands when provided", () => {
     const skillCommands = [
       {
@@ -93,6 +108,94 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "voice")).toBeTruthy();
     expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
+  });
+
+  it("renames status to agentstatus for slack", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "slack" },
+    );
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "status")).toBeFalsy();
+    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
+    expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+  });
+
+  it("keeps discord native command specs within slash-command limits", () => {
+    const cfg = { commands: { native: true } };
+    const native = listNativeCommandSpecsForConfig(cfg, { provider: "discord" });
+    for (const spec of native) {
+      expect(spec.name).toMatch(/^[a-z0-9_-]{1,32}$/);
+      expect(spec.description.length).toBeGreaterThan(0);
+      expect(spec.description.length).toBeLessThanOrEqual(100);
+      expect(spec.args?.length ?? 0).toBeLessThanOrEqual(25);
+
+      const command = findCommandByNativeName(spec.name, "discord");
+      expect(command).toBeTruthy();
+
+      const args = command?.args ?? spec.args ?? [];
+      const argNames = new Set<string>();
+      let sawOptional = false;
+      for (const arg of args) {
+        expect(argNames.has(arg.name)).toBe(false);
+        argNames.add(arg.name);
+
+        const isRequired = arg.required ?? false;
+        if (!isRequired) {
+          sawOptional = true;
+        } else {
+          expect(sawOptional).toBe(false);
+        }
+
+        expect(arg.name).toMatch(/^[a-z0-9_-]{1,32}$/);
+        expect(arg.description.length).toBeGreaterThan(0);
+        expect(arg.description.length).toBeLessThanOrEqual(100);
+
+        if (!command) {
+          continue;
+        }
+        const choices = resolveCommandArgChoices({
+          command,
+          arg,
+          cfg,
+          provider: "discord",
+        });
+        if (choices.length === 0) {
+          continue;
+        }
+        expect(choices.length).toBeLessThanOrEqual(25);
+        for (const choice of choices) {
+          expect(choice.label.length).toBeGreaterThan(0);
+          expect(choice.label.length).toBeLessThanOrEqual(100);
+          expect(choice.value.length).toBeGreaterThan(0);
+          expect(choice.value.length).toBeLessThanOrEqual(100);
+        }
+      }
+    }
+  });
+
+  it("keeps ACP native action choices aligned with implemented handlers", () => {
+    const acp = listChatCommands().find((command) => command.key === "acp");
+    expect(acp).toBeTruthy();
+    const actionArg = acp?.args?.find((arg) => arg.name === "action");
+    expect(actionArg?.choices).toEqual([
+      "spawn",
+      "cancel",
+      "steer",
+      "close",
+      "sessions",
+      "status",
+      "set-mode",
+      "set",
+      "cwd",
+      "permissions",
+      "timeout",
+      "model",
+      "reset-options",
+      "doctor",
+      "install",
+      "help",
+    ]);
   });
 
   it("detects known text commands", () => {

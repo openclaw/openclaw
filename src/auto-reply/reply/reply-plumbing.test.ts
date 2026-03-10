@@ -206,7 +206,7 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBeUndefined();
   });
 
-  it("keeps explicit tags for Slack when off mode allows tags", () => {
+  it("strips explicit tags for Slack when off mode disallows tags", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "[[reply_to_current]]A" }],
       replyToMode: "off",
@@ -215,8 +215,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[0].replyToTag).toBe(true);
+    expect(result[0].replyToId).toBeUndefined();
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
@@ -230,6 +229,46 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBe("42");
     expect(result[0].replyToTag).toBe(true);
+  });
+
+  it("resolves [[reply_to_current]] to currentMessageId when replyToMode is 'all'", () => {
+    // Mattermost-style scenario: agent responds with [[reply_to_current]] and replyToMode
+    // is "all". The tag should resolve to the inbound message id.
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to_current]] some reply text" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-abc123");
+    expect(result[0].replyToTag).toBe(true);
+    expect(result[0].text).toBe("some reply text");
+  });
+
+  it("resolves [[reply_to:<id>]] to explicit id when replyToMode is 'all'", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to:mm-post-xyz789]] threaded reply" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-xyz789");
+    expect(result[0].text).toBe("threaded reply");
+  });
+
+  it("sets replyToId via implicit threading when replyToMode is 'all'", () => {
+    // Even without explicit tags, replyToMode "all" should set replyToId
+    // to currentMessageId for threading.
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-abc123");
   });
 });
 

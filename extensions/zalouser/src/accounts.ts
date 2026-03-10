@@ -1,35 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/zalouser";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
-import { runZca, parseJsonOutput } from "./zca.js";
+import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listZalouserAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
-  const zalouserConfig = cfg.channels?.zalouser as ZalouserConfig | undefined;
-  if (zalouserConfig?.defaultAccount?.trim()) {
-    return zalouserConfig.defaultAccount.trim();
-  }
-  const ids = listZalouserAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const {
+  listAccountIds: listZalouserAccountIds,
+  resolveDefaultAccountId: resolveDefaultZalouserAccountId,
+} = createAccountListHelpers("zalouser");
+export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -49,9 +27,12 @@ function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): Zal
   return { ...base, ...account };
 }
 
-function resolveZcaProfile(config: ZalouserAccountConfig, accountId: string): string {
+function resolveProfile(config: ZalouserAccountConfig, accountId: string): string {
   if (config.profile?.trim()) {
     return config.profile.trim();
+  }
+  if (process.env.ZALOUSER_PROFILE?.trim()) {
+    return process.env.ZALOUSER_PROFILE.trim();
   }
   if (process.env.ZCA_PROFILE?.trim()) {
     return process.env.ZCA_PROFILE.trim();
@@ -60,11 +41,6 @@ function resolveZcaProfile(config: ZalouserAccountConfig, accountId: string): st
     return accountId;
   }
   return "default";
-}
-
-export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
-  const result = await runZca(["auth", "status"], { profile, timeout: 5000 });
-  return result.ok;
 }
 
 export async function resolveZalouserAccount(params: {
@@ -77,8 +53,8 @@ export async function resolveZalouserAccount(params: {
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const profile = resolveZcaProfile(merged, accountId);
-  const authenticated = await checkZcaAuthenticated(profile);
+  const profile = resolveProfile(merged, accountId);
+  const authenticated = await checkZaloAuthenticated(profile);
 
   return {
     accountId,
@@ -100,14 +76,14 @@ export function resolveZalouserAccountSync(params: {
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const profile = resolveZcaProfile(merged, accountId);
+  const profile = resolveProfile(merged, accountId);
 
   return {
     accountId,
     name: merged.name?.trim() || undefined,
     enabled,
     profile,
-    authenticated: false, // unknown without async check
+    authenticated: false,
     config: merged,
   };
 }
@@ -125,11 +101,16 @@ export async function listEnabledZalouserAccounts(
 export async function getZcaUserInfo(
   profile: string,
 ): Promise<{ userId?: string; displayName?: string } | null> {
-  const result = await runZca(["me", "info", "-j"], { profile, timeout: 10000 });
-  if (!result.ok) {
+  const info = await getZaloUserInfo(profile);
+  if (!info) {
     return null;
   }
-  return parseJsonOutput<{ userId?: string; displayName?: string }>(result.stdout);
+  return {
+    userId: info.userId,
+    displayName: info.displayName,
+  };
 }
+
+export { checkZaloAuthenticated as checkZcaAuthenticated };
 
 export type { ResolvedZalouserAccount } from "./types.js";

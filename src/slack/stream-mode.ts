@@ -1,5 +1,13 @@
-export type SlackStreamMode = "replace" | "status_final" | "append";
+import {
+  mapStreamingModeToSlackLegacyDraftStreamMode,
+  resolveSlackNativeStreaming,
+  resolveSlackStreamingMode,
+  type SlackLegacyDraftStreamMode,
+  type StreamingMode,
+} from "../config/discord-preview-streaming.js";
 
+export type SlackStreamMode = SlackLegacyDraftStreamMode;
+export type SlackStreamingMode = StreamingMode;
 const DEFAULT_STREAM_MODE: SlackStreamMode = "replace";
 
 export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {
@@ -11,6 +19,20 @@ export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {
     return normalized;
   }
   return DEFAULT_STREAM_MODE;
+}
+
+export function resolveSlackStreamingConfig(params: {
+  streaming?: unknown;
+  streamMode?: unknown;
+  nativeStreaming?: unknown;
+}): { mode: SlackStreamingMode; nativeStreaming: boolean; draftMode: SlackStreamMode } {
+  const mode = resolveSlackStreamingMode(params);
+  const nativeStreaming = resolveSlackNativeStreaming(params);
+  return {
+    mode,
+    nativeStreaming,
+    draftMode: mapStreamingModeToSlackLegacyDraftStreamMode(mode),
+  };
 }
 
 export function applyAppendOnlyStreamUpdate(params: {

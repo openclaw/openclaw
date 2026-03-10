@@ -127,34 +127,15 @@ enum OpenClawConfigFile {
     }
 
     static func agentWorkspace() -> String? {
-        let root = self.loadDict()
-        let agents = root["agents"] as? [String: Any]
-        let defaults = agents?["defaults"] as? [String: Any]
-        return defaults?["workspace"] as? String
+        AgentWorkspaceConfig.workspace(from: self.loadDict())
     }
 
     static func setAgentWorkspace(_ workspace: String?) {
         var root = self.loadDict()
-        var agents = root["agents"] as? [String: Any] ?? [:]
-        var defaults = agents["defaults"] as? [String: Any] ?? [:]
-        let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty {
-            defaults.removeValue(forKey: "workspace")
-        } else {
-            defaults["workspace"] = trimmed
-        }
-        if defaults.isEmpty {
-            agents.removeValue(forKey: "defaults")
-        } else {
-            agents["defaults"] = defaults
-        }
-        if agents.isEmpty {
-            root.removeValue(forKey: "agents")
-        } else {
-            root["agents"] = agents
-        }
+        AgentWorkspaceConfig.setWorkspace(in: &root, workspace: workspace)
         self.saveDict(root)
-        self.logger.debug("agents.defaults.workspace updated set=\(!trimmed.isEmpty)")
+        let hasWorkspace = !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        self.logger.debug("agents.defaults.workspace updated set=\(hasWorkspace)")
     }
 
     static func gatewayPassword() -> String? {
@@ -223,6 +204,19 @@ enum OpenClawConfigFile {
         }
     }
 
+    static func clearRemoteGatewayUrl() {
+        self.updateGatewayDict { gateway in
+            guard var remote = gateway["remote"] as? [String: Any] else { return }
+            guard remote["url"] != nil else { return }
+            remote.removeValue(forKey: "url")
+            if remote.isEmpty {
+                gateway.removeValue(forKey: "remote")
+            } else {
+                gateway["remote"] = remote
+            }
+        }
+    }
+
     private static func remoteGatewayUrl() -> URL? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any],
@@ -236,7 +230,7 @@ enum OpenClawConfigFile {
         return url
     }
 
-    private static func hostKey(_ host: String) -> String {
+    static func hostKey(_ host: String) -> String {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmed.isEmpty else { return "" }
         if trimmed.contains(":") { return trimmed }

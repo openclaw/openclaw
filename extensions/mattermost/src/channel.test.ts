@@ -1,9 +1,31 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/mattermost";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const { sendMessageMattermostMock } = vi.hoisted(() => ({
+  sendMessageMattermostMock: vi.fn(),
+}));
+
+vi.mock("./mattermost/send.js", () => ({
+  sendMessageMattermost: sendMessageMattermostMock,
+}));
+
 import { mattermostPlugin } from "./channel.js";
+import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
+import {
+  createMattermostReactionFetchMock,
+  createMattermostTestConfig,
+  withMockedGlobalFetch,
+} from "./mattermost/reactions.test-helpers.js";
 
 describe("mattermostPlugin", () => {
+  beforeEach(() => {
+    sendMessageMattermostMock.mockReset();
+    sendMessageMattermostMock.mockResolvedValue({
+      messageId: "post-1",
+      channelId: "channel-1",
+    });
+  });
+
   describe("messaging", () => {
     it("keeps @username targets", () => {
       const normalize = mattermostPlugin.messaging?.normalizeTarget;
@@ -44,6 +66,29 @@ describe("mattermostPlugin", () => {
   });
 
   describe("messageActions", () => {
+    beforeEach(() => {
+      resetMattermostReactionBotUserCacheForTests();
+    });
+
+    const runReactAction = async (params: Record<string, unknown>, fetchMode: "add" | "remove") => {
+      const cfg = createMattermostTestConfig();
+      const fetchImpl = createMattermostReactionFetchMock({
+        mode: fetchMode,
+        postId: "POST1",
+        emojiName: "thumbsup",
+      });
+
+      return await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
+        return await mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: "react",
+          params,
+          cfg,
+          accountId: "default",
+        } as any);
+      });
+    };
+
     it("exposes react when mattermost is configured", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -57,8 +102,9 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).toContain("react");
-      expect(actions).not.toContain("send");
+      expect(actions).toContain("send");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
+      expect(mattermostPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
     });
 
     it("hides react when mattermost is not configured", () => {
@@ -88,7 +134,7 @@ describe("mattermostPlugin", () => {
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).not.toContain("react");
-      expect(actions).not.toContain("send");
+      expect(actions).toContain("send");
     });
 
     it("respects per-account actions.reactions in listActions", () => {
@@ -142,108 +188,140 @@ describe("mattermostPlugin", () => {
     });
 
     it("handles react by calling Mattermost reactions API", async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token",
-            baseUrl: "https://chat.example.com",
-          },
-        },
-      };
+      const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
 
-      const fetchImpl = vi.fn(async (url: any, init?: any) => {
-        if (String(url).endsWith("/api/v4/users/me")) {
-          return new Response(JSON.stringify({ id: "BOT123" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        if (String(url).endsWith("/api/v4/reactions")) {
-          expect(init?.method).toBe("POST");
-          expect(JSON.parse(init?.body)).toEqual({
-            user_id: "BOT123",
-            post_id: "POST1",
-            emoji_name: "thumbsup",
-          });
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 201,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        throw new Error(`unexpected url: ${url}`);
-      });
-
-      const prevFetch = globalThis.fetch;
-      (globalThis as any).fetch = fetchImpl;
-      try {
-        const result = await mattermostPlugin.actions?.handleAction?.({
-          channel: "mattermost",
-          action: "react",
-          params: { messageId: "POST1", emoji: "thumbsup" },
-          cfg,
-          accountId: "default",
-        } as any);
-
-        expect(result?.content).toEqual([
-          { type: "text", text: "Reacted with :thumbsup: on POST1" },
-        ]);
-        expect(result?.details).toEqual({});
-      } finally {
-        (globalThis as any).fetch = prevFetch;
-      }
+      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
+      expect(result?.details).toEqual({});
     });
 
     it("only treats boolean remove flag as removal", async () => {
-      const cfg: OpenClawConfig = {
+      const result = await runReactAction(
+        { messageId: "POST1", emoji: "thumbsup", remove: "true" },
+        "add",
+      );
+
+      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
+    });
+
+    it("removes reaction when remove flag is boolean true", async () => {
+      const result = await runReactAction(
+        { messageId: "POST1", emoji: "thumbsup", remove: true },
+        "remove",
+      );
+
+      expect(result?.content).toEqual([
+        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
+      ]);
+      expect(result?.details).toEqual({});
+    });
+
+    it("maps replyTo to replyToId for send actions", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: {
+          to: "channel:CHAN1",
+          message: "hello",
+          replyTo: "post-root",
+        },
+        cfg,
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+
+    it("falls back to trimmed replyTo when replyToId is blank", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: {
+          to: "channel:CHAN1",
+          message: "hello",
+          replyToId: "   ",
+          replyTo: " post-root ",
+        },
+        cfg,
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+  });
+
+  describe("outbound", () => {
+    it("forwards mediaLocalRoots on sendMedia", async () => {
+      const sendMedia = mattermostPlugin.outbound?.sendMedia;
+      if (!sendMedia) {
+        return;
+      }
+
+      await sendMedia({
+        to: "channel:CHAN1",
+        text: "hello",
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots: ["/tmp/workspace"],
+        accountId: "default",
+        replyToId: "post-root",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          mediaUrl: "/tmp/workspace/image.png",
+          mediaLocalRoots: ["/tmp/workspace"],
+        }),
+      );
+    });
+
+    it("threads resolved cfg on sendText", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+      const cfg = {
         channels: {
           mattermost: {
-            enabled: true,
-            botToken: "test-token",
+            botToken: "resolved-bot-token",
             baseUrl: "https://chat.example.com",
           },
         },
-      };
+      } as OpenClawConfig;
 
-      const fetchImpl = vi.fn(async (url: any, init?: any) => {
-        if (String(url).endsWith("/api/v4/users/me")) {
-          return new Response(JSON.stringify({ id: "BOT123" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        if (String(url).endsWith("/api/v4/reactions")) {
-          expect(init?.method).toBe("POST");
-          expect(JSON.parse(init?.body)).toEqual({
-            user_id: "BOT123",
-            post_id: "POST1",
-            emoji_name: "thumbsup",
-          });
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 201,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        throw new Error(`unexpected url: ${url}`);
-      });
+      await sendText({
+        cfg,
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+      } as any);
 
-      const prevFetch = globalThis.fetch;
-      (globalThis as any).fetch = fetchImpl;
-      try {
-        const result = await mattermostPlugin.actions?.handleAction?.({
-          channel: "mattermost",
-          action: "react",
-          params: { messageId: "POST1", emoji: "thumbsup", remove: "true" },
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
           cfg,
           accountId: "default",
-        } as any);
-
-        expect(result?.content).toEqual([
-          { type: "text", text: "Reacted with :thumbsup: on POST1" },
-        ]);
-      } finally {
-        (globalThis as any).fetch = prevFetch;
-      }
+        }),
+      );
     });
   });
 

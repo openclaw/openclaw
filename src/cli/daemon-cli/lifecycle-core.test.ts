@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfig = vi.fn(() => ({
   gateway: {
@@ -32,16 +32,31 @@ const service = {
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
+  readBestEffortConfig: async () => loadConfig(),
 }));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
+let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+
 describe("runServiceRestart token drift", () => {
+  beforeAll(async () => {
+    ({ runServiceRestart, runServiceStop } = await import("./lifecycle-core.js"));
+  });
+
   beforeEach(() => {
     runtimeLogs.length = 0;
-    loadConfig.mockClear();
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
@@ -53,11 +68,11 @@ describe("runServiceRestart token drift", () => {
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_URL", "");
   });
 
   it("emits drift warning when enabled", async () => {
-    const { runServiceRestart } = await import("./lifecycle-core.js");
-
     await runServiceRestart({
       serviceNoun: "Gateway",
       service,
@@ -69,12 +84,40 @@ describe("runServiceRestart token drift", () => {
     expect(loadConfig).toHaveBeenCalledTimes(1);
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
-    expect(payload.warnings?.[0]).toContain("gateway install --force");
+    expect(payload.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    );
+  });
+
+  it("compares restart drift against config token even when caller env is set", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
+    });
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      checkTokenDrift: true,
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
+    expect(payload.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    );
   });
 
   it("skips drift warning when disabled", async () => {
-    const { runServiceRestart } = await import("./lifecycle-core.js");
-
     await runServiceRestart({
       serviceNoun: "Node",
       service,
@@ -87,5 +130,50 @@ describe("runServiceRestart token drift", () => {
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
     expect(payload.warnings).toBeUndefined();
+  });
+
+  it("emits stopped when an unmanaged process handles stop", async () => {
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "stopped",
+        message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+      }),
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
+    expect(payload.result).toBe("stopped");
+    expect(payload.message).toContain("unmanaged process");
+    expect(service.stop).not.toHaveBeenCalled();
+  });
+
+  it("runs restart health checks after an unmanaged restart signal", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        message: "Gateway restart signal sent to unmanaged process on port 18789: 4200.",
+      }),
+      postRestartCheck,
+    });
+
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.readCommand).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
+    expect(payload.result).toBe("restarted");
+    expect(payload.message).toContain("unmanaged process");
   });
 });

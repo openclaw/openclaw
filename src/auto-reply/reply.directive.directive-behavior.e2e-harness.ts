@@ -125,6 +125,13 @@ export function assertModelSelection(
   expect(entry?.providerOverride).toBe(selection.provider);
 }
 
+export function assertElevatedOffStatusReply(text: string | undefined) {
+  expect(text).toContain("Elevated mode disabled.");
+  const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
+  expect(optionsLine).toBeTruthy();
+  expect(optionsLine).not.toContain("elevated");
+}
+
 export function installDirectiveBehaviorE2EHooks() {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();

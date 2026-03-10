@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
@@ -43,16 +43,23 @@ function expectWrittenPrimaryModel(model: string) {
   });
 }
 
+let modelsSetCommand: typeof import("./models/set.js").modelsSetCommand;
+let modelsFallbacksAddCommand: typeof import("./models/fallbacks.js").modelsFallbacksAddCommand;
+
 describe("models set + fallbacks", () => {
+  beforeAll(async () => {
+    ({ modelsSetCommand } = await import("./models/set.js"));
+    ({ modelsFallbacksAddCommand } = await import("./models/fallbacks.js"));
+  });
+
   beforeEach(() => {
-    readConfigFileSnapshot.mockReset();
+    readConfigFileSnapshot.mockClear();
     writeConfigFile.mockClear();
   });
 
   it("normalizes z.ai provider in models set", async () => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
-    const { modelsSetCommand } = await import("./models/set.js");
 
     await modelsSetCommand("z.ai/glm-4.7", runtime);
 
@@ -62,7 +69,6 @@ describe("models set + fallbacks", () => {
   it("normalizes z-ai provider in models fallbacks add", async () => {
     mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
     const runtime = makeRuntime();
-    const { modelsFallbacksAddCommand } = await import("./models/fallbacks.js");
 
     await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
 
@@ -76,13 +82,47 @@ describe("models set + fallbacks", () => {
     });
   });
 
+  it("preserves primary when adding fallbacks to string defaults.model", async () => {
+    mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
+    const runtime = makeRuntime();
+
+    await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["anthropic/claude-opus-4-6"],
+        },
+        models: { "anthropic/claude-opus-4-6": {} },
+      },
+    });
+  });
+
   it("normalizes provider casing in models set", async () => {
     mockConfigSnapshot({});
     const runtime = makeRuntime();
-    const { modelsSetCommand } = await import("./models/set.js");
 
     await modelsSetCommand("Z.AI/glm-4.7", runtime);
 
     expectWrittenPrimaryModel("zai/glm-4.7");
+  });
+
+  it("rewrites string defaults.model to object form when setting primary", async () => {
+    mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("anthropic/claude-opus-4-6", runtime);
+
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        models: { "anthropic/claude-opus-4-6": {} },
+      },
+    });
   });
 });

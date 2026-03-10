@@ -2,8 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveDefaultSessionStorePath, resolveSessionFilePath } from "./paths.js";
-import { loadSessionStore, updateSessionStore } from "./store.js";
+import { parseSessionThreadInfo } from "./delivery-info.js";
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
+} from "./paths.js";
+import { resolveAndPersistSessionFile } from "./session-file.js";
+import { loadSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 function stripQuery(value: string): string {
@@ -78,6 +85,51 @@ async function ensureSessionHeader(params: {
   });
 }
 
+export async function resolveSessionTranscriptFile(params: {
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  agentId: string;
+  threadId?: string | number;
+}): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
+  const sessionPathOpts = resolveSessionFilePathOptions({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  });
+  let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
+  let sessionEntry = params.sessionEntry;
+
+  if (params.sessionStore && params.storePath) {
+    const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
+    const fallbackSessionFile = !sessionEntry?.sessionFile
+      ? resolveSessionTranscriptPath(
+          params.sessionId,
+          params.agentId,
+          params.threadId ?? threadIdFromSessionKey,
+        )
+      : undefined;
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      sessionEntry,
+      agentId: sessionPathOpts?.agentId,
+      sessionsDir: sessionPathOpts?.sessionsDir,
+      fallbackSessionFile,
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+    sessionEntry = resolvedSessionFile.sessionEntry;
+  }
+
+  return {
+    sessionFile,
+    sessionEntry,
+  };
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
@@ -108,10 +160,16 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   let sessionFile: string;
   try {
-    sessionFile = resolveSessionFilePath(entry.sessionId, entry, {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
       agentId: params.agentId,
       sessionsDir: path.dirname(storePath),
     });
+    sessionFile = resolvedSessionFile.sessionFile;
   } catch (err) {
     return {
       ok: false,
@@ -145,19 +203,6 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     stopReason: "stop",
     timestamp: Date.now(),
   });
-
-  if (!entry.sessionFile || entry.sessionFile !== sessionFile) {
-    await updateSessionStore(
-      storePath,
-      (current) => {
-        current[sessionKey] = {
-          ...entry,
-          sessionFile,
-        };
-      },
-      { activeSessionKey: sessionKey },
-    );
-  }
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };

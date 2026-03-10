@@ -19,6 +19,28 @@ const createFetchMock = () => {
   return withFetchPreconnect(fetchMock);
 };
 
+function mockVoyageApiKey() {
+  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+    apiKey: "voyage-key-123",
+    mode: "api-key",
+    source: "test",
+  });
+}
+
+async function createDefaultVoyageProvider(
+  model: string,
+  fetchMock: ReturnType<typeof createFetchMock>,
+) {
+  vi.stubGlobal("fetch", fetchMock);
+  mockVoyageApiKey();
+  return createVoyageEmbeddingProvider({
+    config: {} as never,
+    provider: "voyage",
+    model,
+    fallback: "none",
+  });
+}
+
 describe("voyage embedding provider", () => {
   afterEach(() => {
     vi.resetAllMocks();
@@ -27,20 +49,7 @@ describe("voyage embedding provider", () => {
 
   it("configures client with correct defaults and headers", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-
-    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-      apiKey: "voyage-key-123",
-      mode: "api-key",
-      source: "test",
-    });
-
-    const result = await createVoyageEmbeddingProvider({
-      config: {} as never,
-      provider: "voyage",
-      model: "voyage-4-large",
-      fallback: "none",
-    });
+    const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
 
     await result.provider.embedQuery("test query");
 
@@ -75,7 +84,7 @@ describe("voyage embedding provider", () => {
       model: "voyage-4-lite",
       fallback: "none",
       remote: {
-        baseUrl: "https://proxy.example.com",
+        baseUrl: "https://example.com",
         apiKey: "remote-override-key",
         headers: { "X-Custom": "123" },
       },
@@ -86,7 +95,7 @@ describe("voyage embedding provider", () => {
     const call = fetchMock.mock.calls[0];
     expect(call).toBeDefined();
     const [url, init] = call as [RequestInfo | URL, RequestInit | undefined];
-    expect(url).toBe("https://proxy.example.com/embeddings");
+    expect(url).toBe("https://example.com/embeddings");
 
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-override-key");
@@ -105,20 +114,7 @@ describe("voyage embedding provider", () => {
           ),
       ),
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-      apiKey: "voyage-key-123",
-      mode: "api-key",
-      source: "test",
-    });
-
-    const result = await createVoyageEmbeddingProvider({
-      config: {} as never,
-      provider: "voyage",
-      model: "voyage-4-large",
-      fallback: "none",
-    });
+    const result = await createDefaultVoyageProvider("voyage-4-large", fetchMock);
 
     await result.provider.embedBatch(["doc1", "doc2"]);
 

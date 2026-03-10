@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
+import {
+  patchChannelOnboardingAdapter,
+  setDefaultChannelPluginRegistryForTests,
+} from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
@@ -26,6 +31,137 @@ function createUnexpectedPromptGuards() {
   };
 }
 
+type SetupChannelsOptions = Parameters<typeof setupChannels>[3];
+
+function runSetupChannels(
+  cfg: OpenClawConfig,
+  prompter: WizardPrompter,
+  options?: SetupChannelsOptions,
+) {
+  return setupChannels(cfg, createExitThrowingRuntime(), prompter, {
+    skipConfirm: true,
+    ...options,
+  });
+}
+
+function createQuickstartTelegramSelect(options?: {
+  configuredAction?: "skip";
+  strictUnexpected?: boolean;
+}) {
+  return vi.fn(async ({ message }: { message: string }) => {
+    if (message === "Select channel (QuickStart)") {
+      return "telegram";
+    }
+    if (options?.configuredAction && message.includes("already configured")) {
+      return options.configuredAction;
+    }
+    if (options?.strictUnexpected) {
+      throw new Error(`unexpected select prompt: ${message}`);
+    }
+    return "__done__";
+  });
+}
+
+function createUnexpectedQuickstartPrompter(select: WizardPrompter["select"]) {
+  const { multiselect, text } = createUnexpectedPromptGuards();
+  return {
+    prompter: createPrompter({ select, multiselect, text }),
+    multiselect,
+    text,
+  };
+}
+
+function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        botToken,
+        ...(typeof enabled === "boolean" ? { enabled } : {}),
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
+  return patchChannelOnboardingAdapter("telegram", {
+    ...overrides,
+    getStatus:
+      overrides.getStatus ??
+      vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        channel: "telegram",
+        configured: Boolean(cfg.channels?.telegram?.botToken),
+        statusLines: [],
+      })),
+  });
+}
+
+function createUnexpectedConfigureCall(message: string) {
+  return vi.fn(async () => {
+    throw new Error(message);
+  });
+}
+
+async function runConfiguredTelegramSetup(params: {
+  strictUnexpected?: boolean;
+  configureWhenConfigured: NonNullable<
+    Parameters<typeof patchTelegramAdapter>[0]["configureWhenConfigured"]
+  >;
+  configureErrorMessage: string;
+}) {
+  const select = createQuickstartTelegramSelect({ strictUnexpected: params.strictUnexpected });
+  const selection = vi.fn();
+  const onAccountId = vi.fn();
+  const configure = createUnexpectedConfigureCall(params.configureErrorMessage);
+  const restore = patchTelegramAdapter({
+    configureInteractive: undefined,
+    configureWhenConfigured: params.configureWhenConfigured,
+    configure,
+  });
+  const { prompter } = createUnexpectedQuickstartPrompter(
+    select as unknown as WizardPrompter["select"],
+  );
+
+  try {
+    const cfg = await runSetupChannels(createTelegramCfg("old-token"), prompter, {
+      quickstartDefaults: true,
+      onSelection: selection,
+      onAccountId,
+    });
+    return { cfg, selection, onAccountId, configure };
+  } finally {
+    restore();
+  }
+}
+
+async function runQuickstartTelegramSetupWithInteractive(params: {
+  configureInteractive: NonNullable<
+    Parameters<typeof patchTelegramAdapter>[0]["configureInteractive"]
+  >;
+  configure?: NonNullable<Parameters<typeof patchTelegramAdapter>[0]["configure"]>;
+}) {
+  const select = createQuickstartTelegramSelect();
+  const selection = vi.fn();
+  const onAccountId = vi.fn();
+  const restore = patchTelegramAdapter({
+    configureInteractive: params.configureInteractive,
+    ...(params.configure ? { configure: params.configure } : {}),
+  });
+  const { prompter } = createUnexpectedQuickstartPrompter(
+    select as unknown as WizardPrompter["select"],
+  );
+
+  try {
+    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+      onSelection: selection,
+      onAccountId,
+    });
+    return { cfg, selection, onAccountId };
+  } finally {
+    restore();
+  }
+}
+
 vi.mock("node:fs/promises", () => ({
   default: {
     access: vi.fn(async () => {
@@ -41,6 +177,15 @@ vi.mock("../channel-web.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
+
+vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...(actual as Record<string, unknown>),
+    // Allow tests to simulate an empty plugin registry during onboarding.
+    reloadOnboardingPluginRegistry: vi.fn(() => {}),
+  };
+});
 
 describe("setupChannels", () => {
   beforeEach(() => {
@@ -67,10 +212,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    const runtime = createExitThrowingRuntime();
-
-    await setupChannels({} as OpenClawConfig, runtime, prompter, {
-      skipConfirm: true,
+    await runSetupChannels({} as OpenClawConfig, prompter, {
       quickstartDefaults: true,
       forceAllowFromChannels: ["whatsapp"],
     });
@@ -79,6 +221,42 @@ describe("setupChannels", () => {
       expect.objectContaining({ message: "Select channel (QuickStart)" }),
     );
     expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("continues Telegram onboarding even when plugin registry is empty (avoids 'plugin not available' block)", async () => {
+    // Simulate missing registry entries (the scenario reported in #25545).
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    // Avoid accidental env-token configuration changing the prompt path.
+    process.env.TELEGRAM_BOT_TOKEN = "";
+
+    const note = vi.fn(async (_message?: string, _title?: string) => {});
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select channel (QuickStart)") {
+        return "telegram";
+      }
+      return "__done__";
+    });
+    const text = vi.fn(async () => "123:token");
+
+    const prompter = createPrompter({
+      note,
+      select: select as unknown as WizardPrompter["select"],
+      text: text as unknown as WizardPrompter["text"],
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+    });
+
+    // The new flow should not stop setup with a hard "plugin not available" note.
+    const sawHardStop = note.mock.calls.some((call) => {
+      const message = call[0];
+      const title = call[1];
+      return (
+        title === "Channel setup" && String(message).trim() === "telegram plugin not available."
+      );
+    });
+    expect(sawHardStop).toBe(false);
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {
@@ -93,11 +271,7 @@ describe("setupChannels", () => {
       text,
     });
 
-    const runtime = createExitThrowingRuntime();
-
-    await setupChannels({} as OpenClawConfig, runtime, prompter, {
-      skipConfirm: true,
-    });
+    await runSetupChannels({} as OpenClawConfig, prompter);
 
     const sawPrimer = note.mock.calls.some(
       ([message, title]) =>
@@ -109,40 +283,17 @@ describe("setupChannels", () => {
   });
 
   it("prompts for configured channel action and skips configuration when told to skip", async () => {
-    const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select channel (QuickStart)") {
-        return "telegram";
-      }
-      if (message.includes("already configured")) {
-        return "skip";
-      }
-      throw new Error(`unexpected select prompt: ${message}`);
+    const select = createQuickstartTelegramSelect({
+      configuredAction: "skip",
+      strictUnexpected: true,
     });
-    const { multiselect, text } = createUnexpectedPromptGuards();
-
-    const prompter = createPrompter({
-      select: select as unknown as WizardPrompter["select"],
-      multiselect,
-      text,
-    });
-
-    const runtime = createExitThrowingRuntime();
-
-    await setupChannels(
-      {
-        channels: {
-          telegram: {
-            botToken: "token",
-          },
-        },
-      } as OpenClawConfig,
-      runtime,
-      prompter,
-      {
-        skipConfirm: true,
-        quickstartDefaults: true,
-      },
+    const { prompter, multiselect, text } = createUnexpectedQuickstartPrompter(
+      select as unknown as WizardPrompter["select"],
     );
+
+    await runSetupChannels(createTelegramCfg("token"), prompter, {
+      quickstartDefaults: true,
+    });
 
     expect(select).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Select channel (QuickStart)" }),
@@ -178,25 +329,127 @@ describe("setupChannels", () => {
       text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
     });
 
-    const runtime = createExitThrowingRuntime();
-
-    await setupChannels(
-      {
-        channels: {
-          telegram: {
-            botToken: "token",
-            enabled: false,
-          },
-        },
-      } as OpenClawConfig,
-      runtime,
-      prompter,
-      {
-        skipConfirm: true,
-      },
-    );
+    await runSetupChannels(createTelegramCfg("token", false), prompter);
 
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("uses configureInteractive skip without mutating selection/account state", async () => {
+    const configureInteractive = vi.fn(async () => "skip" as const);
+    const { cfg, selection, onAccountId } = await runQuickstartTelegramSetupWithInteractive({
+      configureInteractive,
+    });
+
+    expect(configureInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: false, label: expect.any(String) }),
+    );
+    expect(selection).toHaveBeenCalledWith([]);
+    expect(onAccountId).not.toHaveBeenCalled();
+    expect(cfg.channels?.telegram?.botToken).toBeUndefined();
+  });
+
+  it("applies configureInteractive result cfg/account updates", async () => {
+    const configureInteractive = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg: {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          telegram: { ...cfg.channels?.telegram, botToken: "new-token" },
+        },
+      } as OpenClawConfig,
+      accountId: "acct-1",
+    }));
+    const configure = createUnexpectedConfigureCall(
+      "configure should not be called when configureInteractive is present",
+    );
+    const { cfg, selection, onAccountId } = await runQuickstartTelegramSetupWithInteractive({
+      configureInteractive,
+      configure,
+    });
+
+    expect(configureInteractive).toHaveBeenCalledTimes(1);
+    expect(configure).not.toHaveBeenCalled();
+    expect(selection).toHaveBeenCalledWith(["telegram"]);
+    expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-1");
+    expect(cfg.channels?.telegram?.botToken).toBe("new-token");
+  });
+
+  it("uses configureWhenConfigured when channel is already configured", async () => {
+    const configureWhenConfigured = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg: {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          telegram: { ...cfg.channels?.telegram, botToken: "updated-token" },
+        },
+      } as OpenClawConfig,
+      accountId: "acct-2",
+    }));
+    const { cfg, selection, onAccountId, configure } = await runConfiguredTelegramSetup({
+      configureWhenConfigured,
+      configureErrorMessage:
+        "configure should not be called when configureWhenConfigured handles updates",
+    });
+
+    expect(configureWhenConfigured).toHaveBeenCalledTimes(1);
+    expect(configureWhenConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: true, label: expect.any(String) }),
+    );
+    expect(configure).not.toHaveBeenCalled();
+    expect(selection).toHaveBeenCalledWith(["telegram"]);
+    expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-2");
+    expect(cfg.channels?.telegram?.botToken).toBe("updated-token");
+  });
+
+  it("respects configureWhenConfigured skip without mutating selection or account state", async () => {
+    const configureWhenConfigured = vi.fn(async () => "skip" as const);
+    const { cfg, selection, onAccountId, configure } = await runConfiguredTelegramSetup({
+      strictUnexpected: true,
+      configureWhenConfigured,
+      configureErrorMessage: "configure should not run when configureWhenConfigured handles skip",
+    });
+
+    expect(configureWhenConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: true, label: expect.any(String) }),
+    );
+    expect(configure).not.toHaveBeenCalled();
+    expect(selection).toHaveBeenCalledWith([]);
+    expect(onAccountId).not.toHaveBeenCalled();
+    expect(cfg.channels?.telegram?.botToken).toBe("old-token");
+  });
+
+  it("prefers configureInteractive over configureWhenConfigured when both hooks exist", async () => {
+    const select = createQuickstartTelegramSelect({ strictUnexpected: true });
+    const selection = vi.fn();
+    const onAccountId = vi.fn();
+    const configureInteractive = vi.fn(async () => "skip" as const);
+    const configureWhenConfigured = vi.fn(async () => {
+      throw new Error("configureWhenConfigured should not run when configureInteractive exists");
+    });
+    const restore = patchTelegramAdapter({
+      configureInteractive,
+      configureWhenConfigured,
+    });
+    const { prompter } = createUnexpectedQuickstartPrompter(
+      select as unknown as WizardPrompter["select"],
+    );
+
+    try {
+      await runSetupChannels(createTelegramCfg("old-token"), prompter, {
+        quickstartDefaults: true,
+        onSelection: selection,
+        onAccountId,
+      });
+
+      expect(configureInteractive).toHaveBeenCalledWith(
+        expect.objectContaining({ configured: true, label: expect.any(String) }),
+      );
+      expect(configureWhenConfigured).not.toHaveBeenCalled();
+      expect(selection).toHaveBeenCalledWith([]);
+      expect(onAccountId).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 });

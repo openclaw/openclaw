@@ -12,7 +12,7 @@ describe("resolveTailnetDnsHint", () => {
   beforeEach(() => {
     prevTailnetDns.value = process.env.OPENCLAW_TAILNET_DNS;
     delete process.env.OPENCLAW_TAILNET_DNS;
-    getTailnetHostname.mockReset();
+    getTailnetHostname.mockClear();
   });
 
   afterEach(() => {

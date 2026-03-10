@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -109,6 +109,23 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   return respond;
 }
 
+const BASE_USAGE_RANGE = {
+  startDate: "2026-02-01",
+  endDate: "2026-02-02",
+  limit: 10,
+} as const;
+
+function expectSuccessfulSessionsUsage(
+  respond: ReturnType<typeof vi.fn>,
+): Array<{ key: string; agentId: string }> {
+  expect(respond).toHaveBeenCalledTimes(1);
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  const result = respond.mock.calls[0]?.[1] as {
+    sessions: Array<{ key: string; agentId: string }>;
+  };
+  return result.sessions;
+}
+
 describe("sessions.usage", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -116,85 +133,66 @@ describe("sessions.usage", () => {
   });
 
   it("discovers sessions across configured agents and keeps agentId in key", async () => {
-    const respond = await runSessionsUsage({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      limit: 10,
-    });
+    const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
     expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe("opus");
 
-    expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as unknown as {
-      sessions: Array<{ key: string; agentId: string }>;
-    };
-    expect(result.sessions).toHaveLength(2);
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(2);
 
     // Sorted by most recent first (mtime=200 -> opus first).
-    expect(result.sessions[0].key).toBe("agent:opus:s-opus");
-    expect(result.sessions[0].agentId).toBe("opus");
-    expect(result.sessions[1].key).toBe("agent:main:s-main");
-    expect(result.sessions[1].agentId).toBe("main");
+    expect(sessions[0].key).toBe("agent:opus:s-opus");
+    expect(sessions[0].agentId).toBe("opus");
+    expect(sessions[1].key).toBe("agent:main:s-main");
+    expect(sessions[1].agentId).toBe("main");
   });
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
-      const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-      fs.mkdirSync(agentSessionsDir, { recursive: true });
-      const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
-      fs.writeFileSync(sessionFile, "", "utf-8");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
 
-      // Swap the store mock for this test: the canonical key differs from the discovered key
-      // but points at the same sessionId.
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
-        storePath: "(multiple)",
-        store: {
-          [storeKey]: {
-            sessionId: "s-opus",
-            sessionFile: "s-opus.jsonl",
-            label: "Named session",
-            updatedAt: 999,
+        // Swap the store mock for this test: the canonical key differs from the discovered key
+        // but points at the same sessionId.
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            [storeKey]: {
+              sessionId: "s-opus",
+              sessionFile: "s-opus.jsonl",
+              label: "Named session",
+              updatedAt: 999,
+            },
           },
-        },
-      });
+        });
 
-      // Query via discovered key: agent:<id>:<sessionId>
-      const respond = await runSessionsUsage({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        key: "agent:opus:s-opus",
-        limit: 10,
+        // Query via discovered key: agent:<id>:<sessionId>
+        const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "agent:opus:s-opus" });
+        const sessions = expectSuccessfulSessionsUsage(respond);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]?.key).toBe(storeKey);
+        expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
+        expect(
+          vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
+        ).toBe(true);
       });
-
-      expect(respond).toHaveBeenCalledTimes(1);
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<{ key: string }> };
-      expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0]?.key).toBe(storeKey);
-      expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
-      expect(
-        vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
-      ).toBe(true);
     } finally {
-      envSnapshot.restore();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
   it("rejects traversal-style keys in specific session usage lookups", async () => {
     const respond = await runSessionsUsage({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
+      ...BASE_USAGE_RANGE,
       key: "agent:opus:../../etc/passwd",
-      limit: 10,
     });
 
     expect(respond).toHaveBeenCalledTimes(1);

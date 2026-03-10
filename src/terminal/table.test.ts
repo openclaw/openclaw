@@ -48,44 +48,13 @@ describe("renderTable", () => {
       ],
     });
 
-    const ESC = "\u001b";
-    for (let i = 0; i < out.length; i += 1) {
-      if (out[i] !== ESC) {
-        continue;
-      }
-
-      // SGR: ESC [ ... m
-      if (out[i + 1] === "[") {
-        let j = i + 2;
-        while (j < out.length) {
-          const ch = out[j];
-          if (ch === "m") {
-            break;
-          }
-          if (ch && ch >= "0" && ch <= "9") {
-            j += 1;
-            continue;
-          }
-          if (ch === ";") {
-            j += 1;
-            continue;
-          }
-          break;
-        }
-        expect(out[j]).toBe("m");
-        i = j;
-        continue;
-      }
-
-      // OSC-8: ESC ] 8 ; ; ... ST (ST = ESC \)
-      if (out[i + 1] === "]" && out.slice(i + 2, i + 5) === "8;;") {
-        const st = out.indexOf(`${ESC}\\`, i + 5);
-        expect(st).toBeGreaterThanOrEqual(0);
-        i = st + 1;
-        continue;
-      }
-
-      throw new Error(`Unexpected escape sequence at index ${i}`);
+    const ansiToken = new RegExp(String.raw`\u001b\[[0-9;]*m|\u001b\]8;;.*?\u001b\\`, "gs");
+    let escapeIndex = out.indexOf("\u001b");
+    while (escapeIndex >= 0) {
+      ansiToken.lastIndex = escapeIndex;
+      const match = ansiToken.exec(out);
+      expect(match?.index).toBe(escapeIndex);
+      escapeIndex = out.indexOf("\u001b", escapeIndex + 1);
     }
   });
 

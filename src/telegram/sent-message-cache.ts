@@ -6,7 +6,6 @@
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type CacheEntry = {
-  messageIds: Set<number>;
   timestamps: Map<number, number>;
 };
 
@@ -20,7 +19,6 @@ function cleanupExpired(entry: CacheEntry): void {
   const now = Date.now();
   for (const [msgId, timestamp] of entry.timestamps) {
     if (now - timestamp > TTL_MS) {
-      entry.messageIds.delete(msgId);
       entry.timestamps.delete(msgId);
     }
   }
@@ -33,13 +31,12 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
   const key = getChatKey(chatId);
   let entry = sentMessages.get(key);
   if (!entry) {
-    entry = { messageIds: new Set(), timestamps: new Map() };
+    entry = { timestamps: new Map() };
     sentMessages.set(key, entry);
   }
-  entry.messageIds.add(messageId);
   entry.timestamps.set(messageId, Date.now());
   // Periodic cleanup
-  if (entry.messageIds.size > 100) {
+  if (entry.timestamps.size > 100) {
     cleanupExpired(entry);
   }
 }
@@ -55,7 +52,7 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   }
   // Clean up expired entries on read
   cleanupExpired(entry);
-  return entry.messageIds.has(messageId);
+  return entry.timestamps.has(messageId);
 }
 
 /**

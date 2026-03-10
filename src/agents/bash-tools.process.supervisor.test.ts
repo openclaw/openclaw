@@ -41,12 +41,12 @@ function createBackgroundSession(id: string, pid?: number) {
 
 describe("process tool supervisor cancellation", () => {
   beforeEach(() => {
-    supervisorMock.spawn.mockReset();
-    supervisorMock.cancel.mockReset();
-    supervisorMock.cancelScope.mockReset();
-    supervisorMock.reconcileOrphans.mockReset();
-    supervisorMock.getRecord.mockReset();
-    killProcessTreeMock.mockReset();
+    supervisorMock.spawn.mockClear();
+    supervisorMock.cancel.mockClear();
+    supervisorMock.cancelScope.mockClear();
+    supervisorMock.reconcileOrphans.mockClear();
+    supervisorMock.getRecord.mockClear();
+    killProcessTreeMock.mockClear();
   });
 
   afterEach(() => {
