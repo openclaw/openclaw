@@ -65,6 +65,10 @@ Docs: https://docs.openclaw.ai
 - Agents/fallback cooldown probing: cap cooldown-bypass probing to one attempt per provider per fallback run so multi-model same-provider cooldown chains can continue to cross-provider fallbacks instead of repeatedly stalling on duplicate cooldown probes. (#41711) Thanks @cgdusek.
 - Telegram/direct delivery: bridge direct delivery sends to internal `message:sent` hooks so internal hook listeners observe successful Telegram deliveries. (#40185) Thanks @vincentkoc.
 - Plugins/global hook runner: harden singleton state handling so shared global hook runner reuse does not leak or corrupt runner state across executions. (#40184) Thanks @vincentkoc.
+- Agents/fallback: recognize Poe `402 You've used up your points!` billing errors so configured model fallbacks trigger instead of surfacing the raw provider error. (#42278) Thanks @CryUshio.
+- Telegram/outbound HTML sends: chunk long HTML-mode messages, preserve plain-text fallback and silent-delivery params across retries, and cut over to plain text when HTML chunk planning cannot safely preserve the full message. (#42240) thanks @obviyus.
+- Agents/embedded overload logs: include the failing model and provider in error-path console output, with lifecycle regression coverage for the rendered and sanitized `consoleMessage`. (#41236) thanks @jiarung.
+- Agents/failover: treat Gemini `MALFORMED_RESPONSE` stop reasons as retryable timeouts so preview-model enum drift falls back cleanly instead of crashing the run, without also reclassifying malformed function-call errors. (#42292) Thanks @jnMetaCode.
 
 ## 2026.3.8
 
@@ -131,6 +135,7 @@ Docs: https://docs.openclaw.ai
 - Security/system.run: bind approved `bun` and `deno run` script operands to on-disk file snapshots so post-approval script rewrites are denied before execution.
 - Skills/download installs: pin the validated per-skill tools root before writing downloaded archives, so rebinding the lexical tools path cannot redirect download writes outside the intended tools directory. Thanks @tdjackey.
 - Control UI/Debug: replace the Manual RPC free-text method field with a sorted dropdown sourced from gateway-advertised methods, and stack the form vertically for narrower layouts. (#14967) thanks @rixau.
+- Auth/profile resolution: log debug details when auto-discovered auth profiles fail during provider API-key resolution, so `--debug` output surfaces the real refresh/keychain/credential-store failure instead of only the generic missing-key message. (#41271) thanks @he-yufeng.
 
 ## 2026.3.7
 
