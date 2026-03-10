@@ -48,7 +48,8 @@ func agentIdForTrigger(_ matchedTrigger: String, in entries: [TriggerWordEntry])
 /// Find the matching trigger word and its agentId from a transcript.
 func matchTriggerEntry(transcript: String, entries: [TriggerWordEntry]) -> TriggerWordEntry? {
     let lower = transcript.lowercased()
-    for entry in entries {
+    let sorted = entries.sorted { $0.word.count > $1.word.count }
+    for entry in sorted {
         let trigger = entry.word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trigger.isEmpty else { continue }
         if lower.range(of: trigger.lowercased(), options: [.diacriticInsensitive, .widthInsensitive]) != nil {

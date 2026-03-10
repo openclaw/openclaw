@@ -83,6 +83,9 @@ final class AppState {
                 let words = self.swabbleTriggerEntries.map(\.word)
                 if words != self.swabbleTriggerWords {
                     self.swabbleTriggerWords = words
+                } else {
+                    // Words unchanged but agentId may have changed — still refresh runtime.
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 }
             }
         }

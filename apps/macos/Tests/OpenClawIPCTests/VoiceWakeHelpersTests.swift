@@ -87,4 +87,20 @@ struct VoiceWakeHelpersTests {
         let match3 = matchTriggerEntry(transcript: "hello world", entries: entries)
         #expect(match3 == nil)
     }
+
+    @Test func `matchTriggerEntry prefers longest overlapping trigger`() {
+        let entries = [
+            TriggerWordEntry(word: "Hi", agentId: "short"),
+            TriggerWordEntry(word: "Hi Leo", agentId: "leo"),
+        ]
+        // "Hi Leo" should match the longer trigger even though "Hi" also appears.
+        let match = matchTriggerEntry(transcript: "Hi Leo do something", entries: entries)
+        #expect(match?.word == "Hi Leo")
+        #expect(match?.agentId == "leo")
+
+        // Plain "Hi there" should still match the short trigger.
+        let match2 = matchTriggerEntry(transcript: "Hi there", entries: entries)
+        #expect(match2?.word == "Hi")
+        #expect(match2?.agentId == "short")
+    }
 }

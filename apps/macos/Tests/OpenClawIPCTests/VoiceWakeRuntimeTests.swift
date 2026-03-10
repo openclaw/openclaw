@@ -112,4 +112,25 @@ struct VoiceWakeRuntimeTests {
             sendChime: .none)
         #expect(config.triggerWords == ["Hey Sasha", "Hi Leo"])
     }
+
+    @Test func `matchTriggerEntry routes longest overlapping trigger correctly`() {
+        let entries = [
+            TriggerWordEntry(word: "Hi", agentId: "generic"),
+            TriggerWordEntry(word: "Hi Leo", agentId: "leo"),
+            TriggerWordEntry(word: "Hi Kiki", agentId: "kiki"),
+        ]
+
+        // "Hi Leo" must match the longer, more specific trigger.
+        let match1 = matchTriggerEntry(transcript: "Hi Leo play some music", entries: entries)
+        #expect(match1?.agentId == "leo")
+
+        // "Hi Kiki" must match the longer trigger.
+        let match2 = matchTriggerEntry(transcript: "Hi Kiki what's the weather", entries: entries)
+        #expect(match2?.agentId == "kiki")
+
+        // "Hi everyone" should fall back to the short trigger.
+        let match3 = matchTriggerEntry(transcript: "Hi everyone", entries: entries)
+        #expect(match3?.word == "Hi")
+        #expect(match3?.agentId == "generic")
+    }
 }
