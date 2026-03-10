@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
+import { dequeueWebhook, enqueueWebhook, replayPendingWebhooks } from "../infra/webhook-queue.js";
 import {
   logWebhookError,
   logWebhookProcessed,
@@ -88,6 +89,8 @@ export async function startTelegramWebhook(opts: {
   healthPath?: string;
   publicUrl?: string;
   webhookCertPath?: string;
+  /** Override state directory for webhook queue (tests). */
+  stateDir?: string;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -102,18 +105,43 @@ export async function startTelegramWebhook(opts: {
   }
   const runtime = opts.runtime ?? defaultRuntime;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
+  const queueChannelId = opts.accountId ? `telegram_${opts.accountId}` : "telegram";
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    onUpdateProcessed: (updateId) => {
+      dequeueWebhook(queueChannelId, String(updateId), opts.stateDir).catch((err) => {
+        runtime.log?.(`[webhook-queue] dequeue failed: ${formatErrorMessage(err)}`);
+      });
+    },
   });
   await initializeTelegramWebhookBot({
     bot,
     runtime,
     abortSignal: opts.abortSignal,
   });
+
+  // Replay any webhook payloads that were enqueued but not fully processed
+  // before the last shutdown.
+  const pending = await replayPendingWebhooks(queueChannelId, opts.stateDir);
+  for (const entry of pending) {
+    try {
+      await bot.handleUpdate(entry.payload as Parameters<typeof bot.handleUpdate>[0]);
+      // Dequeue happens via onUpdateProcessed in the bot middleware on success.
+    } catch (err) {
+      runtime.log?.(
+        `webhook replay failed for update ${entry.deduplicationId}: ${formatErrorMessage(err)}`,
+      );
+      // Leave entry on disk — will be retried on next restart (1h TTL cleanup).
+    }
+  }
+  if (pending.length > 0) {
+    runtime.log?.(`webhook queue: replayed ${pending.length} pending update(s)`);
+  }
+
   const handler = webhookCallback(bot, "callback", {
     secretToken: secret,
     onTimeout: "return",
@@ -191,6 +219,25 @@ export async function startTelegramWebhook(opts: {
       };
       const secretHeaderRaw = req.headers["x-telegram-bot-api-secret-token"];
       const secretHeader = Array.isArray(secretHeaderRaw) ? secretHeaderRaw[0] : secretHeaderRaw;
+
+      // Validate webhook secret before persisting anything to disk.
+      if (secretHeader !== secret) {
+        await unauthorized();
+        return;
+      }
+
+      // Persist payload to disk before processing so it survives a restart.
+      const updateId =
+        body.value && typeof body.value === "object" && "update_id" in body.value
+          ? (body.value as { update_id?: unknown }).update_id
+          : undefined;
+      if (typeof updateId === "number") {
+        try {
+          await enqueueWebhook(queueChannelId, String(updateId), body.value, opts.stateDir);
+        } catch {
+          // Queue write failure must not block normal processing.
+        }
+      }
 
       await handler(body.value, reply, secretHeader, unauthorized);
       if (!replied) {
