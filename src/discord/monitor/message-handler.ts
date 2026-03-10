@@ -179,13 +179,12 @@ function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string 
 
 function shouldBypassDiscordSessionQueue(params: {
   cfg: DiscordMessageHandlerParams["cfg"];
-  ctx: DiscordMessagePreflightContext;
 }): boolean {
   const resolved = resolveQueueSettings({
     cfg: params.cfg,
     channel: "discord",
   });
-  return resolved.mode === "steer";
+  return resolved.mode === "steer" || resolved.mode === "steer-backlog";
 }
 
 export function createDiscordMessageHandler(
@@ -227,7 +226,7 @@ export function createDiscordMessageHandler(
       }
     };
 
-    const runPromise = shouldBypassDiscordSessionQueue({ cfg: params.cfg, ctx })
+    const runPromise = shouldBypassDiscordSessionQueue({ cfg: params.cfg })
       ? runTask()
       : runQueue.enqueue(resolveDiscordRunQueueKey(ctx), runTask);
 
