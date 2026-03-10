@@ -111,6 +111,15 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches Poe API exhaustion error (#42236)", () => {
+    const samples = [
+      "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      "You've used up your points!",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
   it("does not false-positive on issue IDs or text containing 402", () => {
     const falsePositives = [
       "Fixed issue CHE-402 in the latest release",
@@ -740,6 +749,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("LLM error: weekly/monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
+  });
+  it("classifies Poe API exhaustion as billing (#42236)", () => {
+    expect(
+      classifyFailoverReason(
+        "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      ),
+    ).toBe("billing");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
