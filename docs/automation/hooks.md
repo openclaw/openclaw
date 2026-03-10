@@ -309,7 +309,7 @@ Session events include rich context about the session and changes:
 }
 ```
 
-**Security note:** Only privileged clients can trigger session patch events; WebChat Control UI clients are blocked for security (see PR #20800).
+**Security note:** Only privileged clients (including the Control UI) can trigger `session:patch` events. Standard WebChat clients are blocked from patching sessions (see PR #20800), so the hook will not fire from those connections.
 
 See `SessionsPatchParamsSchema` in `src/gateway/protocol/schema/sessions.ts` for the complete type definition.
 
