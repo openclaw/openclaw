@@ -12,7 +12,12 @@
  *     npx tsx test/live-test.ts
  */
 
-import { sendSMS, getSMS, validateApiKey, type KudosityConfig } from "../src/kudosity-api.js";
+import {
+  sendSMS,
+  getSMS,
+  validateApiKey,
+  type KudosityConfig,
+} from "../src/kudosity-api.js";
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -25,9 +30,7 @@ if (!apiKey || !sender || !testNumber) {
   console.error("   KUDOSITY_API_KEY, KUDOSITY_SENDER, KUDOSITY_TEST_NUMBER");
   console.error("");
   console.error("Usage:");
-  console.error(
-    "  KUDOSITY_API_KEY=xxx KUDOSITY_SENDER=61400000000 KUDOSITY_TEST_NUMBER=61412345678 npx tsx test/live-test.ts",
-  );
+  console.error("  KUDOSITY_API_KEY=xxx KUDOSITY_SENDER=61400000000 KUDOSITY_TEST_NUMBER=61412345678 npx tsx test/live-test.ts");
   process.exit(1);
 }
 

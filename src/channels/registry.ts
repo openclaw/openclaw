@@ -118,6 +118,7 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "line",
     blurb: "LINE Messaging API webhook bot.",
     systemImage: "message",
+  },
   "kudosity-sms": {
     id: "kudosity-sms",
     label: "SMS Kudosity",
@@ -137,7 +138,6 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   "google-chat": "googlechat",
   gchat: "googlechat",
   kudosity: "kudosity-sms",
-  sms: "kudosity-sms",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

@@ -44,7 +44,7 @@ function cleanPhoneNumber(raw: string): string {
 
 /** Generate a unique, collision-resistant message reference. */
 function generateMessageRef(): string {
-  return `openclaw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `openclaw-${crypto.randomUUID()}`;
 }
 
 // ─── Config Types ────────────────────────────────────────────────────────────
@@ -56,6 +56,7 @@ export interface KudositySmsAccount {
   accountId: string;
   apiKey: string;
   sender: string;
+  enabled?: boolean;
 }
 
 // ─── Config Adapter ──────────────────────────────────────────────────────────
@@ -86,9 +87,10 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
    */
   resolveAccount(cfg, _accountId) {
     const section = (cfg as any).channels?.[CHANNEL_KEY];
-    const apiKey = (section?.apiKey as string) || process.env.KUDOSITY_API_KEY || "";
-    const sender = (section?.sender as string) || process.env.KUDOSITY_SENDER || "";
-    return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender };
+    const apiKey = String(section?.apiKey ?? process.env.KUDOSITY_API_KEY ?? "");
+    const sender = String(section?.sender ?? process.env.KUDOSITY_SENDER ?? "");
+    const enabled = section?.enabled as boolean | undefined;
+    return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
 
   /**
@@ -132,27 +134,33 @@ const meta: ChannelMeta = {
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 const capabilities: ChannelCapabilities = {
-  text: true,
-  media: false, // SMS is text-only (MMS would be a separate channel)
-  reactions: false,
-  threads: false,
-  groups: false,
-  mentions: false,
-  buttons: false,
-  audio: false,
-  video: false,
-  files: false,
-  location: false,
-  contacts: false,
-  stickers: false,
-  polls: false,
-  editing: false,
-  deleting: false,
-  forwarding: false,
-  quoting: false,
-  typing: false,
-  readReceipts: false,
-  presenceStatus: false,
+  chatTypes: ["direct"],
+};
+
+// ─── Config Schema ───────────────────────────────────────────────────────────
+
+/**
+ * Channel-level config schema for `channels.kudosity-sms`.
+ *
+ * This is consumed by `loadSchemaWithPlugins` / `applyChannelSchemas` so the
+ * Control UI and schema-driven config flows can render and validate the
+ * Kudosity credential fields. The plugin manifest (`openclaw.plugin.json`)
+ * intentionally keeps an empty schema because it validates plugin-entry scope,
+ * not channel scope.
+ */
+const configSchema = {
+  type: "object" as const,
+  properties: {
+    apiKey: {
+      type: "string" as const,
+      description: "Kudosity API key for authenticating requests",
+    },
+    sender: {
+      type: "string" as const,
+      description: "Default sender number (E.164 format, e.g. +61400000000)",
+    },
+  },
+  required: ["apiKey", "sender"],
 };
 
 // ─── Outbound Adapter ────────────────────────────────────────────────────────
@@ -189,16 +197,17 @@ const outbound: ChannelOutboundAdapter = {
     [key: string]: unknown;
   }) {
     const account = configAdapter.resolveAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
+    const cleanedSender = cleanPhoneNumber(account.sender);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
-      sender: account.sender,
+      sender: cleanedSender,
     };
 
     const cleaned = cleanPhoneNumber(to);
 
     const result = await sendSMS(kudosityConfig, {
       message: text,
-      sender: kudosityConfig.sender,
+      sender: cleanedSender,
       recipient: cleaned,
       message_ref: generateMessageRef(),
     });
@@ -238,19 +247,20 @@ const outbound: ChannelOutboundAdapter = {
     }
 
     const account = configAdapter.resolveAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
+    const cleanedSender = cleanPhoneNumber(account.sender);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
-      sender: account.sender,
+      sender: cleanedSender,
     };
 
     const cleaned = cleanPhoneNumber(to);
 
     // SMS is text-only — send caption text, skip media
-    const message = text?.trim() || "(media attachment — not supported via SMS)";
+    const message = text?.trim() || "The assistant sent a file that can't be delivered via SMS.";
 
     const result = await sendSMS(kudosityConfig, {
       message,
-      sender: kudosityConfig.sender,
+      sender: cleanedSender,
       recipient: cleaned,
       message_ref: generateMessageRef(),
     });
@@ -268,6 +278,7 @@ export const kudositySmsPlugin: ChannelPlugin<KudositySmsAccount> = {
   id: "kudosity-sms",
   meta,
   capabilities,
+  configSchema,
   config: configAdapter,
   onboarding: kudositySmsOnboarding,
   outbound,
@@ -280,6 +291,6 @@ export const kudositySmsPlugin: ChannelPlugin<KudositySmsAccount> = {
   },
 
   reload: {
-    configPrefixes: ["kudosity-sms."],
+    configPrefixes: ["channels.kudosity-sms"],
   },
 };

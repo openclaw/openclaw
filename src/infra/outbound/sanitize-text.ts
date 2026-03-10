@@ -16,6 +16,7 @@ const PLAIN_TEXT_SURFACES = new Set([
   "whatsapp",
   "signal",
   "sms",
+  "kudosity-sms",
   "irc",
   "telegram",
   "imessage",

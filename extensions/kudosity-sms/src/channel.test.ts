@@ -57,11 +57,8 @@ describe("kudositySmsPlugin", () => {
       expect(kudositySmsPlugin.meta.docsLabel).toBe("kudosity-sms");
     });
 
-    it("should support text but not media", () => {
-      expect(kudositySmsPlugin.capabilities.text).toBe(true);
-      expect(kudositySmsPlugin.capabilities.media).toBe(false);
-      expect(kudositySmsPlugin.capabilities.threads).toBe(false);
-      expect(kudositySmsPlugin.capabilities.groups).toBe(false);
+    it("should declare direct chat type", () => {
+      expect(kudositySmsPlugin.capabilities.chatTypes).toEqual(["direct"]);
     });
   });
 
@@ -76,7 +73,7 @@ describe("kudositySmsPlugin", () => {
         {
           channels: {
             "kudosity-sms": {
-              apiKey: "my-api-key",
+              apiKey: "my-api-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -115,7 +112,7 @@ describe("kudositySmsPlugin", () => {
           {
             channels: {
               "kudosity-sms": {
-                apiKey: "config-key",
+                apiKey: "config-key", // pragma: allowlist secret
                 sender: "+61400000000",
               },
             },
@@ -152,7 +149,7 @@ describe("kudositySmsPlugin", () => {
     it("should report configured when apiKey and sender are set", () => {
       const account = {
         accountId: "default",
-        apiKey: "my-key",
+        apiKey: "my-key", // pragma: allowlist secret
         sender: "+61400000000",
       };
       expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(true);
@@ -170,7 +167,7 @@ describe("kudositySmsPlugin", () => {
     it("should report not configured when sender is missing", () => {
       const account = {
         accountId: "default",
-        apiKey: "my-key",
+        apiKey: "my-key", // pragma: allowlist secret
         sender: "",
       };
       expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(false);
@@ -190,7 +187,7 @@ describe("kudositySmsPlugin", () => {
     it("should give reason when sender is missing", () => {
       const account = {
         accountId: "default",
-        apiKey: "my-key",
+        apiKey: "my-key", // pragma: allowlist secret
         sender: "",
       };
       expect(kudositySmsPlugin.config.unconfiguredReason!(account, {} as any)).toBe(
@@ -221,7 +218,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -240,7 +237,7 @@ describe("kudositySmsPlugin", () => {
         // Verify the API was called with correct params
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.objectContaining({
-            apiKey: "test-key",
+            apiKey: "test-key", // pragma: allowlist secret
             sender: "+61400000000",
           }),
           expect.objectContaining({
@@ -257,7 +254,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -281,7 +278,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -300,7 +297,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -314,6 +311,34 @@ describe("kudositySmsPlugin", () => {
           } as any),
         ).rejects.toThrow("invalid phone number format");
       });
+
+      it("should normalize sender number with spaces and formatting", async () => {
+        const { sendSMS: mockSendSMS } = await import("./kudosity-api.js");
+
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key", // pragma: allowlist secret
+              sender: "+61 400 000 000",
+            },
+          },
+        };
+
+        await kudositySmsPlugin.outbound!.sendText!({
+          cfg,
+          to: "+61478038915",
+          text: "test",
+        } as any);
+
+        expect(mockSendSMS).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sender: "+61400000000",
+          }),
+          expect.objectContaining({
+            sender: "+61400000000",
+          }),
+        );
+      });
     });
 
     describe("sendMedia", () => {
@@ -323,7 +348,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -343,7 +368,7 @@ describe("kudositySmsPlugin", () => {
         // Should send the text, not the media URL
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.objectContaining({
-            apiKey: "test-key",
+            apiKey: "test-key", // pragma: allowlist secret
           }),
           expect.objectContaining({
             message: "Check this out!",
@@ -358,7 +383,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -374,7 +399,7 @@ describe("kudositySmsPlugin", () => {
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({
-            message: "(media attachment — not supported via SMS)",
+            message: "The assistant sent a file that can't be delivered via SMS.",
           }),
         );
       });
@@ -385,7 +410,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -409,7 +434,7 @@ describe("kudositySmsPlugin", () => {
         const cfg = {
           channels: {
             "kudosity-sms": {
-              apiKey: "test-key",
+              apiKey: "test-key", // pragma: allowlist secret
               sender: "+61400000000",
             },
           },
@@ -434,7 +459,7 @@ describe("kudositySmsPlugin", () => {
 
   describe("reload", () => {
     it("should watch kudosity-sms config prefix", () => {
-      expect(kudositySmsPlugin.reload?.configPrefixes).toEqual(["kudosity-sms."]);
+      expect(kudositySmsPlugin.reload?.configPrefixes).toEqual(["channels.kudosity-sms"]);
     });
   });
 });

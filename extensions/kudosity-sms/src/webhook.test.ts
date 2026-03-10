@@ -166,6 +166,36 @@ describe("toInboundMessage", () => {
     const message = toInboundMessage(payload);
     expect(message!.timestamp).toBe("2026-03-02T07:00:00Z");
   });
+
+  it("should return null if data.id is missing", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      timestamp: "2026-03-02T06:12:52Z",
+      data: {
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "Hello",
+        created_at: "2026-03-02T06:12:52Z",
+        // missing id
+      },
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
+
+  it("should return null if both created_at and payload timestamp are missing", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      data: {
+        id: "msg-123",
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "Hello",
+        // no created_at
+      },
+      // no timestamp
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
 });
 
 describe("handleWebhookRequest", () => {
