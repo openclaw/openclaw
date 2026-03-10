@@ -541,6 +541,22 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
+      // Verify the reservation is still ours before executing. If the Cron
+      // lane was backed up past STUCK_RUN_MS, stale-marker maintenance may
+      // have cleared runningAtMs and the timer path may have already run the
+      // job. Skipping here prevents a duplicate execution.
+      const isStillReserved = await locked(state, async () => {
+        await ensureLoaded(state, { skipRecompute: true });
+        const current = state.store?.jobs.find((j) => j.id === id);
+        return current?.state.runningAtMs === prepared.startedAt;
+      });
+      if (!isStillReserved) {
+        state.deps.log.warn(
+          { jobId: id, runId },
+          "cron: queued manual run skipped — reservation was cleared before execution (stale-marker or concurrent run)",
+        );
+        return;
+      }
       await finishPreparedManualRun(state, prepared, mode);
     },
     {

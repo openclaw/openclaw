@@ -1703,6 +1703,65 @@ describe("Cron issue regressions", () => {
     resetAllLanes();
   });
 
+  it("enqueueRun skips execution when stale-marker clears runningAtMs before the lane drains", async () => {
+    vi.useRealTimers();
+    resetAllLanes();
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.000Z");
+    const job = createDueIsolatedJob({ id: "stale-skip", nowMs: dueAt, nextRunAtMs: dueAt });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
+
+    let runCount = 0;
+    const blocked = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async () => {
+      await blocked.promise;
+      runCount += 1;
+      return { status: "ok" as const, summary: "ok" };
+    });
+
+    const log = createNoopLogger();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expect(ack).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+    // Simulate stale-marker maintenance clearing runningAtMs while lane is backed up.
+    // This is what happens if the Cron lane is backed up for >STUCK_RUN_MS (2 hours).
+    // Directly mutate in-memory store (same as what recomputeJobTickState does).
+    const stored = state.store?.jobs.find((j) => j.id === job.id);
+    if (stored) {
+      stored.state.runningAtMs = undefined;
+    }
+
+    // Unblock: the queued callback should detect reservation was cleared and skip.
+    blocked.resolve();
+
+    await vi.waitFor(
+      () => {
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ jobId: job.id }),
+          "cron: queued manual run skipped — reservation was cleared before execution (stale-marker or concurrent run)",
+        );
+      },
+      { timeout: 2_000 },
+    );
+
+    // No duplicate execution — runIsolatedAgentJob was never reached.
+    expect(runCount).toBe(0);
+
+    resetAllLanes();
+  });
+
   // Regression: isolated cron runs must not abort at 1/3 of configured timeoutSeconds.
   // The bug (issue #29774) caused the CLI-provider resume watchdog (ratio 0.3, maxMs 180 s)
   // to be applied on fresh sessions because a persisted cliSessionId was passed to
