@@ -50,6 +50,9 @@ function createEnvelope(snapshotId: string, installationId: string): BackupSnaps
   };
 }
 
+const VALID_INSTALLATION_ID = "inst_1234567890abcdef12345678";
+const VALID_SNAPSHOT_ID = "snap_2026-03-10T00-00-00-000Z_deadbeef";
+
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
@@ -70,9 +73,9 @@ describe("folder snapshot store", () => {
     });
 
     await store.uploadSnapshot({
-      installationId: "inst_1",
-      snapshotId: "snap_1",
-      envelope: createEnvelope("snap_1", "inst_1"),
+      installationId: VALID_INSTALLATION_ID,
+      snapshotId: VALID_SNAPSHOT_ID,
+      envelope: createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID),
       payloadPath,
     });
 
@@ -101,16 +104,38 @@ describe("folder snapshot store", () => {
     });
 
     await store.uploadSnapshot({
-      installationId: "inst_1",
-      snapshotId: "snap_1",
-      envelope: createEnvelope("snap_1", "inst_1"),
+      installationId: VALID_INSTALLATION_ID,
+      snapshotId: VALID_SNAPSHOT_ID,
+      envelope: createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID),
       payloadPath,
     });
 
-    const snapshotRoot = path.join(targetDir, "snapshots", "inst_1");
-    const envelopeStat = await fs.stat(path.join(snapshotRoot, "snap_1.envelope.json"));
-    const payloadStat = await fs.stat(path.join(snapshotRoot, "snap_1.payload.bin"));
+    const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
+    const envelopeStat = await fs.stat(
+      path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.envelope.json`),
+    );
+    const payloadStat = await fs.stat(path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.payload.bin`));
     expect(envelopeStat.mode & 0o777).toBe(0o600);
     expect(payloadStat.mode & 0o777).toBe(0o600);
+  });
+
+  it("rejects invalid storage identifiers before touching the filesystem", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-invalid-");
+    const payloadPath = path.join(targetDir, "source.payload");
+    await fs.writeFile(payloadPath, "payload-data", "utf8");
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+
+    await expect(
+      store.uploadSnapshot({
+        installationId: "../bad",
+        snapshotId: VALID_SNAPSHOT_ID,
+        envelope: createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID),
+        payloadPath,
+      }),
+    ).rejects.toThrow("Invalid installationId");
   });
 });

@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { decryptPayloadToArchive } from "../backup/snapshot-store/encryption.js";
 import {
   isNixMode,
@@ -82,7 +84,11 @@ function selectWorkspaceTargets(params: {
   return undefined;
 }
 
-async function ensureGatewayStopped(runtime: RuntimeEnv, forceStop: boolean): Promise<void> {
+async function ensureGatewayStopped(
+  runtime: RuntimeEnv,
+  forceStop: boolean,
+  quietOutput: boolean,
+): Promise<void> {
   if (isNixMode) {
     return;
   }
@@ -102,7 +108,14 @@ async function ensureGatewayStopped(runtime: RuntimeEnv, forceStop: boolean): Pr
     throw new Error("Gateway service appears to be running. Stop it first or pass --force-stop.");
   }
   try {
-    await service.stop({ env: process.env, stdout: process.stdout });
+    const stdout = quietOutput
+      ? new Writable({
+          write(_chunk, _encoding, callback) {
+            callback();
+          },
+        })
+      : process.stdout;
+    await service.stop({ env: process.env, stdout });
   } catch (error) {
     throw new Error(`Gateway stop failed: ${String(error)}`, {
       cause: error,
@@ -137,30 +150,39 @@ async function prepareRestoreArchive(
   }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-snapshot-restore-"));
-  const envelopePath = path.join(tempDir, `${snapshotId}.envelope.json`);
-  const payloadPath = path.join(tempDir, `${snapshotId}.payload.bin`);
-  const archivePath = path.join(tempDir, `${snapshotId}.tar.gz`);
-  const storage = await resolveSnapshotStore({ snapshotStore, deps });
-  const envelope = await storage.downloadSnapshot({
-    installationId,
-    snapshotId,
-    envelopeOutputPath: envelopePath,
-    payloadOutputPath: payloadPath,
-  });
-  await decryptPayloadToArchive({
-    payloadPath,
-    archivePath,
-    secret: snapshotStore.encryptionKey,
-    envelope,
-  });
-  return { archivePath, tempDir };
+  const filePrefix = randomUUID();
+  const envelopePath = path.join(tempDir, `${filePrefix}.envelope.json`);
+  const payloadPath = path.join(tempDir, `${filePrefix}.payload.bin`);
+  const archivePath = path.join(tempDir, `${filePrefix}.tar.gz`);
+  try {
+    const storage = await resolveSnapshotStore({ snapshotStore, deps });
+    const envelope = await storage.downloadSnapshot({
+      installationId,
+      snapshotId,
+      envelopeOutputPath: envelopePath,
+      payloadOutputPath: payloadPath,
+    });
+    await decryptPayloadToArchive({
+      payloadPath,
+      archivePath,
+      secret: snapshotStore.encryptionKey,
+      envelope,
+    });
+    return { archivePath, tempDir };
+  } catch (error) {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function normalizeRestoreMode(mode?: string): BackupRestoreMode {
-  if (mode === "config-only" || mode === "workspace-only") {
+  if (!mode?.trim()) {
+    return "full-host";
+  }
+  if (mode === "full-host" || mode === "config-only" || mode === "workspace-only") {
     return mode;
   }
-  return "full-host";
+  throw new Error(`Invalid restore mode: ${mode}`);
 }
 
 function getAssetExtractPath(extractedRoot: string, asset: BackupManifestAsset): string {
@@ -259,8 +281,8 @@ async function applyRestoreOperations(
         }
         backupPath = undefined;
       }
-      await copySourceToTarget(operation.sourcePath, operation.targetPath);
       applied.push({ targetPath: operation.targetPath, backupPath });
+      await copySourceToTarget(operation.sourcePath, operation.targetPath);
     }
   } catch (error) {
     for (const appliedOp of applied.toReversed()) {
@@ -353,13 +375,20 @@ export async function buildRestoreOperations(params: {
     workspaceAssetSourceKeys.every((key) => manifestWorkspaceMap.has(key));
 
   if (params.mode === "config-only") {
-    if (!configAsset) {
+    const configSourcePath =
+      (configAsset && getAssetExtractPath(params.extractedRoot, configAsset)) ??
+      tryResolveExtractedConfigPath({
+        manifest: params.manifest,
+        assetByKind,
+        extractedRoot: params.extractedRoot,
+      });
+    if (!configSourcePath) {
       throw new Error("Backup archive does not contain a config asset.");
     }
     return [
       {
         kind: "config",
-        sourcePath: getAssetExtractPath(params.extractedRoot, configAsset),
+        sourcePath: configSourcePath,
         targetPath: configPath,
       },
     ];
@@ -452,7 +481,7 @@ export async function backupRestoreCommand(
   opts: BackupRestoreOptions,
   deps?: BackupSnapshotDeps,
 ): Promise<BackupRestoreResult> {
-  await ensureGatewayStopped(runtime, Boolean(opts.forceStop));
+  await ensureGatewayStopped(runtime, Boolean(opts.forceStop), Boolean(opts.json));
 
   const mode = normalizeRestoreMode(opts.mode);
   const restoreSource = await prepareRestoreArchive(opts, deps);

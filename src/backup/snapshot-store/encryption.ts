@@ -127,21 +127,28 @@ export async function decryptPayloadToArchive(params: {
   decipher.setAuthTag(authTag);
   const ciphertextDigest = new HashPassthrough();
   const archiveDigest = new HashPassthrough();
+  const tempArchivePath = `${params.archivePath}.${process.pid}.tmp`;
 
-  await pipeline(
-    fs.createReadStream(params.payloadPath),
-    ciphertextDigest,
-    decipher,
-    archiveDigest,
-    fs.createWriteStream(params.archivePath, { mode: 0o600 }),
-  );
+  try {
+    await pipeline(
+      fs.createReadStream(params.payloadPath),
+      ciphertextDigest,
+      decipher,
+      archiveDigest,
+      fs.createWriteStream(tempArchivePath, { flags: "wx", mode: 0o600 }),
+    );
 
-  const archiveSha = archiveDigest.digestHex();
-  const ciphertextSha = ciphertextDigest.digestHex();
-  if (ciphertextSha !== params.envelope.ciphertext.sha256) {
-    throw new Error("Downloaded payload checksum mismatch.");
-  }
-  if (archiveSha !== params.envelope.archive.sha256) {
-    throw new Error("Decrypted archive checksum mismatch.");
+    const archiveSha = archiveDigest.digestHex();
+    const ciphertextSha = ciphertextDigest.digestHex();
+    if (ciphertextSha !== params.envelope.ciphertext.sha256) {
+      throw new Error("Downloaded payload checksum mismatch.");
+    }
+    if (archiveSha !== params.envelope.archive.sha256) {
+      throw new Error("Decrypted archive checksum mismatch.");
+    }
+    await fs.promises.rename(tempArchivePath, params.archivePath);
+  } catch (error) {
+    await fs.promises.rm(tempArchivePath, { force: true }).catch(() => undefined);
+    throw error;
   }
 }

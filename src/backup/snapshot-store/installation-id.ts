@@ -8,12 +8,18 @@ type InstallationRecord = {
   createdAt: string;
 };
 
+const INSTALLATION_ID_PATTERN = /^inst_[0-9a-f]{24}$/;
+
 function buildInstallationFilePath(stateDir: string): string {
   return path.join(stateDir, "backup", "installation.json");
 }
 
 function generateInstallationId(): string {
   return `inst_${crypto.randomBytes(12).toString("hex")}`;
+}
+
+export function isValidInstallationId(value: string): boolean {
+  return INSTALLATION_ID_PATTERN.test(value);
 }
 
 export async function resolveInstallationId(params: {
@@ -27,7 +33,7 @@ export async function resolveInstallationId(params: {
     if (
       parsed.schemaVersion === 1 &&
       typeof parsed.installationId === "string" &&
-      parsed.installationId.trim()
+      isValidInstallationId(parsed.installationId)
     ) {
       return parsed.installationId;
     }

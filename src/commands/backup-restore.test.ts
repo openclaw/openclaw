@@ -9,10 +9,15 @@ import { backupRestoreCommand, buildRestoreOperations } from "./backup-restore.j
 import { normalizeArchiveRoot, parseBackupManifest } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 
+const { serviceIsLoaded, serviceStop } = vi.hoisted(() => ({
+  serviceIsLoaded: vi.fn(async () => false),
+  serviceStop: vi.fn(async (_args?: { stdout: NodeJS.WritableStream }) => undefined),
+}));
+
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
-    isLoaded: vi.fn(async () => false),
-    stop: vi.fn(async () => undefined),
+    isLoaded: serviceIsLoaded,
+    stop: serviceStop,
   }),
 }));
 
@@ -24,6 +29,8 @@ describe("backup restore", () => {
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-restore-test-");
     previousCwd = process.cwd();
+    serviceIsLoaded.mockResolvedValue(false);
+    serviceStop.mockResolvedValue(undefined);
     runtime = {
       log: vi.fn() as RuntimeEnv["log"],
       error: vi.fn() as RuntimeEnv["error"],
@@ -246,6 +253,111 @@ describe("backup restore", () => {
       const message = vi.mocked(runtime.log).mock.calls[0]?.[0];
       expect(typeof message).toBe("string");
       expect(() => JSON.parse(String(message))).not.toThrow();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores config-only from the state asset when no standalone config asset exists", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-config-only-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          backup: {
+            target: path.join(tempHome.home, "backups"),
+          },
+        }),
+        "utf8",
+      );
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      await fs.rm(path.join(stateDir, "openclaw.json"), { force: true });
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "config-only",
+      });
+
+      expect(restored.mode).toBe("config-only");
+      expect(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8")).toContain('"backup"');
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid restore modes instead of defaulting to full-host", async () => {
+    await expect(
+      backupRestoreCommand(runtime, {
+        archive: path.join(tempHome.home, "missing.tar.gz"),
+        mode: "workspace" as "full-host",
+      }),
+    ).rejects.toThrow("Invalid restore mode: workspace");
+  });
+
+  it("restores the original target if copying fails after rollback rename", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-rollback-"));
+    const originalCp = fs.cp.bind(fs);
+    try {
+      await fs.writeFile(path.join(stateDir, "state.txt"), "original\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      const cpSpy = vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
+        const targetPath = args[1];
+        if (targetPath === stateDir) {
+          throw new Error("copy failed");
+        }
+        return await originalCp(...args);
+      });
+
+      await expect(
+        backupRestoreCommand(runtime, {
+          archive: created.archivePath,
+          mode: "full-host",
+        }),
+      ).rejects.toThrow("copy failed");
+      expect(await fs.readFile(path.join(stateDir, "state.txt"), "utf8")).toBe("original\n");
+      cpSpy.mockRestore();
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps --json output clean when force-stopping the gateway", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-force-stop-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      serviceIsLoaded.mockResolvedValue(true);
+      serviceStop.mockImplementation(async (args) => {
+        args?.stdout.write("stopping\n");
+      });
+
+      vi.mocked(runtime.log).mockClear();
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+        json: true,
+        forceStop: true,
+      });
+
+      expect(runtime.log).toHaveBeenCalledTimes(1);
+      expect(() => JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]))).not.toThrow();
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

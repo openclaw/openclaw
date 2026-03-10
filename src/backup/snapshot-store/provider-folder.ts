@@ -4,17 +4,31 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { ResolvedSnapshotStoreConfig } from "./config.js";
+import { isValidInstallationId } from "./installation-id.js";
 import type { BackupSnapshotEnvelope, BackupSnapshotStore } from "./types.js";
 
+const SNAPSHOT_ID_PATTERN = /^snap_[0-9TZ-]+_[0-9a-f]{8}$/;
+
+function assertValidStorageId(kind: "installationId" | "snapshotId", value: string): void {
+  const isValid =
+    kind === "installationId" ? isValidInstallationId(value) : SNAPSHOT_ID_PATTERN.test(value);
+  if (!isValid) {
+    throw new Error(`Invalid ${kind}: ${value}`);
+  }
+}
+
 function installationRoot(targetDir: string, installationId: string): string {
+  assertValidStorageId("installationId", installationId);
   return path.join(targetDir, "snapshots", installationId);
 }
 
 function envelopePath(targetDir: string, installationId: string, snapshotId: string): string {
+  assertValidStorageId("snapshotId", snapshotId);
   return path.join(installationRoot(targetDir, installationId), `${snapshotId}.envelope.json`);
 }
 
 function payloadPath(targetDir: string, installationId: string, snapshotId: string): string {
+  assertValidStorageId("snapshotId", snapshotId);
   return path.join(installationRoot(targetDir, installationId), `${snapshotId}.payload.bin`);
 }
 

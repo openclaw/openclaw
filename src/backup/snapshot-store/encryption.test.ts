@@ -41,4 +41,32 @@ describe("snapshot backup encryption", () => {
 
     expect(await fs.readFile(restoredPath, "utf8")).toBe("backup archive test\n");
   });
+
+  it("removes temporary plaintext archives when integrity validation fails", async () => {
+    const tempDir = await createTempDir("openclaw-snapshot-encryption-fail-");
+    const archivePath = path.join(tempDir, "archive.tar.gz");
+    const payloadPath = path.join(tempDir, "payload.bin");
+    const restoredPath = path.join(tempDir, "restored.tar.gz");
+    await fs.writeFile(archivePath, "backup archive test\n", "utf8");
+
+    const encrypted = await encryptArchiveToPayload({
+      archivePath,
+      payloadPath,
+      secret: "test-secret",
+    });
+    encrypted.archive.archiveRoot = "fake-root";
+    encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
+    encrypted.archive.sha256 = "bad-sha";
+
+    await expect(
+      decryptPayloadToArchive({
+        payloadPath,
+        archivePath: restoredPath,
+        secret: "test-secret",
+        envelope: encrypted,
+      }),
+    ).rejects.toThrow("Decrypted archive checksum mismatch.");
+    await expect(fs.access(restoredPath)).rejects.toThrow();
+    await expect(fs.access(`${restoredPath}.${process.pid}.tmp`)).rejects.toThrow();
+  });
 });
