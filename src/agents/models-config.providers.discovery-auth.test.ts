@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("provider discovery auth marker guardrails", () => {
   let originalVitest: string | undefined;
@@ -63,7 +63,7 @@ describe("provider discovery auth marker guardrails", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
     expect(providers?.vllm?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     const request = fetchMock.mock.calls[0]?.[1] as
       | { headers?: Record<string, string> }
@@ -96,7 +96,7 @@ describe("provider discovery auth marker guardrails", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
     expect(providers?.huggingface?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     const huggingfaceCalls = fetchMock.mock.calls.filter(([url]) =>
       String(url).includes("router.huggingface.co"),
@@ -132,7 +132,7 @@ describe("provider discovery auth marker guardrails", () => {
       "utf8",
     );
 
-    await resolveImplicitProviders({ agentDir });
+    await resolveImplicitProvidersForTest({ agentDir, env: {} });
     const vllmCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":8000"));
     const request = vllmCall?.[1] as { headers?: Record<string, string> } | undefined;
     expect(request?.headers?.Authorization).toBe("Bearer ALLCAPS_SAMPLE");

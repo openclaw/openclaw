@@ -19,6 +19,7 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   isDangerousNameMatchingEnabled,
+  parseStrictPositiveInteger,
   registerPluginHttpRoute,
   resolveControlCommandGate,
   readStoreAllowFromForDmPolicy,
@@ -30,7 +31,6 @@ import {
   listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
-import { parseStrictPositiveInteger } from "../../../../src/infra/parse-finite-number.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -270,6 +270,17 @@ export function evaluateMattermostMentionGate(
     effectiveWasMentioned,
     dropReason: null,
   };
+}
+
+export function resolveMattermostReplyRootId(params: {
+  threadRootId?: string;
+  replyToId?: string;
+}): string | undefined {
+  const threadRootId = params.threadRootId?.trim();
+  if (threadRootId) {
+    return threadRootId;
+  }
+  return params.replyToId?.trim() || undefined;
 }
 type MattermostMediaInfo = {
   path: string;
@@ -1651,7 +1662,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               await sendMessageMattermost(to, chunk, {
                 accountId: account.accountId,
-                replyToId: threadRootId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId,
+                  replyToId: payload.replyToId,
+                }),
               });
             }
           } else {
@@ -1662,7 +1676,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await sendMessageMattermost(to, caption, {
                 accountId: account.accountId,
                 mediaUrl,
-                replyToId: threadRootId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId,
+                  replyToId: payload.replyToId,
+                }),
               });
             }
           }

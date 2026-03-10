@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("cloudflare-ai-gateway profile provenance", () => {
   it("prefers env keyRef marker over runtime plaintext for persistence", async () => {
@@ -37,7 +37,7 @@ describe("cloudflare-ai-gateway profile provenance", () => {
       "utf8",
     );
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
     } finally {
       envSnapshot.restore();
@@ -70,7 +70,7 @@ describe("cloudflare-ai-gateway profile provenance", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
     expect(providers?.["cloudflare-ai-gateway"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 });
