@@ -4,15 +4,20 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import type { PluginInstallUpdate } from "../plugins/installs.js";
+import type { SlotSelectionResult } from "../plugins/slots.js";
+import type { PluginStatusReport } from "../plugins/status.js";
 
 const mockReadConfigFileSnapshotForWrite =
   vi.fn<() => Promise<{ snapshot: ConfigFileSnapshot; writeOptions: Record<string, unknown> }>>();
 const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: Record<string, unknown>) => Promise<void>
 >(async () => {});
-const mockInstallPluginFromPath = vi.fn();
-const mockInstallPluginFromNpmSpec = vi.fn();
-const mockClearPluginManifestRegistryCache = vi.fn();
+const mockInstallPluginFromPath =
+  vi.fn<(params: { path: string; dryRun?: boolean }) => Promise<unknown>>();
+const mockInstallPluginFromNpmSpec =
+  vi.fn<(params: { spec: string; dryRun?: boolean }) => Promise<unknown>>();
+const mockClearPluginManifestRegistryCache = vi.fn<() => void>();
 const mockEnablePluginInConfig = vi.fn(
   (config: OpenClawConfig, pluginId: string): { config: OpenClawConfig; enabled: true } => ({
     config: {
@@ -31,16 +36,7 @@ const mockEnablePluginInConfig = vi.fn(
   }),
 );
 const mockRecordPluginInstall = vi.fn(
-  (
-    config: OpenClawConfig,
-    install: {
-      pluginId: string;
-      source: string;
-      sourcePath: string;
-      installPath: string;
-      version?: string;
-    },
-  ): OpenClawConfig => ({
+  (config: OpenClawConfig, install: PluginInstallUpdate): OpenClawConfig => ({
     ...config,
     plugins: {
       ...config.plugins,
@@ -56,15 +52,26 @@ const mockRecordPluginInstall = vi.fn(
     },
   }),
 );
-const mockBuildPluginStatusReport = vi.fn(() => ({
+const mockBuildPluginStatusReport = vi.fn<() => PluginStatusReport>(() => ({
   workspaceDir: "/tmp",
   plugins: [],
+  tools: [],
+  hooks: [],
+  typedHooks: [],
+  channels: [],
+  providers: [],
+  gatewayHandlers: {},
+  httpRoutes: [],
+  cliRegistrars: [],
+  services: [],
+  commands: [],
   diagnostics: [],
 }));
 const mockApplyExclusiveSlotSelection = vi.fn(
-  ({ config }: { config: OpenClawConfig }): { config: OpenClawConfig; warnings: string[] } => ({
+  ({ config }: { config: OpenClawConfig }): SlotSelectionResult => ({
     config,
     warnings: [],
+    changed: false,
   }),
 );
 const runtime = {
@@ -83,8 +90,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../plugins/install.js", () => ({
-  installPluginFromPath: (...args: unknown[]) => mockInstallPluginFromPath(...args),
-  installPluginFromNpmSpec: (...args: unknown[]) => mockInstallPluginFromNpmSpec(...args),
+  installPluginFromPath: (params: { path: string; dryRun?: boolean }) =>
+    mockInstallPluginFromPath(params),
+  installPluginFromNpmSpec: (params: { spec: string; dryRun?: boolean }) =>
+    mockInstallPluginFromNpmSpec(params),
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
@@ -92,19 +101,22 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 
 vi.mock("../plugins/enable.js", () => ({
-  enablePluginInConfig: (...args: unknown[]) => mockEnablePluginInConfig(...args),
+  enablePluginInConfig: (config: OpenClawConfig, pluginId: string) =>
+    mockEnablePluginInConfig(config, pluginId),
 }));
 
 vi.mock("../plugins/installs.js", () => ({
-  recordPluginInstall: (...args: unknown[]) => mockRecordPluginInstall(...args),
+  recordPluginInstall: (config: OpenClawConfig, install: PluginInstallUpdate) =>
+    mockRecordPluginInstall(config, install),
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginStatusReport: (...args: unknown[]) => mockBuildPluginStatusReport(...args),
+  buildPluginStatusReport: () => mockBuildPluginStatusReport(),
 }));
 
 vi.mock("../plugins/slots.js", () => ({
-  applyExclusiveSlotSelection: (...args: unknown[]) => mockApplyExclusiveSlotSelection(...args),
+  applyExclusiveSlotSelection: (params: { config: OpenClawConfig }) =>
+    mockApplyExclusiveSlotSelection(params),
 }));
 
 vi.mock("../runtime.js", () => ({
