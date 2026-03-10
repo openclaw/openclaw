@@ -274,6 +274,26 @@ export function resolveMattermostReplyRootId(params: {
   }
   return params.replyToId?.trim() || undefined;
 }
+
+export function resolveMattermostEffectiveReplyToId(params: {
+  kind: ChatType;
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all";
+  threadRootId?: string | null;
+}): string | undefined {
+  const threadRootId = params.threadRootId?.trim();
+  if (threadRootId) {
+    return threadRootId;
+  }
+  if (params.kind === "direct") {
+    return undefined;
+  }
+  const postId = params.postId?.trim();
+  if (!postId) {
+    return undefined;
+  }
+  return params.replyToMode === "all" || params.replyToMode === "first" ? postId : undefined;
+}
 type MattermostMediaInfo = {
   path: string;
   contentType?: string;
@@ -1386,11 +1406,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
     const replyToMode = resolveMattermostReplyToMode(account, kind);
-    const effectiveReplyToId =
-      threadRootId ??
-      (kind !== "direct" && (replyToMode === "all" || replyToMode === "first")
-        ? post.id
-        : undefined);
+    const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
+      kind,
+      postId: post.id,
+      replyToMode,
+      threadRootId,
+    });
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey,
       threadId: effectiveReplyToId,

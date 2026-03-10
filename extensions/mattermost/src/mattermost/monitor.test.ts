@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
@@ -152,5 +153,48 @@ describe("resolveMattermostReplyRootId", () => {
 
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostEffectiveReplyToId", () => {
+  it("keeps an existing thread root", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBe("thread-root-456");
+  });
+
+  it("starts a thread for top-level channel messages when replyToMode is all", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toBe("post-123");
+  });
+
+  it("starts a thread for top-level group messages when replyToMode is first", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "first",
+      }),
+    ).toBe("post-123");
+  });
+
+  it("keeps direct messages non-threaded", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toBeUndefined();
   });
 });

@@ -137,21 +137,15 @@ export function resolveMattermostAccount(params: {
 
 /**
  * Resolve the effective replyToMode for a given chat type.
- * Checks replyToModeByChatType overrides first, then dm.replyToMode for DMs,
- * then falls back to the global replyToMode (defaulting to "off" for DMs).
+ * Mattermost auto-threading only applies to channel and group messages.
  */
 export function resolveMattermostReplyToMode(
   account: ResolvedMattermostAccount,
   kind: MattermostChatTypeKey,
 ): MattermostReplyToMode {
-  if (account.config.replyToModeByChatType?.[kind] !== undefined) {
-    return account.config.replyToModeByChatType[kind] ?? "off";
+  if (kind === "direct") {
+    return "off";
   }
-  if (kind === "direct" && account.config.dm?.replyToMode !== undefined) {
-    return account.config.dm.replyToMode ?? "off";
-  }
-  // DMs default to "off" unless explicitly configured
-  if (kind === "direct") return "off";
   return account.config.replyToMode ?? "off";
 }
 
