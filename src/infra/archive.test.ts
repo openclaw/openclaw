@@ -105,6 +105,39 @@ describe("archive utils", () => {
     },
   );
 
+  it.each([{ ext: "zip" as const }, { ext: "tar" as const }])(
+    "rejects $ext extraction when destination dir is a symlink",
+    async ({ ext }) => {
+      await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
+        const realExtractDir = path.join(workDir, "real-extract");
+        await fs.mkdir(realExtractDir, { recursive: true });
+        await writePackageArchive({
+          ext,
+          workDir,
+          archivePath,
+          fileName: "hello.txt",
+          content: "hi",
+        });
+        await fs.rm(extractDir, { recursive: true, force: true });
+        await fs.symlink(
+          realExtractDir,
+          extractDir,
+          process.platform === "win32" ? "junction" : undefined,
+        );
+
+        await expect(
+          extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+        ).rejects.toMatchObject({
+          code: "destination-symlink",
+        } satisfies Partial<ArchiveSecurityError>);
+
+        await expect(
+          fs.stat(path.join(realExtractDir, "package", "hello.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
+
   it("rejects zip path traversal (zip slip)", async () => {
     await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
       const zip = new JSZip();
@@ -230,6 +263,32 @@ describe("archive utils", () => {
       await expect(
         extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
       ).rejects.toThrow(/escapes destination/i);
+    });
+  });
+
+  it("rejects tar entries that traverse pre-existing destination symlinks", async () => {
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      const outsideDir = path.join(workDir, "outside");
+      const archiveRoot = path.join(workDir, "archive-root");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.mkdir(path.join(archiveRoot, "escape"), { recursive: true });
+      await fs.writeFile(path.join(archiveRoot, "escape", "pwn.txt"), "owned");
+      await fs.symlink(
+        outsideDir,
+        path.join(extractDir, "escape"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
+      await tar.c({ cwd: archiveRoot, file: archivePath }, ["escape"]);
+
+      await expect(
+        extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+      ).rejects.toMatchObject({
+        code: "destination-symlink-traversal",
+      } satisfies Partial<ArchiveSecurityError>);
+
+      await expect(fs.stat(path.join(outsideDir, "pwn.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     });
   });
 
