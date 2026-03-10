@@ -3,8 +3,9 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  resolveSessionOptions,
 } from "./app-render.helpers.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -282,5 +283,109 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+/* ================================================================
+ *  resolveSessionOptions – session dropdown entries
+ * ================================================================ */
+
+function sessions(rows: SessionRow[]): SessionsListResult {
+  return {
+    ts: 0,
+    path: "",
+    count: rows.length,
+    defaults: { model: null, contextTokens: null },
+    sessions: rows,
+  };
+}
+
+function agents(ids: string[], mainKey = "main"): AgentsListResult {
+  return {
+    defaultId: ids[0] ?? "main",
+    mainKey,
+    scope: "per-sender",
+    agents: ids.map((id) => ({ id, name: id })),
+  };
+}
+
+describe("resolveSessionOptions", () => {
+  it("includes agents without existing sessions", () => {
+    const result = resolveSessionOptions(
+      "agent:zhongshu:main",
+      sessions([row({ key: "agent:zhongshu:main" })]),
+      "agent:zhongshu:main",
+      false,
+      agents(["zhongshu", "menshu", "shangshu"]),
+    );
+    const keys = result.map((o) => o.key);
+    expect(keys).toContain("agent:menshu:main");
+    expect(keys).toContain("agent:shangshu:main");
+  });
+
+  it("marks agents without sessions as (new)", () => {
+    const result = resolveSessionOptions(
+      "agent:zhongshu:main",
+      sessions([row({ key: "agent:zhongshu:main" })]),
+      "agent:zhongshu:main",
+      false,
+      agents(["zhongshu", "menshu"]),
+    );
+    const menshu = result.find((o) => o.key === "agent:menshu:main");
+    expect(menshu?.displayName).toBe("menshu (new)");
+  });
+
+  it("does not duplicate agents that already have sessions", () => {
+    const result = resolveSessionOptions(
+      "agent:zhongshu:main",
+      sessions([row({ key: "agent:zhongshu:main" }), row({ key: "agent:menshu:main" })]),
+      "agent:zhongshu:main",
+      false,
+      agents(["zhongshu", "menshu"]),
+    );
+    const menshuEntries = result.filter((o) => o.key === "agent:menshu:main");
+    expect(menshuEntries).toHaveLength(1);
+  });
+
+  it("works without agentsList (backwards compatible)", () => {
+    const result = resolveSessionOptions(
+      "agent:zhongshu:main",
+      sessions([row({ key: "agent:zhongshu:main" })]),
+      "agent:zhongshu:main",
+      false,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].key).toBe("agent:zhongshu:main");
+  });
+
+  it("uses agent name for display when available", () => {
+    const agentsList: AgentsListResult = {
+      defaultId: "libu",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "libu", name: "Ministry of Rites" }],
+    };
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([row({ key: "agent:main:main" })]),
+      "agent:main:main",
+      false,
+      agentsList,
+    );
+    const libu = result.find((o) => o.key === "agent:libu:main");
+    expect(libu?.displayName).toBe("Ministry of Rites (new)");
+  });
+
+  it("respects custom mainKey from agentsList", () => {
+    const result = resolveSessionOptions(
+      "agent:main:home",
+      sessions([row({ key: "agent:main:home" })]),
+      "agent:main:home",
+      false,
+      agents(["main", "worker"], "home"),
+    );
+    const keys = result.map((o) => o.key);
+    expect(keys).toContain("agent:worker:home");
+    expect(keys).not.toContain("agent:worker:main");
   });
 });
