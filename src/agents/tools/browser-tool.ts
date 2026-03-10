@@ -24,6 +24,8 @@ import {
   untrackSessionBrowserTab,
 } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   executeActAction,
   executeConsoleAction,
@@ -282,6 +284,7 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  config?: OpenClawConfig;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -518,6 +521,7 @@ export function createBrowserTool(opts?: {
             label: "browser:screenshot",
             path: result.path,
             details: result,
+            imageSanitization: resolveImageSanitizationLimits(opts?.config),
           });
         }
         case "navigate": {
