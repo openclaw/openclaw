@@ -168,10 +168,12 @@ export async function sendMattermostTyping(
 export async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
+  signal?: AbortSignal,
 ): Promise<MattermostChannel> {
   return await client.request<MattermostChannel>("/channels/direct", {
     method: "POST",
     body: JSON.stringify(userIds),
+    signal,
   });
 }
 
@@ -215,7 +217,7 @@ export async function createMattermostDirectChannelWithRetry(
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const result = await createMattermostDirectChannel(client, userIds);
+        const result = await createMattermostDirectChannel(client, userIds, controller.signal);
         return result;
       } finally {
         clearTimeout(timeoutId);
@@ -259,12 +261,29 @@ function isRetryableError(error: Error): boolean {
     return true;
   }
 
+  // Check for explicit 4xx status codes - these are client errors and should NOT be retried
+  // (except 429 which is handled above)
+  const clientErrorMatch = message.match(/\b4\d{2}\b/);
+  if (clientErrorMatch) {
+    const statusCode = parseInt(clientErrorMatch[0], 10);
+    if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
+      return false;
+    }
+  }
+
   // Retry on 5xx server errors
   if (/\b5\d{2}\b/.test(message)) {
     return true;
   }
 
-  // Retry on network/transient errors
+  // Retry on network/transient errors only if no explicit HTTP status code is present
+  // This avoids false positives like "400 Bad Request: connection timed out"
+  const hasExplicitStatusCode = /\b\d{3}\b/.test(message);
+  if (hasExplicitStatusCode) {
+    return false;
+  }
+
+  // Retry on network/transient errors (no explicit HTTP status code in message)
   const retryablePatterns = [
     "network error",
     "timeout",
