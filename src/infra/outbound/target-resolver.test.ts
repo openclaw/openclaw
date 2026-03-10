@@ -152,6 +152,35 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
+  it("falls back to the existing default behavior when plugin defaultTargetKind is absent", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "custom",
+      input: "ops",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("normalized");
+      expect(result.target.to).toBe("ops");
+      expect(result.target.kind).toBe("group");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
   it("preserves explicit group prefixes ahead of plugin defaultTargetKind", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       messaging: {
