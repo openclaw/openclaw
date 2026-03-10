@@ -720,11 +720,15 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const currentConfig = getCurrentConfigValue() as
-                    | { agents?: { defaults?: { model?: unknown } } }
-                    | null;
+                  const currentConfig = getCurrentConfigValue() as {
+                    agents?: { defaults?: { model?: unknown } };
+                  } | null;
                   const existing = currentConfig?.agents?.defaults?.model;
-                  updateConfigFormValue(state, basePath, buildPrimaryModelConfig(modelId, existing));
+                  updateConfigFormValue(
+                    state,
+                    basePath,
+                    buildPrimaryModelConfig(modelId, existing),
+                  );
                 },
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
@@ -793,7 +797,11 @@ export function renderApp(state: AppViewState) {
                     ? (list[index] as { model?: unknown })
                     : undefined;
                   const existing = entry?.model;
-                  updateConfigFormValue(state, basePath, buildPrimaryModelConfig(modelId, existing));
+                  updateConfigFormValue(
+                    state,
+                    basePath,
+                    buildPrimaryModelConfig(modelId, existing),
+                  );
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
