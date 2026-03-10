@@ -382,9 +382,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       context,
     });
     if (typeof previewTargetAfterStop.previewMessageId !== "number") {
-      // Only retain when a prior preview is already visible to the user —
-      // otherwise falling back is safer than silence.
-      if (lane.hasStreamedMessage && lane.stream?.sendMayHaveLanded?.()) {
+      // Only retain for final delivery when a prior preview is already visible
+      // to the user — otherwise falling back is safer than silence. For updates,
+      // always fall back so the caller can attempt sendPayload without stale
+      // markDelivered() state.
+      if (context === "final" && lane.hasStreamedMessage && lane.stream?.sendMayHaveLanded?.()) {
         params.log(
           `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
         );
