@@ -29,6 +29,7 @@ export type PluginRuntimeCore = {
   };
   tts: {
     textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    textToSpeechTelephonyStream?: typeof import("../../tts/tts.js").textToSpeechTelephonyStream;
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;

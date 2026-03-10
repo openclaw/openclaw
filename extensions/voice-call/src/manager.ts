@@ -11,6 +11,7 @@ import {
   initiateCall as initiateCallWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  speakStream as speakStreamWithContext,
 } from "./manager/outbound.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
@@ -217,6 +218,17 @@ export class CallManager {
    */
   async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
     return speakWithContext(this.getContext(), callId, text);
+  }
+
+  /**
+   * Speak sentences from an async iterable as they arrive from the LLM.
+   */
+  async speakStream(
+    callId: CallId,
+    sentences: AsyncIterable<string>,
+    fullText: string | null,
+  ): Promise<{ success: boolean; error?: string }> {
+    return speakStreamWithContext(this.getContext(), callId, sentences, fullText);
   }
 
   /**
