@@ -17,7 +17,6 @@ export type HookContext = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
-  runId?: string;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };

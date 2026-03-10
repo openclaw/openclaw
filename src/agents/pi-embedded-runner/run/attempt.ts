@@ -140,7 +140,11 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
-    event: { prompt: string; messages: unknown[] },
+    event: {
+      prompt: string;
+      messages: unknown[];
+      tools?: Array<{ name: string; description?: string; parameters?: Record<string, unknown> }>;
+    },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
@@ -540,6 +544,7 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
+  tools?: Array<{ name: string; description?: string; parameters?: Record<string, unknown> }>;
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -566,6 +571,7 @@ export async function resolvePromptBuildHookResult(params: {
             {
               prompt: params.prompt,
               messages: params.messages,
+              tools: params.tools,
             },
             params.hookCtx,
           )
@@ -1632,19 +1638,6 @@ export async function runEmbeddedAttempt(
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
-        const hookTools =
-          tools.length > 0
-            ? tools
-                .filter((tool) => tool.name)
-                .map((tool) => ({
-                  name: tool.name,
-                  description: tool.description ?? "",
-                  parameters:
-                    tool.parameters && typeof tool.parameters === "object"
-                      ? (tool.parameters as Record<string, unknown>)
-                      : undefined,
-                }))
-            : undefined;
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -1665,6 +1658,11 @@ export async function runEmbeddedAttempt(
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
+          tools: tools.map((t) => ({
+            name: t.name ?? "",
+            description: t.description,
+            parameters: t.parameters as Record<string, unknown> | undefined,
+          })),
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
