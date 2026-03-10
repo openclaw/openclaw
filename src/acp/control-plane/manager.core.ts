@@ -234,6 +234,7 @@ export class AcpSessionManager {
             sessionKey,
             agent,
             mode: input.mode,
+            resumeSessionId: input.resumeSessionId,
             cwd: requestedCwd,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
