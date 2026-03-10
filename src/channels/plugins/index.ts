@@ -71,8 +71,8 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   return next;
 }
 
-export function listChannelPlugins(): ChannelPlugin[] {
-  return resolveCachedChannelPlugins().sorted.slice();
+export function listChannelPlugins(): readonly ChannelPlugin[] {
+  return resolveCachedChannelPlugins().sorted;
 }
 
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {

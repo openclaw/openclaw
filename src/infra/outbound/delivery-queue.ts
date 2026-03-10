@@ -182,9 +182,9 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
 /** Load all pending delivery entries from the queue directory. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
-  let files: string[];
+  let dirents: fs.Dirent[];
   try {
-    files = await fs.promises.readdir(queueDir);
+    dirents = await fs.promises.readdir(queueDir, { withFileTypes: true });
   } catch (err) {
     const code = getErrnoCode(err);
     if (code === "ENOENT") {
@@ -192,26 +192,23 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
     }
     throw err;
   }
-  // Clean up .delivered markers left by ackDelivery if the process crashed
-  // between the rename and the unlink.
-  for (const file of files) {
-    if (!file.endsWith(".delivered")) {
-      continue;
-    }
-    await unlinkBestEffort(path.join(queueDir, file));
-  }
 
+  const cleanupPromises: Promise<void>[] = [];
   const entries: QueuedDelivery[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) {
+
+  for (const dirent of dirents) {
+    if (!dirent.isFile()) {
       continue;
     }
-    const filePath = path.join(queueDir, file);
+    if (dirent.name.endsWith(".delivered")) {
+      cleanupPromises.push(unlinkBestEffort(path.join(queueDir, dirent.name)));
+      continue;
+    }
+    if (!dirent.name.endsWith(".json")) {
+      continue;
+    }
+    const filePath = path.join(queueDir, dirent.name);
     try {
-      const stat = await fs.promises.stat(filePath);
-      if (!stat.isFile()) {
-        continue;
-      }
       const raw = await fs.promises.readFile(filePath, "utf-8");
       const parsed = JSON.parse(raw) as QueuedDelivery;
       const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(parsed);
@@ -228,6 +225,8 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
       // Skip malformed or inaccessible entries.
     }
   }
+
+  await Promise.all(cleanupPromises);
   return entries;
 }
 

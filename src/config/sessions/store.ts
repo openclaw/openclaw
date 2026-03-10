@@ -164,8 +164,13 @@ export function resolveSessionStoreEntry(params: {
   };
 }
 
-function normalizeSessionStore(store: Record<string, SessionEntry>): void {
-  for (const [key, entry] of Object.entries(store)) {
+function normalizeSessionStore(
+  store: Record<string, SessionEntry>,
+  keys?: Iterable<string>,
+): void {
+  const target = keys ?? Object.keys(store);
+  for (const key of target) {
+    const entry = store[key];
     if (!entry) {
       continue;
     }
@@ -354,8 +359,9 @@ async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
   opts?: SaveSessionStoreOptions,
+  dirtyKeys?: Iterable<string>,
 ): Promise<void> {
-  normalizeSessionStore(store);
+  normalizeSessionStore(store, dirtyKeys);
 
   const now = Date.now();
   const lastMaintenance = LAST_MAINTENANCE.get(storePath) ?? 0;
@@ -680,9 +686,12 @@ async function persistResolvedSessionEntry(params: {
   for (const legacyKey of params.resolved.legacyKeys) {
     delete params.store[legacyKey];
   }
-  await saveSessionStoreUnlocked(params.storePath, params.store, {
-    activeSessionKey: params.resolved.normalizedKey,
-  });
+  await saveSessionStoreUnlocked(
+    params.storePath,
+    params.store,
+    { activeSessionKey: params.resolved.normalizedKey },
+    [params.resolved.normalizedKey],
+  );
   return params.next;
 }
 

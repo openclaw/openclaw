@@ -154,6 +154,10 @@ function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalog
   return out;
 }
 
+function modelKey(provider: string, id: string): string {
+  return `${provider.toLowerCase().trim()}::${id.toLowerCase().trim()}`;
+}
+
 function mergeConfiguredOptInProviderModels(params: {
   config: OpenClawConfig;
   models: ModelCatalogEntry[];
@@ -163,19 +167,17 @@ function mergeConfiguredOptInProviderModels(params: {
     return;
   }
 
-  const seen = new Set(
-    params.models.map(
-      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
-    ),
-  );
+  const seen = new Set<string>();
+  for (const entry of params.models) {
+    seen.add(modelKey(entry.provider, entry.id));
+  }
 
   for (const entry of configured) {
-    const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
-    if (seen.has(key)) {
-      continue;
+    const key = modelKey(entry.provider, entry.id);
+    if (!seen.has(key)) {
+      params.models.push(entry);
+      seen.add(key);
     }
-    params.models.push(entry);
-    seen.add(key);
   }
 }
 

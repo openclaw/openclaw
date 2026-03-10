@@ -93,9 +93,10 @@ export async function resolveMessageChannelSelection(params: {
   source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
+  const fallback = resolveKnownChannel(params.fallbackChannel);
+
   if (normalized) {
     if (!isKnownChannel(normalized)) {
-      const fallback = resolveKnownChannel(params.fallbackChannel);
       if (fallback) {
         return {
           channel: fallback,
@@ -112,7 +113,6 @@ export async function resolveMessageChannelSelection(params: {
     };
   }
 
-  const fallback = resolveKnownChannel(params.fallbackChannel);
   if (fallback) {
     return {
       channel: fallback,
