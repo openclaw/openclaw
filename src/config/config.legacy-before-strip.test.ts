@@ -32,7 +32,9 @@ describe("config legacy checks before unknown-key stripping", () => {
   it("rejects migratable legacy keys that would otherwise be stripped as unknown", () => {
     const legacyBindingsConfig = {
       agents: { list: [{ id: "main" }] },
-      bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "ops" } }],
+      bindings: [
+        { agentId: "main", match: { channel: "telegram", provider: "slack", accountID: "ops" } },
+      ],
       messages: {
         queue: {
           byProvider: {
@@ -52,6 +54,7 @@ describe("config legacy checks before unknown-key stripping", () => {
     if (result.ok) {
       throw new Error("expected validation failure");
     }
+    expect(result.issues.some((issue) => issue.path === "bindings[].match.provider")).toBe(true);
     expect(result.issues.some((issue) => issue.path === "bindings[].match.accountID")).toBe(true);
     expect(
       result.issues.some((issue) => issue.path === "session.sendPolicy.rules[].match.provider"),

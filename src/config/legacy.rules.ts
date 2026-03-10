@@ -30,6 +30,19 @@ function hasLegacyBindingMatchAccountID(value: unknown): boolean {
   });
 }
 
+function hasLegacyBindingMatchProvider(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    const match = isRecord(entry.match) ? entry.match : undefined;
+    return Boolean(match) && Object.prototype.hasOwnProperty.call(match, "provider");
+  });
+}
+
 function hasLegacySessionSendPolicyRuleProvider(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
@@ -184,6 +197,13 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["memorySearch"],
     message:
       "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+  },
+  {
+    path: ["bindings"],
+    issuePath: "bindings[].match.provider",
+    message:
+      "bindings[].match.provider was renamed to bindings[].match.channel (auto-migrated on load).",
+    match: (value) => hasLegacyBindingMatchProvider(value),
   },
   {
     path: ["bindings"],

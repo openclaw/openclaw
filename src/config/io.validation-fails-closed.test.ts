@@ -312,7 +312,9 @@ describe("config validation fail-closed behavior", () => {
     await withTempHomeConfig(
       {
         agents: { list: [{ id: "main" }] },
-        bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "ops" } }],
+        bindings: [
+          { agentId: "main", match: { channel: "telegram", provider: "slack", accountID: "ops" } },
+        ],
         messages: {
           queue: {
             byProvider: {

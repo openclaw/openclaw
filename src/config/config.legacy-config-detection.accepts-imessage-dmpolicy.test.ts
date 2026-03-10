@@ -344,6 +344,7 @@ describe("legacy config detection", () => {
         (parsed as { bindings?: Array<{ match?: { provider?: string } }> }).bindings?.[0]?.match
           ?.provider,
       expectedValue: "slack",
+      expectedIssuePath: "bindings[].match.provider",
     });
   });
   it("rejects bindings[].match.accountID on load and preserves source value", async () => {
