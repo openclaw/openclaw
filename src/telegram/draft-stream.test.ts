@@ -546,6 +546,36 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After rotation", undefined);
   });
 
+  it("preserves message_thread_id but drops reply_to on subsequent messages (#39718 + thread)", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      replyToMessageId: 999,
+      thread: { id: 55, scope: "forum" },
+    });
+
+    // First message should include both message_thread_id and reply_to_message_id
+    stream.update("Hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+      message_thread_id: 55,
+      reply_to_message_id: 999,
+    });
+
+    // After forceNewMessage, the second message should keep message_thread_id
+    // but drop reply_to_message_id to prevent "Deleted message" artifacts
+    stream.forceNewMessage();
+    stream.update("After rotation");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After rotation", {
+      message_thread_id: 55,
+    });
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
