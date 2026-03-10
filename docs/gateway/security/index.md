@@ -262,9 +262,14 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 ## Control UI over HTTP
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
-identity. `gateway.controlUi.allowInsecureAuth` does **not** bypass secure-context,
-device-identity, or device-pairing checks. Prefer HTTPS (Tailscale Serve) or open
-the UI on `127.0.0.1`.
+identity. `gateway.controlUi.allowInsecureAuth` is a local compatibility toggle:
+
+- On localhost, it allows Control UI auth without device identity when the page
+  is loaded over non-secure HTTP.
+- It does not bypass pairing checks.
+- It does not relax remote (non-localhost) device identity requirements.
+
+Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
 disables device identity checks entirely. This is a severe security downgrade;

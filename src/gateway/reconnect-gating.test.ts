@@ -45,9 +45,15 @@ describe("isNonRecoverableAuthError", () => {
     );
   });
 
+  it("blocks reconnect for PAIRING_REQUIRED", () => {
+    expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.PAIRING_REQUIRED))).toBe(
+      true,
+    );
+  });
+
   it("allows reconnect for AUTH_TOKEN_MISMATCH (device-token fallback flow)", () => {
-    // Browser client fallback: stale device token → mismatch → sendConnect() clears it →
-    // next reconnect uses opts.token (shared gateway token). Blocking here breaks recovery.
+    // Browser client can queue a single trusted-device retry after shared token mismatch.
+    // Blocking reconnect on mismatch here would skip that bounded recovery attempt.
     expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH))).toBe(
       false,
     );
