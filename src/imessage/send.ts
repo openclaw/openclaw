@@ -136,7 +136,13 @@ export async function sendMessageIMessage(
   // so protocol-level metadata never leaks into the delivered iMessage text.
   const stripped = stripInlineDirectiveTagsForDisplay(message);
   if (stripped.changed) {
-    message = stripped.text.replace(/  +/g, " ").trim();
+    // Replace tags AND their surrounding whitespace with a single space so we
+    // don't need a global /  +/g that would corrupt intentional multi-space
+    // formatting (e.g. code blocks, aligned text).
+    message = message
+      .replace(/\s*\[\[\s*audio_as_voice\s*\]\]\s*/gi, " ")
+      .replace(/\s*\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*/gi, " ")
+      .trim();
   }
 
   // Re-check after stripping: a directive-only message (e.g. "[[reply_to:123]]")
