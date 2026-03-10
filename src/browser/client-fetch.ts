@@ -102,7 +102,7 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
-const BROWSER_RATE_LIMIT_MESSAGE =
+export const BROWSER_RATE_LIMIT_MESSAGE =
   "Browserbase rate limit reached (max concurrent sessions). " +
   "Wait for the current session to complete, or upgrade your plan.";
 

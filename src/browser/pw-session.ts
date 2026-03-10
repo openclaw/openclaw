@@ -367,7 +367,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         lastErr = err;
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes("rate limit") || errMsg.includes("429")) {
+        if (errMsg.includes("rate limit")) {
           break;
         }
         const delay = 250 + attempt * 250;

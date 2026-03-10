@@ -3,6 +3,7 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { BROWSER_RATE_LIMIT_MESSAGE } from "./client-fetch.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -176,8 +177,7 @@ export async function fetchCdpChecked(
         const text = await res.text().catch(() => "");
         const detail = text ? ` (${text.slice(0, 200)})` : "";
         throw new Error(
-          `Browserbase rate limit reached (max concurrent sessions).${detail} ` +
-            `Do NOT retry - wait for the current session to complete, or upgrade your plan.`,
+          `${BROWSER_RATE_LIMIT_MESSAGE}${detail} Do NOT retry - wait for the current session to complete, or upgrade your plan.`,
         );
       }
       throw new Error(`HTTP ${res.status}`);
