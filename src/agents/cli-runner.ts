@@ -69,6 +69,7 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  bootstrapContextMode?: "full" | "lightweight";
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -111,6 +112,7 @@ export async function runCliAgent(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+    contextMode: params.bootstrapContextMode,
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);

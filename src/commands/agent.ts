@@ -376,6 +376,7 @@ function runAgentAttempt(params: {
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
         streamParams: params.opts.streamParams,
+        bootstrapContextMode: params.opts.lightContext ? "lightweight" : undefined,
       });
     return runCliWithSession(cliSessionId).catch(async (err) => {
       // Handle CLI session expired error
