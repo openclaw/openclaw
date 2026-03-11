@@ -1,4 +1,7 @@
+import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
@@ -162,6 +165,125 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
     info.lastExitReason = exitReason;
   }
   return info;
+}
+
+/**
+ * Parse the `arguments = { ... }` block from `launchctl print` output.
+ * Each line inside the braces is one argument string (trimmed).
+ */
+export function parseLaunchctlPrintArguments(output: string): string[] | undefined {
+  const match = output.match(/\barguments\s*=\s*\{([^}]*)\}/);
+  if (!match) {
+    return undefined;
+  }
+  return match[1]
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Parse the `environment = { ... }` block from `launchctl print` output.
+ * Each line is `KEY => VALUE`.
+ */
+export function parseLaunchctlPrintEnvironment(output: string): Record<string, string> | undefined {
+  // Match only the bare "environment = { ... }" block, NOT
+  // "inherited environment" or "default environment".
+  const match = output.match(/(?:^|\n)[\t ]*environment\s*=\s*\{([^}]*)\}/);
+  if (!match) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const idx = trimmed.indexOf("=>");
+    if (idx <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 2).trim();
+    if (key) {
+      env[key] = value;
+    }
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+/**
+ * Compare the already-fetched `launchctl print` output with the on-disk plist.
+ * Returns true if ProgramArguments or EnvironmentVariables have changed.
+ */
+export async function hasPlistConfigChanged(
+  printOutput: string,
+  plistPath: string,
+): Promise<boolean> {
+  const loadedArgs = parseLaunchctlPrintArguments(printOutput);
+  if (!loadedArgs) {
+    // Could not parse loaded arguments — treat as changed to be safe.
+    return true;
+  }
+
+  // Read the on-disk plist.
+  const diskConfig = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  if (!diskConfig) {
+    // Plist unreadable — treat as changed.
+    return true;
+  }
+
+  // Compare ProgramArguments.
+  if (
+    loadedArgs.length !== diskConfig.programArguments.length ||
+    loadedArgs.some((arg, i) => arg !== diskConfig.programArguments[i])
+  ) {
+    return true;
+  }
+
+  // Compare EnvironmentVariables.
+  const loadedEnv = parseLaunchctlPrintEnvironment(printOutput) ?? {};
+  const diskEnv = diskConfig.environment ?? {};
+  const loadedKeys = Object.keys(loadedEnv).toSorted();
+  const diskKeys = Object.keys(diskEnv).toSorted();
+  if (
+    loadedKeys.length !== diskKeys.length ||
+    loadedKeys.some((key, i) => key !== diskKeys[i] || loadedEnv[key] !== diskEnv[diskKeys[i]])
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Spawn a detached shell script that performs bootout → bootstrap → kickstart.
+ * This survives the gateway process being killed by bootout.
+ * The script self-deletes after execution.
+ */
+function spawnDetachedReload(domain: string, label: string, plistPath: string): void {
+  const serviceId = `${domain}/${label}`;
+  const script = [
+    "#!/bin/bash",
+    "# Detached LaunchAgent plist reload — survives gateway death.",
+    "sleep 0.5",
+    `launchctl bootout '${serviceId}' 2>/dev/null`,
+    "sleep 1",
+    `launchctl enable '${serviceId}'`,
+    `launchctl bootstrap '${domain}' '${plistPath}'`,
+    `launchctl kickstart -kp '${serviceId}'`,
+    'rm -f "$0"',
+  ].join("\n");
+
+  const scriptPath = path.join(os.tmpdir(), `openclaw-launchd-reload-${process.pid}.sh`);
+  // Write synchronously so the file exists before spawn.
+  fsSync.writeFileSync(scriptPath, `${script}\n`, { mode: 0o755 });
+
+  const child = spawn("/bin/bash", [scriptPath], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
 }
 
 export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
@@ -352,34 +474,6 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
-const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
-const RESTART_PID_WAIT_INTERVAL_MS = 200;
-
-async function sleepMs(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForPidExit(pid: number): Promise<void> {
-  if (!Number.isFinite(pid) || pid <= 1) {
-    return;
-  }
-  const deadline = Date.now() + RESTART_PID_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH" || code === "EPERM") {
-        return;
-      }
-      return;
-    }
-    await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
-  }
-}
-
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -475,25 +569,60 @@ export async function restartLaunchAgent({
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const serviceId = `${domain}/${label}`;
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
 
-  const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
-  const previousPid =
-    runtime.code === 0
-      ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
-      : undefined;
+  // Strategy: detect whether the on-disk plist differs from what launchd has loaded.
+  // - Unchanged plist → kickstart -kp (fast, atomic, no unload/reload).
+  // - Changed plist → bootout/bootstrap required to pick up new config. This is done
+  //   via a detached shell script that survives the gateway process being killed.
+  // - Service not loaded → inline enable/bootstrap/kickstart (existing fallback).
+  const printRes = await execLaunchctl(["print", `${domain}/${label}`]);
+  const serviceLoaded = printRes.code === 0;
 
-  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
-    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
-  }
-  if (typeof previousPid === "number") {
-    await waitForPidExit(previousPid);
+  if (serviceLoaded) {
+    const plistChanged = await hasPlistConfigChanged(
+      printRes.stdout || printRes.stderr || "",
+      plistPath,
+    );
+
+    if (!plistChanged) {
+      // Fast path: plist unchanged — use kickstart -kp for an atomic kill-and-restart
+      // that does NOT unload the plist. Avoids the bootout→bootstrap race where the
+      // CLI (a child of the gateway) gets killed by bootout before bootstrap can
+      // re-register the service.
+      const kick = await execLaunchctl(["kickstart", "-kp", serviceId]);
+      if (kick.code === 0) {
+        try {
+          stdout.write(`${formatLine("Restarted LaunchAgent", serviceId)}\n`);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+            throw err;
+          }
+        }
+        return;
+      }
+      // kickstart failed even though plist is unchanged — fall through to fallback.
+    } else {
+      // Slow path: plist has changed — need bootout/bootstrap to reload config.
+      // Spawn a detached script that survives gateway death (bootout kills us).
+      try {
+        spawnDetachedReload(domain, label, plistPath);
+        stdout.write(
+          `${formatLine("Restarting LaunchAgent (plist changed, reloading)", serviceId)}\n`,
+        );
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+          throw err;
+        }
+      }
+      return;
+    }
   }
 
-  // launchd can persist "disabled" state after bootout; clear it before bootstrap
-  // (matches the same guard in installLaunchAgent).
-  await execLaunchctl(["enable", `${domain}/${label}`]);
+  // Fallback: service not loaded (e.g. after a manual bootout or first-time run),
+  // or kickstart failed unexpectedly. Enable + bootstrap + kickstart inline.
+  await execLaunchctl(["enable", serviceId]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
@@ -511,12 +640,12 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl bootstrap failed: ${detail}`);
   }
 
-  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  const start = await execLaunchctl(["kickstart", "-kp", serviceId]);
   if (start.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
   try {
-    stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+    stdout.write(`${formatLine("Restarted LaunchAgent", serviceId)}\n`);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
       throw err;
