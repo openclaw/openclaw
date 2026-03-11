@@ -58,7 +58,6 @@ describe("resolveEffectiveHomeDir", () => {
     expect(resolveEffectiveHomeDir(env, homedir)).toBe(path.resolve(expected));
   });
 
-<<<<<<< HEAD
   it.each([
     {
       name: "expands ~/ using HOME",
@@ -79,17 +78,6 @@ describe("resolveEffectiveHomeDir", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveEffectiveHomeDir(env)).toBe(path.resolve(expected));
-=======
-  it("falls back to HOME then USERPROFILE then homedir", () => {
-    expect(resolveEffectiveHomeDir({ HOME: "/home/alice" } as NodeJS.ProcessEnv)).toBe(
-      path.resolve("/home/alice"),
-    );
-    expect(resolveEffectiveHomeDir({ USERPROFILE: "C:/Users/alice" } as NodeJS.ProcessEnv)).toBe(
-      path.resolve("C:/Users/alice"),
-    );
-    expect(resolveEffectiveHomeDir({} as NodeJS.ProcessEnv, () => "/fallback")).toBe(
-      path.resolve("/fallback"),
-    );
   });
 
   it("derives home from PREFIX on Android/Termux when HOME is unset", () => {
@@ -108,9 +96,28 @@ describe("resolveEffectiveHomeDir", () => {
       PREFIX: "/data/data/com.termux/files/usr",
       ANDROID_DATA: "/data",
     } as NodeJS.ProcessEnv;
-    expect(resolveEffectiveHomeDir(env)).toBe(
-      path.resolve("/data/data/com.termux/files/home"),
-    );
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/data/data/com.termux/files/home"));
+  });
+
+  it("ignores PREFIX without com.termux to avoid false positives in generic chroots", () => {
+    const env = {
+      PREFIX: "/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/fallback"));
+  });
+
+  it("uses Termux PREFIX for tilde expansion when HOME is unset", () => {
+    const env = {
+      OPENCLAW_HOME: "~/workspace",
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(
+      resolveEffectiveHomeDir(env, () => {
+        throw new Error("no homedir");
+      }),
+    ).toBe(path.resolve("/data/data/com.termux/files/home/workspace"));
   });
 
   it("expands OPENCLAW_HOME when set to ~", () => {
@@ -120,7 +127,6 @@ describe("resolveEffectiveHomeDir", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
->>>>>>> 9215bb9bdf (fix(infra): derive home directory from PREFIX on Android/Termux)
   });
 });
 
