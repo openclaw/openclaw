@@ -255,6 +255,14 @@ describe("web_search country and language parameters", () => {
     expect(url.searchParams.get("search_lang")).toBe("zh-hans");
   });
 
+  it("normalizes Chinese locale-style search_lang inputs", async () => {
+    const simplified = await runBraveSearchAndGetUrl({ search_lang: "zh_CN" });
+    expect(simplified.searchParams.get("search_lang")).toBe("zh-hans");
+
+    const traditional = await runBraveSearchAndGetUrl({ search_lang: "zh-Hant-HK" });
+    expect(traditional.searchParams.get("search_lang")).toBe("zh-hant");
+  });
+
   it("maps ja language code to Brave jp search_lang", async () => {
     const url = await runBraveSearchAndGetUrl({ language: "ja" });
     expect(url.searchParams.get("search_lang")).toBe("jp");

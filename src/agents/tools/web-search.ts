@@ -1027,6 +1027,27 @@ function resolveSearchCount(value: unknown, fallback: number): number {
   return clamped;
 }
 
+function canonicalizeChineseSearchLang(value: string): string {
+  const normalized = value.toLowerCase().replace(/_/g, "-");
+  if (!normalized.startsWith("zh")) {
+    return normalized;
+  }
+
+  const parts = normalized.split("-");
+  if (parts.includes("hant")) {
+    return "zh-hant";
+  }
+  if (parts.includes("hans")) {
+    return "zh-hans";
+  }
+
+  const region = parts[1];
+  if (region === "tw" || region === "hk" || region === "mo") {
+    return "zh-hant";
+  }
+  return "zh-hans";
+}
+
 function normalizeBraveSearchLang(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -1035,7 +1056,9 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  const canonical = BRAVE_SEARCH_LANG_ALIASES[trimmed.toLowerCase()] ?? trimmed.toLowerCase();
+
+  const canonicalInput = canonicalizeChineseSearchLang(trimmed);
+  const canonical = BRAVE_SEARCH_LANG_ALIASES[canonicalInput] ?? canonicalInput;
   if (!BRAVE_SEARCH_LANG_CODES.has(canonical)) {
     return undefined;
   }
