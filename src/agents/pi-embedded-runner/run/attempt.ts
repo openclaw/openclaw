@@ -598,6 +598,7 @@ function wrapStreamRepairMalformedToolCallArguments(
                   (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
                 }
                 repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
+                repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
               }
             }
           }
