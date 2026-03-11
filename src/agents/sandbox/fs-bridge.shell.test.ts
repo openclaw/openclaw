@@ -130,11 +130,11 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(true);
-    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(false);
+    expect(scripts.some((script) => script.includes("os.replace("))).toBe(true);
   });
 
-  it("re-validates target before final rename and cleans temp file on failure", async () => {
+  it("re-validates target before the pinned write helper runs", async () => {
     const { mockedOpenBoundaryFile } = await import("./fs-bridge.test-helpers.js");
     mockedOpenBoundaryFile
       .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
@@ -150,8 +150,6 @@ describe("sandbox fs bridge shell compatibility", () => {
     );
 
     const scripts = getScriptsFromCalls();
-    expect(scripts.some((script) => script.includes("mktemp"))).toBe(true);
-    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('rm -f -- "$1"'))).toBe(true);
+    expect(scripts.some((script) => script.includes("os.replace("))).toBe(false);
   });
 });
