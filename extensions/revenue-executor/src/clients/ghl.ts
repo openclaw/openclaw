@@ -35,6 +35,7 @@ async function requestJson(params: {
       Authorization: `Bearer ${params.apiKey}`,
       "Content-Type": "application/json",
       Accept: "application/json",
+      Version: "2021-07-28",
     },
     body: params.body ? JSON.stringify(params.body) : undefined,
   });
