@@ -150,10 +150,130 @@ async function validateScriptFileForShellBleed(params: {
 }
 
 const BROAD_FIND_TIMEOUT_SEC = 20;
-const BROAD_FIND_GUARD_RE = /^\s*find\s+(?:"([^"]+)"|'([^']+)'|([^\s|&;]+))/;
-const BROAD_FIND_ESCAPE_HATCH_RE = /\s-(?:prune|xdev|mount)\b/;
+const BROAD_FIND_ESCAPE_HATCHES = new Set(["-prune", "-xdev", "-mount"]);
+const FIND_GLOBAL_OPTIONS_NO_ARG = new Set(["-H", "-L", "-P"]);
+const FIND_PREDICATES_WITH_ARG = new Set([
+  "-amin",
+  "-anewer",
+  "-atime",
+  "-cmin",
+  "-cnewer",
+  "-context",
+  "-ctime",
+  "-fstype",
+  "-gid",
+  "-group",
+  "-iname",
+  "-inum",
+  "-ipath",
+  "-iregex",
+  "-iwholename",
+  "-links",
+  "-maxdepth",
+  "-mindepth",
+  "-mmin",
+  "-mtime",
+  "-name",
+  "-newer",
+  "-path",
+  "-perm",
+  "-regex",
+  "-samefile",
+  "-size",
+  "-type",
+  "-uid",
+  "-user",
+  "-wholename",
+]);
+const FIND_SEGMENT_TERMINATORS = new Set(["&", "&&", ";", ";;", "|", "||"]);
+const FIND_EXEC_TOKENS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
-function resolveFindRootToken(rootToken: string, homeDir: string): string {
+function tokenizeShellWords(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  for (const char of command) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+      current += char;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === ";" || char === "|") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      tokens.push(char);
+      continue;
+    }
+    if (char === "&") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      tokens.push(char);
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function extractFindTraversalTokens(command: string): string[] {
+  const tokens = tokenizeShellWords(command);
+  if (tokens[0] !== "find") {
+    return [];
+  }
+  const findTokens: string[] = [];
+  for (const token of tokens.slice(1)) {
+    if (FIND_SEGMENT_TERMINATORS.has(token) || FIND_EXEC_TOKENS.has(token)) {
+      break;
+    }
+    findTokens.push(token);
+  }
+  return findTokens;
+}
+
+function resolveFindRootToken(rootToken: string, homeDir: string, workdir: string): string {
   if (rootToken === "~") {
     return homeDir;
   }
@@ -166,7 +286,25 @@ function resolveFindRootToken(rootToken: string, homeDir: string): string {
   if (rootToken.startsWith("$HOME/")) {
     return path.resolve(homeDir, rootToken.slice("$HOME/".length));
   }
-  return path.resolve(rootToken);
+  return path.resolve(workdir, rootToken);
+}
+
+function tokenLooksLikePath(token: string): boolean {
+  if (!token) {
+    return false;
+  }
+  if (token === "." || token === ".." || token === "/" || token === "~" || token === "$HOME") {
+    return true;
+  }
+  if (
+    token.startsWith("./") ||
+    token.startsWith("../") ||
+    token.startsWith("~/") ||
+    token.startsWith("$HOME/")
+  ) {
+    return true;
+  }
+  return !token.startsWith("-");
 }
 
 export function maybeCapBroadFindTimeoutSec(params: {
@@ -177,24 +315,49 @@ export function maybeCapBroadFindTimeoutSec(params: {
   if (params.explicitTimeoutSec !== null) {
     return { timeoutSec: null };
   }
-  if (BROAD_FIND_ESCAPE_HATCH_RE.test(params.command)) {
+  const findTokens = extractFindTraversalTokens(params.command);
+  if (findTokens.length === 0) {
     return { timeoutSec: null };
   }
-  const match = params.command.match(BROAD_FIND_GUARD_RE);
-  const rootToken = match?.[1] ?? match?.[2] ?? match?.[3];
-  if (!rootToken) {
+  let rootToken: string | null = null;
+  let hasEscapeHatch = false;
+  for (let i = 0; i < findTokens.length; i += 1) {
+    const token = findTokens[i];
+    if (FIND_GLOBAL_OPTIONS_NO_ARG.has(token)) {
+      continue;
+    }
+    if (token === "-D" || token === "-O") {
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("-D") || token.startsWith("-O")) {
+      continue;
+    }
+    if (BROAD_FIND_ESCAPE_HATCHES.has(token)) {
+      hasEscapeHatch = true;
+      continue;
+    }
+    if (FIND_PREDICATES_WITH_ARG.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (!rootToken && tokenLooksLikePath(token)) {
+      rootToken = token;
+    }
+  }
+  if (hasEscapeHatch) {
     return { timeoutSec: null };
   }
   const homeDir = path.resolve(os.homedir());
-  const resolvedRoot = resolveFindRootToken(rootToken, homeDir);
+  const resolvedRoot = resolveFindRootToken(rootToken ?? ".", homeDir, params.workdir);
   const resolvedWorkdir = path.resolve(params.workdir);
+  const filesystemRoot = path.parse(homeDir).root;
   if (
-    resolvedRoot === resolvedWorkdir ||
-    resolvedRoot.startsWith(`${resolvedWorkdir}${path.sep}`)
+    resolvedWorkdir !== filesystemRoot &&
+    (resolvedRoot === resolvedWorkdir || resolvedRoot.startsWith(`${resolvedWorkdir}${path.sep}`))
   ) {
     return { timeoutSec: null };
   }
-  const filesystemRoot = path.parse(homeDir).root;
   const isBroadRoot = resolvedRoot === homeDir || resolvedRoot === filesystemRoot;
   if (!isBroadRoot) {
     return { timeoutSec: null };
