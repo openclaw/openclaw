@@ -540,6 +540,12 @@ async function sendExternalCompletionNotification(entry: SubagentRunRecord): Pro
   if (!channel || !target) {
     return;
   }
+  const normalizedRequesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+  const normalizedNotifyChannel = normalizeDeliveryContext({ channel })?.channel ?? channel;
+  const accountId =
+    normalizedRequesterOrigin?.channel === normalizedNotifyChannel
+      ? normalizedRequesterOrigin.accountId
+      : undefined;
 
   const taskLabel = entry.label || entry.task || "task";
   const outcome = entry.outcome;
@@ -561,7 +567,7 @@ async function sendExternalCompletionNotification(entry: SubagentRunRecord): Pro
         channel,
         to: target,
         message,
-        accountId: entry.requesterOrigin?.accountId,
+        accountId,
         idempotencyKey: `subagent-complete-${entry.runId}`,
       },
       timeoutMs: 15_000,

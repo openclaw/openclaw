@@ -61,11 +61,14 @@ vi.mock("./timeout.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.js");
   let announceFn: ReturnType<typeof vi.fn>;
+  let callGatewayMock: ReturnType<typeof vi.fn>;
 
   beforeAll(async () => {
     registry = await import("./subagent-registry.js");
     const subagentAnnounce = await import("./subagent-announce.js");
+    const gateway = await import("../gateway/call.js");
     announceFn = vi.mocked(subagentAnnounce.runSubagentAnnounceFlow);
+    callGatewayMock = vi.mocked(gateway.callGateway);
   });
 
   beforeEach(() => {
@@ -228,5 +231,85 @@ describe("announce loop guard (#18264)", () => {
     expect(stored?.cleanupCompletedAt).toBeUndefined();
     expect(stored?.announceRetryCount).toBe(1);
     expect(stored?.lastAnnounceRetryAt).toBeTypeOf("number");
+  });
+
+  test("external completion notify keeps requester accountId for same-channel sends", async () => {
+    announceFn.mockReset();
+    announceFn.mockResolvedValueOnce(true);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-external-notify-same-channel";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            requesterOrigin: { channel: " telegram ", accountId: " acct-main " },
+            notifyChannel: "telegram",
+            notifyTarget: "telegram:123",
+            task: "same-channel notify",
+            cleanup: "keep" as const,
+            createdAt: now - 30_000,
+            startedAt: now - 20_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const sendCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string })?.method === "send",
+    )?.[0] as { params?: { accountId?: string } } | undefined;
+    expect(sendCall?.params?.accountId).toBe("acct-main");
+  });
+
+  test("external completion notify drops requester accountId for cross-channel sends", async () => {
+    announceFn.mockReset();
+    announceFn.mockResolvedValueOnce(true);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-external-notify-cross-channel";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            requesterOrigin: { channel: "telegram", accountId: "acct-main" },
+            notifyChannel: "discord",
+            notifyTarget: "channel:results",
+            task: "cross-channel notify",
+            cleanup: "keep" as const,
+            createdAt: now - 30_000,
+            startedAt: now - 20_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const sendCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string })?.method === "send",
+    )?.[0] as { params?: { accountId?: string } } | undefined;
+    expect(sendCall?.params?.accountId).toBeUndefined();
   });
 });
