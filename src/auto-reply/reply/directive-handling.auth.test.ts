@@ -32,7 +32,7 @@ vi.mock("../../agents/model-selection.js", () => ({
 
 vi.mock("../../agents/model-auth.js", () => ({
   ensureAuthProfileStore: () => mockStore,
-  getCustomProviderApiKey: () => undefined,
+  resolveUsableCustomProviderApiKey: () => null,
   resolveAuthProfileOrder: () => mockOrder,
   resolveEnvApiKey: () => null,
 }));
