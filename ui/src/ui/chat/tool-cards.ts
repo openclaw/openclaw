@@ -54,16 +54,29 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const hasText = Boolean(card.text?.trim());
 
   const canClick = Boolean(onOpenSidebar);
+
+  // Extract raw, untruncated command for sidebar display
+  const rawCommand = extractRawCommand(card);
+
   const handleClick = canClick
     ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
-          return;
+        // Build sidebar content with full command first
+        let sidebarContent = `## ${display.label}`;
+
+        if (rawCommand) {
+          sidebarContent += `\n\n**Command:**\n\`${rawCommand}\``;
+        } else if (detail) {
+          sidebarContent += `\n\n**Command:** \`${detail}\``;
         }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+
+        // Add output if present
+        if (hasText) {
+          sidebarContent += `\n\n**Output:**\n\n${formatToolOutputForSidebar(card.text!)}`;
+        } else {
+          sidebarContent += `\n\n*No output — tool completed successfully.*`;
+        }
+
+        onOpenSidebar!(sidebarContent);
       }
     : undefined;
 
@@ -153,4 +166,31 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
     return item.content;
   }
   return undefined;
+}
+
+/**
+ * Extract the raw, untruncated command from a tool card.
+ * For exec tools: returns card.args.command
+ * For other tools: returns JSON-serialized args object
+ * Returns undefined if args are unavailable
+ */
+function extractRawCommand(card: ToolCard): string | undefined {
+  if (!card.args || typeof card.args !== "object") {
+    return undefined;
+  }
+
+  const args = card.args as Record<string, unknown>;
+
+  // For exec tools, return the raw command string
+  if (typeof args.command === "string" && args.command.trim()) {
+    return args.command.trim();
+  }
+
+  // For other tools, serialize the full args object
+  try {
+    const serialized = JSON.stringify(args, null, 2);
+    return serialized !== "{}" ? serialized : undefined;
+  } catch {
+    return undefined;
+  }
 }
