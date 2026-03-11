@@ -26,11 +26,13 @@ function labelForSource(source: string): string {
     case "memory":
       return "Prior work";
     case "incident-dossier":
-      return "Incident dossiers";
+      return "Incident memory";
+    case "seed-knowledge":
+      return "Seeded incident docs";
     case "relationship-index":
-      return "Related graph evidence";
+      return "Related graph";
     case "relationship-knowledge":
-      return "Shell relationship knowledge";
+      return "Shell graph facts";
     case "repo-ownership":
       return "Repo ownership";
     default:
@@ -54,6 +56,23 @@ export function buildContextBrokerPrependContext(
   }
 
   const lines = ["Context broker packet:", `intent=${params.intents.join(", ")}`];
+
+  if (
+    params.intents.includes("data-integrity-investigation") ||
+    params.intents.includes("postgres-internals") ||
+    params.intents.includes("read-consistency-incident")
+  ) {
+    lines.push("DB-first checks:");
+    lines.push(
+      "- resolve DB target and run schema, data, and PG internal queries before ranking root cause",
+    );
+    lines.push(
+      "- prefer replay lag, pg_stat_activity, pg_stat_statements, pg_stat_database_conflicts, and routing/topology facts",
+    );
+    lines.push(
+      "- treat seeded incident docs as priors, not proof; keep multiple plausible hypotheses until live evidence narrows them",
+    );
+  }
 
   for (const [source, evidenceList] of grouped) {
     lines.push(`${labelForSource(source)}:`);

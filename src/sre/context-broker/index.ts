@@ -11,7 +11,11 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import type { RelationshipEdge } from "../contracts/entity.js";
 import { loadRepoOwnershipMap } from "../repo-ownership/load.js";
 import { resolveSreStatePaths } from "../state/paths.js";
-import { classifyContextBrokerIntent, type ContextBrokerClassification } from "./classifier.js";
+import {
+  classifyContextBrokerIntent,
+  type ContextBrokerClassification,
+  type ContextBrokerIntent,
+} from "./classifier.js";
 import { buildContextBrokerPrependContext, type ContextBrokerEvidence } from "./inject.js";
 
 export type ContextBrokerInput = {
@@ -247,13 +251,16 @@ function scoreShellItems<T>(params: {
 function resolveBrokerPaths(config: OpenClawConfig | undefined): {
   dossiersDir: string;
   repoOwnershipPath: string;
+  repoRootDir: string;
 } {
   const fallback = resolveSreStatePaths(process.env);
   const dossiersDir = config?.sre?.stateRoots?.dossiersDir?.trim() || fallback.dossiersDir;
   const repoOwnershipPath =
     config?.sre?.repoOwnership?.filePath?.trim() ||
     path.join(fallback.indexDir, "repo-ownership.json");
-  return { dossiersDir, repoOwnershipPath };
+  const repoRootDir =
+    config?.sre?.repoBootstrap?.rootDir?.trim() || process.env.OPENCLAW_SRE_REPO_ROOT || "";
+  return { dossiersDir, repoOwnershipPath, repoRootDir };
 }
 
 function resolveContextBrokerAgentId(input: ContextBrokerInput): string {
@@ -304,7 +311,10 @@ async function retrieveDossierEvidence(
   let incidentDirs: string[] = [];
   try {
     incidentDirs = (await fs.readdir(dossiersDir)).slice(0, 50);
-  } catch {
+  } catch (error) {
+    if (!isMissingFsError(error)) {
+      throw error;
+    }
     return [];
   }
 
@@ -322,10 +332,110 @@ async function retrieveDossierEvidence(
           score,
         });
       }
-    } catch {
+    } catch (error) {
+      if (!isMissingFsError(error)) {
+        throw error;
+      }
       continue;
     }
   }
+  return evidence.toSorted((left, right) => right.score - left.score).slice(0, 3);
+}
+
+function isMissingFsError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function clampEvidenceSnippet(text: string, maxChars = 2000): string {
+  const trimmed = text.trim();
+  return trimmed.length <= maxChars ? trimmed : trimmed.slice(0, maxChars);
+}
+
+async function retrieveSeedKnowledgeEvidence(
+  input: ContextBrokerInput,
+  repoRootDir: string,
+): Promise<ContextBrokerEvidence[]> {
+  if (!repoRootDir) {
+    return [];
+  }
+
+  const tokens = tokenize(input.prompt);
+  const seedRootCandidates = unique([
+    path.join(repoRootDir, "morpho-infra-helm", "charts", "openclaw-sre", "files", "seed-skills"),
+    path.join(
+      repoRootDir,
+      "..",
+      "morpho-infra-helm",
+      "charts",
+      "openclaw-sre",
+      "files",
+      "seed-skills",
+    ),
+  ]);
+  const candidates: string[] = [];
+  let foundSeedRoot = false;
+
+  for (const seedRoot of seedRootCandidates) {
+    const referencesDir = path.join(seedRoot, "references");
+    try {
+      for (const name of await fs.readdir(seedRoot)) {
+        if (
+          name.endsWith(".md") &&
+          (name.startsWith("incident-dossier-") || name === "notion-postmortem-index.md")
+        ) {
+          candidates.push(path.join(seedRoot, name));
+        }
+      }
+      foundSeedRoot = true;
+    } catch (error) {
+      if (!isMissingFsError(error)) {
+        throw error;
+      }
+      continue;
+    }
+
+    try {
+      for (const name of await fs.readdir(referencesDir)) {
+        if (name.endsWith(".md")) {
+          candidates.push(path.join(referencesDir, name));
+        }
+      }
+    } catch (error) {
+      if (!isMissingFsError(error)) {
+        throw error;
+      }
+      // references are optional
+    }
+  }
+
+  if (!foundSeedRoot) {
+    return [];
+  }
+
+  const evidence: ContextBrokerEvidence[] = [];
+  for (const filePath of unique(candidates).slice(0, 80)) {
+    try {
+      const content = await fs.readFile(filePath, "utf8");
+      const title = filePath;
+      const haystack = `${title}\n${content}`;
+      const score = scoreText(tokens, haystack);
+      if (score > 0) {
+        evidence.push({
+          source: "seed-knowledge",
+          title,
+          snippet: clampEvidenceSnippet(content),
+          score,
+        });
+      }
+    } catch (error) {
+      if (!isMissingFsError(error)) {
+        throw error;
+      }
+      continue;
+    }
+  }
+
   return evidence.toSorted((left, right) => right.score - left.score).slice(0, 3);
 }
 
@@ -449,25 +559,59 @@ export async function runContextBroker(input: ContextBrokerInput): Promise<Conte
     return { ...classification, evidence: [] };
   }
 
-  const { dossiersDir, repoOwnershipPath } = resolveBrokerPaths(input.config);
+  const { dossiersDir, repoOwnershipPath, repoRootDir } = resolveBrokerPaths(input.config);
+  const hasIntent = (targets: ReadonlySet<ContextBrokerIntent>): boolean =>
+    classification.intents.some((intent) => targets.has(intent));
+  const safeRetrieve = async (
+    retrieve: () => Promise<ContextBrokerEvidence[]>,
+  ): Promise<ContextBrokerEvidence[]> => {
+    try {
+      return await retrieve();
+    } catch {
+      return [];
+    }
+  };
+  const memoryIntents = new Set<ContextBrokerIntent>([
+    "prior-work",
+    "data-integrity-investigation",
+    "postgres-internals",
+    "read-consistency-incident",
+  ]);
+  const dossierIntents = new Set<ContextBrokerIntent>([
+    "incident-follow-up",
+    "data-integrity-investigation",
+    "postgres-internals",
+    "read-consistency-incident",
+  ]);
+  const seedKnowledgeIntents = new Set<ContextBrokerIntent>([
+    "incident-follow-up",
+    "data-integrity-investigation",
+  ]);
+  const relationshipIntents = new Set<ContextBrokerIntent>([
+    "incident-follow-up",
+    "data-integrity-investigation",
+    "postgres-internals",
+    "repo-deploy-ownership",
+    "read-consistency-incident",
+    "multi-repo-fix-planning",
+  ]);
+  const repoOwnershipIntents = new Set<ContextBrokerIntent>([
+    "repo-deploy-ownership",
+    "multi-repo-fix-planning",
+  ]);
   const evidence = [
-    ...(classification.intents.includes("prior-work") ? await retrieveMemoryEvidence(input) : []),
-    ...(classification.intents.includes("incident-follow-up") &&
-    input.config?.sre?.incidentDossier?.enabled === true
-      ? await retrieveDossierEvidence(input, dossiersDir)
+    ...(hasIntent(memoryIntents) ? await safeRetrieve(() => retrieveMemoryEvidence(input)) : []),
+    ...(hasIntent(dossierIntents) && input.config?.sre?.incidentDossier?.enabled === true
+      ? await safeRetrieve(() => retrieveDossierEvidence(input, dossiersDir))
       : []),
-    ...(classification.intents.some(
-      (intent) =>
-        intent === "incident-follow-up" ||
-        intent === "repo-deploy-ownership" ||
-        intent === "multi-repo-fix-planning",
-    ) && input.config?.sre?.relationshipIndex?.enabled === true
-      ? await retrieveRelationshipEvidence(input)
+    ...(hasIntent(seedKnowledgeIntents)
+      ? await safeRetrieve(() => retrieveSeedKnowledgeEvidence(input, repoRootDir))
       : []),
-    ...(classification.intents.some(
-      (intent) => intent === "repo-deploy-ownership" || intent === "multi-repo-fix-planning",
-    ) && input.config?.sre?.repoOwnership?.enabled === true
-      ? await retrieveRepoOwnershipEvidence(input, repoOwnershipPath)
+    ...(hasIntent(relationshipIntents) && input.config?.sre?.relationshipIndex?.enabled === true
+      ? await safeRetrieve(() => retrieveRelationshipEvidence(input))
+      : []),
+    ...(hasIntent(repoOwnershipIntents) && input.config?.sre?.repoOwnership?.enabled === true
+      ? await safeRetrieve(() => retrieveRepoOwnershipEvidence(input, repoOwnershipPath))
       : []),
   ]
     .toSorted((left, right) => right.score - left.score)

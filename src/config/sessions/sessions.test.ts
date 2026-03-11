@@ -9,6 +9,7 @@ import {
   loadSessionStore,
   mergeSessionEntry,
   resolveAndPersistSessionFile,
+  resolveSessionTranscriptFile,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
@@ -68,6 +69,21 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("uses storePath-derived sessions dir even when no session store is provided", async () => {
+    const storePath = "/tmp/openclaw/agents/sre/sessions/sessions.json";
+    const resolved = await resolveSessionTranscriptFile({
+      sessionId: "sess-1",
+      sessionKey: "agent:sre:main",
+      sessionEntry: undefined,
+      storePath,
+      agentId: "sre",
+    });
+
+    expect(resolved.sessionFile).toBe(
+      path.resolve("/tmp/openclaw/agents/sre/sessions/sess-1.jsonl"),
+    );
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {

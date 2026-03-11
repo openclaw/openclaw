@@ -125,7 +125,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git openssl ripgrep unzip && \
+      procps hostname curl git openssl postgresql-client ripgrep unzip && \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}" && \
     case "$arch" in \
       amd64) terraform_arch="amd64" ;; \

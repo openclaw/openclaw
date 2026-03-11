@@ -23,6 +23,7 @@ RUN apt-get update \
     git \
     gzip \
     jq \
+    postgresql-client \
     ripgrep \
     tar \
     unzip \

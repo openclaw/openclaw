@@ -59,6 +59,26 @@ describe("runContextBroker", () => {
     expect(result.prependContext).toContain("memory/ops.md");
   });
 
+  it("injects db-first packet guidance for data investigation prompts", async () => {
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+        },
+      },
+      prompt:
+        "We have a negative APY spike and inconsistent values. Query the DB and pg_stat_activity before blaming math.",
+      agentId: "sre-runtime",
+    });
+
+    expect(result.intents).toContain("data-integrity-investigation");
+    expect(result.intents).toContain("postgres-internals");
+    expect(result.prependContext).toContain("DB-first checks:");
+    expect(result.prependContext).toContain("schema, data, and PG internal queries");
+    expect(result.prependContext).toContain("priors, not proof");
+  });
+
   it("returns empty result for ordinary sessions even when enabled", async () => {
     const result = await runContextBroker({
       config: {
@@ -204,6 +224,192 @@ describe("runContextBroker", () => {
     });
   });
 
+  it("injects db-first guidance for data and read-consistency prompts", async () => {
+    const root = await createStateRoot();
+    const dossiersDir = path.join(root, "state", "sre-dossiers", "incident-db-drift");
+    const graphDir = path.join(root, "state", "sre-graph");
+    await fs.mkdir(dossiersDir, { recursive: true });
+    await fs.mkdir(graphDir, { recursive: true });
+    await fs.writeFile(
+      path.join(dossiersDir, "summary.md"),
+      [
+        "# incident-db-drift",
+        "",
+        "- Root cause: mixed freshness across replica-backed reads",
+        "- Best checks: pg_stat_activity, pg_stat_statements, replay lag",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(graphDir, "latest-by-entity.json"),
+      JSON.stringify(
+        {
+          version: "sre.relationship-index-latest.v1",
+          updatedAt: "2026-03-10T17:00:00.000Z",
+          nodes: {
+            "service:blue-api": {
+              version: "sre.relationship-index-node.v1",
+              entityId: "service:blue-api",
+              entityType: "service",
+              observedAt: "2026-03-10T17:00:00.000Z",
+              attributes: {
+                db: "indexer-db",
+                routing: "haproxy",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(path.join(graphDir, "edges.ndjson"), "", "utf8");
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const result = await runContextBroker({
+        config: {
+          sre: {
+            contextBroker: { enabled: true },
+            incidentDossier: { enabled: true },
+            relationshipIndex: { enabled: true },
+          },
+        },
+        prompt:
+          "Investigate a negative APY spike in blue-api, query the DB, check pg_stat_activity, and verify read consistency across replicas",
+        agentId: "sre-verifier",
+      });
+
+      expect(result.intents).toContain("data-integrity-investigation");
+      expect(result.intents).toContain("postgres-internals");
+      expect(result.intents).toContain("read-consistency-incident");
+      expect(result.prependContext).toContain("DB-first checks:");
+      expect(result.prependContext).toContain("pg_stat_activity");
+      expect(result.prependContext).toContain("Incident memory:");
+    });
+  });
+
+  it("retrieves seeded incident docs for sparse incident titles", async () => {
+    const root = await createStateRoot();
+    const seededDir = path.join(
+      root,
+      "morpho-infra-helm",
+      "charts",
+      "openclaw-sre",
+      "files",
+      "seed-skills",
+    );
+    await fs.mkdir(seededDir, { recursive: true });
+    await fs.writeFile(
+      path.join(seededDir, "incident-dossier-blue-api-apy-spike-read-consistency-2026-03-07.md"),
+      [
+        "# spike in APY from API reported by several integrators",
+        "",
+        "- Root cause: read-consistency / replica-routing issue behind mixed HAProxy reads",
+        "- Ruled out: price, rewards, APY math",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+          repoBootstrap: { rootDir: root },
+        },
+      },
+      prompt: "spike in APY from API reported by several integrators",
+      agentId: "sre-runtime",
+    });
+
+    expect(result.intents).toContain("data-integrity-investigation");
+    expect(result.prependContext).toContain("Seeded incident docs:");
+    expect(result.prependContext).toContain("read-consistency / replica-routing issue");
+    expect(result.prependContext).toContain("Ruled out: price, rewards, APY math");
+  });
+
+  it("finds seeded incident docs when repo root points at the openclaw-sre checkout", async () => {
+    const root = await createStateRoot();
+    const repoRoot = path.join(root, "openclaw-sre");
+    const seededDir = path.join(
+      root,
+      "morpho-infra-helm",
+      "charts",
+      "openclaw-sre",
+      "files",
+      "seed-skills",
+    );
+    await fs.mkdir(repoRoot, { recursive: true });
+    await fs.mkdir(seededDir, { recursive: true });
+    const dossierPath = path.join(
+      seededDir,
+      "incident-dossier-blue-api-apy-spike-read-consistency-2026-03-07.md",
+    );
+    await fs.writeFile(
+      dossierPath,
+      [
+        "# spike in APY from API reported by several integrators",
+        "",
+        "- Root cause: mixed primary/replica reads behind HAProxy",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+          repoBootstrap: { rootDir: repoRoot },
+        },
+      },
+      prompt: "spike in APY from API reported by several integrators",
+      agentId: "sre-runtime",
+    });
+
+    expect(result.prependContext).toContain(dossierPath);
+    expect(result.prependContext).toContain("mixed primary/replica reads behind HAProxy");
+  });
+
+  it("retrieves seeded reference docs from the references directory", async () => {
+    const root = await createStateRoot();
+    const referencesDir = path.join(
+      root,
+      "morpho-infra-helm",
+      "charts",
+      "openclaw-sre",
+      "files",
+      "seed-skills",
+      "references",
+    );
+    await fs.mkdir(referencesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(referencesDir, "db-data-incident-playbook.md"),
+      [
+        "# db playbook",
+        "",
+        "- Check pg_stat_database_conflicts before blaming application logic",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+          repoBootstrap: { rootDir: root },
+        },
+      },
+      prompt: "check pg_stat_database_conflicts for this APY spike",
+      agentId: "sre-runtime",
+    });
+
+    expect(result.prependContext).toContain("db-data-incident-playbook.md");
+    expect(result.prependContext).toContain("pg_stat_database_conflicts");
+  });
+
   it("falls back to shell relationship knowledge cache when runtime graph is empty", async () => {
     const root = await createStateRoot();
     const incidentStateDir = path.join(root, "state", "sentinel");
@@ -252,7 +458,7 @@ describe("runContextBroker", () => {
           agentId: "sre-verifier",
         });
 
-        expect(result.prependContext).toContain("Shell relationship knowledge:");
+        expect(result.prependContext).toContain("Shell graph facts:");
         expect(result.prependContext).toContain("morpho-org/morpho-infra-helm");
       },
     );
