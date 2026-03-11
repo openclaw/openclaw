@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { isSilentReplyPrefixText, isSilentReplyText } from "../../../../src/auto-reply/tokens.js";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -13,10 +14,6 @@ import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
-import {
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-} from "../../../../src/auto-reply/tokens.js";
 import "../components/resizable-divider.ts";
 
 export type CompactionIndicatorStatus = {

@@ -1,13 +1,13 @@
-import { resetToolStream } from "../app-tool-stream.ts";
-import { extractRawText, extractText } from "../chat/message-extract.ts";
-import { stripThinkingTags } from "../format.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ChatAttachment } from "../ui-types.ts";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
   isSilentReplyText,
 } from "../../../../src/auto-reply/tokens.js";
+import { resetToolStream } from "../app-tool-stream.ts";
+import { extractRawText, extractText } from "../chat/message-extract.ts";
+import { stripThinkingTags } from "../format.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
@@ -292,11 +292,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (
-      typeof next === "string" &&
-      !isSilentReplyText(next) &&
-      !isSilentReplyPrefixText(next)
-    ) {
+    if (typeof next === "string" && !isSilentReplyText(next) && !isSilentReplyPrefixText(next)) {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;
