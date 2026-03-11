@@ -581,7 +581,7 @@ export function renderChat(props: ChatProps) {
                       @click=${props.onAbort}
                       title="Stop agent"
                     >
-                      ${icons.stop || icons.x}
+                      ${icons.x}
                     </button>
                   `
                 : html`

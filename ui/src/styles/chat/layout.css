@@ -366,6 +366,35 @@
   height: 12px;
 }
 
+/* Abort/Stop button */
+.compose-abort-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  cursor: pointer;
+  transition: all 150ms ease;
+  flex-shrink: 0;
+}
+
+.compose-abort-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.compose-abort-btn:active {
+  transform: scale(0.95);
+}
+
+.compose-abort-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
 /* Compose input area */
 .chat-compose__input-wrapper {
   display: flex;
