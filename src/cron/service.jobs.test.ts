@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch, createJob } from "./service/jobs.js";
+import { applyJobPatch, createJob, resolveJobPayloadTextForMain } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
@@ -68,6 +68,24 @@ describe("applyJobPatch", () => {
     expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
     expect(job.sessionTarget).toBe("main");
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
+  });
+
+  it("allows main-session agentTurn jobs for non-default agents", () => {
+    const job = createIsolatedAgentTurnJob("job-main-agentturn", {
+      mode: "none",
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        sessionTarget: "main",
+        agentId: "eva-public",
+        payload: { kind: "agentTurn", message: "post update" },
+      }),
+    ).not.toThrow();
+    expect(job.sessionTarget).toBe("main");
+    expect(job.agentId).toBe("eva-public");
+    expect(job.payload).toEqual({ kind: "agentTurn", message: "post update" });
+    expect(job.delivery).toBeUndefined();
   });
 
   it("maps legacy payload delivery updates onto delivery", () => {
@@ -365,7 +383,7 @@ function createMockState(now: number, opts?: { defaultAgentId?: string }): CronS
   } as unknown as CronServiceState;
 }
 
-describe("createJob rejects sessionTarget main for non-default agents", () => {
+describe("createJob allows sessionTarget main for non-default agents", () => {
   const now = Date.parse("2026-02-28T12:00:00.000Z");
 
   const mainJobInput = (agentId?: string) => ({
@@ -389,18 +407,14 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     expect(() => createJob(state, mainJobInput("MAIN"))).not.toThrow();
   });
 
-  it("rejects creating a main-session job for a non-default agentId", () => {
+  it("allows creating a main-session job for a non-default agentId", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
-      'cron: sessionTarget "main" is only valid for the default agent',
-    );
+    expect(() => createJob(state, mainJobInput("custom-agent"))).not.toThrow();
   });
 
-  it("rejects main-session job for non-default agent even without explicit defaultAgentId", () => {
+  it("allows main-session job for non-default agent even without explicit defaultAgentId", () => {
     const state = createMockState(now);
-    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
-      'cron: sessionTarget "main" is only valid for the default agent',
-    );
+    expect(() => createJob(state, mainJobInput("custom-agent"))).not.toThrow();
   });
 
   it("allows isolated session job for non-default agents", () => {
@@ -438,7 +452,7 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
   });
 });
 
-describe("applyJobPatch rejects sessionTarget main for non-default agents", () => {
+describe("applyJobPatch allows sessionTarget main for non-default agents", () => {
   const now = Date.now();
 
   const createMainJob = (agentId?: string): CronJob => ({
@@ -455,13 +469,13 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
     agentId,
   });
 
-  it("rejects patching agentId to non-default on a main-session job", () => {
+  it("allows patching agentId to non-default on a main-session job", () => {
     const job = createMainJob();
     expect(() =>
       applyJobPatch(job, { agentId: "custom-agent" } as CronJobPatch, {
         defaultAgentId: "main",
       }),
-    ).toThrow('cron: sessionTarget "main" is only valid for the default agent');
+    ).not.toThrow();
   });
 
   it("allows patching agentId to the default agent on a main-session job", () => {
@@ -556,6 +570,25 @@ describe("cron stagger defaults", () => {
     if (job.schedule.kind === "cron") {
       expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+});
+
+describe("resolveJobPayloadTextForMain", () => {
+  it("returns trimmed agentTurn text for main-session cron execution", () => {
+    const text = resolveJobPayloadTextForMain({
+      id: "job-main-text",
+      name: "job-main-text",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "  do the thing  " },
+      state: {},
+    } as CronJob);
+
+    expect(text).toBe("do the thing");
   });
 });
 

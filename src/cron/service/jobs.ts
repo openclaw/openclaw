@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -132,8 +131,11 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
+  if (job.sessionTarget === "main") {
+    if (job.payload.kind !== "systemEvent" && job.payload.kind !== "agentTurn") {
+      throw new Error('main cron jobs require payload.kind="systemEvent" or "agentTurn"');
+    }
+    return;
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
@@ -142,21 +144,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
 
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
-  defaultAgentId: string | undefined,
+  _defaultAgentId: string | undefined,
 ) {
   if (job.sessionTarget !== "main") {
     return;
   }
-  if (!job.agentId) {
-    return;
-  }
-  const normalized = normalizeAgentId(job.agentId);
-  const normalizedDefault = normalizeAgentId(defaultAgentId);
-  if (normalized !== normalizedDefault) {
-    throw new Error(
-      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
-    );
-  }
+  return;
 }
 
 const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
@@ -892,9 +885,13 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
-    return undefined;
+  if (job.payload.kind === "systemEvent") {
+    const text = normalizePayloadToSystemText(job.payload);
+    return text.trim() ? text : undefined;
   }
-  const text = normalizePayloadToSystemText(job.payload);
-  return text.trim() ? text : undefined;
+  if (job.payload.kind === "agentTurn") {
+    const text = job.payload.message?.trim() ?? "";
+    return text ? text : undefined;
+  }
+  return undefined;
 }
