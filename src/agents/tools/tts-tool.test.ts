@@ -39,8 +39,48 @@ describe("createTtsTool", () => {
       ok: true,
       deliveryMode: "return",
       audioPath: "/tmp/openclaw/tts-test/voice.mp3",
+      mimeType: "audio/mpeg",
       sent: false,
     });
+  });
+
+  it("uses audio/ogg mimeType for voice-compatible return output", async () => {
+    textToSpeechMock.mockResolvedValueOnce({
+      success: true,
+      audioPath: "/tmp/openclaw/tts-test/voice.opus",
+      provider: "openai",
+      voiceCompatible: true,
+    });
+    const tool = createTtsTool();
+
+    const result = await tool.execute("call-voice", {
+      text: "hello",
+      channel: "telegram",
+      deliveryMode: "return",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      deliveryMode: "return",
+      mimeType: "audio/ogg",
+    });
+  });
+
+  it("includes ok=true in send mode success details", async () => {
+    textToSpeechMock.mockResolvedValueOnce({
+      success: true,
+      audioPath: "/tmp/openclaw/tts-test/voice.mp3",
+      provider: "openai",
+      voiceCompatible: false,
+    });
+    const tool = createTtsTool();
+
+    const result = await tool.execute("call-send", {
+      text: "hello",
+      deliveryMode: "send",
+    });
+
+    expect(result.details).toMatchObject({ ok: true, deliveryMode: "send" });
   });
 
   it("returns validation error for invalid deliveryMode", async () => {

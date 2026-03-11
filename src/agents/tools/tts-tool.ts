@@ -72,7 +72,7 @@ export function createTtsTool(opts?: {
               ok: true,
               deliveryMode: "return",
               audioPath: result.audioPath,
-              mimeType: "audio/mpeg",
+              mimeType: result.voiceCompatible ? "audio/ogg" : "audio/mpeg",
               sent: false,
               provider: result.provider,
             },
@@ -87,7 +87,12 @@ export function createTtsTool(opts?: {
         lines.push(`MEDIA:${result.audioPath}`);
         return {
           content: [{ type: "text", text: lines.join("\n") }],
-          details: { audioPath: result.audioPath, provider: result.provider, deliveryMode: "send" },
+          details: {
+            ok: true,
+            audioPath: result.audioPath,
+            provider: result.provider,
+            deliveryMode: "send",
+          },
         };
       }
 
