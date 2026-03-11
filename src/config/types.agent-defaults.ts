@@ -348,6 +348,8 @@ export type AgentDefaultsConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
   };
+  /** Additional workspace file names allowed for agents.files.get/set (beyond built-in bootstrap and memory files). */
+  extraWorkspaceFiles?: string[];
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };
