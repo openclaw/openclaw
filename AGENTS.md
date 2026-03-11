@@ -6,8 +6,39 @@
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
 - PR landing comments: always make commit SHAs clickable with full commit links (both landed SHA + source SHA when present).
+- PR review conversations: if a bot leaves review conversations on your PR, address them and resolve those conversations yourself once fixed. Leave a conversation unresolved only when reviewer or maintainer judgment is still needed; do not leave bot-conversation cleanup to maintainers.
 - GitHub searching footgun: don't limit yourself to the first 500 issues or PRs when wanting to search all. Unless you're supposed to look at the most recent, keep going until you've reached the last page in the search
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
+
+## Auto-close labels (issues and PRs)
+
+- If an issue/PR matches one of the reasons below, apply the label and let `.github/workflows/auto-response.yml` handle comment/close/lock.
+- Do not manually close + manually comment for these reasons.
+- Why: keeps wording consistent, preserves automation behavior (`state_reason`, locking), and keeps triage/reporting searchable by label.
+- `r:*` labels can be used on both issues and PRs.
+
+- `r: skill`: close with guidance to publish skills on Clawhub.
+- `r: support`: close with redirect to Discord support + stuck FAQ.
+- `r: no-ci-pr`: close test-fix-only PRs for failing `main` CI and post the standard explanation.
+- `r: too-many-prs`: close when author exceeds active PR limit.
+- `r: testflight`: close requests asking for TestFlight access/builds. OpenClaw does not provide TestFlight distribution yet, so use the standard response (“Not available, build from source.”) instead of ad-hoc replies.
+- `r: third-party-extension`: close with guidance to ship as third-party plugin.
+- `r: moltbook`: close + lock as off-topic (not affiliated).
+- `r: spam`: close + lock as spam (`lock_reason: spam`).
+- `invalid`: close invalid items (issues are closed as `not_planned`; PRs are closed).
+- `dirty`: close PRs with too many unrelated/unexpected changes (PR-only label).
+
+## PR truthfulness and bug-fix validation
+
+- Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.
+- Before `/landpr`, run `/reviewpr` and require explicit evidence for bug-fix claims.
+- Minimum merge gate for bug-fix PRs:
+  1. symptom evidence (repro/log/failing test),
+  2. verified root cause in code with file/line,
+  3. fix touches the implicated code path,
+  4. regression test (fail before/pass after) when feasible; if not feasible, include manual verification proof and why no test was added.
+- If claim is unsubstantiated or likely hallucinated/BS: do not merge. Request evidence/changes, or close with `invalid` when appropriate.
+- If linked issue appears wrong/outdated, correct triage first; do not merge speculative fixes.
 
 ## Project Structure & Module Organization
 
@@ -28,6 +59,7 @@
 - Docs are hosted on Mintlify (docs.openclaw.ai).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - When working with documentation, read the mintlify skill.
+- For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime behavior (for example auto-detection or execution order).
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - Doc headings and anchors: avoid em dashes and apostrophes in headings because they break Mintlify anchor links.
 - When Peter asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
@@ -113,6 +145,7 @@
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
+- `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.

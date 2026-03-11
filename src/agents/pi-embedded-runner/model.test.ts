@@ -180,7 +180,7 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toBeUndefined();
   });
 
-  it("preserves literal marker-shaped headers in inline provider models", () => {
+  it("drops SecretRef marker headers in inline provider models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         headers: {
@@ -196,8 +196,6 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Static": "tenant-a",
     });
   });
@@ -245,7 +243,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("preserves literal marker-shaped provider headers in fallback models", () => {
+  it("drops SecretRef marker provider headers in fallback models", () => {
     const cfg = {
       models: {
         providers: {
@@ -266,8 +264,6 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Custom-Auth": "token-123",
     });
   });
@@ -518,6 +514,54 @@ describe("resolveModel", () => {
     });
   });
 
+  it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("keeps proxied openai completions transport untouched", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+    });
+  });
+
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
     mockDiscoveredModel({
       provider: "anthropic",
@@ -633,6 +677,86 @@ describe("resolveModel", () => {
       expectedModel: {
         api: "openai-codex-responses",
         id: "gpt-5.3-codex",
+        provider: "openai-codex",
+      },
+    });
+  });
+
+  it("uses codex fallback when inline model omits api (#39682)", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+            headers: { "X-Custom-Auth": "token-123" },
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://custom.example.com",
+      headers: { "X-Custom-Auth": "token-123" },
+      id: "gpt-5.4",
+      provider: "openai-codex",
+    });
+  });
+
+  it("normalizes openai-codex gpt-5.4 overrides away from /v1/responses", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.4",
+        provider: "openai-codex",
+      },
+    });
+  });
+
+  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
         provider: "openai-codex",
       },
     });

@@ -15,17 +15,17 @@ struct CronJobEditorSmokeTests {
             onSave: { _ in })
     }
 
-    @Test func statusPillBuildsBody() {
+    @Test func `status pill builds body`() {
         _ = StatusPill(text: "ok", tint: .green).body
         _ = StatusPill(text: "disabled", tint: .secondary).body
     }
 
-    @Test func cronJobEditorBuildsBodyForNewJob() {
+    @Test func `cron job editor builds body for new job`() {
         let view = self.makeEditor()
         _ = view.body
     }
 
-    @Test func cronJobEditorBuildsBodyForExistingJob() {
+    @Test func `cron job editor builds body for existing job`() {
         let channelsStore = ChannelsStore(isPreview: true)
         let job = CronJob(
             id: "job-1",
@@ -60,12 +60,12 @@ struct CronJobEditorSmokeTests {
         _ = view.body
     }
 
-    @Test func cronJobEditorExercisesBuilders() {
+    @Test func `cron job editor exercises builders`() {
         var view = self.makeEditor()
         view.exerciseForTesting()
     }
 
-    @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() {
+    @Test func `cron job editor includes delete after run for at schedule`() {
         let view = self.makeEditor()
 
         var root: [String: Any] = [:]
