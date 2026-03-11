@@ -6,7 +6,6 @@ import { inspectTelegramAccount } from "../../../telegram/account-inspect.js";
 import {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
 } from "../../../telegram/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
@@ -72,11 +71,11 @@ async function promptTelegramAllowFrom(params: {
   tokenOverride?: string;
 }): Promise<OpenClawConfig> {
   const { cfg, prompter, accountId } = params;
-  const resolved = resolveTelegramAccount({ cfg, accountId });
-  const existingAllowFrom = resolved.config.allowFrom ?? [];
+  const inspected = inspectTelegramAccount({ cfg, accountId });
+  const existingAllowFrom = inspected.config.allowFrom ?? [];
   await noteTelegramUserIdHelp(prompter);
 
-  const token = params.tokenOverride?.trim() || resolved.token;
+  const token = params.tokenOverride?.trim() || inspected.token;
   if (!token) {
     await prompter.note("Telegram token missing; username lookup is unavailable.", "Telegram");
   }
@@ -185,13 +184,14 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
     });
 
     let next = cfg;
-    const resolvedAccount = resolveTelegramAccount({
+    const inspectedAccount = inspectTelegramAccount({
       cfg: next,
       accountId: telegramAccountId,
     });
-    const hasConfiguredBotToken = hasConfiguredSecretInput(resolvedAccount.config.botToken);
+    const hasConfiguredBotToken = hasConfiguredSecretInput(inspectedAccount.config.botToken);
     const hasConfigToken =
-      hasConfiguredBotToken || Boolean(resolvedAccount.config.tokenFile?.trim());
+      hasConfiguredBotToken || Boolean(inspectedAccount.config.tokenFile?.trim());
+    const accountConfigured = inspectedAccount.configured;
     const allowEnv = telegramAccountId === DEFAULT_ACCOUNT_ID;
     const tokenStep = await runSingleChannelSecretStep({
       cfg: next,
@@ -199,7 +199,7 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
       providerHint: "telegram",
       credentialLabel: "Telegram bot token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured: Boolean(resolvedAccount.token) || hasConfigToken,
+      accountConfigured,
       hasConfigToken,
       allowEnv,
       envValue: process.env.TELEGRAM_BOT_TOKEN,
