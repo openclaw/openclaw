@@ -712,6 +712,13 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
+export const DmScopeSchema = z.union([
+  z.literal("main"),
+  z.literal("per-peer"),
+  z.literal("per-channel-peer"),
+  z.literal("per-account-channel-peer"),
+]);
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -744,14 +751,7 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
-    dmScope: z
-      .union([
-        z.literal("main"),
-        z.literal("per-peer"),
-        z.literal("per-channel-peer"),
-        z.literal("per-account-channel-peer"),
-      ])
-      .optional(),
+    dmScope: DmScopeSchema.optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
