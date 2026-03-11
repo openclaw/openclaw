@@ -700,29 +700,85 @@ has_sufficient_swap() {
     [[ "$swap_free_kb" -ge 1048576 ]]  # At least 1GB free swap
 }
 
+can_attempt_swap_creation() {
+    if is_root; then
+        return 0
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        ui_warn "sudo is unavailable; skipping automatic swap setup"
+        return 1
+    fi
+
+    if ! sudo -n true >/dev/null 2>&1; then
+        ui_info "Administrator privileges required to create swap; enter your password"
+        if ! sudo -v; then
+            ui_warn "Could not obtain sudo credentials; skipping automatic swap setup"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+swapfile_is_enabled() {
+    local swap_file="$1"
+    [[ -r /proc/swaps ]] || return 1
+    awk 'NR>1 {print $1}' /proc/swaps 2>/dev/null | grep -Fxq "$swap_file"
+}
+
+has_swapfile_disk_headroom() {
+    local swap_size_mb="$1"
+    local have_kb need_kb
+
+    have_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')"
+    if [[ ! "$have_kb" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    need_kb=$(( (swap_size_mb + 512) * 1024 ))
+    [[ "$have_kb" -ge "$need_kb" ]]
+}
+
 create_swap_file() {
     if [[ "$OS" != "linux" ]]; then
         return 1
     fi
 
-    require_sudo
     local swap_file="/swapfile-openclaw"
     local swap_size_mb=2048  # 2GB swap
 
-    ui_info "Creating ${swap_size_mb}MB swap file to improve npm install stability"
-    
-    if is_root; then
-        dd if=/dev/zero of="$swap_file" bs=1M count="$swap_size_mb" status=none 2>/dev/null || return 1
-        chmod 600 "$swap_file" || return 1
-        mkswap "$swap_file" >/dev/null 2>&1 || return 1
-        swapon "$swap_file" || return 1
-    else
-        sudo dd if=/dev/zero of="$swap_file" bs=1M count="$swap_size_mb" status=none 2>/dev/null || return 1
-        sudo chmod 600 "$swap_file" || return 1
-        sudo mkswap "$swap_file" >/dev/null 2>&1 || return 1
-        sudo swapon "$swap_file" || return 1
+    if ! can_attempt_swap_creation; then
+        return 1
     fi
-    
+
+    if swapfile_is_enabled "$swap_file"; then
+        ui_info "Swap file already enabled: ${swap_file}"
+        return 0
+    fi
+
+    if maybe_sudo test -L "$swap_file"; then
+        ui_warn "Refusing to use ${swap_file}: path is a symlink"
+        return 1
+    fi
+
+    if maybe_sudo test -e "$swap_file"; then
+        ui_warn "Swap file already exists at ${swap_file}; not overwriting automatically"
+        return 1
+    fi
+
+    if ! has_swapfile_disk_headroom "$swap_size_mb"; then
+        ui_warn "Not enough free disk space for ${swap_size_mb}MB swap (+512MB headroom)"
+        return 1
+    fi
+
+    ui_info "Creating ${swap_size_mb}MB swap file to improve npm install stability"
+
+    maybe_sudo dd if=/dev/zero of="$swap_file" bs=1M count="$swap_size_mb" oflag=excl status=none 2>/dev/null || return 1
+    maybe_sudo chmod 600 "$swap_file" || return 1
+    maybe_sudo mkswap "$swap_file" >/dev/null 2>&1 || return 1
+    maybe_sudo swapon "$swap_file" || return 1
+
     ui_success "Swap file created and enabled"
     return 0
 }
@@ -912,13 +968,12 @@ install_openclaw_npm() {
                         return 0
                     fi
                 else
-                    ui_error "Failed to create swap file"
+                    ui_warn "Automatic swap setup failed or was skipped"
                     ui_info "Manual workaround: create swap before retrying installer"
                     echo "  sudo fallocate -l 2G /swapfile"
                     echo "  sudo chmod 600 /swapfile"
                     echo "  sudo mkswap /swapfile"
                     echo "  sudo swapon /swapfile"
-                    return 1
                 fi
             else
                 ui_error "npm install failed due to insufficient memory"
