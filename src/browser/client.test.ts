@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CHROME_LAUNCH_READY_WINDOW_MS } from "./cdp-timeouts.js";
 import {
   browserAct,
   browserArmDialog,
@@ -8,7 +9,15 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  BROWSER_START_TIMEOUT_MS,
+  browserOpenTab,
+  browserSnapshot,
+  browserStart,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
+import { CDP_READY_AFTER_LAUNCH_WINDOW_MS } from "./server-context.constants.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -31,6 +40,7 @@ describe("browser client", () => {
   }
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -50,6 +60,45 @@ describe("browser client", () => {
   it("adds useful timeout messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+  });
+
+  it("keeps browser start timeout ahead of the synchronous server launch budget (#3941)", async () => {
+    expect(BROWSER_START_TIMEOUT_MS).toBeGreaterThan(
+      CHROME_LAUNCH_READY_WINDOW_MS + CDP_READY_AFTER_LAUNCH_WINDOW_MS,
+    );
+
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              return;
+            }
+            if (signal.aborted) {
+              reject(signal.reason ?? new Error("aborted"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), {
+              once: true,
+            });
+          }),
+      ),
+    );
+
+    let settled = false;
+    const promise = browserStart("http://127.0.0.1:18791").finally(() => {
+      settled = true;
+    });
+    const rejected = expect(promise).rejects.toThrow(new RegExp(`${BROWSER_START_TIMEOUT_MS}ms`));
+
+    await vi.advanceTimersByTimeAsync(BROWSER_START_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
   });
 
   it("surfaces non-2xx responses with body text", async () => {

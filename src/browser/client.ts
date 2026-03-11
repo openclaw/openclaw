@@ -1,4 +1,6 @@
+import { CHROME_LAUNCH_READY_WINDOW_MS } from "./cdp-timeouts.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+import { CDP_READY_AFTER_LAUNCH_WINDOW_MS } from "./server-context.constants.js";
 
 export type BrowserStatus = {
   enabled: boolean;
@@ -100,6 +102,12 @@ function withBaseUrl(baseUrl: string | undefined, path: string): string {
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
+// /start waits synchronously for managed Chrome launch + post-launch CDP readiness.
+// Keep the client timeout ahead of that combined server-side window so the request
+// does not abort first on slower Linux hosts.
+export const BROWSER_START_TIMEOUT_MS =
+  CHROME_LAUNCH_READY_WINDOW_MS + CDP_READY_AFTER_LAUNCH_WINDOW_MS + 7000;
+
 export async function browserStatus(
   baseUrl?: string,
   opts?: { profile?: string },
@@ -124,7 +132,7 @@ export async function browserStart(baseUrl?: string, opts?: { profile?: string }
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: BROWSER_START_TIMEOUT_MS,
   });
 }
 
