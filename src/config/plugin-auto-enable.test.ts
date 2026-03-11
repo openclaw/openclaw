@@ -246,6 +246,42 @@ describe("applyPluginAutoEnable", () => {
       expect(result.changes).toEqual([]);
     });
 
+    it("resolves prefixed plugin id when manifest channel differs from plugin id", () => {
+      // Covers external plugins where the plugin id has a vendor prefix
+      // (e.g. "openclaw-foo" declares channels: ["foo"]).
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { foo: { credentials: { clientId: "x" } } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "openclaw-foo", channels: ["foo"] }]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-foo"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["foo"]).toBeUndefined();
+      expect(result.changes.join("\n")).toContain("foo configured, enabled automatically.");
+    });
+
+    it("resolves plugin id from config when manifest registry has no entry", () => {
+      // When the plugin is recorded in plugins.installs but the manifest
+      // registry is empty (e.g. extensions dir not yet scanned), the
+      // config-based fallback should still resolve the correct plugin id.
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { foo: { credentials: { clientId: "x" } } },
+          plugins: {
+            installs: { "openclaw-foo": { source: "archive" } },
+            allow: ["openclaw-foo"],
+          },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-foo"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["foo"]).toBeUndefined();
+    });
+
     it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
       // Without a matching manifest entry, behavior is unchanged (backward compat).
       const result = applyPluginAutoEnable({
