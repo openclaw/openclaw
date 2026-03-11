@@ -597,7 +597,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
-    state.successfulCronAdds = 0;
+    // Preserve successfulCronAdds across compaction so the reminder guard
+    // does not fire a false positive after a mid-turn compaction retry.
     state.pendingMessagingMediaUrls.clear();
     state.deterministicApprovalPromptSent = false;
     resetAssistantMessageState(0);
