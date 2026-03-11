@@ -135,13 +135,15 @@ describe("extractUserMessagesFromTranscript", () => {
 
 describe("resolveHandoffPath", () => {
   test("creates a safe filename from session key", () => {
-    const result = resolveHandoffPath("/tmp/sessions", "telegram:381198032");
-    expect(result).toBe("/tmp/sessions/handoff-telegram_381198032.json");
+    const sessionsDir = path.join(os.tmpdir(), "sessions");
+    const result = resolveHandoffPath(sessionsDir, "telegram:381198032");
+    expect(result).toBe(path.join(sessionsDir, "handoff-telegram_381198032.json"));
   });
 
   test("handles complex session keys", () => {
-    const result = resolveHandoffPath("/tmp/sessions", "agent:main:group:-1003833119217");
-    expect(result).toBe("/tmp/sessions/handoff-agent_main_group_-1003833119217.json");
+    const sessionsDir = path.join(os.tmpdir(), "sessions");
+    const result = resolveHandoffPath(sessionsDir, "agent:main:group:-1003833119217");
+    expect(result).toBe(path.join(sessionsDir, "handoff-agent_main_group_-1003833119217.json"));
   });
 });
 

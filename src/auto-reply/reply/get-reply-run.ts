@@ -43,7 +43,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { buildHandoffAwareResetPrompt } from "./session-reset-prompt.js";
+import { buildBareSessionResetPrompt, consumeHandoffAsSystemPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -267,11 +267,18 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
+  // On the first turn of a session, check for a pending model-change handoff and
+  // inject user context as a system prompt section.  This covers normal user messages
+  // after a model change (where isBareSessionReset would be false) so the new model
+  // always receives the handoff notice on its very first reply.
+  const handoffSystemPrompt =
+    isFirstTurnInSession ? consumeHandoffAsSystemPrompt({ storePath, sessionKey }) : null;
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    handoffSystemPrompt,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
@@ -290,13 +297,7 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset
-    ? buildHandoffAwareResetPrompt({
-        cfg,
-        storePath,
-        sessionKey,
-      })
-    : baseBody;
+  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {

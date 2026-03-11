@@ -802,10 +802,13 @@ export async function archiveAndHandoffOnModelChange(params: {
         : path.join(sessionsDir, `${entry.sessionId}.jsonl`);
 
       if (!fs.existsSync(transcriptPath)) {
-        // No transcript to archive — just clear model fields
-        if (entry.model || entry.modelProvider) {
+        // No transcript to archive — just clear stale model fields so the
+        // session picks up the new default model on its next turn.
+        if (entry.model || entry.modelProvider || entry.contextTokens) {
           delete entry.model;
           delete entry.modelProvider;
+          delete entry.contextTokens;
+          archived++; // count as "touched" so the store is saved below
         }
         continue;
       }

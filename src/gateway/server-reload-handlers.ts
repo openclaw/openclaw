@@ -135,8 +135,12 @@ export function createGatewayReloadHandlers(params: {
               const storePath = resolveStorePath(nextConfig.session?.store, { agentId });
               const cleared = await clearSessionModelFields(storePath);
               totalCleared += cleared;
-            } catch {
-              // best-effort
+            } catch (fallbackErr) {
+              if ((fallbackErr as NodeJS.ErrnoException).code !== "ENOENT") {
+                params.logReload.warn(
+                  `fallback clearSessionModelFields also failed for agent ${agentId}: ${String(fallbackErr)}`,
+                );
+              }
             }
             params.logReload.warn(
               `failed to archive/handoff sessions for agent ${agentId}: ${String(err)}`,

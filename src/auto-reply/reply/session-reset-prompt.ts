@@ -23,35 +23,31 @@ export function buildBareSessionResetPrompt(cfg?: OpenClawConfig, nowMs?: number
 }
 
 /**
- * Build a session reset prompt that includes model handoff context if available.
- * When a model change triggered a session reset, the handoff file contains recent
- * user messages (only user-authored, no assistant patterns) that help the new model
- * understand what the user was working on without inheriting behavioral patterns.
+ * Consume a pending model-change handoff and return its content as a system
+ * prompt section, or null if no handoff exists for this session.
+ *
+ * Called on the first turn of every new session so the new model always
+ * receives handoff context — even when the user sends a normal message rather
+ * than /new or /reset.  The handoff file is deleted after the first read
+ * so subsequent turns are not affected.
  */
-export function buildHandoffAwareResetPrompt(params: {
-  cfg?: OpenClawConfig;
+export function consumeHandoffAsSystemPrompt(params: {
   storePath?: string;
   sessionKey?: string;
-  nowMs?: number;
-}): string {
-  const basePrompt = buildBareSessionResetPrompt(params.cfg, params.nowMs);
-
+}): string | null {
   if (!params.storePath || !params.sessionKey) {
-    return basePrompt;
+    return null;
   }
 
   try {
     const sessionsDir = path.dirname(params.storePath);
     const handoff = consumeModelHandoff(sessionsDir, params.sessionKey);
     if (!handoff || handoff.recentUserMessages.length === 0) {
-      return basePrompt;
+      return null;
     }
-
-    const handoffSection = buildHandoffPromptSection(handoff);
-    return `${basePrompt}\n\n${handoffSection}`;
+    return buildHandoffPromptSection(handoff);
   } catch {
-    // If handoff resolution fails, fall back to the bare prompt.
-    return basePrompt;
+    return null;
   }
 }
 
