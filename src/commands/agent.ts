@@ -140,32 +140,17 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: {
-  body: string;
-  isFallbackRetry: boolean;
-  previousFailureReason?: FailoverReason;
-}): string {
-  // Fallback retries only fire on thrown errors (not partial streaming results),
-  // so the original prompt is always safe to re-send. The orphaned-user-message
-  // repair in attempt.ts handles any residual duplicate user turns.
-  return params.body;
-}
-
-function resolveRetryImages(params: {
-  images: AgentCommandOpts["images"];
-  isFallbackRetry: boolean;
-  previousFailureReason?: FailoverReason;
-}): AgentCommandOpts["images"] {
-  if (!params.isFallbackRetry) {
-    return params.images;
-  }
+function resolveRetryImages(
+  images: AgentCommandOpts["images"],
+  isFallbackRetry: boolean,
+  previousFailureReason?: FailoverReason,
+): AgentCommandOpts["images"] {
   // Format errors may be caused by image payloads the fallback model
   // doesn't support — strip as a safety measure.
-  if (params.previousFailureReason === "format") {
+  if (isFallbackRetry && previousFailureReason === "format") {
     return undefined;
   }
-  // All other reasons: model never processed or rejected the images.
-  return params.images;
+  return images;
 }
 
 function prependInternalEventContext(
@@ -368,11 +353,10 @@ function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   previousFailureReason?: FailoverReason;
 }) {
-  const effectivePrompt = resolveFallbackRetryPrompt({
-    body: params.body,
-    isFallbackRetry: params.isFallbackRetry,
-    previousFailureReason: params.previousFailureReason,
-  });
+  // Fallback retries only fire on thrown errors (not partial streaming results),
+  // so the original prompt is always safe to re-send. The orphaned-user-message
+  // repair in attempt.ts handles any residual duplicate user turns.
+  const effectivePrompt = params.body;
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
@@ -398,11 +382,11 @@ function runAgentAttempt(params: {
         cliSessionId: nextCliSessionId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        images: resolveRetryImages({
-          images: params.opts.images,
-          isFallbackRetry: params.isFallbackRetry,
-          previousFailureReason: params.previousFailureReason,
-        }),
+        images: resolveRetryImages(
+          params.opts.images,
+          params.isFallbackRetry,
+          params.previousFailureReason,
+        ),
         streamParams: params.opts.streamParams,
       });
     return runCliWithSession(cliSessionId).catch(async (err) => {
@@ -506,11 +490,11 @@ function runAgentAttempt(params: {
     config: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: resolveRetryImages({
-      images: params.opts.images,
-      isFallbackRetry: params.isFallbackRetry,
-      previousFailureReason: params.previousFailureReason,
-    }),
+    images: resolveRetryImages(
+      params.opts.images,
+      params.isFallbackRetry,
+      params.previousFailureReason,
+    ),
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
@@ -1140,6 +1124,8 @@ async function agentCommandInternal(
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride, runOptions) => {
+          // TODO: isFallbackRetry is derivable from `runOptions?.previousFailureReason !== undefined`;
+          // consider removing it in a future cleanup pass.
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -1290,4 +1276,4 @@ export async function agentCommandFromIngress(
 }
 
 /** @internal – exposed for unit tests only */
-export const _testInternals = { resolveFallbackRetryPrompt, resolveRetryImages } as const;
+export const _testInternals = { resolveRetryImages } as const;
