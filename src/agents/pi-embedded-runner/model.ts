@@ -93,12 +93,18 @@ function applyConfiguredProviderOverrides(params: {
       headers: discoveredHeaders,
     };
   }
+  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
+  const normalizedInput =
+    Array.isArray(resolvedInput) && resolvedInput.length > 0
+      ? resolvedInput.filter((item) => item === "text" || item === "image")
+      : (["text"] as Array<"text" | "image">);
+
   return {
     ...discoveredModel,
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: configuredModel?.input ?? discoveredModel.input,
+    input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
