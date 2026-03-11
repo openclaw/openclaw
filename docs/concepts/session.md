@@ -77,7 +77,7 @@ OpenClaw applies session-store maintenance to keep `sessions.json` and transcrip
 
 ### Defaults
 
-- `session.maintenance.mode`: `warn`
+- `session.maintenance.mode`: `enforce`
 - `session.maintenance.pruneAfter`: `30d`
 - `session.maintenance.maxEntries`: `500`
 - `session.maintenance.rotateBytes`: `10mb`
