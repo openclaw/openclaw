@@ -472,9 +472,6 @@ async function inspectManualRunPreflight(
       }
     }
 
-    // Normalize job tick state (clears stale runningAtMs markers) before
-    // checking if already running, so a stale marker from a crashed Phase-1
-    // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
@@ -522,16 +519,12 @@ async function prepareManualRun(
     } as const;
   }
   return await locked(state, async () => {
-    // Reserve this run under lock, then execute outside lock so read ops
-    // (`list`, `status`) stay responsive while the run is in progress.
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     job.state.runningAtMs = preflight.now;
     job.state.lastError = undefined;
-    // Persist the running marker before releasing lock so timer ticks that
-    // force-reload from disk cannot start the same job concurrently.
     await persist(state);
     emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
     const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
