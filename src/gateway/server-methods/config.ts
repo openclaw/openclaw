@@ -31,6 +31,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -53,6 +54,8 @@ import { resolveBaseHashParam } from "./base-hash.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const CONFIG_WRITE_LANE = "config-write";
 
 function requireConfigBaseHash(
   params: unknown,
@@ -308,208 +311,214 @@ export const configHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "config.set": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
-      return;
-    }
-    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-    if (!requireConfigBaseHash(params, snapshot, respond)) {
-      return;
-    }
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
-    if (!parsed) {
-      return;
-    }
-    await writeConfigFile(parsed.config, writeOptions);
-    respond(
-      true,
-      {
-        ok: true,
-        path: createConfigIO().configPath,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
-      },
-      undefined,
-    );
+    await enqueueCommandInLane(CONFIG_WRITE_LANE, async () => {
+      if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
+        return;
+      }
+      const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+      if (!requireConfigBaseHash(params, snapshot, respond)) {
+        return;
+      }
+      const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
+      if (!parsed) {
+        return;
+      }
+      await writeConfigFile(parsed.config, writeOptions);
+      respond(
+        true,
+        {
+          ok: true,
+          path: createConfigIO().configPath,
+          config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        },
+        undefined,
+      );
+    });
   },
   "config.patch": async ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
-      return;
-    }
-    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-    if (!requireConfigBaseHash(params, snapshot, respond)) {
-      return;
-    }
-    if (!snapshot.valid) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config; fix before patching"),
+    await enqueueCommandInLane(CONFIG_WRITE_LANE, async () => {
+      if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
+        return;
+      }
+      const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+      if (!requireConfigBaseHash(params, snapshot, respond)) {
+        return;
+      }
+      if (!snapshot.valid) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid config; fix before patching"),
+        );
+        return;
+      }
+      const rawValue = (params as { raw?: unknown }).raw;
+      if (typeof rawValue !== "string") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "invalid config.patch params: raw (string) required",
+          ),
+        );
+        return;
+      }
+      const parsedRes = parseConfigJson5(rawValue);
+      if (!parsedRes.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
+        return;
+      }
+      if (
+        !parsedRes.parsed ||
+        typeof parsedRes.parsed !== "object" ||
+        Array.isArray(parsedRes.parsed)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object"),
+        );
+        return;
+      }
+      const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+        mergeObjectArraysById: true,
+      });
+      const schemaPatch = loadSchemaWithPlugins();
+      const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
+      if (!restoredMerge.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            restoredMerge.humanReadableMessage ?? "invalid config",
+          ),
+        );
+        return;
+      }
+      const migrated = applyLegacyMigrations(restoredMerge.result);
+      const resolved = migrated.next ?? restoredMerge.result;
+      const validated = validateConfigObjectWithPlugins(resolved);
+      if (!validated.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
+            details: { issues: validated.issues },
+          }),
+        );
+        return;
+      }
+      const changedPaths = diffConfigPaths(snapshot.config, validated.config);
+      const actor = resolveControlPlaneActor(client);
+      context?.logGateway?.info(
+        `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
       );
-      return;
-    }
-    const rawValue = (params as { raw?: unknown }).raw;
-    if (typeof rawValue !== "string") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid config.patch params: raw (string) required",
-        ),
-      );
-      return;
-    }
-    const parsedRes = parseConfigJson5(rawValue);
-    if (!parsedRes.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
-      return;
-    }
-    if (
-      !parsedRes.parsed ||
-      typeof parsedRes.parsed !== "object" ||
-      Array.isArray(parsedRes.parsed)
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object"),
-      );
-      return;
-    }
-    const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
-      mergeObjectArraysById: true,
-    });
-    const schemaPatch = loadSchemaWithPlugins();
-    const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
-    if (!restoredMerge.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          restoredMerge.humanReadableMessage ?? "invalid config",
-        ),
-      );
-      return;
-    }
-    const migrated = applyLegacyMigrations(restoredMerge.result);
-    const resolved = migrated.next ?? restoredMerge.result;
-    const validated = validateConfigObjectWithPlugins(resolved);
-    if (!validated.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
-          details: { issues: validated.issues },
-        }),
-      );
-      return;
-    }
-    const changedPaths = diffConfigPaths(snapshot.config, validated.config);
-    const actor = resolveControlPlaneActor(client);
-    context?.logGateway?.info(
-      `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
-    );
-    await writeConfigFile(validated.config, writeOptions);
+      await writeConfigFile(validated.config, writeOptions);
 
-    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-      resolveConfigRestartRequest(params);
-    const payload = buildConfigRestartSentinelPayload({
-      kind: "config-patch",
-      mode: "config.patch",
-      sessionKey,
-      deliveryContext,
-      threadId,
-      note,
-    });
-    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.patch",
-      audit: {
-        actor: actor.actor,
-        deviceId: actor.deviceId,
-        clientIp: actor.clientIp,
-        changedPaths,
-      },
-    });
-    if (restart.coalesced) {
-      context?.logGateway?.warn(
-        `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
-      );
-    }
-    respond(
-      true,
-      {
-        ok: true,
-        path: createConfigIO().configPath,
-        config: redactConfigObject(validated.config, schemaPatch.uiHints),
-        restart,
-        sentinel: {
-          path: sentinelPath,
-          payload,
+      const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+        resolveConfigRestartRequest(params);
+      const payload = buildConfigRestartSentinelPayload({
+        kind: "config-patch",
+        mode: "config.patch",
+        sessionKey,
+        deliveryContext,
+        threadId,
+        note,
+      });
+      const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+      const restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "config.patch",
+        audit: {
+          actor: actor.actor,
+          deviceId: actor.deviceId,
+          clientIp: actor.clientIp,
+          changedPaths,
         },
-      },
-      undefined,
-    );
+      });
+      if (restart.coalesced) {
+        context?.logGateway?.warn(
+          `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+        );
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          path: createConfigIO().configPath,
+          config: redactConfigObject(validated.config, schemaPatch.uiHints),
+          restart,
+          sentinel: {
+            path: sentinelPath,
+            payload,
+          },
+        },
+        undefined,
+      );
+    });
   },
   "config.apply": async ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
-      return;
-    }
-    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-    if (!requireConfigBaseHash(params, snapshot, respond)) {
-      return;
-    }
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
-    if (!parsed) {
-      return;
-    }
-    const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
-    const actor = resolveControlPlaneActor(client);
-    context?.logGateway?.info(
-      `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
-    );
-    await writeConfigFile(parsed.config, writeOptions);
-
-    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-      resolveConfigRestartRequest(params);
-    const payload = buildConfigRestartSentinelPayload({
-      kind: "config-apply",
-      mode: "config.apply",
-      sessionKey,
-      deliveryContext,
-      threadId,
-      note,
-    });
-    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.apply",
-      audit: {
-        actor: actor.actor,
-        deviceId: actor.deviceId,
-        clientIp: actor.clientIp,
-        changedPaths,
-      },
-    });
-    if (restart.coalesced) {
-      context?.logGateway?.warn(
-        `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+    await enqueueCommandInLane(CONFIG_WRITE_LANE, async () => {
+      if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
+        return;
+      }
+      const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+      if (!requireConfigBaseHash(params, snapshot, respond)) {
+        return;
+      }
+      const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
+      if (!parsed) {
+        return;
+      }
+      const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+      const actor = resolveControlPlaneActor(client);
+      context?.logGateway?.info(
+        `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
       );
-    }
-    respond(
-      true,
-      {
-        ok: true,
-        path: createConfigIO().configPath,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
-        restart,
-        sentinel: {
-          path: sentinelPath,
-          payload,
+      await writeConfigFile(parsed.config, writeOptions);
+
+      const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+        resolveConfigRestartRequest(params);
+      const payload = buildConfigRestartSentinelPayload({
+        kind: "config-apply",
+        mode: "config.apply",
+        sessionKey,
+        deliveryContext,
+        threadId,
+        note,
+      });
+      const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+      const restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: "config.apply",
+        audit: {
+          actor: actor.actor,
+          deviceId: actor.deviceId,
+          clientIp: actor.clientIp,
+          changedPaths,
         },
-      },
-      undefined,
-    );
+      });
+      if (restart.coalesced) {
+        context?.logGateway?.warn(
+          `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+        );
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          path: createConfigIO().configPath,
+          config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+          restart,
+          sentinel: {
+            path: sentinelPath,
+            payload,
+          },
+        },
+        undefined,
+      );
+    });
   },
 };
