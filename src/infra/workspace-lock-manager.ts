@@ -49,8 +49,10 @@ function lockMapKey(kind: WorkspaceLockKind, normalizedTarget: string): string {
 async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind): Promise<string> {
   const resolved = path.resolve(targetPath);
   if (kind === "file") {
-    await fs.mkdir(path.dirname(resolved), { recursive: true });
-    return resolved;
+    const parentDir = path.dirname(resolved);
+    await fs.mkdir(parentDir, { recursive: true });
+    const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
+    return path.join(canonicalParent, path.basename(resolved));
   }
   await fs.mkdir(resolved, { recursive: true });
   try {
@@ -111,12 +113,13 @@ async function isStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
     if (!Number.isFinite(Date.parse(payload.createdAt))) {
       return true;
     }
-    if (payload.pid) {
-      return !isPidAlive(payload.pid);
-    }
     if (isTimestampExpired(payload.expiresAt)) {
       return true;
     }
+    if (payload.pid && !isPidAlive(payload.pid)) {
+      return true;
+    }
+    return false;
   }
 
   try {

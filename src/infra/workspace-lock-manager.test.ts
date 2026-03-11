@@ -191,16 +191,16 @@ describe("workspace lock manager", () => {
     await lock.release();
   });
 
-  it("does not reclaim a lock solely because expiresAt elapsed when owner pid is alive", async () => {
+  it("reclaims expired lock even when pid appears alive", async () => {
     const dir = await makeCaseDir();
-    const target = path.join(dir, "still-owned.txt");
+    const target = path.join(dir, "expired-owned.txt");
     const lockPath = await expectedLockPath(target, "file");
 
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
     await fs.writeFile(
       lockPath,
       JSON.stringify({
-        token: "live-owner",
+        token: "expired-owner",
         pid: process.pid,
         createdAt: new Date(Date.now() - 60_000).toISOString(),
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
@@ -210,14 +210,13 @@ describe("workspace lock manager", () => {
       "utf8",
     );
 
-    await expect(
-      acquireWorkspaceLock(target, {
-        kind: "file",
-        timeoutMs: 25,
-        pollIntervalMs: 5,
-        ttlMs: 10,
-      }),
-    ).rejects.toThrow(/workspace lock timeout/);
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 10,
+    });
+    await lock.release();
   });
 
   it("cleans up lock artifact when initial payload write fails", async () => {
@@ -245,6 +244,36 @@ describe("workspace lock manager", () => {
 
     await expect(fs.stat(lockPath)).rejects.toThrow();
     openSpy.mockRestore();
+  });
+
+  it("canonicalizes file lock aliases through symlinked parent paths", async () => {
+    const dir = await makeCaseDir();
+    const realDir = path.join(dir, "real");
+    const aliasDir = path.join(dir, "alias");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.symlink(realDir, aliasDir, "dir");
+
+    const realTarget = path.join(realDir, "shared.txt");
+    const aliasTarget = path.join(aliasDir, "shared.txt");
+
+    const lockA = await acquireWorkspaceLock(realTarget, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    const lockB = await acquireWorkspaceLock(aliasTarget, {
+      kind: "file",
+      timeoutMs: 25,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    expect(lockA.lockPath).toBe(lockB.lockPath);
+
+    await lockB.release();
+    await lockA.release();
   });
 
   it("backs off when stale lock deletion fails", async () => {
