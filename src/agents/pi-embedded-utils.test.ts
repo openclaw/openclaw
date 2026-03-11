@@ -513,6 +513,16 @@ describe("formatReasoningMessage", () => {
 describe("stripPiAgentToolTranscriptLines", () => {
   it.each([
     {
+      name: "hyphenated plugin tool name (e.g. llm-task)",
+      input: `to=llm-task {"prompt":"summarise this"}`,
+      expected: "",
+    },
+    {
+      name: "assistant prefix with hyphenated tool name",
+      input: `assistant to=llm-task json {"prompt":"summarise"}`,
+      expected: "",
+    },
+    {
       name: "bare to=cron with JSON args (Discord leak shape from issue #41844)",
       input: `to=cron {"action":"create","schedule":"in 2 minutes","message":"check cron"}`,
       expected: "",

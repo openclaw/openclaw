@@ -74,8 +74,10 @@ export function stripModelSpecialTokens(text: string): string {
  *
  * The quick-check (`to=`) avoids the regex cost on the vast majority of replies.
  */
-// Match a complete line: optional "assistant " prefix, "to=<word>", optional " json", then args.
-const PI_AGENT_TOOL_LINE_RE = /^[ \t]*(?:assistant\s+)?to=\w+(?:\s+json)?[^\S\n].*$/gm;
+// Match a complete line: optional "assistant " prefix, "to=<tool-name>", optional " json", then args.
+// Use [\w-]+ to cover hyphenated plugin tool names (e.g. "llm-task").
+// Use [ \t]+ (not \s+) before "json" so the match stays on a single line.
+const PI_AGENT_TOOL_LINE_RE = /^[ \t]*(?:assistant[ \t]+)?to=[\w-]+(?:[ \t]+json)?[^\S\n].*$/gm;
 
 export function stripPiAgentToolTranscriptLines(text: string): string {
   if (!text) {
