@@ -250,8 +250,12 @@ describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {
   });
 
   it("retries with reduced context after initial timeout and returns success", async () => {
-    // First call times out; second (retry) succeeds.
+    // Three compactWithSafetyTimeout calls in the timeout-retry path:
+    // 1. initial attempt → times out
+    // 2. settle-wait for the aborted background compact → also times out (proceed to retry)
+    // 3. actual retry → succeeds
     compactWithSafetyTimeoutMock
+      .mockRejectedValueOnce(makeTimeoutError())
       .mockRejectedValueOnce(makeTimeoutError())
       .mockImplementationOnce(async (fn: () => Promise<typeof COMPACT_SUCCESS>) => fn());
 
@@ -262,16 +266,18 @@ describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {
 
     // truncateOversizedToolResultsInMessages was called once (before retry)
     expect(truncateOversizedToolResultsMock).toHaveBeenCalledTimes(1);
-    // compactWithSafetyTimeout was called twice: initial + retry
-    expect(compactWithSafetyTimeoutMock).toHaveBeenCalledTimes(2);
-    // The retry uses the shorter EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS (120_000)
-    expect(compactWithSafetyTimeoutMock.mock.calls[1][1]).toBe(120_000);
+    // compactWithSafetyTimeout was called three times: initial + settle-wait + retry
+    expect(compactWithSafetyTimeoutMock).toHaveBeenCalledTimes(3);
+    // The retry (call index 2) uses the shorter EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS (120_000)
+    expect(compactWithSafetyTimeoutMock.mock.calls[2][1]).toBe(120_000);
     // replaceMessages: 2 pre-existing calls (validate + limit-history) + 1 from retry truncation
     expect(replaceMessagesMock).toHaveBeenCalledTimes(3);
   });
 
   it("returns failure when both initial and retry timeout", async () => {
+    // Three calls: initial timeout, settle-wait timeout, retry timeout
     compactWithSafetyTimeoutMock
+      .mockRejectedValueOnce(makeTimeoutError())
       .mockRejectedValueOnce(makeTimeoutError())
       .mockRejectedValueOnce(makeTimeoutError());
 
@@ -283,7 +289,7 @@ describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {
     expect((result as { reason?: string }).reason).toMatch(/timed out/i);
     // truncation was still attempted before the retry
     expect(truncateOversizedToolResultsMock).toHaveBeenCalledTimes(1);
-    expect(compactWithSafetyTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(compactWithSafetyTimeoutMock).toHaveBeenCalledTimes(3);
     // replaceMessages: 2 pre-existing + 1 from retry truncation
     expect(replaceMessagesMock).toHaveBeenCalledTimes(3);
   });
@@ -305,7 +311,9 @@ describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {
   });
 
   it("skips replaceMessages when truncation finds no oversized results", async () => {
+    // Three calls: initial timeout, settle-wait timeout, retry succeeds
     compactWithSafetyTimeoutMock
+      .mockRejectedValueOnce(makeTimeoutError())
       .mockRejectedValueOnce(makeTimeoutError())
       .mockImplementationOnce(async (fn: () => Promise<typeof COMPACT_SUCCESS>) => fn());
     // Nothing to truncate
@@ -318,6 +326,7 @@ describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {
 
     expect(result.ok).toBe(true);
     expect(truncateOversizedToolResultsMock).toHaveBeenCalledTimes(1);
+    expect(compactWithSafetyTimeoutMock).toHaveBeenCalledTimes(3);
     // replaceMessages: only the 2 pre-existing calls; our retry code skips it when truncatedCount=0
     expect(replaceMessagesMock).toHaveBeenCalledTimes(2);
   });
