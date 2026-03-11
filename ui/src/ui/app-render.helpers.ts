@@ -1,5 +1,9 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -124,6 +128,15 @@ function renderCronFilterIcon(hiddenCount: number) {
 
 export function renderChatControls(state: AppViewState) {
   const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
+  const defaultAgentId = resolveDefaultAgentId(state, mainSessionKey);
+  const selectedAgentId = resolveSessionAgentId(state.sessionKey, defaultAgentId);
+  const selectedAgentMainSessionKey = resolveAgentMainSessionKey({
+    agentId: selectedAgentId,
+    defaultAgentId,
+    mainSessionKey,
+    mainKey: state.agentsList?.mainKey,
+  });
+  const agentOptions = resolveAgentOptions(state, selectedAgentId, defaultAgentId);
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron
     ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
@@ -131,9 +144,37 @@ export function renderChatControls(state: AppViewState) {
   const sessionOptions = resolveSessionOptions(
     state.sessionKey,
     state.sessionsResult,
-    mainSessionKey,
+    selectedAgentMainSessionKey,
     hideCron,
+    {
+      selectedAgentId,
+      defaultAgentId,
+    },
   );
+  const applySessionSwitch = (next: string) => {
+    if (!next || state.sessionKey === next) {
+      return;
+    }
+    state.sessionKey = next;
+    state.chatMessage = "";
+    state.chatStream = null;
+    (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+    state.chatRunId = null;
+    (state as unknown as OpenClawApp).resetToolStream();
+    (state as unknown as OpenClawApp).resetChatScroll();
+    state.applySettings({
+      ...state.settings,
+      sessionKey: next,
+      lastActiveSessionKey: next,
+    });
+    void state.loadAssistantIdentity();
+    syncUrlWithSessionKey(
+      state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+      next,
+      true,
+    );
+    void loadChatHistory(state as unknown as ChatState);
+  };
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -174,31 +215,48 @@ export function renderChatControls(state: AppViewState) {
   `;
   return html`
     <div class="chat-controls">
+      <label class="field chat-controls__agent">
+        <select
+          .value=${selectedAgentId}
+          ?disabled=${!state.connected}
+          aria-label=${t("nav.agent")}
+          title=${t("nav.agent")}
+          @change=${(e: Event) => {
+            const nextAgentId = normalizeAgentId((e.target as HTMLSelectElement).value);
+            if (!nextAgentId || nextAgentId === selectedAgentId) {
+              return;
+            }
+            const nextMainSessionKey = resolveAgentMainSessionKey({
+              agentId: nextAgentId,
+              defaultAgentId,
+              mainSessionKey,
+              mainKey: state.agentsList?.mainKey,
+            });
+            const nextSessionOptions = resolveSessionOptions(
+              state.sessionKey,
+              state.sessionsResult,
+              nextMainSessionKey,
+              hideCron,
+              { selectedAgentId: nextAgentId, defaultAgentId },
+            );
+            const nextSessionKey = nextSessionOptions[0]?.key ?? nextMainSessionKey;
+            applySessionSwitch(nextSessionKey);
+          }}
+        >
+          ${repeat(
+            agentOptions,
+            (agentId) => agentId,
+            (agentId) => html`<option value=${agentId}>${agentId}</option>`,
+          )}
+        </select>
+      </label>
       <label class="field chat-controls__session">
         <select
           .value=${state.sessionKey}
           ?disabled=${!state.connected}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
-            state.sessionKey = next;
-            state.chatMessage = "";
-            state.chatStream = null;
-            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-            state.chatRunId = null;
-            (state as unknown as OpenClawApp).resetToolStream();
-            (state as unknown as OpenClawApp).resetChatScroll();
-            state.applySettings({
-              ...state.settings,
-              sessionKey: next,
-              lastActiveSessionKey: next,
-            });
-            void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(
-              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-              next,
-              true,
-            );
-            void loadChatHistory(state as unknown as ChatState);
+            applySessionSwitch(next);
           }}
         >
           ${repeat(
@@ -308,6 +366,76 @@ function resolveMainSessionKey(
     return "main";
   }
   return null;
+}
+
+function normalizeAgentId(value: string | null | undefined): string {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return normalized || "main";
+}
+
+function resolveDefaultAgentId(state: AppViewState, mainSessionKey?: string | null): string {
+  const configured = state.agentsList?.defaultId?.trim();
+  if (configured) {
+    return normalizeAgentId(configured);
+  }
+  const parsedMain = parseAgentSessionKey(mainSessionKey ?? "");
+  if (parsedMain?.agentId) {
+    return normalizeAgentId(parsedMain.agentId);
+  }
+  const parsedCurrent = parseAgentSessionKey(state.sessionKey);
+  if (parsedCurrent?.agentId) {
+    return normalizeAgentId(parsedCurrent.agentId);
+  }
+  return "main";
+}
+
+function resolveAgentOptions(
+  state: AppViewState,
+  selectedAgentId: string,
+  defaultAgentId: string,
+): string[] {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  for (const entry of state.agentsList?.agents ?? []) {
+    const id = normalizeAgentId(entry.id);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    options.push(id);
+  }
+  for (const fallback of [selectedAgentId, defaultAgentId]) {
+    const id = normalizeAgentId(fallback);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    options.push(id);
+  }
+  return options.length > 0 ? options : ["main"];
+}
+
+export function resolveSessionAgentId(sessionKey: string, defaultAgentId: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return normalizeAgentId(defaultAgentId);
+}
+
+export function resolveAgentMainSessionKey(params: {
+  agentId: string;
+  defaultAgentId: string;
+  mainSessionKey?: string | null;
+  mainKey?: string | null;
+}): string {
+  const agentId = normalizeAgentId(params.agentId);
+  const defaultAgentId = normalizeAgentId(params.defaultAgentId);
+  const mainSessionKey = (params.mainSessionKey ?? "").trim();
+  if (mainSessionKey && agentId === defaultAgentId) {
+    return mainSessionKey;
+  }
+  return buildAgentMainSessionKey({ agentId, mainKey: params.mainKey ?? undefined });
 }
 
 /* ── Channel display labels ────────────────────────────── */
@@ -436,15 +564,25 @@ function resolveSessionOptions(
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
+  agentFilter?: { selectedAgentId: string; defaultAgentId: string },
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
+  const shouldIncludeSession = (key: string) => {
+    if (!agentFilter) {
+      return true;
+    }
+    return (
+      resolveSessionAgentId(key, agentFilter.defaultAgentId) ===
+      normalizeAgentId(agentFilter.selectedAgentId)
+    );
+  };
 
   const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
 
   // Add main session key first
-  if (mainSessionKey) {
+  if (mainSessionKey && shouldIncludeSession(mainSessionKey)) {
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
@@ -454,7 +592,7 @@ function resolveSessionOptions(
 
   // Add current session key next — always include it even if it's a cron session,
   // so the active session is never silently dropped from the select.
-  if (!seen.has(sessionKey)) {
+  if (!seen.has(sessionKey) && shouldIncludeSession(sessionKey)) {
     seen.add(sessionKey);
     options.push({
       key: sessionKey,
@@ -465,7 +603,11 @@ function resolveSessionOptions(
   // Add sessions from the result, optionally filtering out cron sessions.
   if (sessions?.sessions) {
     for (const s of sessions.sessions) {
-      if (!seen.has(s.key) && !(hideCron && isCronSessionKey(s.key))) {
+      if (
+        !seen.has(s.key) &&
+        !(hideCron && isCronSessionKey(s.key)) &&
+        shouldIncludeSession(s.key)
+      ) {
         seen.add(s.key);
         options.push({
           key: s.key,

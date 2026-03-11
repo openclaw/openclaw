@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveAgentMainSessionKey,
+  resolveSessionAgentId,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -282,5 +284,39 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveSessionAgentId", () => {
+  it("returns agent from scoped keys", () => {
+    expect(resolveSessionAgentId("agent:ops:main", "main")).toBe("ops");
+  });
+
+  it("falls back to default agent for legacy keys", () => {
+    expect(resolveSessionAgentId("main", "docs-agent")).toBe("docs-agent");
+  });
+});
+
+describe("resolveAgentMainSessionKey", () => {
+  it("keeps provided main session key for default agent", () => {
+    expect(
+      resolveAgentMainSessionKey({
+        agentId: "main",
+        defaultAgentId: "main",
+        mainSessionKey: "main",
+        mainKey: "main",
+      }),
+    ).toBe("main");
+  });
+
+  it("builds scoped main key for non-default agents", () => {
+    expect(
+      resolveAgentMainSessionKey({
+        agentId: "docs-agent",
+        defaultAgentId: "main",
+        mainSessionKey: "main",
+        mainKey: "work",
+      }),
+    ).toBe("agent:docs-agent:work");
   });
 });
