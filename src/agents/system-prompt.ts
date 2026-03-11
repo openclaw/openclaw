@@ -134,13 +134,16 @@ function buildMessagingSection(params: {
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
-    "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+    "- Do not use exec/curl for normal outbound provider messaging; OpenClaw handles user-visible delivery internally.",
+    "- Provider API calls via exec/curl are only for setup or diagnostics when the docs explicitly instruct them.",
+    "- To attach media in the current reply, put `MEDIA:<path-or-url>` on its own line.",
     params.availableTools.has("message")
       ? [
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
+          "- For `action=send` attachments, use `media` (URL/path) or `filePath`/`buffer` instead of calling provider APIs directly.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled

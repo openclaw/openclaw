@@ -213,6 +213,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not forward raw internal metadata");
   });
 
+  it("guides attachment delivery without raw provider API calls", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+    });
+
+    expect(prompt).toContain(
+      "Do not use exec/curl for normal outbound provider messaging; OpenClaw handles user-visible delivery internally.",
+    );
+    expect(prompt).toContain(
+      "Provider API calls via exec/curl are only for setup or diagnostics when the docs explicitly instruct them.",
+    );
+    expect(prompt).toContain("To attach media in the current reply, put `MEDIA:<path-or-url>` on its own line.");
+    expect(prompt).toContain(
+      "For `action=send` attachments, use `media` (URL/path) or `filePath`/`buffer` instead of calling provider APIs directly.",
+    );
+  });
+
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

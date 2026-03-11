@@ -254,6 +254,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - DM messages can carry `message_thread_id`; OpenClaw routes them with thread-aware session keys and preserves thread ID for replies.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
+- Agent-generated attachments should use OpenClaw delivery primitives: `MEDIA:<path-or-url>` in the reply, or the `message` tool `media` / `filePath` / `buffer` fields for proactive sends. Do not script raw `sendDocument` / `sendPhoto` Bot API calls from the agent for normal delivery.
 
 ## Feature reference
 
