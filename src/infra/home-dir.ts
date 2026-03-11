@@ -54,6 +54,18 @@ function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): str
   if (userProfile) {
     return userProfile;
   }
+<<<<<<< HEAD
+=======
+
+  // On Android/Termux, os.homedir() reads /etc/passwd and returns /home which
+  // does not exist. Derive a usable home from Termux's PREFIX before falling
+  // back to os.homedir().
+  const prefix = normalize(env.PREFIX);
+  if (prefix && normalize(env.ANDROID_DATA)) {
+    return path.resolve(prefix, "..", "home");
+  }
+
+>>>>>>> 9215bb9bdf (fix(infra): derive home directory from PREFIX on Android/Termux)
   return normalizeSafe(homedir);
 }
 

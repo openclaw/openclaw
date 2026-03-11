@@ -58,6 +58,7 @@ describe("resolveEffectiveHomeDir", () => {
     expect(resolveEffectiveHomeDir(env, homedir)).toBe(path.resolve(expected));
   });
 
+<<<<<<< HEAD
   it.each([
     {
       name: "expands ~/ using HOME",
@@ -78,6 +79,48 @@ describe("resolveEffectiveHomeDir", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveEffectiveHomeDir(env)).toBe(path.resolve(expected));
+=======
+  it("falls back to HOME then USERPROFILE then homedir", () => {
+    expect(resolveEffectiveHomeDir({ HOME: "/home/alice" } as NodeJS.ProcessEnv)).toBe(
+      path.resolve("/home/alice"),
+    );
+    expect(resolveEffectiveHomeDir({ USERPROFILE: "C:/Users/alice" } as NodeJS.ProcessEnv)).toBe(
+      path.resolve("C:/Users/alice"),
+    );
+    expect(resolveEffectiveHomeDir({} as NodeJS.ProcessEnv, () => "/fallback")).toBe(
+      path.resolve("/fallback"),
+    );
+  });
+
+  it("derives home from PREFIX on Android/Termux when HOME is unset", () => {
+    const env = {
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/home")).toBe(
+      path.resolve("/data/data/com.termux/files/home"),
+    );
+  });
+
+  it("prefers HOME over PREFIX-derived path on Termux", () => {
+    const env = {
+      HOME: "/data/data/com.termux/files/home",
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env)).toBe(
+      path.resolve("/data/data/com.termux/files/home"),
+    );
+  });
+
+  it("expands OPENCLAW_HOME when set to ~", () => {
+    const env = {
+      OPENCLAW_HOME: "~/svc",
+      HOME: "/home/alice",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
+>>>>>>> 9215bb9bdf (fix(infra): derive home directory from PREFIX on Android/Termux)
   });
 });
 
