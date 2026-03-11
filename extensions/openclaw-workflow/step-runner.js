@@ -43,6 +43,29 @@ import { checkOutputs } from './output-checker.js';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Preamble injected at the start of every step task prompt.
+ *
+ * Addresses a known OpenClaw behavior: the exec tool backgrounds commands that
+ * run longer than ~10 seconds (default yieldMs), returning "Command still running"
+ * without any output. Without this instruction, an agent that runs a 15-30s bash
+ * script will see no output and incorrectly conclude the step failed.
+ *
+ * The preamble instructs the agent to detect this condition and poll via the
+ * process tool before interpreting any result.
+ *
+ * @constant {string}
+ */
+const EXEC_POLL_PREAMBLE = `\
+IMPORTANT — exec tool behaviour: if any exec call returns "Command still running \
+(session <name>...)", the command was backgrounded because it takes >10s. In that \
+case you MUST call process(action="poll", sessionId="<name>", timeout=60000) to \
+retrieve the full output before proceeding. Never interpret a backgrounded exec as \
+a failure. Only report failure if the final exit code is non-zero or the output \
+explicitly indicates an error.
+
+`;
+
+/**
  * @typedef {Object} StepRunOptions
  * @property {number}  pollIntervalMs  - How often to poll for session completion (ms)
  * @property {string}  baseDir         - Base directory for resolving relative output paths
@@ -96,8 +119,12 @@ export async function runStep(step, runId, api, options) {
     // Build the model preference: step-level overrides plugin default
     const model = step.model || defaultModel || null;
 
+    // Wrap the task with exec-poll instructions so the agent handles backgrounded
+    // bash commands correctly (commands taking >10s are backgrounded by the exec tool).
+    const taskWithPreamble = EXEC_POLL_PREAMBLE + step.task;
+
     // Spawn the session
-    const spawnResult = await adapter.spawn(step.task, {
+    const spawnResult = await adapter.spawn(taskWithPreamble, {
       model,
       timeout: step.timeout,
       sessionTarget: 'isolated',
@@ -226,18 +253,25 @@ class ApiAdapter {
 
 /**
  * @class CliAdapter
- * @description Spawns subagent sessions via the OpenClaw CLI.
- * Works with any OpenClaw installation where `openclaw` is in PATH.
+ * @description Spawns subagent sessions via the OpenClaw CLI using one-shot
+ * cron jobs. Works with any OpenClaw installation where `openclaw` is in PATH.
  *
- * Command used: `openclaw session run --prompt "..." --isolated [--model "..."]`
+ * ## Approach
+ * Since `openclaw sessions spawn` is not exposed as a CLI command, this adapter
+ * uses the cron subsystem as a session-spawning mechanism:
+ *   1. `openclaw cron add --at +5s --session isolated --message "..." --json`
+ *      creates a one-shot job and returns its job ID.
+ *   2. `openclaw cron run <id>` triggers it immediately.
+ *   3. `openclaw cron runs --id <id> --json` polls for the run result.
+ *   4. `openclaw cron remove <id>` cleans up after completion.
  *
- * Note: This adapter runs the step synchronously (the CLI blocks until
- * the session completes) rather than the spawn-then-poll pattern of the
- * ApiAdapter. The polling loop in runStep() is short-circuited by the
- * adapter immediately returning 'done' or 'error'.
+ * The spawn() call returns immediately with the cron job ID as the sessionId.
+ * getStatus() polls the cron run history to detect completion.
  *
- * @note PR NOTE: This may not be the exact CLI syntax. Adjust to match the
- * actual `openclaw session` subcommand interface.
+ * ## Exec yieldMs note
+ * Step task prompts are wrapped with exec-poll instructions (see EXEC_POLL_PREAMBLE)
+ * so the spawned agent correctly handles bash commands that take >10s (the default
+ * exec yieldMs) by polling via the process tool rather than seeing empty output.
  */
 class CliAdapter {
   /**
@@ -246,49 +280,83 @@ class CliAdapter {
    * @returns {Promise<{ sessionId: string, sessionKey: string }>}
    */
   async spawn(prompt, options) {
-    const args = ['session', 'run', '--isolated', '--prompt', prompt];
+    this._jobs = this._jobs || new Map();
+
+    // Build cron add args — one-shot job that runs immediately
+    const args = [
+      'cron', 'add',
+      '--at', '+5s',
+      '--session', 'isolated',
+      '--message', prompt,
+      '--delete-after-run',
+      '--json',
+    ];
     if (options.model) {
       args.push('--model', options.model);
     }
     if (options.label) {
-      args.push('--label', options.label);
+      args.push('--name', options.label);
     }
 
-    // Run synchronously — CLI blocks until session completes.
-    // We store the result and return a pseudo-sessionId so getStatus() can look it up.
-    const pendingKey = `cli-${Date.now()}`;
-
-    // Execute the CLI command
+    let jobId;
     try {
-      const { stdout, stderr } = await execFileAsync('openclaw', args, {
-        timeout: (options.timeout || 300) * 1000 + 30000, // add 30s grace period
-        maxBuffer: 10 * 1024 * 1024, // 10MB output buffer
+      const { stdout } = await execFileAsync('openclaw', args, {
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
       });
-
-      // Store result for getStatus() to retrieve
-      this._results = this._results || new Map();
-      this._results.set(pendingKey, { status: 'done', stdout, stderr });
+      const parsed = JSON.parse(stdout.trim());
+      // CLI returns { id: '...' } or { job: { id: '...' } }
+      jobId = parsed.id || parsed.job?.id;
+      if (!jobId) throw new Error(`Unexpected cron add output: ${stdout}`);
     } catch (err) {
-      this._results = this._results || new Map();
-      this._results.set(pendingKey, {
-        status: 'error',
-        error: err.stderr || err.message,
-      });
+      throw new Error(`CliAdapter: cron add failed — ${err.message}`);
     }
 
-    return { sessionId: pendingKey, sessionKey: pendingKey };
+    // Trigger the job immediately (it was created with +5s, but run now)
+    try {
+      await execFileAsync('openclaw', ['cron', 'run', jobId], { timeout: 10000 });
+    } catch (err) {
+      // Non-fatal — the job may already be queued to run in 5s
+    }
+
+    this._jobs.set(jobId, { status: 'running' });
+    return { sessionId: jobId, sessionKey: `cli-cron:${jobId}` };
   }
 
   /**
-   * @param {string} sessionId - The pseudo-session ID from spawn()
+   * Poll the cron run history to check if the one-shot job has completed.
+   *
+   * @param {string} sessionId - The cron job ID returned by spawn()
    * @returns {Promise<{ status: string, error?: string }>}
    */
   async getStatus(sessionId) {
-    const result = (this._results || new Map()).get(sessionId);
-    if (!result) {
+    const jobId = sessionId;
+    try {
+      const { stdout } = await execFileAsync(
+        'openclaw',
+        ['cron', 'runs', '--id', jobId, '--limit', '1', '--json'],
+        { timeout: 15000 },
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      if (!lines.length) return { status: 'running' };
+
+      // JSONL — take the last line
+      const entry = JSON.parse(lines[lines.length - 1]);
+      if (entry.action === 'finished') {
+        // Clean up the cron job (best-effort — may already be deleted if --delete-after-run)
+        execFileAsync('openclaw', ['cron', 'remove', jobId]).catch(() => {});
+        return entry.status === 'ok'
+          ? { status: 'done' }
+          : { status: 'error', error: entry.error || entry.summary || 'Step failed' };
+      }
+      return { status: 'running' };
+    } catch (err) {
+      // If the job no longer exists (deleted after run), treat as done
+      if (err.message.includes('not found') || err.message.includes('404')) {
+        return { status: 'done' };
+      }
       return { status: 'running' };
     }
-    return result;
   }
 }
 
@@ -356,7 +424,8 @@ export function createStepRunner(adapter) {
 
     try {
       const model = step.model || options.defaultModel || null;
-      const spawnResult = await adapter.spawn(step.task, {
+      const taskWithPreamble = EXEC_POLL_PREAMBLE + step.task;
+      const spawnResult = await adapter.spawn(taskWithPreamble, {
         model,
         timeout: step.timeout,
         sessionTarget: 'isolated',
