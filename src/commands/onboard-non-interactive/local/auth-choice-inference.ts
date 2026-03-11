@@ -9,6 +9,7 @@ type AuthChoiceFlag = {
 
 type AuthChoiceFlagOptions = Pick<
   OnboardOptions,
+  | "ainftApiKey"
   | "anthropicApiKey"
   | "geminiApiKey"
   | "openaiApiKey"

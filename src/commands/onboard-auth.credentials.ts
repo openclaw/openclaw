@@ -336,6 +336,7 @@ export async function setVeniceApiKey(
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
+export const AINFT_DEFAULT_MODEL_REF = "ainft/gpt-5.2";
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
@@ -376,6 +377,20 @@ export async function setOpenrouterApiKey(
   upsertAuthProfile({
     profileId: "openrouter:default",
     credential: buildApiKeyCredential("openrouter", safeKey, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setAinftApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  // Never persist the literal "undefined" (e.g. when prompt returns undefined and caller used String(key)).
+  const safeKey = typeof key === "string" && key === "undefined" ? "" : key;
+  upsertAuthProfile({
+    profileId: "ainft:default",
+    credential: buildApiKeyCredential("ainft", safeKey, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

@@ -433,6 +433,75 @@ export function buildOpenrouterProvider(): ProviderConfig {
   };
 }
 
+const AINFT_BASE_URL = "https://chat.ainft.com/webapi/";
+const AINFT_DEFAULT_MODEL_ID = "gpt-5.2";
+const AINFT_DEFAULT_CONTEXT_WINDOW = 200000;
+const AINFT_DEFAULT_MAX_TOKENS = 8192;
+const AINFT_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+export function buildAinftProvider(): ProviderConfig {
+  return {
+    baseUrl: AINFT_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: AINFT_DEFAULT_MODEL_ID,
+        name: "ChatGPT 5.2",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AINFT_DEFAULT_COST,
+        contextWindow: AINFT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AINFT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-5-mini",
+        name: "ChatGPT 5 mini",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AINFT_DEFAULT_COST,
+        contextWindow: AINFT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AINFT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-5-nano",
+        name: "ChatGPT 5 nano",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AINFT_DEFAULT_COST,
+        contextWindow: AINFT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AINFT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AINFT_DEFAULT_COST,
+        contextWindow: AINFT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AINFT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AINFT_DEFAULT_COST,
+        contextWindow: AINFT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AINFT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-haiku-4.5",
+        name: "Claude Haiku 4.5",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AINFT_DEFAULT_COST,
+        contextWindow: AINFT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AINFT_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildOpenAICodexProvider(): ProviderConfig {
   return {
     baseUrl: OPENAI_CODEX_BASE_URL,

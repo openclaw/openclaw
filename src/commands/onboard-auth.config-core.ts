@@ -35,6 +35,7 @@ import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  AINFT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -173,6 +174,30 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyAinftProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[AINFT_DEFAULT_MODEL_REF] = {
+    ...models[AINFT_DEFAULT_MODEL_REF],
+    alias: models[AINFT_DEFAULT_MODEL_REF]?.alias ?? "AINFT",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyAinftConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyAinftProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, AINFT_DEFAULT_MODEL_REF);
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
