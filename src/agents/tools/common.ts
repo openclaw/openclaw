@@ -124,8 +124,13 @@ export function readNumberParam(
     strictInteger?: boolean;
   } = {},
 ): number | undefined {
-  const { required = false, label = key, integer = false, strict = false, strictInteger = false } =
-    options;
+  const {
+    required = false,
+    label = key,
+    integer = false,
+    strict = false,
+    strictInteger = false,
+  } = options;
   const raw = readParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
