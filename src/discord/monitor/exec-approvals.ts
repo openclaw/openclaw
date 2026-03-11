@@ -16,6 +16,7 @@ import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
+import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
@@ -105,6 +106,7 @@ type ExecApprovalContainerParams = {
   title: string;
   description?: string;
   commandPreview: string;
+  commandSecondaryPreview?: string | null;
   metadataLines?: string[];
   actionRow?: Row<Button>;
   footer?: string;
@@ -121,6 +123,11 @@ class ExecApprovalContainer extends DiscordUiContainer {
     }
     components.push(new Separator({ divider: true, spacing: "small" }));
     components.push(new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``));
+    if (params.commandSecondaryPreview) {
+      components.push(
+        new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
+      );
+    }
     if (params.metadataLines?.length) {
       components.push(new TextDisplay(params.metadataLines.join("\n")));
     }
@@ -235,14 +242,27 @@ function formatCommandPreview(commandText: string, maxChars: number): string {
   return commandRaw.replace(/`/g, "\u200b`");
 }
 
+function formatOptionalCommandPreview(
+  commandText: string | null | undefined,
+  maxChars: number,
+): string | null {
+  if (!commandText) {
+    return null;
+  }
+  return formatCommandPreview(commandText, maxChars);
+}
+
 function createExecApprovalRequestContainer(params: {
   request: ExecApprovalRequest;
   cfg: OpenClawConfig;
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
+    params.request.request,
+  );
   const commandPreview = formatCommandPreview(commandText, 1000);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 500);
   const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
 
   return new ExecApprovalContainer({
@@ -251,6 +271,7 @@ function createExecApprovalRequestContainer(params: {
     title: "Exec Approval Required",
     description: "A command needs your approval.",
     commandPreview,
+    commandSecondaryPreview,
     metadataLines: buildExecApprovalMetadataLines(params.request),
     actionRow: params.actionRow,
     footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.request.id}`,
@@ -265,8 +286,11 @@ function createResolvedContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
+    params.request.request,
+  );
   const commandPreview = formatCommandPreview(commandText, 500);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 300);
 
   const decisionLabel =
     params.decision === "allow-once"
@@ -288,6 +312,7 @@ function createResolvedContainer(params: {
     title: `Exec Approval: ${decisionLabel}`,
     description: params.resolvedBy ? `Resolved by ${params.resolvedBy}` : "Resolved",
     commandPreview,
+    commandSecondaryPreview,
     footer: `ID: ${params.request.id}`,
     accentColor,
   });
@@ -298,8 +323,11 @@ function createExpiredContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
+    params.request.request,
+  );
   const commandPreview = formatCommandPreview(commandText, 500);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 300);
 
   return new ExecApprovalContainer({
     cfg: params.cfg,
@@ -307,6 +335,7 @@ function createExpiredContainer(params: {
     title: "Exec Approval: Expired",
     description: "This approval request has expired.",
     commandPreview,
+    commandSecondaryPreview,
     footer: `ID: ${params.request.id}`,
     accentColor: "#99AAB5",
   });
