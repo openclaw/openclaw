@@ -13,42 +13,40 @@ describe("buildGroupChatContext", () => {
     AccountId: undefined,
   } as unknown as TemplateContext;
 
-  it("包含群聊介绍（无主题）", () => {
+  it("includes group chat intro (no subject)", () => {
     const result = buildGroupChatContext({ sessionCtx: baseCtx });
     expect(result).toContain("group chat");
   });
 
-  it("包含群聊名称（有主题时）", () => {
+  it("includes group name when subject is present", () => {
     const result = buildGroupChatContext({
       sessionCtx: { ...baseCtx, GroupSubject: "My Project Chat" } as TemplateContext,
     });
     expect(result).toContain('"My Project Chat"');
   });
 
-  it("包含参与者（有成员时）", () => {
+  it("includes participants when members are present", () => {
     const result = buildGroupChatContext({
       sessionCtx: { ...baseCtx, GroupMembers: "Alice, Bob, Charlie" } as TemplateContext,
     });
     expect(result).toContain("Alice, Bob, Charlie");
   });
 
-  it("文本回复指引：直接回复，不用 message 工具", () => {
+  it("guides text replies to reply directly without the message tool", () => {
     const result = buildGroupChatContext({ sessionCtx: baseCtx });
-    // 应该建议文本直接回复
     expect(result).toContain("reply directly");
   });
 
-  it("允许使用 message 工具发送附件/文件到同一群组", () => {
+  it("allows the message tool for sending attachments/files to the same group", () => {
     const result = buildGroupChatContext({ sessionCtx: baseCtx });
-    // 不应该完全禁止 message 工具
+    // should not blanket-forbid the message tool
     expect(result).not.toContain("Do not use the message tool");
-    // 应该允许附件使用 message 工具
+    // should allow message tool for attachments
     expect(result).toMatch(/message tool.*attachments|files.*message tool/i);
   });
 
-  it("附件指引覆盖 files、images、attachments", () => {
+  it("attachment guidance covers files, images, and attachments", () => {
     const result = buildGroupChatContext({ sessionCtx: baseCtx });
-    // 应提到 files 和 images 等附件类型
     expect(result).toMatch(/files|images|attachments/i);
   });
 });
