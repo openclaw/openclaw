@@ -3,131 +3,92 @@ import type { OpenClawConfig } from "../../../../src/config/config.js";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  resolveAgentDirMock: vi.fn(),
-  resolveAgentEffectiveModelPrimaryMock: vi.fn(),
-  discoverAuthStorageMock: vi.fn(),
-  discoverModelsMock: vi.fn(),
-  resolveModelWithRegistryMock: vi.fn(),
-  findModelMock: vi.fn(),
-  getApiKeyForModelMock: vi.fn(),
+  prepareSimpleCompletionModelForAgentMock: vi.fn(),
   extractAssistantTextMock: vi.fn(),
-  setRuntimeApiKeyMock: vi.fn(),
-  resolveCopilotApiTokenMock: vi.fn(),
 }));
 
 vi.mock("@mariozechner/pi-ai", () => ({
   complete: hoisted.completeMock,
 }));
 
-vi.mock("../../../../src/agents/agent-scope.js", () => ({
-  resolveAgentDir: hoisted.resolveAgentDirMock,
-  resolveAgentEffectiveModelPrimary: hoisted.resolveAgentEffectiveModelPrimaryMock,
-}));
-
-vi.mock("../../../../src/agents/pi-model-discovery.js", () => ({
-  discoverAuthStorage: hoisted.discoverAuthStorageMock,
-  discoverModels: hoisted.discoverModelsMock,
-}));
-
-vi.mock("../../../../src/agents/pi-embedded-runner/model.js", () => ({
-  resolveModelWithRegistry: hoisted.resolveModelWithRegistryMock,
-}));
-
-vi.mock("../../../../src/agents/model-auth.js", () => ({
-  getApiKeyForModel: hoisted.getApiKeyForModelMock,
+vi.mock("../../../../src/agents/simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgentMock,
 }));
 
 vi.mock("../../../../src/agents/pi-embedded-utils.js", () => ({
   extractAssistantText: hoisted.extractAssistantTextMock,
 }));
 
-vi.mock("../../../github-copilot/token.js", () => ({
-  resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
-}));
-
 import { generateThreadTitle } from "./thread-title.js";
 
 beforeEach(() => {
   hoisted.completeMock.mockReset();
-  hoisted.resolveAgentDirMock.mockReset();
-  hoisted.resolveAgentEffectiveModelPrimaryMock.mockReset();
-  hoisted.discoverAuthStorageMock.mockReset();
-  hoisted.discoverModelsMock.mockReset();
-  hoisted.resolveModelWithRegistryMock.mockReset();
-  hoisted.findModelMock.mockReset();
-  hoisted.getApiKeyForModelMock.mockReset();
+  hoisted.prepareSimpleCompletionModelForAgentMock.mockReset();
   hoisted.extractAssistantTextMock.mockReset();
-  hoisted.setRuntimeApiKeyMock.mockReset();
-  hoisted.resolveCopilotApiTokenMock.mockReset();
 
-  hoisted.resolveAgentDirMock.mockReturnValue("/tmp/openclaw-agent");
-  hoisted.resolveAgentEffectiveModelPrimaryMock.mockReturnValue("anthropic/claude-opus-4-6");
-  hoisted.discoverAuthStorageMock.mockReturnValue({
-    setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-  });
-  hoisted.discoverModelsMock.mockReturnValue({
-    find: hoisted.findModelMock,
-  });
-  hoisted.resolveModelWithRegistryMock.mockImplementation(({ provider, modelId, modelRegistry }) =>
-    modelRegistry.find(provider, modelId),
-  );
-  hoisted.findModelMock.mockReturnValue({
-    provider: "anthropic",
-    id: "claude-opus-4-6",
-  });
-  hoisted.getApiKeyForModelMock.mockResolvedValue({
-    apiKey: "sk-test",
-    mode: "api-key",
-    source: "env:TEST_API_KEY",
+  hoisted.prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
+    selection: {
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentDir: "/tmp/openclaw-agent",
+    },
+    model: {
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    },
+    auth: {
+      apiKey: "sk-test",
+      source: "env:TEST_API_KEY",
+      mode: "api-key",
+    },
   });
   hoisted.completeMock.mockResolvedValue({});
   hoisted.extractAssistantTextMock.mockReturnValue("Generated title");
-  hoisted.resolveCopilotApiTokenMock.mockResolvedValue({
-    token: "copilot-token",
-    expiresAt: Date.now() + 60_000,
-    source: "cache:/tmp/copilot-token.json",
-    baseUrl: "https://api.individual.githubcopilot.com",
-  });
 });
 
 describe("generateThreadTitle", () => {
-  it("continues when auth mode is aws-sdk and api key is absent", async () => {
-    hoisted.resolveAgentEffectiveModelPrimaryMock.mockReturnValue(
-      "amazon-bedrock/anthropic.claude-sonnet-4-5",
-    );
-    hoisted.findModelMock.mockReturnValue({
-      provider: "amazon-bedrock",
-      id: "anthropic.claude-sonnet-4-5",
+  it("calls shared one-shot model prep with aws-sdk allowance", async () => {
+    hoisted.prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
+      selection: {
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-5",
+        profileId: "work",
+        agentDir: "/tmp/openclaw-agent",
+      },
+      model: {
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4-5",
+      },
+      auth: {
+        apiKey: "sk-openrouter",
+        source: "profile:work",
+        mode: "api-key",
+      },
     });
-    hoisted.getApiKeyForModelMock.mockResolvedValue({
-      mode: "aws-sdk",
-      source: "aws-sdk default chain",
-    });
-    hoisted.extractAssistantTextMock.mockReturnValue("Bedrock generated title");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openrouter/anthropic/claude-sonnet-4-5@work",
+        },
+      },
+    } as OpenClawConfig;
 
-    const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+    await generateThreadTitle({
+      cfg,
       agentId: "main",
-      messageText: "Summarize the deployment blockers.",
+      messageText: "Need a generated title.",
     });
 
-    expect(result).toBe("Bedrock generated title");
-    expect(hoisted.completeMock).toHaveBeenCalledTimes(1);
-    const completeOptions = hoisted.completeMock.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(completeOptions).toEqual(
-      expect.objectContaining({
-        maxTokens: 24,
-        temperature: 0.2,
-      }),
-    );
-    expect("apiKey" in completeOptions).toBe(false);
-    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    expect(hoisted.prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      allowMissingApiKeyModes: ["aws-sdk"],
+    });
   });
 
-  it("returns null when api key is missing for non-aws auth modes", async () => {
-    hoisted.getApiKeyForModelMock.mockResolvedValue({
-      mode: "api-key",
-      source: "models.providers.anthropic",
+  it("returns null when shared model prep cannot resolve selection", async () => {
+    hoisted.prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
+      error: "No model configured for agent main.",
     });
 
     const result = await generateThreadTitle({
@@ -138,66 +99,71 @@ describe("generateThreadTitle", () => {
 
     expect(result).toBeNull();
     expect(hoisted.completeMock).not.toHaveBeenCalled();
-    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 
-  it("exchanges GitHub token for Copilot token before completion", async () => {
-    hoisted.resolveAgentEffectiveModelPrimaryMock.mockReturnValue("github-copilot/gpt-4.1");
-    hoisted.findModelMock.mockReturnValue({
-      provider: "github-copilot",
-      id: "gpt-4.1",
+  it("returns null when shared completion prep fails", async () => {
+    hoisted.prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
+      error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
+      selection: {
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        agentDir: "/tmp/openclaw-agent",
+      },
     });
-    hoisted.getApiKeyForModelMock.mockResolvedValue({
-      apiKey: "ghu_test",
-      mode: "token",
-      source: "profile:github-copilot",
-    });
-    hoisted.extractAssistantTextMock.mockReturnValue("Copilot title");
 
     const result = await generateThreadTitle({
       cfg: {} as OpenClawConfig,
       agentId: "main",
-      messageText: "Generate a summary title.",
+      messageText: "Need a thread title.",
     });
 
-    expect(result).toBe("Copilot title");
-    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: "ghu_test",
-    });
-    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-token");
-    const completeOptions = hoisted.completeMock.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect("apiKey" in completeOptions).toBe(false);
+    expect(result).toBeNull();
+    expect(hoisted.completeMock).not.toHaveBeenCalled();
   });
 
-  it("uses runtime model fallback resolution when registry lookup misses", async () => {
-    hoisted.findModelMock.mockReturnValueOnce(null);
-    hoisted.resolveModelWithRegistryMock.mockReturnValueOnce({
-      provider: "openrouter",
-      id: "anthropic/claude-sonnet-4-5",
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-      input: ["text"],
-      reasoning: false,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 8192,
-    });
-    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
-      apiKey: "sk-openrouter",
-      mode: "api-key",
-      source: "models.providers.openrouter",
-    });
-    hoisted.extractAssistantTextMock.mockReturnValueOnce("Fallback generated title");
-
+  it("builds contextual prompt and forwards completion options", async () => {
     const result = await generateThreadTitle({
       cfg: {} as OpenClawConfig,
       agentId: "main",
-      messageText: "Need a title from fallback model resolution.",
+      messageText: "Summarize deployment blockers and owner follow-ups.",
+      channelName: "release-status",
+      channelDescription: "Deploy updates and incident notes",
     });
 
-    expect(result).toBe("Fallback generated title");
-    expect(hoisted.resolveModelWithRegistryMock).toHaveBeenCalledTimes(1);
+    expect(result).toBe("Generated title");
     expect(hoisted.completeMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("openrouter", "sk-openrouter");
+    expect(hoisted.completeMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        systemPrompt:
+          "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
+        messages: [
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("Channel: release-status"),
+          }),
+        ],
+      }),
+    );
+    expect(hoisted.completeMock.mock.calls[0]?.[1]?.messages?.[0]?.content).toContain(
+      "Channel description: Deploy updates and incident notes",
+    );
+    expect(hoisted.completeMock.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        maxTokens: 24,
+        temperature: 0.2,
+      }),
+    );
+  });
+
+  it("returns null when completion throws", async () => {
+    hoisted.completeMock.mockRejectedValueOnce(new Error("network timeout"));
+
+    const result = await generateThreadTitle({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      messageText: "Generate title.",
+    });
+
+    expect(result).toBeNull();
   });
 });

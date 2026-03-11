@@ -1,22 +1,6 @@
 import { complete } from "@mariozechner/pi-ai";
-import {
-  resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
-} from "../../../../src/agents/agent-scope.js";
-import { DEFAULT_PROVIDER } from "../../../../src/agents/defaults.js";
-import { getApiKeyForModel } from "../../../../src/agents/model-auth.js";
-import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../../../../src/agents/model-selection.js";
-import { resolveModelWithRegistry } from "../../../../src/agents/pi-embedded-runner/model.js";
 import { extractAssistantText } from "../../../../src/agents/pi-embedded-utils.js";
-import {
-  discoverAuthStorage,
-  discoverModels,
-} from "../../../../src/agents/pi-model-discovery.js";
+import { prepareSimpleCompletionModelForAgent } from "../../../../src/agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { logVerbose } from "../../../../src/globals.js";
 
@@ -28,13 +12,6 @@ const DISCORD_THREAD_TITLE_MAX_TOKENS = 24;
 const DISCORD_THREAD_TITLE_TEMPERATURE = 0.2;
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
   "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
-
-type ThreadTitleModelSelection = {
-  provider: string;
-  modelId: string;
-  profileId?: string;
-  agentDir: string;
-};
 
 type ThreadTitleModel = Parameters<typeof complete>[0];
 
@@ -51,25 +28,20 @@ export async function generateThreadTitle(params: {
     return null;
   }
 
-  const selection = resolveDiscordThreadTitleModelSelection({
+  const prepared = await prepareSimpleCompletionModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    allowMissingApiKeyModes: ["aws-sdk"],
   });
-  if (!selection) {
-    logVerbose(`thread-title: no model configured for agent ${params.agentId}`);
+  if ("error" in prepared) {
+    const modelLabel = prepared.selection
+      ? `${prepared.selection.provider}/${prepared.selection.modelId}`
+      : "unknown";
+    logVerbose(`thread-title: ${prepared.error} (agent=${params.agentId}, model=${modelLabel})`);
     return null;
   }
 
   try {
-    const model = await resolveThreadTitleModel({
-      cfg: params.cfg,
-      selection,
-      agentId: params.agentId,
-    });
-    if (!model) {
-      return null;
-    }
-
     const promptText = truncateThreadTitleSourceText(sourceText);
     const userMessage = buildThreadTitleUserMessage({
       sourceText: promptText,
@@ -78,7 +50,7 @@ export async function generateThreadTitle(params: {
     });
     const timeoutMs = resolveThreadTitleTimeoutMs(params.timeoutMs);
     const response = await completeThreadTitle({
-      model,
+      model: prepared.model,
       userMessage,
       timeoutMs,
     });
@@ -88,99 +60,6 @@ export async function generateThreadTitle(params: {
     logVerbose(`thread-title: title generation failed for agent ${params.agentId}: ${String(err)}`);
     return null;
   }
-}
-
-export function resolveDiscordThreadTitleModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): ThreadTitleModelSelection | null {
-  const fallbackRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
-  const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
-  });
-  const resolved = split
-    ? resolveModelRefFromString({
-        raw: split.model,
-        defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
-        aliasIndex,
-      })
-    : null;
-  const provider = resolved?.ref.provider ?? fallbackRef.provider;
-  const modelId = resolved?.ref.model ?? fallbackRef.model;
-  return {
-    provider,
-    modelId,
-    profileId: split?.profile || undefined,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
-  };
-}
-
-async function resolveThreadTitleModel(params: {
-  cfg: OpenClawConfig;
-  selection: ThreadTitleModelSelection;
-  agentId: string;
-}): Promise<ThreadTitleModel | null> {
-  const authStorage = discoverAuthStorage(params.selection.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.selection.agentDir);
-  const model = resolveModelWithRegistry({
-    provider: params.selection.provider,
-    modelId: params.selection.modelId,
-    modelRegistry,
-    cfg: params.cfg,
-  });
-  if (!model) {
-    logVerbose(
-      `thread-title: model not found for agent ${params.agentId}: ${params.selection.provider}/${params.selection.modelId}`,
-    );
-    return null;
-  }
-
-  const apiKeyInfo = await getApiKeyForModel({
-    model,
-    cfg: params.cfg,
-    agentDir: params.selection.agentDir,
-    profileId: params.selection.profileId,
-  });
-  const rawApiKey = apiKeyInfo.apiKey?.trim();
-  if (!rawApiKey && apiKeyInfo.mode !== "aws-sdk") {
-    logVerbose(
-      `thread-title: missing API key for agent ${params.agentId}: ${params.selection.provider}/${params.selection.modelId}`,
-    );
-    return null;
-  }
-
-  await maybeSetThreadTitleRuntimeApiKey({
-    authStorage,
-    model,
-    rawApiKey,
-  });
-
-  return model;
-}
-
-async function maybeSetThreadTitleRuntimeApiKey(params: {
-  authStorage: ReturnType<typeof discoverAuthStorage>;
-  model: ThreadTitleModel;
-  rawApiKey: string | undefined;
-}): Promise<void> {
-  if (!params.rawApiKey) {
-    return;
-  }
-  if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("../../../github-copilot/token.js");
-    const copilotToken = await resolveCopilotApiToken({
-      githubToken: params.rawApiKey,
-    });
-    params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
-    return;
-  }
-  params.authStorage.setRuntimeApiKey(params.model.provider, params.rawApiKey);
 }
 
 async function completeThreadTitle(params: {
