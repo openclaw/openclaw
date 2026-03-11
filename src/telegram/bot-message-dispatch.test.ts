@@ -268,12 +268,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      999,
-      "Final reply",
-      expect.any(Object),
-    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Final reply", expect.any(Object));
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:main",

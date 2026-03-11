@@ -613,7 +613,9 @@ export const dispatchTelegramMessage = async ({
               previewButtons: bufferedButtons,
             });
             reasoningStepState.resetForNextStep();
-            return result !== "skipped" ? applyTextToPayload(buffered.payload, buffered.text) : null;
+            return result !== "skipped"
+              ? applyTextToPayload(buffered.payload, buffered.text)
+              : null;
           };
 
           let deliveredFinalPayload = false;
