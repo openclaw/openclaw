@@ -16,7 +16,13 @@ async function makeCaseDir(): Promise<string> {
 
 async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promise<string> {
   const resolved = path.resolve(targetPath);
-  const normalized = kind === "dir" ? await fs.realpath(resolved).catch(() => resolved) : resolved;
+  const normalized =
+    kind === "dir"
+      ? await fs.realpath(resolved).catch(() => resolved)
+      : path.join(
+          await fs.realpath(path.dirname(resolved)).catch(() => path.dirname(resolved)),
+          path.basename(resolved),
+        );
   const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
   const lockBaseDir = kind === "dir" ? normalized : path.dirname(normalized);
   return path.join(lockBaseDir, ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
@@ -295,22 +301,31 @@ describe("workspace lock manager", () => {
       "utf8",
     );
 
-    const rmSpy = vi.spyOn(fs, "rm").mockRejectedValue(new Error("EACCES"));
-    const started = Date.now();
-    await expect(
-      acquireWorkspaceLock(target, {
-        kind: "file",
-        timeoutMs: 30,
-        pollIntervalMs: 20,
-        ttlMs: 1,
-      }),
-    ).rejects.toThrow(/workspace lock timeout/);
-    const elapsed = Date.now() - started;
+    const originalRm = fs.rm.bind(fs);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (String(filePath) === lockPath) {
+        throw new Error("EACCES");
+      }
+      return originalRm(filePath, options);
+    });
 
-    expect(rmSpy).toHaveBeenCalled();
-    expect(elapsed).toBeGreaterThanOrEqual(20);
+    try {
+      const started = Date.now();
+      await expect(
+        acquireWorkspaceLock(target, {
+          kind: "file",
+          timeoutMs: 30,
+          pollIntervalMs: 20,
+          ttlMs: 1,
+        }),
+      ).rejects.toThrow(/workspace lock timeout/);
+      const elapsed = Date.now() - started;
 
-    rmSpy.mockRestore();
-    await fs.rm(lockPath, { force: true });
+      expect(rmSpy).toHaveBeenCalled();
+      expect(elapsed).toBeGreaterThanOrEqual(20);
+    } finally {
+      rmSpy.mockRestore();
+      await fs.rm(lockPath, { force: true });
+    }
   });
 });

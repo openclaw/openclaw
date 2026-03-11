@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 
 const withWorkspaceLockMock = vi.fn(
@@ -18,7 +19,10 @@ describe("wrapToolMutationLock timeout policy", () => {
         label: "write",
         description: "write",
         parameters: {},
-        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+        execute: async (): Promise<AgentToolResult<unknown>> => ({
+          content: [{ type: "text", text: "ok" }],
+          details: undefined,
+        }),
       },
       process.cwd(),
     );
@@ -26,7 +30,11 @@ describe("wrapToolMutationLock timeout policy", () => {
     await wrapped.execute("call-1", { path: "same.txt", content: "x" });
 
     expect(withWorkspaceLockMock).toHaveBeenCalled();
-    const [, options] = withWorkspaceLockMock.mock.calls[0] as [string, { timeoutMs?: number }];
+    const [, options] = withWorkspaceLockMock.mock.calls[0] as [
+      string,
+      { timeoutMs?: number },
+      () => Promise<unknown>,
+    ];
     expect(options.timeoutMs).toBeGreaterThanOrEqual(60_000);
   });
 });
