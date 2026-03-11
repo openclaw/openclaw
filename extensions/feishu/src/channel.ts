@@ -368,13 +368,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         const rawFeishu = ctx.cfg.channels?.feishu as FeishuConfig | undefined;
         const accountsMap = rawFeishu?.accounts;
         const isMultiAccount = accountsMap != null && Object.keys(accountsMap).length > 0;
-        // In multi-account mode, account-level dmPolicy is undefined when not explicitly set.
-        // Root-level "open" means the user deliberately opted in, so skip the warning.
-        // In single-account mode, Zod applies the schema default ("pairing"), so warn when
-        // the resolved value is "pairing" as the best available signal.
+        // Determine whether dmPolicy was implicitly left to the default:
+        //
+        // Multi-account: the per-account slot holds dmPolicy only when explicitly set;
+        // undefined means the account inherits the default. Skip the warning only when
+        // the root-level feishu config itself carries an explicit non-pairing value
+        // (e.g. dmPolicy: 'open' at the top level), which is inherited by all named accounts.
+        //
+        // Single-account: AJV / schema validation does not inject default values into the
+        // raw config object, so the field may be undefined even when the runtime falls back
+        // to 'pairing' via `feishuCfg?.dmPolicy ?? 'pairing'` in bot.ts. Warn whenever
+        // dmPolicy is absent (undefined) or is already the new default ('pairing'), and
+        // skip only when the user has explicitly opted in with 'open' or 'allowlist'.
         const dmPolicyImplicit = isMultiAccount
           ? accountsMap[ctx.accountId]?.dmPolicy === undefined && rawFeishu?.dmPolicy !== "open"
-          : rawFeishu?.dmPolicy === "pairing";
+          : rawFeishu?.dmPolicy === undefined || rawFeishu?.dmPolicy === "pairing";
         if (dmPolicyImplicit) {
           warnedDmPolicyMigration.add(ctx.accountId);
           ctx.log?.warn(
