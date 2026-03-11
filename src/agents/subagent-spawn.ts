@@ -548,7 +548,7 @@ export async function spawnSubagentDirect(
     ...toolSpawnMetadata,
     workspaceDir: resolveSpawnedWorkspaceInheritance({
       config: cfg,
-      requesterSessionKey: requesterInternalKey,
+      requesterSessionKey: childSessionKey,
       explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
     }),
   });
