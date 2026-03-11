@@ -50,6 +50,8 @@ export const operatorServiceContextUpsertSchema = z.object({
 export type OperatorMemoryCollection = (typeof OPERATOR_MEMORY_COLLECTIONS)[number];
 export type OperatorMemoryPromotionInput = z.infer<typeof operatorMemoryPromotionSchema>;
 export type OperatorServiceContextUpsertInput = z.infer<typeof operatorServiceContextUpsertSchema>;
+export const OPERATOR_SHARED_MEMORY_AUTHORITY = "local-json-shim" as const;
+export type OperatorSharedMemoryAuthority = typeof OPERATOR_SHARED_MEMORY_AUTHORITY;
 
 export type OperatorMemoryRecord = {
   collection: OperatorMemoryCollection;
@@ -265,7 +267,7 @@ export function upsertOperatorServiceContext(input: unknown): WriteResult {
 }
 
 export function listOperatorMemory(filters?: OperatorMemoryListFilters): {
-  authority: "qdrant";
+  authority: OperatorSharedMemoryAuthority;
   storePath: string;
   generatedAt: number;
   collections: Record<
@@ -312,7 +314,7 @@ export function listOperatorMemory(filters?: OperatorMemoryListFilters): {
   >;
 
   return {
-    authority: "qdrant",
+    authority: OPERATOR_SHARED_MEMORY_AUTHORITY,
     storePath: resolveMemoryStorePath(),
     generatedAt: Date.now(),
     collections,

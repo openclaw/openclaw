@@ -183,6 +183,7 @@ function resolve2TonyTaskType(task: OperatorTaskRecord): string {
 function build2TonyPayload(task: OperatorTaskRecord) {
   const team = getResolvedOperatorTaskTeam(task.envelope);
   const taskType = resolve2TonyTaskType(task);
+  const rawInputs = asRecord(task.envelope.inputs) ?? {};
   return {
     taskId: task.envelope.task_id,
     runId: task.receipt.run_id,
@@ -191,8 +192,9 @@ function build2TonyPayload(task: OperatorTaskRecord) {
     priority: mapTierToPriority(task.envelope.tier),
     callbackUrl: resolveReceiptUrl(task.envelope.task_id),
     payload: {
+      ...rawInputs,
       objective: task.envelope.objective,
-      inputs: task.envelope.inputs,
+      inputs: rawInputs,
       contextRefs: task.envelope.context_refs,
       acceptanceCriteria: task.envelope.acceptance_criteria,
       requester: task.envelope.requester,

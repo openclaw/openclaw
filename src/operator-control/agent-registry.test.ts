@@ -66,6 +66,7 @@ describe("compileOperatorAgentRegistry", () => {
         expect(compiled.agents[0]).toMatchObject({
           id: "tonya",
           name: "Tonya",
+          role: "Control plane",
           specialty: "Control plane",
           triggers: ["operator", "orchestration"],
           teams: ["control-plane"],
@@ -81,12 +82,34 @@ describe("compileOperatorAgentRegistry", () => {
           dispatchAuthEnv: "OPENCLAW_OPERATOR_DEB_SHARED_SECRET",
         });
         expect(compiled.pipelineOrder).toEqual(["tonya"]);
+        expect(compiled.identities).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "tonya",
+              kind: "agent",
+              name: "Tonya",
+              role: "Control plane",
+              teamIds: ["control-plane"],
+              leadTeamIds: ["control-plane"],
+            }),
+            expect.objectContaining({
+              id: "deb-pod",
+              kind: "runtime",
+              name: "Deb",
+              role: "kanban",
+              teamIds: [],
+              leadTeamIds: [],
+            }),
+          ]),
+        );
 
         const artifactPath = path.join(stateDir, "mission-control", "operator-agent-registry.json");
         const artifact = JSON.parse(await fs.readFile(artifactPath, "utf8")) as {
           sourceHash?: string;
+          identities?: unknown[];
         };
         expect(artifact.sourceHash).toBe(compiled.sourceHash);
+        expect(Array.isArray(artifact.identities)).toBe(true);
       });
     });
   });

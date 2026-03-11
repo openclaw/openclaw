@@ -43,7 +43,7 @@ describe("operator shared memory store", () => {
       const snapshot = listOperatorMemory({ limit: 10 });
       expect(service.created).toBe(true);
       expect(taskOutcome.created).toBe(true);
-      expect(snapshot.authority).toBe("qdrant");
+      expect(snapshot.authority).toBe("local-json-shim");
       expect(snapshot.collections["service-context"]).toMatchObject({
         count: 1,
         lastVerifiedAt: 1_700_000_000_000,

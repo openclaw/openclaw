@@ -191,6 +191,12 @@ describe("operator task dispatch", () => {
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
         type: "validate-k8s",
+        payload: {
+          manifest: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n",
+          inputs: {
+            manifest: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n",
+          },
+        },
         metadata: {
           capability: "infrastructure",
           workerTaskType: "validate-k8s",

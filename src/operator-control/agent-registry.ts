@@ -10,6 +10,7 @@ import { saveJsonFile } from "../infra/json-file.js";
 export type CompiledOperatorAgentRecord = {
   id: string;
   name: string;
+  role: string | null;
   specialty: string | null;
   model: string | null;
   skill: string | null;
@@ -33,6 +34,15 @@ export type CompiledOperatorK8sRecord = {
   role: string | null;
   namespace: string | null;
   status: string | null;
+};
+
+export type CompiledOperatorIdentityRecord = {
+  id: string;
+  kind: "agent" | "runtime";
+  name: string;
+  role: string | null;
+  teamIds: string[];
+  leadTeamIds: string[];
 };
 
 export type CompiledOperatorTeamRecord = {
@@ -66,6 +76,7 @@ export type CompiledOperatorAgentRegistry = {
   pipelineOrder: string[];
   skillOwnership: CompiledOperatorSkillOwnership[];
   k8sCluster: CompiledOperatorK8sRecord[];
+  identities: CompiledOperatorIdentityRecord[];
 };
 
 type RawAgentRegistry = {
@@ -140,6 +151,7 @@ function compileAgentRecord(entry: unknown): CompiledOperatorAgentRecord {
   return {
     id,
     name: asString(record.name) ?? id,
+    role: asString(record.role) ?? asString(record.specialty),
     specialty: asString(record.specialty),
     model: asString(record.model_full) ?? asString(record.model),
     skill: asString(record.skill),
@@ -218,6 +230,79 @@ function compileK8sRecord(entry: unknown): CompiledOperatorK8sRecord {
 
 function resolveRegistryArtifactPath(): string {
   return path.join(resolveStateDir(), "mission-control", "operator-agent-registry.json");
+}
+
+function buildIdentityDirectory(params: {
+  agents: CompiledOperatorAgentRecord[];
+  teams: CompiledOperatorTeamRecord[];
+  k8sCluster: CompiledOperatorK8sRecord[];
+}): CompiledOperatorIdentityRecord[] {
+  const teamIdsByAgent = new Map<string, string[]>();
+  const leadTeamIdsByAgent = new Map<string, string[]>();
+  const teamIdsByRuntime = new Map<string, string[]>();
+  const leadTeamIdsByRuntime = new Map<string, string[]>();
+
+  for (const team of params.teams) {
+    for (const member of team.members) {
+      const key = member.toLowerCase();
+      const current = teamIdsByAgent.get(key) ?? [];
+      if (!current.includes(team.id)) {
+        current.push(team.id);
+      }
+      teamIdsByAgent.set(key, current);
+    }
+
+    for (const runtimeId of team.runtimeIds) {
+      const key = runtimeId.toLowerCase();
+      const current = teamIdsByRuntime.get(key) ?? [];
+      if (!current.includes(team.id)) {
+        current.push(team.id);
+      }
+      teamIdsByRuntime.set(key, current);
+    }
+
+    if (!team.lead) {
+      continue;
+    }
+
+    const leadKey = team.lead.toLowerCase();
+    if (team.members.some((member) => member.toLowerCase() === leadKey)) {
+      const current = leadTeamIdsByAgent.get(leadKey) ?? [];
+      if (!current.includes(team.id)) {
+        current.push(team.id);
+      }
+      leadTeamIdsByAgent.set(leadKey, current);
+    }
+
+    if (team.runtimeIds.some((runtimeId) => runtimeId.toLowerCase() === leadKey)) {
+      const current = leadTeamIdsByRuntime.get(leadKey) ?? [];
+      if (!current.includes(team.id)) {
+        current.push(team.id);
+      }
+      leadTeamIdsByRuntime.set(leadKey, current);
+    }
+  }
+
+  const identities: CompiledOperatorIdentityRecord[] = [
+    ...params.agents.map((agent) => ({
+      id: agent.id,
+      kind: "agent" as const,
+      name: agent.name,
+      role: agent.role,
+      teamIds: teamIdsByAgent.get(agent.id.toLowerCase()) ?? [],
+      leadTeamIds: leadTeamIdsByAgent.get(agent.id.toLowerCase()) ?? [],
+    })),
+    ...params.k8sCluster.map((runtime) => ({
+      id: runtime.id,
+      kind: "runtime" as const,
+      name: runtime.name ?? runtime.id,
+      role: runtime.role,
+      teamIds: teamIdsByRuntime.get(runtime.id.toLowerCase()) ?? [],
+      leadTeamIds: leadTeamIdsByRuntime.get(runtime.id.toLowerCase()) ?? [],
+    })),
+  ];
+
+  return identities.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export function compileOperatorAgentRegistry(params?: {
@@ -303,6 +388,11 @@ export function compileOperatorAgentRegistry(params?: {
     pipelineOrder,
     skillOwnership,
     k8sCluster,
+    identities: buildIdentityDirectory({
+      agents: compiledAgents,
+      teams: compiledTeams,
+      k8sCluster,
+    }),
   };
   saveJsonFile(resolveRegistryArtifactPath(), snapshot);
   return snapshot;

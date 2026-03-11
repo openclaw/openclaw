@@ -49,6 +49,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
+COPY mission-control-ui/package.json ./mission-control-ui/package.json
 COPY patches ./patches
 
 COPY --from=ext-deps /out/ ./extensions/
@@ -82,6 +83,7 @@ RUN pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
+RUN pnpm mission-control:build
 
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.

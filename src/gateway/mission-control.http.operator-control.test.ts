@@ -176,7 +176,7 @@ describe.sequential("mission-control operator control routes", () => {
         collections: { "task-outcomes": { count: number } };
         records: Array<{ scopeKey: string; collection: string }>;
       };
-      expect(memory.authority).toBe("qdrant");
+      expect(memory.authority).toBe("local-json-shim");
       expect(memory.collections["task-outcomes"].count).toBe(1);
       expect(memory.records[0]).toMatchObject({
         collection: "task-outcomes",

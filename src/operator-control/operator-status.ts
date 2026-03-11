@@ -20,7 +20,7 @@ export type OperatorControlStatusSnapshot = {
   runtimes: {
     acpBackendId: string | null;
     acpBackendHealthy: boolean;
-    sharedMemoryAuthority: "qdrant";
+    sharedMemoryAuthority: ReturnType<typeof listOperatorMemory>["authority"];
   };
   sharedMemory: {
     storePath: string;
@@ -50,7 +50,7 @@ export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
     runtimes: {
       acpBackendId: acpBackend?.id ?? null,
       acpBackendHealthy: Boolean(acpBackend),
-      sharedMemoryAuthority: "qdrant",
+      sharedMemoryAuthority: sharedMemory.authority,
     },
     sharedMemory: {
       storePath: sharedMemory.storePath,
