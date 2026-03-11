@@ -100,6 +100,13 @@ export function startWhatsAppQrPoll(state: ChannelsState) {
           void loadChannels(state, true);
           break;
         }
+        // Server returned a terminal non-connected response with no QR
+        // refresh (e.g. login TTL expired, session reset). Clear the
+        // stale QR and stop polling to avoid an infinite loop.
+        if (!res.qrDataUrl) {
+          state.whatsappLoginQrDataUrl = null;
+          break;
+        }
       } catch (err) {
         if (myGeneration !== qrPollGeneration) {
           break;
