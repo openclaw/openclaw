@@ -78,7 +78,11 @@ export function resolveTranscriptPolicy(params: {
       provider,
       modelId,
     });
-  const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
+  const isOpenAiResponsesApi =
+    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+  const requiresOpenAiCompatibleToolIdSanitization =
+    params.modelApi === "openai-completions" ||
+    (isOpenAiResponsesApi && !isOpenAi && supportsOpenAiCompatTurnValidation(provider));
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").

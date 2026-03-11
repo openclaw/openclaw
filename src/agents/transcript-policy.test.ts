@@ -54,6 +54,26 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
   });
 
+  it("keeps tool-call id preservation for native OpenAI responses APIs", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      modelApi: "openai-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
+  });
+
+  it("enables strict tool call id sanitization for OpenAI-compatible responses APIs", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "gpt-5.2",
+      modelApi: "openai-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "moonshot",

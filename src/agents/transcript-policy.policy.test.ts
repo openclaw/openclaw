@@ -21,4 +21,14 @@ describe("resolveTranscriptPolicy e2e smoke", () => {
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict9");
   });
+
+  it("enables strict tool-call sanitization for OpenAI-compatible responses routes", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "gpt-5.2",
+      modelApi: "openai-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
 });
