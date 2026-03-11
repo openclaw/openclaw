@@ -22,7 +22,8 @@ export function channelIcon(key: string): string {
 }
 
 export function renderChannelTitleIcon(key: string, label?: string) {
-  return html`<span title=${label ?? key}>${channelIcon(key)}</span>`;
+  const resolvedLabel = label ?? key;
+  return html`<span title=${resolvedLabel}>${channelIcon(key)} ${resolvedLabel}</span>`;
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {

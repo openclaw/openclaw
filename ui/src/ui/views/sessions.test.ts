@@ -116,6 +116,27 @@ describe("sessions view", () => {
     expect(platformMeta?.textContent).toContain("@muhammedirfan00");
   });
 
+  it("shows channel icon for dm-scoped whatsapp keys", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:whatsapp:default:dm:+15551234567",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("🟢");
+    expect(platformMeta?.textContent).toContain("+15551234567");
+  });
+
   it("renders verbose=full without falling back to inherit", async () => {
     const container = document.createElement("div");
     render(

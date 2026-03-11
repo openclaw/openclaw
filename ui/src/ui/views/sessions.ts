@@ -219,8 +219,21 @@ function inferSessionChannel(row: GatewaySessionRow): string {
   if (directFromRow) {
     return directFromRow;
   }
-  const keyMatch = row.key.match(/^agent:[^:]+:([^:]+):(?:direct|group):/i);
-  return keyMatch?.[1]?.toLowerCase() ?? "";
+
+  const parts = row.key.split(":");
+  if (parts.length < 3 || parts[0] !== "agent") {
+    return "";
+  }
+
+  const kindIndex = parts.findIndex((part) => {
+    const lowered = part.toLowerCase();
+    return lowered === "direct" || lowered === "group" || lowered === "dm";
+  });
+  if (kindIndex >= 3) {
+    return parts[2]?.toLowerCase() ?? "";
+  }
+
+  return parts[2]?.toLowerCase() ?? "";
 }
 
 const CHANNEL_ICONS: Record<string, string> = {
@@ -244,7 +257,10 @@ function extractDirectPeerFromSessionKey(key: string): string {
   if (directIndex < 0 || directIndex + 1 >= parts.length) {
     return "";
   }
-  return parts.slice(directIndex + 1).join(":").trim();
+  return parts
+    .slice(directIndex + 1)
+    .join(":")
+    .trim();
 }
 
 function inferSessionHandle(row: GatewaySessionRow, channel: string): string {
