@@ -463,7 +463,15 @@ export async function runMemoryFlushIfNeeded(params: {
   if (sessionFilePath) {
     try {
       const tailMessages = await readTranscriptTailMessages(sessionFilePath, 10);
-      contextHashBeforeFlush = computeContextHash(tailMessages);
+      // If no messages were extracted (e.g. >64KB single-line record), skip
+      // dedup rather than hashing an empty array to a stable value (#34222).
+      if (tailMessages.length === 0) {
+        logVerbose(
+          `memoryFlush dedup skipped (no tail messages extracted): sessionKey=${params.sessionKey}`,
+        );
+      }
+      contextHashBeforeFlush =
+        tailMessages.length > 0 ? computeContextHash(tailMessages) : undefined;
       const previousHash = entry?.memoryFlushContextHash;
       if (previousHash && contextHashBeforeFlush === previousHash) {
         logVerbose(
@@ -632,16 +640,8 @@ async function resolveSessionFilePathForFlush(
       // fall through — resolved path doesn't exist
     }
   } catch {
-    // resolveSessionFilePath threw — try raw sessionFile as last resort
-  }
-  // Fallback: try the raw sessionFile if normalization didn't produce a valid path
-  if (sessionFile) {
-    try {
-      await fs.promises.access(sessionFile);
-      return sessionFile;
-    } catch {
-      return undefined;
-    }
+    // resolveSessionFilePath threw — normalization failed, skip dedup rather
+    // than reading from an unnormalized (potentially stale) path.
   }
   return undefined;
 }
