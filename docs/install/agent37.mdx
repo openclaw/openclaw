@@ -1,0 +1,59 @@
+---
+title: Deploy on Agent37
+---
+
+Deploy OpenClaw on Agent37 with managed hosting and finish setup in your browser.
+Agent37 provisions an isolated OpenClaw instance for you, including HTTPS and terminal
+access, so you can skip VM setup and go straight to OpenClaw.
+
+## How to get started
+
+1. Open [Agent37 OpenClaw](https://www.agent37.com/openclaw).
+2. Sign up or log in to Agent37.
+3. Choose a plan and complete checkout.
+4. Wait for your instance to finish provisioning. Agent37 says access is typically ready
+   in about 30 to 60 seconds.
+5. Open the instance URL shown in your Agent37 dashboard.
+6. Complete the OpenClaw setup flow at `/setup`.
+7. Open the Control UI at `/openclaw`.
+
+## What you get
+
+- Hosted OpenClaw Gateway + Control UI
+- HTTPS-enabled public URL
+- Web setup wizard at `/setup`
+- Full terminal or shell access from the Agent37 dashboard
+- Managed shared infrastructure, so you do not need to provision your own VM
+
+## Setup flow
+
+1. Open the URL for your instance from the Agent37 dashboard.
+2. Visit `/setup` on that URL.
+3. If your instance prompts for a setup password, use the password configured for that instance.
+4. Choose a model or auth provider and paste your key.
+5. Optional: add Telegram, Discord, Slack, or other channel tokens.
+6. Click **Run setup**.
+7. Open the Control UI at `/openclaw`.
+
+## Terminal access
+
+Agent37 includes terminal access for your OpenClaw instance. That gives you a path to:
+
+- inspect logs
+- run `openclaw` CLI commands
+- approve device pairings if needed
+- export data before migrating away from Agent37
+
+## Backup and migration
+
+OpenClaw's standard backup export is available at:
+
+- `https://<your-agent37-instance>/setup/export`
+
+Use the instance URL from the Agent37 dashboard in place of `<your-agent37-instance>`.
+This lets you move your state and workspace to another OpenClaw host later.
+
+## Notes
+
+- Plan selection, billing, and hosted infrastructure are managed by Agent37.
+- For the latest pricing and availability, check [Agent37 OpenClaw](https://www.agent37.com/openclaw).
