@@ -9,6 +9,8 @@ import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
+type IFileInfo = import("music-metadata").IFileInfo;
+
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
 export type DownloadImageResult = {
@@ -414,6 +416,33 @@ export function detectFileType(
 }
 
 /**
+ * Extract duration in milliseconds from an audio/video buffer.
+ * Returns undefined for non-media files or when parsing fails.
+ */
+async function resolveMediaDurationMs(
+  buffer: Buffer,
+  fileName: string,
+  fileType: ReturnType<typeof detectFileType>,
+): Promise<number | undefined> {
+  if (fileType !== "opus" && fileType !== "mp4") return undefined;
+  try {
+    const { parseBuffer } = await import("music-metadata");
+    const fileInfo: IFileInfo = { size: buffer.byteLength, path: fileName };
+    const metadata = await parseBuffer(buffer, fileInfo, {
+      duration: true,
+      skipCovers: true,
+    });
+    const durationSeconds = metadata.format.duration;
+    if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
+      return Math.max(0, Math.round(durationSeconds * 1000));
+    }
+  } catch {
+    // Duration is optional; ignore parse failures.
+  }
+  return undefined;
+}
+
+/**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
  * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
@@ -474,11 +503,13 @@ export async function sendMediaFeishu(params: {
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
     const fileType = detectFileType(name);
+    const duration = await resolveMediaDurationMs(buffer, name, fileType);
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
       fileType,
+      duration,
       accountId,
     });
     // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
