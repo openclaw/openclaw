@@ -180,6 +180,12 @@ export function createProfileAvailability({
     }
 
     if (!httpReachable) {
+      // Direct WebSocket endpoints (e.g. Browser Use) are on-demand — no need to probe
+      // reachability up front. The Playwright connection is established lazily in
+      // connectBrowser when a tab operation actually needs it.
+      if (isWebSocketUrl(profile.cdpUrl)) {
+        return;
+      }
       if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
