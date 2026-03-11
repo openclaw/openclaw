@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 let mockTtsPromise = vi.fn<(text: string, filePath: string) => Promise<void>>();
 
@@ -25,10 +25,14 @@ const baseEdgeConfig = {
 };
 
 describe("edgeTTS – empty audio validation", () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
 
   it("throws when the output file is 0 bytes", async () => {
-
-    const tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
+    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
 
     mockTtsPromise = vi.fn(async (_text: string, filePath: string) => {
@@ -43,16 +47,14 @@ describe("edgeTTS – empty audio validation", () => {
         timeoutMs: 10000,
       }),
     ).rejects.toThrow("Edge TTS produced empty audio file");
-
   });
 
   it("succeeds when the output file has content", async () => {
-
-    const tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
+    tempDir = mkdtempSync(path.join(tmpdir(), "tts-test-"));
     const outputPath = path.join(tempDir, "voice.mp3");
 
     mockTtsPromise = vi.fn(async (_text: string, filePath: string) => {
-      writeFileSync(filePath, Buffer.from([0xff,0xfb,0x90,0x00]));
+      writeFileSync(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     });
 
     await expect(
@@ -63,7 +65,5 @@ describe("edgeTTS – empty audio validation", () => {
         timeoutMs: 10000,
       }),
     ).resolves.toBeUndefined();
-
   });
-
 });
