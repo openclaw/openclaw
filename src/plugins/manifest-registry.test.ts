@@ -130,10 +130,11 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("suppresses duplicate warning when higher-precedence origin (global) overrides lower-precedence (bundled) (#38437)", () => {
-    // A user-installed plugin in .openclaw/extensions/ (global) intentionally
-    // shadows the npm-bundled copy of the same plugin id.  No warning should
-    // be emitted — this is the expected customization flow.
+  it("emits duplicate warning when auto-discovered global plugin conflicts with bundled plugin (#38437)", () => {
+    // A global plugin in .openclaw/extensions/ that shares an id with a bundled
+    // plugin is an unexpected collision (not an explicit config override).
+    // Discovery intentionally keeps globals behind bundled plugins; a conflict
+    // here should surface a warning so the user can investigate.
     const dirBundled = makeTempDir();
     const dirGlobal = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
@@ -150,6 +151,31 @@ describe("loadPluginManifestRegistry", () => {
         idHint: "feishu",
         rootDir: dirGlobal,
         origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning when config-origin plugin explicitly overrides bundled plugin (#38437)", () => {
+    // A plugin loaded via plugins.load.paths (origin=config) intentionally
+    // shadows the bundled copy.  This is an explicit user action — no warning.
+    const dirBundled = makeTempDir();
+    const dirConfig = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirBundled, manifest);
+    writeManifest(dirConfig, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirBundled,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirConfig,
+        origin: "config",
       }),
     ];
 
@@ -181,9 +207,9 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
-  it("suppresses duplicate warning when bundled plugin is discovered after user global copy (#38437 reverse-order)", () => {
-    // Discovery order can vary; even if the bundled copy is encountered after
-    // the global copy, no warning should be emitted.
+  it("emits duplicate warning when bundled plugin is discovered after global copy (#38437 reverse-order)", () => {
+    // Even if the global copy is encountered first in discovery order,
+    // a global vs bundled id collision should still emit a warning.
     const dirBundled = makeTempDir();
     const dirGlobal = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
@@ -203,7 +229,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
