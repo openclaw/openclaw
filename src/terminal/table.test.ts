@@ -156,6 +156,20 @@ describe("renderTable", () => {
       expect(visibleWidth(line)).toBe(width);
     }
   });
+
+  it("consumes unsupported escape sequences without hanging", () => {
+    const out = renderTable({
+      width: 48,
+      columns: [
+        { key: "K", header: "K", minWidth: 6 },
+        { key: "V", header: "V", minWidth: 12, flex: true },
+      ],
+      rows: [{ K: "row", V: "before \x1b[2J after" }],
+    });
+
+    expect(out).toContain("before");
+    expect(out).toContain("after");
+  });
 });
 
 describe("wrapNoteMessage", () => {
