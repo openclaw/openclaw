@@ -140,6 +140,18 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.kimi?.apiKey).toBe("sk-moonshot");
   });
 
+  it("sets provider and key for tavily", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "tavily",
+      textValue: "tvly-test",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("tavily");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.tavily?.apiKey).toBe("tvly-test");
+  });
+
   it("shows missing-key note when no key is provided and no env var", async () => {
     const original = process.env.BRAVE_API_KEY;
     delete process.env.BRAVE_API_KEY;
@@ -273,6 +285,21 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
+  it("stores env-backed SecretRef when secretInputMode=ref for tavily", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({ selectValue: "tavily" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      secretInputMode: "ref", // pragma: allowlist secret
+    });
+    expect(result.tools?.web?.search?.provider).toBe("tavily");
+    expect(result.tools?.web?.search?.tavily?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "TAVILY_API_KEY",
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("stores plaintext key when secretInputMode is unset", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -283,9 +310,9 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "tavily"]);
   });
 });

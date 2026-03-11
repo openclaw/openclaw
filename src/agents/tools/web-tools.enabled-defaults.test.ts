@@ -68,7 +68,25 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createTavilySearchTool(tavilyConfig?: { apiKey?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "tavily",
+            ...(tavilyConfig ? { tavily: tavilyConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "tavily",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
@@ -78,7 +96,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+            : provider === "tavily"
+              ? { provider, tavily: { apiKey: "tvly-config-test" } } // pragma: allowlist secret
+              : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -121,12 +141,15 @@ function installPerplexityChatFetch() {
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "tavily",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
   }
   if (provider === "perplexity") {
+    return { results: [] };
+  }
+  if (provider === "tavily") {
     return { results: [] };
   }
   if (provider === "grok") {
@@ -270,7 +293,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "tavily"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -422,6 +445,61 @@ describe("web_search perplexity Search API", () => {
     expect(body.search_recency_filter).toBe("month");
     expect(body.search_domain_filter).toEqual(["nature.com", ".gov"]);
     expect(body.search_language_filter).toEqual(["en"]);
+  });
+});
+
+describe("web_search tavily provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  it("returns a setup hint when Tavily key is missing", async () => {
+    vi.stubEnv("TAVILY_API_KEY", "");
+    const tool = createTavilySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_tavily_api_key" });
+  });
+
+  it("uses Tavily Search API and maps structured results", async () => {
+    const mockFetch = installMockFetch({
+      results: [
+        {
+          title: "Example",
+          url: "https://example.com/page",
+          content: "Tavily snippet content",
+          published_date: "2026-03-10",
+        },
+      ],
+    });
+    const tool = createTavilySearchTool({ apiKey: "tvly-test-key" }); // pragma: allowlist secret
+    const result = await tool?.execute?.("call-1", { query: "tavily test", count: 3 });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.tavily.com/search");
+    expect((mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.method).toBe("POST");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body).toMatchObject({
+      query: "tavily test",
+      max_results: 3,
+      include_answer: false,
+      include_images: false,
+    });
+    expect(result?.details).toMatchObject({
+      provider: "tavily",
+      count: 1,
+      externalContent: { untrusted: true, source: "web_search", wrapped: true },
+      results: [
+        {
+          url: "https://example.com/page",
+          published: "2026-03-10",
+          siteName: "example.com",
+        },
+      ],
+    });
   });
 });
 

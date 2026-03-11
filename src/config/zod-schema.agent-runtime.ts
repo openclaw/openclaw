@@ -269,6 +269,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("tavily"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -282,6 +283,12 @@ export const ToolsWebSearchSchema = z
         // Setting either opts Perplexity back into the chat-completions path.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
       })
       .strict()
       .optional(),
