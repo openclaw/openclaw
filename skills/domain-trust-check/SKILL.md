@@ -119,7 +119,7 @@ curl -s -X POST https://app.outtake.ai/api/v1/trust/check-batch \
 
 - **Scan before visiting.** Check URLs before using `web_fetch` or `browser` tools.
 - **Batch when possible.** Processing a list of links? Use the batch endpoint.
-- **Respect verdicts.** If `safe_to_visit` is `unsafe`, do not proceed — warn the user.
+- **Respect verdicts.** If `safe_to_visit` is `unsafe`, do not proceed — warn the user. Also warn if `verdict` is `suspicious`, even when `safe_to_visit` is `safe`.
 - **Handle unknowns.** `unknown` means no data, not safe. Proceed with caution.
 
 ## Rate Limits
