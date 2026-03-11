@@ -61,6 +61,8 @@ export type TtsConfig = {
     baseUrl?: string;
     model?: string;
     voice?: string;
+    /** Instructions for gpt-4o-mini-tts model to control tone, style, accent, etc. */
+    instructions?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
