@@ -605,21 +605,32 @@ function isLikelyProviderErrorType(type?: string): boolean {
   return normalized.endsWith("_error");
 }
 
+function hasProviderStreamSequenceMarker(payload: ErrorPayload): boolean {
+  return typeof payload.sequence_number === "number" && Number.isFinite(payload.sequence_number);
+}
+
 function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
   const info = parseApiErrorInfo(raw);
   if (!info) {
     return false;
   }
-  if (isLikelyProviderErrorType(info.type)) {
-    return true;
-  }
+
   if (info.httpCode) {
     const parsedCode = Number(info.httpCode);
     if (Number.isFinite(parsedCode) && parsedCode >= 400) {
       return true;
     }
   }
-  return false;
+
+  // Outside explicit errorContext, only rewrite payloads that strongly look like
+  // streamed provider error events (sequence marker + provider *_error type).
+  // This avoids clobbering legitimate assistant JSON examples.
+  const payload = parseApiErrorPayload(raw);
+  if (!payload || !hasProviderStreamSequenceMarker(payload)) {
+    return false;
+  }
+
+  return isLikelyProviderErrorType(info.type);
 }
 
 export function formatRawAssistantErrorForUi(raw?: string): string {

@@ -90,6 +90,12 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("does not rewrite *_error JSON payloads without errorContext unless stream-marked", () => {
+    const text =
+      '{"type":"error","error":{"type":"server_error","code":"server_error","message":"Example payload for docs"}}';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("does not rewrite regular assistant JSON that only contains error-shaped fields", () => {
     const text =
       '{"request_id":"example-123","error":{"code":"example_code","message":"Example payload for docs"}}';
