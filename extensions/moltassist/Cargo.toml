@@ -1,0 +1,24 @@
+[package]
+name = "moltassist"
+version = "0.1.0"
+edition = "2024"
+authors = ["AnnulusLabs LLC <steve@annuluslabs.com>"]
+description = "Autonomous task execution for OpenClaw — F1 pit crew for your codebase"
+license = "MIT"
+repository = "https://github.com/openclaw/openclaw"
+keywords = ["openclaw", "automation", "task-runner", "ai", "llm"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
+colored = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

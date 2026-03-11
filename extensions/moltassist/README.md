@@ -1,112 +1,132 @@
 # MoltAssist 🦞
 
-**Autonomous task execution for OpenClaw.**
+**Autonomous task execution for OpenClaw.** Written in Rust.
 
-Load a checklist. Assign to specialists. Execute via local LLM. Verify. Ship.
+Load a checklist. Route to specialists. Execute via local LLM. Ship.
 
-Like an F1 pit crew for your codebase — every agent has one job, executes in parallel, zero wasted motion.
-
-## Why
-
-You have a TODO list. You have a local GPU. Why are you doing this manually?
-
-MoltAssist reads your markdown checklists, breaks them into atomic tasks, routes each task to a specialist agent via ternary gene matching (no embeddings, no APIs), and executes them through an uncensored local model.
-
-## Quick Start
+## Install
 
 ```bash
-# Install
-pip install moltassist
-
-# Run against a checklist
-moltassist run TODO.md
-
-# Run with auto-execute (shell commands run automatically)
-moltassist run TODO.md --auto-execute
-
-# Use a specific model
-moltassist run TODO.md --model dolphin-mixtral:8x7b
-
-# Just plan, don't execute
-moltassist plan TODO.md
+cargo install --path extensions/moltassist
 ```
 
-## As a Library
+Or grab a release binary from [Releases](https://github.com/openclaw/openclaw/releases).
 
-```python
-from moltassist import PitCrew, LocalRunner
+## Usage
 
-runner = LocalRunner(tier="medium")  # wizard-vicuna-uncensored:13b
-crew = PitCrew()
-crew.load("MASTER_SOP.md")
-print(crew.run(executor=runner.execute))
+```bash
+# Execute a markdown checklist
+moltassist run TODO.md --tier medium
+
+# Auto-execute shell commands from LLM plans
+moltassist run TODO.md --auto-execute
+
+# Plan without executing
+moltassist plan TODO.md
+
+# List available models
+moltassist models
+
+# Check saved state
+moltassist status TODO_state.json
 ```
 
 ## How It Works
 
 1. **Parse** — Reads markdown checklists (`- [ ] task`) into atomic tasks
-2. **Gene** — Each task gets a 48-trit ternary gene from its description (SHA-256 → balanced ternary)
-3. **Match** — Cavity resonance routing matches tasks to specialist agents (Scout, Builder, Tester, Washer, Deployer, Verifier)
-4. **Execute** — Local LLM plans and optionally runs shell commands
-5. **Verify** — Completion checks via commands, file existence, or imports
-6. **Report** — ASCII status board shows progress
+2. **Gene** — Each task gets a 48-trit balanced ternary gene via SHA-256
+3. **Route** — Cosine similarity in trit space matches tasks to specialist agents
+4. **Execute** — Local abliterated LLM plans and optionally runs commands
+5. **Report** — Colored ASCII status board shows progress
 
-## Agent Types
+### Gene Routing
 
-| Type | Signature | Job |
-|------|-----------|-----|
-| Scout | explore, search, find | Explore codebase, locate files |
-| Builder | write, create, build | Write code, generate files |
-| Tester | test, verify, check | Run tests, validate outputs |
-| Washer | scrub, clean, purge | Remove secrets, clean data |
-| Deployer | deploy, install, ship | SCP, install, configure |
-| Verifier | confirm, endpoint, status | Health checks, ping endpoints |
+No embeddings. No cloud APIs. No vector databases.
 
-Routing is deterministic — same task description always goes to the same agent type. No randomness, no embeddings API, no cloud calls.
+Every task description is hashed to a 48-trit balanced ternary gene `{-1, 0, +1}`.
+Every agent type has a fixed gene from its role description.
+Routing = cosine similarity between task gene and agent genes.
+Same input always routes to the same agent. Deterministic. Instant. Offline.
 
-## Model Tiers
+### Agent Types
 
-| Tier | Model | VRAM | Speed |
-|------|-------|------|-------|
-| heavy | dolphin-mixtral:8x7b | 24GB | Slow, best reasoning |
-| medium | wizard-vicuna-uncensored:13b | 7GB | Good balance |
-| light | dolphin-llama3:8b | 4GB | Fast |
-| tiny | dolphin-phi:2.7b | 1.5GB | Instant |
+| Type | Routes to | Signature |
+|------|-----------|-----------|
+| Scout | explore, search, find | `+0-+0+00-+0-+-0+0-+00+-+0...` |
+| Builder | write, create, build | `0+-0++0-+0+-+0-+0+0-+-00+...` |
+| Tester | test, verify, check | `-+0+0-+00+0-++-0-+0+-0+0-...` |
+| Washer | scrub, clean, purge | `0-+0-+0+0+-0+0-+-+0-+00+-...` |
+| Deployer | deploy, install, ship | `+0+0-+-+0+0-+0+-0-+0+0-+0...` |
+| Verifier | confirm, endpoint, status | `-0+0+-0+0-+0+0-+0+-0-+0+0...` |
 
-All models are abliterated (uncensored). They execute tasks without refusing, hedging, or asking permission.
+### Model Tiers
+
+| Tier | Model | VRAM | Use Case |
+|------|-------|------|----------|
+| heavy | dolphin-mixtral:8x7b | 24GB | Complex reasoning |
+| medium | wizard-vicuna-uncensored:13b | 7GB | General tasks |
+| light | dolphin-llama3:8b | 4GB | Fast iteration |
+| tiny | dolphin-phi:2.7b | 1.5GB | Instant planning |
+
+All models are abliterated — they execute without refusing or hedging.
 
 ## Checklist Format
 
-Any markdown with checkboxes works:
+Any markdown with checkboxes:
 
 ```markdown
-# My Project
-
-## Phase 1
+## My Project
 - [x] Already done
 - [ ] Scrub API keys from repo
 - [ ] Run test suite
 - [ ] Deploy to staging
-
-## Phase 2
-- [ ] Write documentation
-- [ ] Create release tag
 ```
 
-Projects are detected from `## PROJECT N: Name` headers (SOP format) or inferred from `##` headers.
+SOP format also supported:
+
+```markdown
+## PROJECT 1: Backend
+- [ ] Build auth module
+- [ ] Write tests
+
+## PROJECT 2: Frontend
+- [ ] Create login page
+```
 
 ## Requirements
 
-- Python 3.10+
 - [Ollama](https://ollama.com) running locally
-- Any abliterated model pulled (`ollama pull dolphin-llama3:8b`)
-- A GPU (CPU works but slow)
+- Any model pulled (`ollama pull dolphin-llama3:8b`)
+- A GPU (CPU works but slower)
+
+## Build
+
+```bash
+# Requires Rust nightly
+cargo build --release
+
+# Cross-compile for Linux
+cargo build --release --target x86_64-unknown-linux-gnu
+```
+
+## Architecture
+
+```
+src/
+  main.rs     — CLI (clap) + orchestration
+  gene.rs     — SHA-256 → balanced ternary gene encoding
+  task.rs     — Task struct, priority inference, state machine
+  dispatch.rs — Cavity-resonance agent routing
+  manifest.rs — Markdown checklist parser
+  runner.rs   — Ollama LLM executor
+  board.rs    — Colored ASCII status board
+  verify.rs   — Task completion verification
+```
+
+Zero runtime dependencies beyond Ollama. Single static binary. ~2.5MB stripped.
 
 ## License
 
 MIT — same as OpenClaw.
 
-## Credits
-
 Built by [AnnulusLabs LLC](https://annuluslabs.com), Taos, New Mexico.
-Part of the OpenClaw ecosystem.
