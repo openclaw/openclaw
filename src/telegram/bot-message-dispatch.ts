@@ -24,6 +24,7 @@ import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../conf
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -51,6 +52,47 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+function normalizeReplyQuoteText(text: string | undefined, maxChars?: number): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!(typeof maxChars === "number") || !Number.isFinite(maxChars) || maxChars <= 0) {
+    return trimmed;
+  }
+  return truncateUtf16Safe(trimmed, maxChars).trim();
+}
+
+function buildReplyQuoteTextByMessageId(params: {
+  currentMessageId?: number;
+  currentBody?: string;
+  replyTargetId?: string;
+  replyTargetBody?: string;
+  maxChars?: number;
+}): Record<string, string> | undefined {
+  if (
+    !(typeof params.maxChars === "number") ||
+    !Number.isFinite(params.maxChars) ||
+    params.maxChars <= 0
+  ) {
+    return undefined;
+  }
+  const entries = new Map<string, string>();
+  if (typeof params.currentMessageId === "number") {
+    const quote = normalizeReplyQuoteText(params.currentBody, params.maxChars);
+    if (quote) {
+      entries.set(String(params.currentMessageId), quote);
+    }
+  }
+  if (params.replyTargetId) {
+    const quote = normalizeReplyQuoteText(params.replyTargetBody, params.maxChars);
+    if (quote) {
+      entries.set(params.replyTargetId, quote);
+    }
+  }
+  return entries.size > 0 ? Object.fromEntries(entries) : undefined;
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -433,10 +475,14 @@ export const dispatchTelegramMessage = async ({
     }
   }
 
-  const replyQuoteText =
-    ctxPayload.ReplyToIsQuote && ctxPayload.ReplyToBody
-      ? ctxPayload.ReplyToBody.trim() || undefined
-      : undefined;
+  const replyQuoteTextByMessageId = buildReplyQuoteTextByMessageId({
+    currentMessageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
+    currentBody: typeof ctxPayload.BodyForAgent === "string" ? ctxPayload.BodyForAgent : undefined,
+    replyTargetId: typeof ctxPayload.ReplyToId === "string" ? ctxPayload.ReplyToId : undefined,
+    replyTargetBody:
+      typeof ctxPayload.ReplyToBody === "string" ? ctxPayload.ReplyToBody : undefined,
+    maxChars: telegramCfg.replyContextLength,
+  });
   const deliveryState = createLaneDeliveryStateTracker();
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
@@ -459,7 +505,7 @@ export const dispatchTelegramMessage = async ({
     tableMode,
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
-    replyQuoteText,
+    replyQuoteTextByMessageId,
   };
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
     if (payload.text === text) {

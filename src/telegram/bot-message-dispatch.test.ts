@@ -212,6 +212,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("builds reply quote text by target message id when replyContextLength is configured", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reply", replyToId: "456" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const context = createContext({
+      ctxPayload: {
+        BodyForAgent: "Current message body",
+        ReplyToId: "123",
+        ReplyToBody: "Quoted upstream body",
+      } as unknown as TelegramMessageContext["ctxPayload"],
+    });
+
+    await dispatchWithContext({
+      context,
+      telegramCfg: { replyContextLength: 12 },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyQuoteTextByMessageId: {
+          "123": "Quoted upstr",
+          "456": "Current mess",
+        },
+      }),
+    );
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
