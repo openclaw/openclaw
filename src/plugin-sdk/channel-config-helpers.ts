@@ -151,6 +151,13 @@ export function resolveWhatsAppConfigAllowFrom(params: {
   return resolveWhatsAppAccount(params).allowFrom ?? [];
 }
 
+export function resolveWhatsAppConfigAllowSendTo(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] | undefined {
+  return resolveWhatsAppAccount(params).allowSendTo;
+}
+
 export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
   return normalizeWhatsAppAllowFromEntries(allowFrom);
 }
