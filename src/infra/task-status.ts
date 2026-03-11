@@ -58,9 +58,7 @@ export type OpenClawTaskStatusReadResult =
   | { ok: true; status: OpenClawTaskStatusFile }
   | { ok: false; error: string };
 
-export async function readTaskStatusFile(
-  filePath: string,
-): Promise<OpenClawTaskStatusReadResult> {
+export async function readTaskStatusFile(filePath: string): Promise<OpenClawTaskStatusReadResult> {
   // Prefer a more precise error surface than readJsonFile for callers that need
   // to distinguish missing files from malformed JSON.
   let raw: unknown;
@@ -72,7 +70,12 @@ export async function readTaskStatusFile(
       return { ok: false, error: "TASK_STATUS_INVALID_JSON" };
     }
   } catch (err: unknown) {
-    if (err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === "ENOENT") {
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "ENOENT"
+    ) {
       return { ok: false, error: "TASK_STATUS_FILE_MISSING" };
     }
     // Fall back to the generic helper for non-ENOENT errors so future
@@ -104,7 +107,7 @@ export async function readTaskStatusFile(
     "completed",
     "failed",
   ];
-  if (!allowedStatuses.includes(data.status as OpenClawTaskStatusPhase)) {
+  if (!allowedStatuses.includes(data.status)) {
     return { ok: false, error: "TASK_STATUS_INVALID_STATUS" };
   }
 
@@ -126,4 +129,3 @@ export async function readTaskStatusFile(
 
   return { ok: true, status: data as OpenClawTaskStatusFile };
 }
-

@@ -123,13 +123,13 @@ The script might emit a JSON status file like:
 
 ```json5
 {
-  "task": "seo-audit",
-  "status": "running",
-  "current": 67,
-  "total": 135,
-  "message": "Analyzing 108-compression-is-intelligence.md",
-  "updated_at": "2026-03-10T14:32:00+08:00",
-  "results_file": "/home/user/.openclaw/workspace/tasks/seo-audit-results.json"
+  task: "seo-audit",
+  status: "running",
+  current: 67,
+  total: 135,
+  message: "Analyzing 108-compression-is-intelligence.md",
+  updated_at: "2026-03-10T14:32:00+08:00",
+  results_file: "/home/user/.openclaw/workspace/tasks/seo-audit-results.json",
 }
 ```
 
@@ -180,20 +180,20 @@ The status file can encode these pauses:
 
 ```json5
 {
-  "task": "server-migration",
-  "status": "waiting_for_input",
-  "phase": "database-restore",
-  "completed_phases": ["backup", "config-sync"],
-  "current_issue": {
-    "type": "decision_required",
-    "message": "Target database has existing table user_sessions (2,847 rows).",
-    "options": [
+  task: "server-migration",
+  status: "waiting_for_input",
+  phase: "database-restore",
+  completed_phases: ["backup", "config-sync"],
+  current_issue: {
+    type: "decision_required",
+    message: "Target database has existing table user_sessions (2,847 rows).",
+    options: [
       "drop: delete and restore from backup",
       "merge: attempt to merge data (may hit conflicts)",
-      "rename: rename existing table to user_sessions_bak and restore"
-    ]
+      "rename: rename existing table to user_sessions_bak and restore",
+    ],
   },
-  "updated_at": "2026-03-10T14:32:00+08:00"
+  updated_at: "2026-03-10T14:32:00+08:00",
 }
 ```
 
@@ -235,13 +235,13 @@ A shell script runs daily, checks certificate expiration dates for a domain list
 
 ```json5
 {
-  "task": "ssl-cert-check",
-  "status": "completed",
-  "checked_at": "2026-03-10T09:00:01Z",
-  "certificates": [
-    { "domain": "api.example.com", "expiry": "2026-03-22", "days_left": 12 },
-    { "domain": "blog.example.com", "expiry": "2026-10-15", "days_left": 247 }
-  ]
+  task: "ssl-cert-check",
+  status: "completed",
+  checked_at: "2026-03-10T09:00:01Z",
+  certificates: [
+    { domain: "api.example.com", expiry: "2026-03-22", days_left: 12 },
+    { domain: "blog.example.com", expiry: "2026-10-15", days_left: 247 },
+  ],
 }
 ```
 
@@ -358,4 +358,3 @@ This does **not** enforce a global contract for all tasks, but provides a solid 
   - use **Pattern 4** for recurring "sentinel" checks.
 - Standardizing your status file shape around `OpenClawTaskStatusV1` makes it easier to evolve
   from ad-hoc scripts to shared tools and dashboards over time.
-
