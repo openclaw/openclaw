@@ -17,6 +17,11 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import {
+  extractShortModelName,
+  resolveResponsePrefixTemplate,
+  type ResponsePrefixContext,
+} from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -126,11 +131,26 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
   const list = cfg.agents?.list ?? [];
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
-    return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+    const entry = list.find(
+      (e) => Boolean(e?.heartbeat) && normalizeAgentId(e?.id) === resolvedAgentId,
     );
+    if (!entry) {
+      return false;
+    }
+    // Respect explicit enabled: false on a per-agent heartbeat block.
+    if (entry.heartbeat?.enabled === false) {
+      return false;
+    }
+    return true;
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  if (resolvedAgentId !== resolveDefaultAgentId(cfg)) {
+    return false;
+  }
+  // Respect enabled: false on the defaults heartbeat block.
+  if (cfg.agents?.defaults?.heartbeat?.enabled === false) {
+    return false;
+  }
+  return true;
 }
 
 function resolveHeartbeatConfig(
@@ -769,14 +789,22 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    const prefixContext: ResponsePrefixContext = {};
+    const onModelSelected = (ctx: { provider: string; model: string; thinkLevel?: string }) => {
+      prefixContext.provider = ctx.provider;
+      prefixContext.model = extractShortModelName(ctx.model);
+      prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+      prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+    };
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          onModelSelected,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode, onModelSelected };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -809,7 +837,8 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
+    const resolvedResponsePrefix = resolveResponsePrefixTemplate(responsePrefix, prefixContext);
+    const normalized = normalizeHeartbeatReply(replyPayload, resolvedResponsePrefix, ackMaxChars);
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
