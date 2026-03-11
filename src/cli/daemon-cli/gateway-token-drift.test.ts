@@ -43,4 +43,29 @@ describe("resolveGatewayTokenForDriftCheck", () => {
       }),
     ).toThrow(/gateway\.auth\.token/i);
   });
+
+  it("does not fall back to gateway.remote token for unresolved local token refs", () => {
+    expect(() =>
+      resolveGatewayTokenForDriftCheck({
+        cfg: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+            },
+            remote: {
+              token: "remote-token",
+            },
+          },
+        } as OpenClawConfig,
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toThrow(/gateway\.auth\.token/i);
+  });
 });
