@@ -208,7 +208,70 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
-  it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
+  it("prefers higher-precedence origins for truly distinct plugins with the same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "ranked-duplicate", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "ranked-duplicate",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "ranked-duplicate",
+        rootDir: dirB,
+        origin: "config",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
+    const warning = registry.diagnostics.find(
+      (diagnostic) => diagnostic.pluginId === "ranked-duplicate",
+    );
+    expect(warning?.level).toBe("warn");
+    expect(warning?.source).toBe(path.join(dirA, "index.ts"));
+    expect(warning?.message).toContain(path.join(dirB, "index.ts"));
+  });
+
+  it("keeps bundled plugins ahead of auto-discovered global duplicates", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "bundled-wins", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "bundled-wins",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "bundled-wins",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+    const warning = registry.diagnostics.find(
+      (diagnostic) => diagnostic.pluginId === "bundled-wins",
+    );
+    expect(warning?.source).toBe(path.join(globalDir, "index.ts"));
+    expect(warning?.message).toContain(path.join(bundledDir, "index.ts"));
+  });
+
+  it("prefers higher-precedence origins for the same physical directory (config > workspace > bundled > global)", () => {
     const dir = makeTempDir();
     fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };

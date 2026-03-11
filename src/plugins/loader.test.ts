@@ -1094,9 +1094,16 @@ describe("loadOpenClawPlugins", () => {
 
     const entries = registry.plugins.filter((entry) => entry.id === "shadow");
     const loaded = entries.find((entry) => entry.status === "loaded");
-    const overridden = entries.find((entry) => entry.status === "disabled");
+    expect(entries).toHaveLength(1);
     expect(loaded?.origin).toBe("config");
-    expect(overridden?.origin).toBe("bundled");
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "shadow" &&
+          diag.source === path.join(bundledDir, "shadow.cjs") &&
+          diag.message.includes(override.file),
+      ),
+    ).toBe(true);
   });
 
   it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
@@ -1134,10 +1141,16 @@ describe("loadOpenClawPlugins", () => {
 
       const entries = registry.plugins.filter((entry) => entry.id === "feishu");
       const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
+      expect(entries).toHaveLength(1);
       expect(loaded?.origin).toBe("bundled");
-      expect(overridden?.origin).toBe("global");
-      expect(overridden?.error).toContain("overridden by bundled plugin");
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.pluginId === "feishu" &&
+            diag.source === path.join(globalDir, "index.cjs") &&
+            diag.message.includes(path.join(bundledDir, "index.cjs")),
+        ),
+      ).toBe(true);
     });
   });
 
