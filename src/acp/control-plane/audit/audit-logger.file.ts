@@ -46,7 +46,7 @@ export class FileAuditLogger implements IAuditLogger {
     this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
 
     // Start flush timer
-    if (this.config.flushInterval > 0) {
+    if (this.config.flushInterval && this.config.flushInterval > 0) {
       this.flushTimer = setInterval(() => {
         this.flush().catch((err) => {
           if (!this.isClosed) {
@@ -58,7 +58,7 @@ export class FileAuditLogger implements IAuditLogger {
     }
 
     // Ensure storage directory exists
-    if (this.config.enabled) {
+    if (this.config.enabled && this.config.storageDir) {
       fs.mkdir(this.config.storageDir, { recursive: true }).catch((err) => {
         logVerbose(`audit: failed to create storage dir: ${err}`);
       });
@@ -98,7 +98,7 @@ export class FileAuditLogger implements IAuditLogger {
     this.buffer.push(enriched);
 
     // Auto-flush if buffer is full
-    if (this.buffer.length >= this.config.maxBufferSize) {
+    if (this.config.maxBufferSize && this.buffer.length >= this.config.maxBufferSize) {
       // Flush asynchronously without blocking
       setImmediate(() => {
         this.flush().catch((err) => {
