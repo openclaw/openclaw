@@ -36,6 +36,8 @@ export class RealtimeCallHandler {
     private manager: CallManager,
     private provider: VoiceCallProvider,
     private coreConfig: CoreConfig | null,
+    /** Pre-resolved OpenAI API key (falls back to OPENAI_API_KEY env at call time) */
+    private openaiApiKey?: string,
   ) {}
 
   /**
@@ -129,9 +131,9 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
   ): OpenAIRealtimeVoiceBridge | null {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = this.openaiApiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      console.error("[voice-call] No OPENAI_API_KEY for realtime call");
+      console.error("[voice-call] No OpenAI API key for realtime call (set streaming.openaiApiKey or OPENAI_API_KEY)");
       ws.close(1011, "No API key");
       return null;
     }

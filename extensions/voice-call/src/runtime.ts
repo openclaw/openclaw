@@ -179,6 +179,7 @@ export async function createVoiceCallRuntime(params: {
       manager,
       provider,
       coreConfig,
+      config.streaming.openaiApiKey,
     );
     webhookServer.setRealtimeHandler(realtimeHandler);
     log.info("[voice-call] Realtime voice handler initialized");
