@@ -115,6 +115,7 @@ export const editMessageReplyMarkupSpy: AnyAsyncMock = vi.fn(async () => ({ mess
 export const sendMessageDraftSpy: AnyAsyncMock = vi.fn(async () => true);
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const getChatSpy: AnyAsyncMock = vi.fn(async () => ({ id: -1001234567890 }));
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
   username: "openclaw_bot",
   has_topics_enabled: true,
@@ -149,6 +150,7 @@ const apiStub: ApiStub = {
   sendMessageDraft: sendMessageDraftSpy,
   setMessageReaction: setMessageReactionSpy,
   setMyCommands: setMyCommandsSpy,
+  getChat: getChatSpy,
   getMe: getMeSpy,
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
@@ -311,6 +313,8 @@ beforeEach(() => {
   sendChatActionSpy.mockResolvedValue(undefined);
   setMyCommandsSpy.mockReset();
   setMyCommandsSpy.mockResolvedValue(undefined);
+  getChatSpy.mockReset();
+  getChatSpy.mockResolvedValue({ id: -1001234567890 });
   getMeSpy.mockReset();
   getMeSpy.mockResolvedValue({
     username: "openclaw_bot",

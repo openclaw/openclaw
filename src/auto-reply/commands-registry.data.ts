@@ -197,6 +197,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "set_context",
+      nativeName: "set_context",
+      description: "Bind a Telegram DM to a forum topic context.",
+      // Native-only: handled by Telegram DM intercept (not a general text command).
+      scope: "native",
+      category: "management",
+    }),
+    defineChatCommand({
+      key: "clear_context",
+      nativeName: "clear_context",
+      description: "Clear a Telegram DM forum topic context binding.",
+      // Native-only: handled by Telegram DM intercept (not a general text command).
+      scope: "native",
+      category: "management",
+    }),
+    defineChatCommand({
       key: "export-session",
       nativeName: "export-session",
       description: "Export current session to HTML file with full system prompt.",
