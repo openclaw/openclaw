@@ -291,7 +291,10 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("🔒 Exec approval required");
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(text).toContain("/approve req-1 allow-once");
+    expect(text).toContain("/approve req-1 allow-always");
+    expect(text).toContain("/approve req-1 deny");
+    expect(text).not.toContain("Reply with:");
   });
 
   it("formats complex commands as fenced code blocks", async () => {
@@ -458,5 +461,62 @@ describe("exec approval forwarder", () => {
     await Promise.resolve();
 
     expect(getFirstDeliveryText(deliver)).toContain("````\necho ```danger```\n````");
+  });
+
+  it("renders each approval option as a separate code block with full ID", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    const fullId = "550e8400-e29b-41d4-a716-446655440000";
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        id: fullId,
+        request: { ...baseRequest.request },
+        createdAtMs: 1000,
+        expiresAtMs: 121_000,
+      }),
+    ).resolves.toBe(true);
+
+    const text = getFirstDeliveryText(deliver);
+
+    // Each approval must be in its own code block
+    expect(text).toContain("```\n/approve " + fullId + " allow-once\n```");
+    expect(text).toContain("```\n/approve " + fullId + " allow-always\n```");
+    expect(text).toContain("```\n/approve " + fullId + " deny\n```");
+
+    // Approvals must NOT share a code block — verify three separate ``` pairs
+    const fenceCount = (text.match(/```/g) || []).length;
+    expect(fenceCount).toBe(6); // 3 blocks x 2 fences each
+  });
+
+  it("never outputs the old 'Reply with: /approve <id>' placeholder format", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    const text = getFirstDeliveryText(deliver);
+
+    expect(text).not.toContain("Reply with:");
+    expect(text).not.toContain("<id>");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+  });
+
+  it("shows full approval ID on the ID line, not a truncated slug", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    const fullId = "abcdef01-2345-6789-abcd-ef0123456789";
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        id: fullId,
+        request: { ...baseRequest.request },
+      }),
+    ).resolves.toBe(true);
+
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain(`ID: ${fullId}`);
+    expect(text).not.toContain("ID: abcdef01\n");
   });
 });

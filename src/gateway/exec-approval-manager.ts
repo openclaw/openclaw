@@ -31,11 +31,6 @@ type PendingEntry = {
   promise: Promise<ExecApprovalDecision | null>;
 };
 
-export type ExecApprovalIdLookupResult =
-  | { kind: "exact" | "prefix"; id: string }
-  | { kind: "ambiguous"; ids: string[] }
-  | { kind: "none" };
-
 export class ExecApprovalManager {
   private pending = new Map<string, PendingEntry>();
 
@@ -176,36 +171,31 @@ export class ExecApprovalManager {
     return entry?.promise ?? null;
   }
 
-  lookupPendingId(input: string): ExecApprovalIdLookupResult {
-    const normalized = input.trim();
-    if (!normalized) {
-      return { kind: "none" };
-    }
-
-    const exact = this.pending.get(normalized);
+  /**
+   * Find a pending approval by exact ID or unique prefix match.
+   * Returns the matched record and full ID, "ambiguous" if multiple prefix matches, or null.
+   */
+  findByIdOrPrefix(
+    idOrPrefix: string,
+  ): { record: ExecApprovalRecord; id: string } | "ambiguous" | null {
+    // Exact match first
+    const exact = this.pending.get(idOrPrefix);
     if (exact) {
-      return exact.record.resolvedAtMs === undefined
-        ? { kind: "exact", id: normalized }
-        : { kind: "none" };
+      return { record: exact.record, id: idOrPrefix };
     }
-
-    const lowerPrefix = normalized.toLowerCase();
-    const matches: string[] = [];
-    for (const [id, entry] of this.pending.entries()) {
-      if (entry.record.resolvedAtMs !== undefined) {
-        continue;
-      }
-      if (id.toLowerCase().startsWith(lowerPrefix)) {
-        matches.push(id);
+    // Prefix match over still-pending entries
+    const matches: { record: ExecApprovalRecord; id: string }[] = [];
+    for (const [id, entry] of this.pending) {
+      if (id.startsWith(idOrPrefix) && entry.record.resolvedAtMs === undefined) {
+        matches.push({ record: entry.record, id });
       }
     }
-
     if (matches.length === 1) {
-      return { kind: "prefix", id: matches[0] };
+      return matches[0];
     }
     if (matches.length > 1) {
-      return { kind: "ambiguous", ids: matches };
+      return "ambiguous";
     }
-    return { kind: "none" };
+    return null;
   }
 }
