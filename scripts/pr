@@ -103,8 +103,49 @@ pr_meta_json() {
   gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,files,additions,deletions,statusCheckRollup
 }
 
+resolve_pr_contributor_from_json() {
+  local json="$1"
+
+  local pr_author
+  pr_author=$(printf '%s\n' "$json" | jq -r '.author.login // ""')
+
+  local body
+  body=$(printf '%s\n' "$json" | jq -r '.body // ""')
+
+  local explicit_contrib
+  explicit_contrib=$(printf '%s\n' "$body" | rg -io -r '$1' '^Original contributor:\s*@([A-Za-z0-9-]+)\s*$' -m 1 || true)
+  if [ -n "$explicit_contrib" ] && [ "$explicit_contrib" != "null" ]; then
+    printf '%s\n' "$explicit_contrib"
+    return 0
+  fi
+
+  local replacement_pr
+  replacement_pr=$(printf '%s\n' "$body" | rg -io -r '$1' 'Replacement for #([0-9]+)' -m 1 || true)
+  if [ -n "$replacement_pr" ] && [ "$replacement_pr" != "null" ]; then
+    local replacement_author
+    replacement_author=$(gh pr view "$replacement_pr" --json author --jq '.author.login // ""' 2>/dev/null || true)
+    if [ -n "$replacement_author" ] && [ "$replacement_author" != "null" ]; then
+      printf '%s\n' "$replacement_author"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$pr_author"
+}
+
+resolve_pr_contributor() {
+  local pr="$1"
+  local json="${2:-}"
+  if [ -z "$json" ]; then
+    json=$(pr_meta_json "$pr")
+  fi
+  resolve_pr_contributor_from_json "$json"
+}
+
 write_pr_meta_files() {
   local json="$1"
+  local contrib
+  contrib=$(resolve_pr_contributor_from_json "$json")
 
   printf '%s\n' "$json" > .local/pr-meta.json
 
@@ -119,6 +160,7 @@ PR_HEAD_REPO=$(printf '%s\n' "$json" | jq -r .headRepository.nameWithOwner)
 PR_HEAD_REPO_URL=$(printf '%s\n' "$json" | jq -r '.headRepository.url // ""')
 PR_HEAD_OWNER=$(printf '%s\n' "$json" | jq -r '.headRepositoryOwner.login // ""')
 PR_HEAD_REPO_NAME=$(printf '%s\n' "$json" | jq -r '.headRepository.name // ""')
+PR_CONTRIBUTOR=$contrib
 EOF_ENV
 }
 
@@ -1181,11 +1223,11 @@ prepare_validate_commit() {
 
   # shellcheck disable=SC1091
   source .local/pr-meta.env
-  local contrib="${PR_AUTHOR:-}"
+  local contrib="${PR_CONTRIBUTOR:-}"
   local pr_number="${PR_NUMBER:-$pr}"
 
   if [ -z "$contrib" ]; then
-    contrib=$(gh pr view "$pr" --json author --jq .author.login)
+    contrib=$(resolve_pr_contributor "$pr")
   fi
 
   local subject
@@ -1411,7 +1453,10 @@ prepare_gates() {
     echo "Missing changelog update. Add CHANGELOG.md changes."
     exit 1
   fi
-  local contrib="${PR_AUTHOR:-}"
+  local contrib="${PR_CONTRIBUTOR:-}"
+  if [ -z "$contrib" ] || [ "$contrib" = "null" ]; then
+    contrib=$(resolve_pr_contributor "$pr")
+  fi
   validate_changelog_merge_hygiene
   validate_changelog_entry_for_pr "$pr" "$contrib"
 
@@ -1466,9 +1511,9 @@ prepare_push() {
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
 
-  local contrib="${PR_AUTHOR:-}"
+  local contrib="${PR_CONTRIBUTOR:-}"
   if [ -z "$contrib" ]; then
-    contrib=$(gh pr view "$pr" --json author --jq .author.login)
+    contrib=$(resolve_pr_contributor "$pr")
   fi
   local contrib_id
   contrib_id=$(gh api "users/$contrib" --jq .id)
@@ -1483,6 +1528,7 @@ EOF_PREP
   cat > .local/prep.env <<EOF_ENV
 PR_NUMBER=$PR_NUMBER
 PR_AUTHOR=$contrib
+PR_CONTRIBUTOR=$contrib
 PR_HEAD=$PR_HEAD
 PR_HEAD_SHA_BEFORE=$pushed_from_sha
 PREP_HEAD_SHA=$prep_head_sha
@@ -1527,9 +1573,9 @@ prepare_sync_head() {
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
 
-  local contrib="${PR_AUTHOR:-}"
+  local contrib="${PR_CONTRIBUTOR:-}"
   if [ -z "$contrib" ]; then
-    contrib=$(gh pr view "$pr" --json author --jq .author.login)
+    contrib=$(resolve_pr_contributor "$pr")
   fi
   local contrib_id
   contrib_id=$(gh api "users/$contrib" --jq .id)
@@ -1545,6 +1591,7 @@ EOF_PREP
   cat > .local/prep.env <<EOF_ENV
 PR_NUMBER=$PR_NUMBER
 PR_AUTHOR=$contrib
+PR_CONTRIBUTOR=$contrib
 PR_HEAD=$PR_HEAD
 PR_HEAD_SHA_BEFORE=$pushed_from_sha
 PREP_HEAD_SHA=$prep_head_sha
@@ -1755,7 +1802,10 @@ merge_run() {
   local pr_number
   pr_number=$(printf '%s\n' "$pr_meta_json" | jq -r .number)
   local contrib
-  contrib=$(printf '%s\n' "$pr_meta_json" | jq -r .author.login)
+  contrib="${PR_CONTRIBUTOR:-}"
+  if [ -z "$contrib" ] || [ "$contrib" = "null" ]; then
+    contrib=$(resolve_pr_contributor "$pr" "$pr_meta_json")
+  fi
   local is_draft
   is_draft=$(printf '%s\n' "$pr_meta_json" | jq -r .isDraft)
   if [ "$is_draft" = "true" ]; then
