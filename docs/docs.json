@@ -2009,11 +2009,11 @@
             "groups": [
               {
                 "group": "概要",
-                "pages": ["ja-JP/index"]
+                "pages": ["ja/index"]
               },
               {
                 "group": "初回セットアップ",
-                "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
+                "pages": ["ja/start/getting-started", "ja/start/wizard"]
               }
             ]
           }
