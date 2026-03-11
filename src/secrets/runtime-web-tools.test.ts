@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as authProfiles from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
@@ -291,6 +292,80 @@ describe("runtime web tools resolution", () => {
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("minimax-oauth-token");
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("auto-detects minimax using auth profile oauth when env/config keys are missing", async () => {
+    vi.spyOn(authProfiles, "ensureAuthProfileStore").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-portal:default": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "profile-oauth-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.ensureAuthProfileStore>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax-portal" ? ["minimax-portal:default"] : [],
+    );
+    vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
+      apiKey: "profile-oauth-token", // pragma: allowlist secret
+      provider: "minimax-portal",
+    });
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
+  });
+
+  it("treats configured provider as primary and falls back to next available provider", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              minimax: {
+                apiKey: "fallback-minimax-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerConfigured).toBe("brave");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("config");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("fallback-minimax-key");
+    expect(metadata.search.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_AUTODETECT_SELECTED",
+          path: "tools.web.search.provider",
+        }),
+      ]),
     );
   });
 

@@ -1,3 +1,8 @@
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  resolveApiKeyForProfile,
+} from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -15,10 +20,11 @@ const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
+const MINIMAX_AUTH_PROFILE_PROVIDERS = ["minimax-portal", "minimax-cn", "minimax"] as const;
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
-type SecretResolutionSource = "config" | "secretRef" | "env" | "missing"; // pragma: allowlist secret
+type SecretResolutionSource = "config" | "secretRef" | "env" | "auth_profile" | "missing"; // pragma: allowlist secret
 type RuntimeWebProviderSource = "configured" | "auto-detect" | "none";
 
 export type RuntimeWebDiagnosticCode =
@@ -350,6 +356,47 @@ function resolveProviderKeyValue(
   return scoped.apiKey;
 }
 
+async function resolveMinimaxApiKeyFromAuthProfiles(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+}): Promise<string | undefined> {
+  let store: ReturnType<typeof ensureAuthProfileStore>;
+  try {
+    store = ensureAuthProfileStore(params.context.env.OPENCLAW_AGENT_DIR, {
+      allowKeychainPrompt: false,
+    });
+  } catch {
+    return undefined;
+  }
+
+  const visited = new Set<string>();
+  for (const provider of MINIMAX_AUTH_PROFILE_PROVIDERS) {
+    const profileIds = listProfilesForProvider(store, provider);
+    for (const profileId of profileIds) {
+      if (visited.has(profileId)) {
+        continue;
+      }
+      visited.add(profileId);
+      try {
+        const resolved = await resolveApiKeyForProfile({
+          cfg: params.sourceConfig,
+          store,
+          profileId,
+          agentDir: params.context.env.OPENCLAW_AGENT_DIR,
+        });
+        const value = normalizeSecretInput(resolved?.apiKey);
+        if (value) {
+          return value;
+        }
+      } catch {
+        // Ignore profile-specific failures and continue probing next profile.
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function hasConfiguredSecretRef(value: unknown, defaults: SecretDefaults | undefined): boolean {
   return Boolean(
     resolveSecretInputRef({
@@ -402,7 +449,12 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search) {
-    const candidates = configuredProvider ? [configuredProvider] : [...WEB_SEARCH_PROVIDERS];
+    const candidates = configuredProvider
+      ? [
+          configuredProvider,
+          ...WEB_SEARCH_PROVIDERS.filter((provider) => provider !== configuredProvider),
+        ]
+      : [...WEB_SEARCH_PROVIDERS];
     const unresolvedWithoutFallback: Array<{
       provider: WebSearchProvider;
       path: string;
@@ -416,7 +468,7 @@ export async function resolveRuntimeWebTools(params: {
       const path =
         provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
       const value = resolveProviderKeyValue(search, provider);
-      const resolution = await resolveSecretInputWithEnvFallback({
+      let resolution = await resolveSecretInputWithEnvFallback({
         sourceConfig: params.sourceConfig,
         context: params.context,
         defaults,
@@ -424,6 +476,20 @@ export async function resolveRuntimeWebTools(params: {
         path,
         envVars: envVarsForProvider(provider),
       });
+
+      if (provider === "minimax" && !resolution.value) {
+        const authProfileValue = await resolveMinimaxApiKeyFromAuthProfiles({
+          sourceConfig: params.sourceConfig,
+          context: params.context,
+        });
+        if (authProfileValue) {
+          resolution = {
+            ...resolution,
+            value: authProfileValue,
+            source: "auth_profile",
+          };
+        }
+      }
 
       if (resolution.secretRefConfigured && resolution.fallbackUsedAfterRefFailure) {
         const diagnostic: RuntimeWebDiagnostic = {
@@ -448,19 +514,6 @@ export async function resolveRuntimeWebTools(params: {
           path,
           reason: resolution.unresolvedRefReason,
         });
-      }
-
-      if (configuredProvider) {
-        selectedProvider = provider;
-        selectedResolution = resolution;
-        if (resolution.value) {
-          setResolvedWebSearchApiKey({
-            resolvedConfig: params.resolvedConfig,
-            provider,
-            value: resolution.value,
-          });
-        }
-        break;
       }
 
       if (resolution.value) {
@@ -500,16 +553,24 @@ export async function resolveRuntimeWebTools(params: {
       if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
         failUnresolvedSearchNoFallback(unresolvedWithoutFallback[0]);
       }
+    }
 
-      if (selectedProvider) {
-        const diagnostic: RuntimeWebDiagnostic = {
-          code: "WEB_SEARCH_AUTODETECT_SELECTED",
-          message: `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`,
-          path: "tools.web.search.provider",
-        };
-        diagnostics.push(diagnostic);
-        searchMetadata.diagnostics.push(diagnostic);
-      }
+    if (configuredProvider && selectedProvider && selectedProvider !== configuredProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_AUTODETECT_SELECTED",
+        message: `tools.web.search.provider is "${configuredProvider}" but no usable credentials were found. Falling back to "${selectedProvider}".`,
+        path: "tools.web.search.provider",
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
+    } else if (!configuredProvider && selectedProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_AUTODETECT_SELECTED",
+        message: `tools.web.search auto-detected provider "${selectedProvider}" from available credentials.`,
+        path: "tools.web.search.provider",
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
     }
 
     if (selectedProvider) {
@@ -529,7 +590,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && !configuredProvider && searchMetadata.selectedProvider) {
+  if (searchEnabled && search && searchMetadata.selectedProvider) {
     for (const provider of WEB_SEARCH_PROVIDERS) {
       if (provider === searchMetadata.selectedProvider) {
         continue;
@@ -543,7 +604,7 @@ export async function resolveRuntimeWebTools(params: {
       pushInactiveSurfaceWarning({
         context: params.context,
         path,
-        details: `tools.web.search auto-detected provider is "${searchMetadata.selectedProvider}".`,
+        details: `tools.web.search selected provider is "${searchMetadata.selectedProvider}".`,
       });
     }
   } else if (search && !searchEnabled) {
@@ -562,7 +623,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  if (searchEnabled && search && configuredProvider) {
+  if (searchEnabled && search && configuredProvider && !searchMetadata.selectedProvider) {
     for (const provider of WEB_SEARCH_PROVIDERS) {
       if (provider === configuredProvider) {
         continue;
