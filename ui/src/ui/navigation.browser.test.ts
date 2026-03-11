@@ -129,6 +129,76 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
   });
 
+  it("keeps active chat state when opening the current session from the table", async () => {
+    const app = mountApp("/sessions");
+    await app.updateComplete;
+
+    const currentSession = "agent:main:subagent:task-123";
+    const queuedAt = Date.now();
+    app.sessionKey = currentSession;
+    app.applySettings({
+      ...app.settings,
+      token: "abc123",
+      sessionKey: currentSession,
+      lastActiveSessionKey: currentSession,
+    });
+    app.chatAttachments = [
+      {
+        id: "a1",
+        dataUrl: "data:text/plain;base64,QQ==",
+        mimeType: "text/plain",
+      },
+    ];
+    app.chatQueue = [
+      {
+        id: "q1",
+        text: "queued message",
+        createdAt: queuedAt,
+      },
+    ];
+    app.chatRunId = "run-123";
+    app.sessionsResult = {
+      ts: Date.now(),
+      path: "(multiple)",
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      sessions: [
+        {
+          key: currentSession,
+          kind: "direct",
+          updatedAt: Date.now(),
+        },
+      ],
+    };
+    await app.updateComplete;
+
+    const link = app.querySelector<HTMLAnchorElement>(".session-key-cell a.session-link");
+    expect(link).not.toBeNull();
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    await app.updateComplete;
+    expect(app.settings.token).toBe("abc123");
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe(currentSession);
+    expect(app.chatAttachments).toEqual([
+      {
+        id: "a1",
+        dataUrl: "data:text/plain;base64,QQ==",
+        mimeType: "text/plain",
+      },
+    ]);
+    expect(app.chatQueue).toEqual([
+      {
+        id: "q1",
+        text: "queued message",
+        createdAt: queuedAt,
+      },
+    ]);
+    expect(app.chatRunId).toBe("run-123");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
+  });
+
   it("keeps chat and nav usable on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

@@ -448,21 +448,26 @@ export function renderApp(state: AppViewState) {
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSessionAndRefresh(state, key),
                 onOpenSession: (sessionKey) => {
-                  state.sessionKey = sessionKey;
-                  state.chatMessage = "";
-                  state.chatAttachments = [];
-                  state.chatStream = null;
-                  state.chatStreamStartedAt = null;
-                  state.chatRunId = null;
-                  state.chatQueue = [];
-                  state.resetToolStream();
-                  state.resetChatScroll();
+                  const isSessionSwitch = state.sessionKey !== sessionKey;
+                  if (isSessionSwitch) {
+                    state.sessionKey = sessionKey;
+                    state.chatMessage = "";
+                    state.chatAttachments = [];
+                    state.chatStream = null;
+                    state.chatStreamStartedAt = null;
+                    state.chatRunId = null;
+                    state.chatQueue = [];
+                    state.resetToolStream();
+                    state.resetChatScroll();
+                  }
                   state.applySettings({
                     ...state.settings,
                     sessionKey,
                     lastActiveSessionKey: sessionKey,
                   });
-                  void state.loadAssistantIdentity();
+                  if (isSessionSwitch) {
+                    void state.loadAssistantIdentity();
+                  }
                   state.setTab("chat");
                 },
               })
