@@ -254,7 +254,7 @@ describe("loadImageFromRef", () => {
 });
 
 describe("detectAndLoadPromptImages", () => {
-  it("returns no images for non-vision models even when existing images are provided", async () => {
+  it("preserves existing images for non-vision models (webchat attachments)", async () => {
     const result = await detectAndLoadPromptImages({
       prompt: "ignore",
       workspaceDir: "/tmp",
@@ -262,6 +262,20 @@ describe("detectAndLoadPromptImages", () => {
       existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
     });
 
+    // Webchat attachment images should pass through even when the model
+    // does not declare image support — the user explicitly sent them (issue #42903)
+    expect(result.images).toHaveLength(1);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("skips prompt-detected images for non-vision models", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "look at /tmp/test.png",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+    });
+
+    // Auto-detected prompt images should still be skipped for non-vision models
     expect(result.images).toHaveLength(0);
     expect(result.detectedRefs).toHaveLength(0);
   });
