@@ -773,12 +773,18 @@ export async function runCapability(params: {
   });
   let resolvedEntries = entries;
   if (resolvedEntries.length === 0) {
+    // When image capability is requested and explicit imageModel is configured,
+    // do not pass activeModel to resolveAutoEntries to ensure imageModel takes precedence.
+    const configuredImageModels =
+      capability === "image" ? resolveImageModelFromAgentDefaults(cfg) : [];
+    const shouldNotUseActiveModel = capability === "image" && configuredImageModels.length > 0;
+
     resolvedEntries = await resolveAutoEntries({
       cfg,
       agentDir: params.agentDir,
       providerRegistry: params.providerRegistry,
       capability,
-      activeModel: params.activeModel,
+      activeModel: shouldNotUseActiveModel ? undefined : params.activeModel,
     });
   }
   if (resolvedEntries.length === 0) {
