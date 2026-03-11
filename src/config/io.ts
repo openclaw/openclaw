@@ -68,6 +68,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENROUTER_API_KEY",
   "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
+  "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "KILOCODE_API_KEY",
   "ELEVENLABS_API_KEY",
@@ -139,6 +140,22 @@ export type ReadConfigFileSnapshotForWriteResult = {
   snapshot: ConfigFileSnapshot;
   writeOptions: ConfigWriteOptions;
 };
+
+export type RuntimeConfigSnapshotRefreshParams = {
+  sourceConfig: OpenClawConfig;
+};
+
+export type RuntimeConfigSnapshotRefreshHandler = {
+  refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
+  clearOnRefreshFailure?: () => void;
+};
+
+export class ConfigRuntimeRefreshError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ConfigRuntimeRefreshError";
+  }
+}
 
 function hashConfigRaw(raw: string | null): string {
   return crypto
@@ -1306,6 +1323,7 @@ let configCache: {
 } | null = null;
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
@@ -1356,6 +1374,64 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
 }
 
+function isCompatibleTopLevelRuntimeProjectionShape(params: {
+  runtimeSnapshot: OpenClawConfig;
+  candidate: OpenClawConfig;
+}): boolean {
+  const runtime = params.runtimeSnapshot as Record<string, unknown>;
+  const candidate = params.candidate as Record<string, unknown>;
+  for (const key of Object.keys(runtime)) {
+    if (!Object.hasOwn(candidate, key)) {
+      return false;
+    }
+    const runtimeValue = runtime[key];
+    const candidateValue = candidate[key];
+    const runtimeType = Array.isArray(runtimeValue)
+      ? "array"
+      : runtimeValue === null
+        ? "null"
+        : typeof runtimeValue;
+    const candidateType = Array.isArray(candidateValue)
+      ? "array"
+      : candidateValue === null
+        ? "null"
+        : typeof candidateValue;
+    if (runtimeType !== candidateType) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
+    return config;
+  }
+  if (config === runtimeConfigSnapshot) {
+    return runtimeConfigSourceSnapshot;
+  }
+  // This projection expects callers to pass config objects derived from the
+  // active runtime snapshot (for example shallow/deep clones with targeted edits).
+  // For structurally unrelated configs, skip projection to avoid accidental
+  // merge-patch deletions or reintroducing resolved values into source refs.
+  if (
+    !isCompatibleTopLevelRuntimeProjectionShape({
+      runtimeSnapshot: runtimeConfigSnapshot,
+      candidate: config,
+    })
+  ) {
+    return config;
+  }
+  const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
+  return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+}
+
+export function setRuntimeConfigSnapshotRefreshHandler(
+  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
+): void {
+  runtimeConfigSnapshotRefreshHandler = refreshHandler;
+}
+
 export function loadConfig(): OpenClawConfig {
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
@@ -1402,9 +1478,11 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
-  if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
-    const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
+  if (hadBothSnapshots) {
+    const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
+    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
@@ -1412,4 +1490,38 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  // Keep the last-known-good runtime snapshot active until the specialized refresh path
+  // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
+  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+  if (refreshHandler) {
+    try {
+      const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
+      if (refreshed) {
+        return;
+      }
+    } catch (error) {
+      try {
+        refreshHandler.clearOnRefreshFailure?.();
+      } catch {
+        // Keep the original refresh failure as the surfaced error.
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new ConfigRuntimeRefreshError(
+        `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
+        { cause: error },
+      );
+    }
+  }
+  if (hadBothSnapshots) {
+    // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
+    // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
+    const fresh = io.loadConfig();
+    setRuntimeConfigSnapshot(fresh, nextCfg);
+    return;
+  }
+  if (hadRuntimeSnapshot) {
+    clearRuntimeConfigSnapshot();
+  }
+  // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
+  // edits to openclaw.json remain visible (no stale snapshot).
 }

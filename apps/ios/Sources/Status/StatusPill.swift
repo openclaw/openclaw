@@ -38,6 +38,7 @@ struct StatusPill: View {
     var gateway: GatewayState
     var voiceWakeEnabled: Bool
     var activity: Activity?
+    var compact: Bool = false
     var brighten: Bool = false
     var onTap: () -> Void
 
@@ -45,11 +46,11 @@ struct StatusPill: View {
 
     var body: some View {
         Button(action: self.onTap) {
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
+            HStack(spacing: self.compact ? 8 : 10) {
+                HStack(spacing: self.compact ? 6 : 8) {
                     Circle()
                         .fill(self.gateway.color)
-                        .frame(width: 9, height: 9)
+                        .frame(width: self.compact ? 8 : 9, height: self.compact ? 8 : 9)
                         .scaleEffect(
                             self.gateway == .connecting && !self.reduceMotion
                                 ? (self.pulse ? 1.15 : 0.85)
@@ -58,34 +59,38 @@ struct StatusPill: View {
                         .opacity(self.gateway == .connecting && !self.reduceMotion ? (self.pulse ? 1.0 : 0.6) : 1.0)
 
                     Text(self.gateway.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font((self.compact ? Font.footnote : Font.subheadline).weight(.semibold))
                         .foregroundStyle(.primary)
                 }
 
-                Divider()
-                    .frame(height: 14)
-                    .opacity(0.35)
-
                 if let activity {
-                    HStack(spacing: 6) {
+                    if !self.compact {
+                        Divider()
+                            .frame(height: 14)
+                            .opacity(0.35)
+                    }
+
+                    HStack(spacing: self.compact ? 4 : 6) {
                         Image(systemName: activity.systemImage)
-                            .font(.subheadline.weight(.semibold))
+                            .font((self.compact ? Font.footnote : Font.subheadline).weight(.semibold))
                             .foregroundStyle(activity.tint ?? .primary)
-                        Text(activity.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        if !self.compact {
+                            Text(activity.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                        }
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 } else {
                     Image(systemName: self.voiceWakeEnabled ? "mic.fill" : "mic.slash")
-                        .font(.subheadline.weight(.semibold))
+                        .font((self.compact ? Font.footnote : Font.subheadline).weight(.semibold))
                         .foregroundStyle(self.voiceWakeEnabled ? .primary : .secondary)
                         .accessibilityLabel(self.voiceWakeEnabled ? "Voice Wake enabled" : "Voice Wake disabled")
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .statusGlassCard(brighten: self.brighten, verticalPadding: 8)
+            .statusGlassCard(brighten: self.brighten, verticalPadding: self.compact ? 6 : 8)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Connection Status")

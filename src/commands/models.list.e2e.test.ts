@@ -21,6 +21,8 @@ const resolveAuthStorePathForDisplay = vi
 const resolveProfileUnusableUntilForDisplay = vi.fn().mockReturnValue(null);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
+const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const resolveUsableCustomProviderApiKey = vi.fn().mockReturnValue(null);
 const getCustomProviderApiKey = vi.fn().mockReturnValue(undefined);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
@@ -57,6 +59,8 @@ vi.mock("../agents/auth-profiles.js", () => ({
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
   resolveAwsSdkEnvVarName,
+  hasUsableCustomProviderApiKey,
+  resolveUsableCustomProviderApiKey,
   getCustomProviderApiKey,
 }));
 
@@ -354,8 +358,8 @@ describe("models list/status", () => {
 
     await modelsListCommand({ all: true, json: true }, runtime);
 
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJson).toHaveBeenCalledWith(resolvedConfig);
+    expect(ensureOpenClawModelsJson).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJson.mock.calls[0]?.[0]).toEqual(resolvedConfig);
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {

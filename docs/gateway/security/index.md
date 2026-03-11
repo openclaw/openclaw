@@ -104,6 +104,7 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
 - `sessionKey` is routing/context selection, not per-user auth.
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
+- Exec approvals bind exact request context and best-effort direct local file operands; they do not semantically model every runtime/interpreter loader path. Use sandboxing and host isolation for strong boundaries.
 
 If you need hostile-user isolation, split trust boundaries by OS user/host and run separate gateways.
 
@@ -199,7 +200,7 @@ If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
 Use this when auditing access or deciding what to back up:
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
-- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:
@@ -262,9 +263,14 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 ## Control UI over HTTP
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
-identity. `gateway.controlUi.allowInsecureAuth` does **not** bypass secure-context,
-device-identity, or device-pairing checks. Prefer HTTPS (Tailscale Serve) or open
-the UI on `127.0.0.1`.
+identity. `gateway.controlUi.allowInsecureAuth` is a local compatibility toggle:
+
+- On localhost, it allows Control UI auth without device identity when the page
+  is loaded over non-secure HTTP.
+- It does not bypass pairing checks.
+- It does not relax remote (non-localhost) device identity requirements.
+
+Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
 disables device identity checks entirely. This is a severe security downgrade;
@@ -365,6 +371,7 @@ If a macOS node is paired, the Gateway can invoke `system.run` on that node. Thi
 
 - Requires node pairing (approval + token).
 - Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
+- Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
 - If you don’t want remote execution, set security to **deny** and remove node pairing for that Mac.
 
 ## Dynamic skills (watcher / remote nodes)
@@ -747,8 +754,10 @@ Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
 Note: `gateway.remote.token` / `.password` are client credential sources. They
 do **not** protect local WS access by themselves.
-Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*`
+Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*`
 is unset.
+If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via
+SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.

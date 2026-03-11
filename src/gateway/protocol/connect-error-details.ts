@@ -28,6 +28,26 @@ export const ConnectErrorDetailCodes = {
 export type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
+export type ConnectRecoveryNextStep =
+  | "retry_with_device_token"
+  | "update_auth_configuration"
+  | "update_auth_credentials"
+  | "wait_then_retry"
+  | "review_auth_configuration";
+
+export type ConnectErrorRecoveryAdvice = {
+  canRetryWithDeviceToken?: boolean;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+};
+
+const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
+  "retry_with_device_token",
+  "update_auth_configuration",
+  "update_auth_credentials",
+  "wait_then_retry",
+  "review_auth_configuration",
+]);
+
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
@@ -90,4 +110,27 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   }
   const code = (details as { code?: unknown }).code;
   return typeof code === "string" && code.trim().length > 0 ? code : null;
+}
+
+export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return {};
+  }
+  const raw = details as {
+    canRetryWithDeviceToken?: unknown;
+    recommendedNextStep?: unknown;
+  };
+  const canRetryWithDeviceToken =
+    typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
+  const normalizedNextStep =
+    typeof raw.recommendedNextStep === "string" ? raw.recommendedNextStep.trim() : "";
+  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
+    normalizedNextStep as ConnectRecoveryNextStep,
+  )
+    ? (normalizedNextStep as ConnectRecoveryNextStep)
+    : undefined;
+  return {
+    canRetryWithDeviceToken,
+    recommendedNextStep,
+  };
 }
