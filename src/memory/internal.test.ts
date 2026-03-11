@@ -214,6 +214,28 @@ describe("buildFileEntry", () => {
     ]);
     expect(built?.structuredInputBytes).toBeGreaterThan(0);
   });
+
+  it("skips lazy multimodal indexing when the file grows after discovery", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "diagram.png");
+    await fs.writeFile(target, Buffer.from("png"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+    await fs.writeFile(target, Buffer.alloc(entry!.size + 32, 1));
+
+    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+  });
+
+  it("skips lazy multimodal indexing when file bytes change after discovery", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "diagram.png");
+    await fs.writeFile(target, Buffer.from("png"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+    await fs.writeFile(target, Buffer.from("gif"));
+
+    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+  });
 });
 
 describe("chunkMarkdown", () => {
