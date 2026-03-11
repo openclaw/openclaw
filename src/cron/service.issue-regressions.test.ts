@@ -1834,7 +1834,7 @@ describe("Cron issue regressions", () => {
     const result = await cron.run("stale-running", "force");
 
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("stale-running", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("stale-running", { agentId: undefined, contextKey: "cron:stale-running", sessionKey: undefined });
 
     cron.stop();
     await store.cleanup();
