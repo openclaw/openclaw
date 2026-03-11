@@ -185,5 +185,11 @@ export async function handlePilotInbound(params: {
     onDispatchError: (err, info) => {
       runtime.error?.(`pilot ${info.kind} reply failed: ${String(err)}`);
     },
+    replyOptions: {
+      disableBlockStreaming:
+        typeof account.config.blockStreaming === "boolean"
+          ? !account.config.blockStreaming
+          : undefined,
+    },
   });
 }
