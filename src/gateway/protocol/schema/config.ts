@@ -13,6 +13,7 @@ export const ConfigSetParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
     baseHash: Type.Optional(NonEmptyString),
+    checkpoint: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -21,6 +22,7 @@ const ConfigApplyLikeParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
     baseHash: Type.Optional(NonEmptyString),
+    checkpoint: Type.Optional(Type.Boolean()),
     sessionKey: Type.Optional(Type.String()),
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),

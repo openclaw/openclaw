@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { backupVerifyCommand } from "../commands/backup-verify.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -70,6 +71,98 @@ describe("gateway config methods", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
     expect(res.payload?.config).toBeTruthy();
+  });
+
+  it("creates a verified config-only checkpoint when requested", async () => {
+    const current = await rpcReq<{
+      raw?: unknown;
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+
+    const bootstrap = await rpcReq<{ ok?: boolean }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      baseHash: current.payload?.hash,
+    });
+    expect(bootstrap.ok).toBe(true);
+
+    const persisted = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(persisted.ok).toBe(true);
+    expect(typeof persisted.payload?.hash).toBe("string");
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      checkpoint?: {
+        archivePath?: string;
+        createdAt?: string;
+        verified?: boolean;
+        onlyConfig?: boolean;
+      };
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(persisted.payload?.config ?? {}, null, 2),
+      baseHash: persisted.payload?.hash,
+      checkpoint: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.checkpoint?.onlyConfig).toBe(true);
+    expect(res.payload?.checkpoint?.verified).toBe(true);
+    expect(typeof res.payload?.checkpoint?.createdAt).toBe("string");
+    expect(res.payload?.checkpoint?.archivePath).toContain("openclaw-backup");
+    expect(res.payload?.checkpoint?.archivePath).toContain(
+      path.join(process.env.HOME ?? "", "Backups", "OpenClaw"),
+    );
+    await fs.access(res.payload?.checkpoint?.archivePath ?? "");
+
+    await backupVerifyCommand(
+      {
+        log: () => {},
+        error: () => {},
+        exit: (code: number) => {
+          throw new Error(`unexpected verify exit ${code}`);
+        },
+      },
+      {
+        archive: res.payload?.checkpoint?.archivePath ?? "",
+        json: false,
+      },
+    );
+  });
+
+  it("rejects config.patch when the resulting gateway runtime config would fail to start", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.patch",
+      {
+        raw: JSON.stringify({
+          gateway: {
+            tailscale: { mode: "funnel" },
+          },
+        }),
+        baseHash: current.payload?.hash,
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("tailscale funnel requires gateway auth mode=password");
+
+    const after = await rpcReq<{
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(after.ok).toBe(true);
+    expect(after.payload?.hash).toBe(current.payload?.hash);
   });
 
   it("returns a path-scoped config schema lookup", async () => {

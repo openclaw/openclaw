@@ -1,14 +1,16 @@
+import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { backupCreateCommand } from "../../commands/backup.js";
 import {
   createConfigIO,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  resolveGatewayPort,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -23,6 +25,7 @@ import {
   type ConfigSchemaResponse,
 } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { runConfigWriteTransaction } from "../../config/transaction.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -31,6 +34,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { resolveHomeDir } from "../../utils.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -49,10 +53,26 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
+import { resolveGatewayRuntimeConfig } from "../server-runtime-config.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type ConfigCheckpointResult = {
+  archivePath: string;
+  createdAt: string;
+  verified: boolean;
+  onlyConfig: true;
+};
+
+const SILENT_RUNTIME = {
+  log: () => {},
+  error: () => {},
+  exit: (code: number) => {
+    throw new Error(`backup checkpoint unexpectedly exited (${code})`);
+  },
+};
 
 function requireConfigBaseHash(
   params: unknown,
@@ -259,6 +279,100 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   });
 }
 
+async function commitConfigTransactionOrRespond(params: {
+  method: "config.set" | "config.patch" | "config.apply";
+  config: OpenClawConfig;
+  writeOptions: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["writeOptions"];
+  expectedBaseHash: string | null;
+  checkpointRequested: boolean;
+  currentConfigExists: boolean;
+  respond: RespondFn;
+}): Promise<ConfigCheckpointResult | null | false> {
+  try {
+    await resolveGatewayRuntimeConfig({
+      cfg: params.config,
+      port: resolveGatewayPort(params.config, process.env),
+    });
+  } catch (error) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+    return false;
+  }
+
+  let checkpoint: ConfigCheckpointResult | null = null;
+  if (params.checkpointRequested && params.currentConfigExists) {
+    try {
+      const home = resolveHomeDir();
+      const output = home ? `${path.join(home, "Backups", "OpenClaw")}${path.sep}` : undefined;
+      const result = await backupCreateCommand(SILENT_RUNTIME, {
+        onlyConfig: true,
+        verify: true,
+        output,
+      });
+      checkpoint = {
+        archivePath: result.archivePath,
+        createdAt: result.createdAt,
+        verified: result.verified,
+        onlyConfig: true,
+      };
+    } catch (error) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `config checkpoint failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+      return false;
+    }
+  }
+
+  const transaction = await runConfigWriteTransaction({
+    config: params.config,
+    writeOptions: params.writeOptions,
+    expectedBaseHash: params.expectedBaseHash,
+  });
+  if (transaction.ok) {
+    return checkpoint;
+  }
+  const reason = transaction.error ?? "unknown error";
+  const rollbackStateText = transaction.rolledBack
+    ? transaction.beforeHash
+      ? `changes were rolled back to the previous version (config hash ${transaction.beforeHash})`
+      : "changes were rolled back to the previous version"
+    : transaction.stage === "prepare" || transaction.stage === "commit"
+      ? "config file was left unchanged"
+      : transaction.stage === "rollback"
+        ? "rollback did not complete"
+        : "config state could not be confirmed";
+  const isBaseHashMismatch = reason.startsWith("config base hash mismatch:");
+  const message = isBaseHashMismatch
+    ? "config changed since last load; re-run config.get and retry"
+    : `${params.method} transaction failed: ${reason}; ${rollbackStateText}; retry the config update`;
+
+  params.respond(
+    false,
+    undefined,
+    errorShape(isBaseHashMismatch ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE, message, {
+      details: {
+        transactionId: transaction.transactionId,
+        stage: transaction.stage,
+        rolledBack: transaction.rolledBack,
+        beforeHash: transaction.beforeHash,
+        issues: transaction.issues,
+      },
+    }),
+  );
+  return false;
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
@@ -319,13 +433,25 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    await writeConfigFile(parsed.config, writeOptions);
+    const checkpoint = await commitConfigTransactionOrRespond({
+      method: "config.set",
+      config: parsed.config,
+      writeOptions,
+      expectedBaseHash: resolveBaseHashParam(params),
+      checkpointRequested: (params as { checkpoint?: unknown }).checkpoint === true,
+      currentConfigExists: snapshot.exists,
+      respond,
+    });
+    if (checkpoint === false) {
+      return;
+    }
     respond(
       true,
       {
         ok: true,
         path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        ...(checkpoint ? { checkpoint } : {}),
       },
       undefined,
     );
@@ -409,7 +535,18 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
     );
-    await writeConfigFile(validated.config, writeOptions);
+    const checkpoint = await commitConfigTransactionOrRespond({
+      method: "config.patch",
+      config: validated.config,
+      writeOptions,
+      expectedBaseHash: resolveBaseHashParam(params),
+      checkpointRequested: (params as { checkpoint?: unknown }).checkpoint === true,
+      currentConfigExists: snapshot.exists,
+      respond,
+    });
+    if (checkpoint === false) {
+      return;
+    }
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -448,6 +585,7 @@ export const configHandlers: GatewayRequestHandlers = {
           path: sentinelPath,
           payload,
         },
+        ...(checkpoint ? { checkpoint } : {}),
       },
       undefined,
     );
@@ -469,7 +607,18 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
     );
-    await writeConfigFile(parsed.config, writeOptions);
+    const checkpoint = await commitConfigTransactionOrRespond({
+      method: "config.apply",
+      config: parsed.config,
+      writeOptions,
+      expectedBaseHash: resolveBaseHashParam(params),
+      checkpointRequested: (params as { checkpoint?: unknown }).checkpoint === true,
+      currentConfigExists: snapshot.exists,
+      respond,
+    });
+    if (checkpoint === false) {
+      return;
+    }
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -508,6 +657,7 @@ export const configHandlers: GatewayRequestHandlers = {
           path: sentinelPath,
           payload,
         },
+        ...(checkpoint ? { checkpoint } : {}),
       },
       undefined,
     );
