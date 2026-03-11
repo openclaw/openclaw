@@ -106,7 +106,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const token = opts.token?.trim() || account.token;
     if (!token) {
       throw new Error(
-        `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
+        `Telegram bot token missing for account "${account.accountId}". Set one of:
+  - channels.telegram.accounts.${account.accountId}.botToken in openclaw.json
+  - channels.telegram.accounts.${account.accountId}.tokenFile pointing to a file containing the token
+  - TELEGRAM_BOT_TOKEN environment variable`,
       );
     }
 
