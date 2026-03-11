@@ -1,0 +1,32 @@
+name: ShellCheck
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.sh"
+      - ".github/workflows/shellcheck.yml"
+  pull_request:
+    paths:
+      - "**/*.sh"
+      - ".github/workflows/shellcheck.yml"
+
+concurrency:
+  group: shellcheck-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shellcheck:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
