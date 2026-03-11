@@ -6,15 +6,14 @@ import {
   buildRemovePlan,
   buildRenamePlan,
   buildStatPlan,
-  buildWriteCommitPlan,
   type SandboxFsCommandPlan,
 } from "./fs-bridge-shell-command-plans.js";
+import { buildPinnedWritePlan } from "./fs-bridge-write-helper.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import { normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
@@ -112,26 +111,24 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "write files");
-    await this.pathGuard.assertPathSafety(target, { action: "write files", requireWritable: true });
+    const writeCheck = {
+      target,
+      options: { action: "write files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, writeCheck.options);
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const tempPath = await this.writeFileToTempPath({
-      targetContainerPath: target.containerPath,
-      mkdir: params.mkdir !== false,
-      data: buffer,
+    const pinnedWriteTarget = this.pathGuard.resolvePinnedWriteEntry(target, "write files");
+    await this.runCheckedCommand({
+      ...buildPinnedWritePlan({
+        check: writeCheck,
+        pinned: pinnedWriteTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      stdin: buffer,
       signal: params.signal,
     });
-
-    try {
-      await this.runCheckedCommand({
-        ...buildWriteCommitPlan(target, tempPath),
-        signal: params.signal,
-      });
-    } catch (error) {
-      await this.cleanupTempPath(tempPath, params.signal);
-      throw error;
-    }
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
@@ -263,58 +260,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal,
   ): Promise<ExecDockerRawResult> {
     return await this.runCheckedCommand({ ...plan, signal });
-  }
-
-  private async writeFileToTempPath(params: {
-    targetContainerPath: string;
-    mkdir: boolean;
-    data: Buffer;
-    signal?: AbortSignal;
-  }): Promise<string> {
-    const script = params.mkdir
-      ? [
-          "set -eu",
-          'target="$1"',
-          'dir=$(dirname -- "$target")',
-          'if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi',
-          'base=$(basename -- "$target")',
-          'tmp=$(mktemp "$dir/.openclaw-write-$base.XXXXXX")',
-          'cat >"$tmp"',
-          'printf "%s\\n" "$tmp"',
-        ].join("\n")
-      : [
-          "set -eu",
-          'target="$1"',
-          'dir=$(dirname -- "$target")',
-          'base=$(basename -- "$target")',
-          'tmp=$(mktemp "$dir/.openclaw-write-$base.XXXXXX")',
-          'cat >"$tmp"',
-          'printf "%s\\n" "$tmp"',
-        ].join("\n");
-    const result = await this.runCommand(script, {
-      args: [params.targetContainerPath],
-      stdin: params.data,
-      signal: params.signal,
-    });
-    const tempPath = result.stdout.toString("utf8").trim().split(/\r?\n/).at(-1)?.trim();
-    if (!tempPath || !tempPath.startsWith("/")) {
-      throw new Error(
-        `Failed to create temporary sandbox write path for ${params.targetContainerPath}`,
-      );
-    }
-    return normalizeContainerPath(tempPath);
-  }
-
-  private async cleanupTempPath(tempPath: string, signal?: AbortSignal): Promise<void> {
-    try {
-      await this.runCommand('set -eu; rm -f -- "$1"', {
-        args: [tempPath],
-        signal,
-        allowFailure: true,
-      });
-    } catch {
-      // Best-effort cleanup only.
-    }
   }
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
