@@ -87,7 +87,7 @@ afterEach(() => {
 describe("foundry-evm-debug rpc-url.sh", () => {
   it("builds the default Morpho RPC URL", () => {
     const result = runScript(rpcUrlScript, ["8453"], {
-      env: { RPC_SECRET: "test-secret" },
+      env: { RPC_SECRET: "test-secret" }, // pragma: allowlist secret
     });
 
     expect(result.status).toBe(0);
@@ -120,7 +120,7 @@ describe("foundry-evm-debug rpc-url.sh", () => {
 
   it("URL-encodes reserved characters in the secret", () => {
     const result = runScript(rpcUrlScript, ["1"], {
-      env: { RPC_SECRET: "abc&admin=true +?#%" },
+      env: { RPC_SECRET: "abc&admin=true +?#%" }, // pragma: allowlist secret
     });
 
     expect(result.status).toBe(0);

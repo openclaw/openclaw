@@ -16,6 +16,10 @@ REQUIRED_BINS=(
   boundary
   sentry-cli
   argocd
+  anvil
+  cast
+  chisel
+  forge
   openclaw
   qmd
 )
@@ -42,6 +46,10 @@ vault --version >/dev/null
 boundary version >/dev/null
 sentry-cli --version >/dev/null
 argocd version --client >/dev/null
+anvil --version >/dev/null
+cast --version >/dev/null
+chisel --version >/dev/null
+forge --version >/dev/null
 openclaw --help >/dev/null
 qmd --version >/dev/null
 '

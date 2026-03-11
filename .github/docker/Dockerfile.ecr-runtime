@@ -7,6 +7,7 @@ ARG HELM_VERSION=v3.17.1
 ARG TERRAFORM_VERSION=1.14.5
 ARG OPENCLAW_VERSION=latest
 ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
+ARG OPENCLAW_FOUNDRY_VERSION=1.3.1
 ARG QMD_VERSION=1.1.5
 ARG VAULT_VERSION=v1.21.2
 ARG BOUNDARY_VERSION=v0.20.1
@@ -41,6 +42,22 @@ RUN mkdir -p /Users/florian/morpho/openclaw-sre \
     fi \
   && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
   && rm -f /tmp/openclaw-local.tgz
+
+# Trust boundary: the installer script itself is fetched over HTTPS and piped to
+# bash. foundryup then verifies downloaded release binaries via GitHub
+# attestations before activation.
+RUN export FOUNDRY_DIR=/opt/foundry \
+  && curl -fsSL https://foundry.paradigm.xyz | bash \
+  && /opt/foundry/bin/foundryup --install "${OPENCLAW_FOUNDRY_VERSION}" \
+  && chmod -R a+rX /opt/foundry \
+  && ln -sf /opt/foundry/bin/forge /usr/local/bin/forge \
+  && ln -sf /opt/foundry/bin/cast /usr/local/bin/cast \
+  && ln -sf /opt/foundry/bin/anvil /usr/local/bin/anvil \
+  && ln -sf /opt/foundry/bin/chisel /usr/local/bin/chisel \
+  && forge --version >/dev/null \
+  && cast --version >/dev/null \
+  && anvil --version >/dev/null \
+  && chisel --version >/dev/null
 
 RUN set -eux; \
   arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
