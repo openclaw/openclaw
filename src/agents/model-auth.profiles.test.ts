@@ -356,6 +356,20 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolveEnvApiKey('opencode-go') returns OPENCODE_API_KEY when set", async () => {
+    await withEnvAsync(
+      {
+        OPENCODE_API_KEY: "opencode-go-test-key",
+        OPENCODE_ZEN_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("opencode-go");
+        expect(resolved?.apiKey).toBe("opencode-go-test-key");
+        expect(resolved?.source).toContain("OPENCODE_API_KEY");
+      },
+    );
+  });
+
   it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {
     await withEnvAsync(
       {
