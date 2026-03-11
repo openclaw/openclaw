@@ -16,7 +16,11 @@ import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
 export { CHUTES_DEFAULT_MODEL_REF } from "../agents/chutes-models.js";
-export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
+export {
+  MISTRAL_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
+} from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
@@ -443,11 +447,30 @@ export async function setOpencodeZenApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
-  upsertAuthProfile({
-    profileId: "opencode:default",
-    credential: buildApiKeyCredential("opencode", key, undefined, options),
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
+  await setSharedOpencodeApiKey(key, agentDir, options);
+}
+
+export async function setOpencodeGoApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  await setSharedOpencodeApiKey(key, agentDir, options);
+}
+
+async function setSharedOpencodeApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  const resolvedAgentDir = resolveAuthAgentDir(agentDir);
+  for (const provider of ["opencode", "opencode-go"] as const) {
+    upsertAuthProfile({
+      profileId: `${provider}:default`,
+      credential: buildApiKeyCredential(provider, key, undefined, options),
+      agentDir: resolvedAgentDir,
+    });
+  }
 }
 
 export async function setTogetherApiKey(
@@ -482,6 +505,18 @@ export function setQianfanApiKey(
   upsertAuthProfile({
     profileId: "qianfan:default",
     credential: buildApiKeyCredential("qianfan", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export function setModelStudioApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "modelstudio:default",
+    credential: buildApiKeyCredential("modelstudio", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

@@ -32,7 +32,7 @@ const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
-  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}'; // pragma: allowlist secret
 // Together AI error code examples: https://docs.together.ai/docs/error-codes
 const TOGETHER_PAYMENT_REQUIRED_MESSAGE =
   "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
@@ -42,7 +42,7 @@ const TOGETHER_ENGINE_OVERLOADED_MESSAGE =
 const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
-  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
 
 describe("isAuthPermanentErrorMessage", () => {
   it("matches permanent auth failure patterns", () => {
@@ -443,6 +443,7 @@ describe("isLikelyContextOverflowError", () => {
 
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
+    expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);
@@ -454,6 +455,19 @@ describe("isTransientHttpError", () => {
   it("returns false for non-retryable or non-http text", () => {
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
+  });
+});
+
+describe("classifyFailoverReasonFromHttpStatus", () => {
+  it("treats HTTP 499 as transient for structured errors", () => {
+    expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        499,
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ),
+    ).toBe("overloaded");
   });
 });
 
@@ -486,6 +500,26 @@ describe("isFailoverErrorMessage", () => {
       expect(classifyFailoverReason(sample)).toBe("timeout");
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
+  });
+
+  it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
+    const samples = [
+      "Unhandled stop reason: MALFORMED_RESPONSE",
+      "Unhandled stop reason: malformed_response",
+      "stop reason: MALFORMED_RESPONSE",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+    const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
   });
 });
 
@@ -632,6 +666,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
       "billing",
     );
+    // Poe returns 402 without "payment required"; must be recognized for fallback
+    expect(
+      classifyFailoverReason(
+        "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");

@@ -12,6 +12,7 @@ import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
@@ -553,6 +554,7 @@ export async function runCronIsolatedAgentTurn(params: {
         cfg: cfgWithAgentDefaults,
         provider,
         model,
+        runId: cronSession.sessionEntry.sessionId,
         agentDir,
         fallbacksOverride:
           payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
@@ -609,7 +611,7 @@ export async function runCronIsolatedAgentTurn(params: {
             config: cfgWithAgentDefaults,
             skillsSnapshot,
             prompt: promptText,
-            lane: params.lane ?? "cron",
+            lane: resolveNestedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
             authProfileId,

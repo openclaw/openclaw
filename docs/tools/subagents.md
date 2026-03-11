@@ -182,6 +182,7 @@ Each level only sees announces from its direct children.
 
 ### Tool policy by depth
 
+- Role and control scope are written into session metadata at spawn time. That keeps flat or restored session keys from accidentally regaining orchestrator privileges.
 - **Depth 1 (orchestrator, when `maxSpawnDepth >= 2`)**: Gets `sessions_spawn`, `subagents`, `sessions_list`, `sessions_history` so it can manage its children. Other session/system tools remain denied.
 - **Depth 1 (leaf, when `maxSpawnDepth == 1`)**: No session tools (current default behavior).
 - **Depth 2 (leaf worker)**: No session tools — `sessions_spawn` is always denied at depth 2. Cannot spawn further children.
