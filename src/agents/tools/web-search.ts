@@ -564,11 +564,17 @@ function resolvePluginSearchProvider(
   // Auto-detect: try each plugin provider's isAvailable()
   if (!raw) {
     for (const entry of registry.searchProviders) {
-      if (entry.provider.isAvailable?.(config)) {
+      try {
+        if (entry.provider.isAvailable?.(config)) {
+          logVerbose(
+            `web_search: no provider configured, auto-detected plugin provider "${entry.provider.id}"`,
+          );
+          return entry.provider;
+        }
+      } catch {
         logVerbose(
-          `web_search: no provider configured, auto-detected plugin provider "${entry.provider.id}"`,
+          `web_search: plugin provider "${entry.provider.id}" isAvailable() threw, skipping`,
         );
-        return entry.provider;
       }
     }
   }
@@ -1883,14 +1889,13 @@ function createPluginSearchTool(
         return jsonResult({ error: "missing_query", message: "query is required" });
       }
 
-      const cacheKey = normalizeCacheKey(`${pluginProvider.id}:${query}`);
-      const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
-      if (cached) {
-        return jsonResult(cached);
-      }
-
       const maxResults = readNumberParam(params, "count", { integer: true }) ??
         search?.maxResults ?? DEFAULT_SEARCH_COUNT;
+      const cacheKey = normalizeCacheKey(`${pluginProvider.id}:${query}:${maxResults}`);
+      const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
+      if (cached) {
+        return jsonResult(cached.value);
+      }
       const started = Date.now();
 
       try {
