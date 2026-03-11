@@ -53,9 +53,20 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
 }
 
+function isMoonshotKimiAnthropicModel(model: { provider?: unknown; id?: unknown }): boolean {
+  const provider = typeof model.provider === "string" ? model.provider.trim().toLowerCase() : "";
+  if (provider !== "moonshot") {
+    return false;
+  }
+
+  const modelId = typeof model.id === "string" ? model.id.trim().toLowerCase() : "";
+  return modelId.startsWith("kimi-") || modelId.startsWith("k2");
+}
+
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   api?: unknown;
   provider?: unknown;
+  id?: unknown;
   compat?: unknown;
 }): boolean {
   if (model.api !== "anthropic-messages") {
@@ -66,6 +77,10 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
     typeof model.provider === "string" &&
     requiresOpenAiCompatibleAnthropicToolPayload(model.provider)
   ) {
+    return true;
+  }
+
+  if (isMoonshotKimiAnthropicModel(model)) {
     return true;
   }
 
@@ -81,9 +96,13 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
 
 function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
   provider?: unknown;
+  id?: unknown;
   compat?: unknown;
 }): boolean {
   if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
+    return true;
+  }
+  if (isMoonshotKimiAnthropicModel(model)) {
     return true;
   }
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
@@ -97,12 +116,16 @@ function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
 
 function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
   provider?: unknown;
+  id?: unknown;
   compat?: unknown;
 }): boolean {
   if (
     typeof model.provider === "string" &&
     usesOpenAiStringModeAnthropicToolChoice(model.provider)
   ) {
+    return true;
+  }
+  if (isMoonshotKimiAnthropicModel(model)) {
     return true;
   }
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
