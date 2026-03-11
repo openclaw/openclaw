@@ -72,11 +72,7 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
-    // Stub empty vars first — on Windows, process.env is case-insensitive so
-    // HTTPS_PROXY and https_proxy share the same slot. Value must be set LAST.
     vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("http_proxy", "");
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     delete process.env.https_proxy;
     delete process.env.http_proxy;
@@ -95,8 +91,6 @@ describe("resolveProxyFetchFromEnv", () => {
 
   it("returns proxy fetch when HTTP_PROXY is set", () => {
     vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("http_proxy", "");
     vi.stubEnv("HTTP_PROXY", "http://fallback.test:3128");
     delete process.env.https_proxy;
     delete process.env.http_proxy;

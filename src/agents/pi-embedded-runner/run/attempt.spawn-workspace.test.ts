@@ -79,6 +79,7 @@ vi.mock("../../../infra/machine-name.js", () => ({
 }));
 
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: () => {},
   ensureGlobalUndiciStreamTimeouts: () => {},
 }));
 
