@@ -148,6 +148,18 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
+
+    it("normalizes text-presentation emoji selectors in info output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "info-emoji",
+          emoji: "🎛\uFE0E",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "info-emoji", {});
+      expect(output).toContain("🎛️");
+    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -169,6 +181,22 @@ describe("skills-cli", () => {
       expect(output).toContain("not-ready");
       expect(output).toContain("go"); // missing binary
       expect(output).toContain("npx clawhub");
+    });
+
+    it("normalizes text-presentation emoji selectors in check output", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "ready-emoji", emoji: "🎛\uFE0E", eligible: true }),
+        createMockSkill({
+          name: "missing-emoji",
+          emoji: "🎙\uFE0E",
+          eligible: false,
+          missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
+        }),
+      ]);
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("🎛️ ready-emoji");
+      expect(output).toContain("🎙️ missing-emoji");
     });
   });
 
