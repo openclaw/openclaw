@@ -5,6 +5,15 @@ import type { RbacIdentity, RbacRole } from "./types.js";
 /** Default role when access config is absent or user is unrecognized. */
 const IMPLICIT_DEFAULT_ROLE: RbacRole = "user";
 
+const VALID_ROLES = new Set<RbacRole>(["admin", "user", "guest"]);
+
+function parseRole(value: unknown): RbacRole | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return VALID_ROLES.has(value as RbacRole) ? (value as RbacRole) : null;
+}
+
 /**
  * Build an RbacIdentity from a raw senderId and optional channel name.
  * Handles both `channel:id` qualified format and bare IDs.
@@ -68,17 +77,22 @@ export function resolveUserRole(params: {
     }
   }
 
-  // 2. Explicit roles map
+  // 2. Explicit roles map (with runtime validation for config-loaded values)
   if (accessConfig.roles && typeof accessConfig.roles === "object") {
     for (const [entry, role] of Object.entries(accessConfig.roles)) {
       if (matchesIdentity(entry, identity)) {
-        return role as RbacRole;
+        const parsed = parseRole(role);
+        if (parsed) {
+          return parsed;
+        }
+        // Invalid role in config, fall through to default
       }
     }
   }
 
-  // 3. Default role
-  return (accessConfig.defaultRole as RbacRole | undefined) ?? IMPLICIT_DEFAULT_ROLE;
+  // 3. Default role (with runtime validation)
+  const defaultRole = parseRole(accessConfig.defaultRole);
+  return defaultRole ?? IMPLICIT_DEFAULT_ROLE;
 }
 
 /**

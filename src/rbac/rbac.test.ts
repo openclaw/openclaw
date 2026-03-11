@@ -117,6 +117,19 @@ describe("resolveUserRole", () => {
     const cfg: GatewayAccessConfig = { roles: { "slack:U999": "guest" } };
     expect(resolveUserRole({ identity: unknown, accessConfig: cfg })).toBe("user");
   });
+
+  it("ignores invalid role in roles map and falls back to defaultRole", () => {
+    const cfg = {
+      roles: { "slack:U999": "superuser" as "guest" },
+      defaultRole: "guest" as const,
+    } as GatewayAccessConfig;
+    expect(resolveUserRole({ identity: slackUser, accessConfig: cfg })).toBe("guest");
+  });
+
+  it("ignores invalid defaultRole and uses implicit user", () => {
+    const cfg = { defaultRole: "owner" as "user" } as GatewayAccessConfig;
+    expect(resolveUserRole({ identity: unknown, accessConfig: cfg })).toBe("user");
+  });
 });
 
 // ---------------------------------------------------------------------------
