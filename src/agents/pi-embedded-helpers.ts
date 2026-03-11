@@ -11,6 +11,8 @@ export {
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
+  OVERLOADED_ERROR_USER_MESSAGE,
+  RATE_LIMIT_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,

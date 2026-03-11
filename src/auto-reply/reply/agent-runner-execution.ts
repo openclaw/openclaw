@@ -6,10 +6,15 @@ import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  classifyFailoverReason,
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isTransientHttpError,
+  OVERLOADED_ERROR_USER_MESSAGE,
+  RATE_LIMIT_ERROR_USER_MESSAGE,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -606,6 +611,10 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      const failoverReason = classifyFailoverReason(message);
+      const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
+      const isRateLimit =
+        !isOverloaded && (failoverReason === "rate_limit" || isRateLimitErrorMessage(message));
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
@@ -614,7 +623,11 @@ export async function runAgentTurnWithFallback(params: {
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isOverloaded
+            ? OVERLOADED_ERROR_USER_MESSAGE
+            : isRateLimit
+              ? RATE_LIMIT_ERROR_USER_MESSAGE
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
