@@ -170,7 +170,12 @@ function createCore(params: {
   onRecordSessionMeta?: (args: unknown) => Promise<void> | void;
   onDispatchReply?: (args: {
     dispatcherOptions: {
-      deliver: (payload: { text?: string; replyToId?: string }) => Promise<void>;
+      deliver: (payload: {
+        text?: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+        replyToId?: string;
+      }) => Promise<void>;
     };
   }) => Promise<void> | void;
   fetchRemoteMediaResult?: { buffer: Buffer; fileName: string; contentType: string };
