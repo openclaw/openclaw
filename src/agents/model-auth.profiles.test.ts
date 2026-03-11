@@ -287,6 +287,17 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves Bailian API key from env", async () => {
+    await withEnvAsync({ BAILIAN_API_KEY: "bailian-test-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "bailian",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("bailian-test-key");
+      expect(resolved.source).toContain("BAILIAN_API_KEY");
+    });
+  });
+
   it("resolves Vercel AI Gateway API key from env", async () => {
     await withEnvAsync({ [envVar("AI_GATEWAY", "API", "KEY")]: "gateway-test-key" }, async () => {
       // pragma: allowlist secret

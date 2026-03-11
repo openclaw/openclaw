@@ -30,6 +30,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   synthetic: ["SYNTHETIC_API_KEY"],
   venice: ["VENICE_API_KEY"],
   mistral: ["MISTRAL_API_KEY"],
+  bailian: ["BAILIAN_API_KEY"],
   together: ["TOGETHER_API_KEY"],
   qianfan: ["QIANFAN_API_KEY"],
   ollama: ["OLLAMA_API_KEY"],
