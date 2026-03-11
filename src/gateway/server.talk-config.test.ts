@@ -6,6 +6,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
 import {
@@ -150,45 +151,47 @@ describe("gateway talk.config", () => {
       },
     });
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
-      const res = await rpcReq<{
-        config?: {
-          talk?: {
-            apiKey?: { source?: string; provider?: string; id?: string };
-            providers?: {
-              elevenlabs?: {
-                apiKey?: { source?: string; provider?: string; id?: string };
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-elevenlabs-key" }, async () => {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
+        const res = await rpcReq<{
+          config?: {
+            talk?: {
+              apiKey?: { source?: string; provider?: string; id?: string };
+              providers?: {
+                elevenlabs?: {
+                  apiKey?: { source?: string; provider?: string; id?: string };
+                };
               };
-            };
-            resolved?: {
-              provider?: string;
-              config?: {
-                apiKey?: { source?: string; provider?: string; id?: string };
+              resolved?: {
+                provider?: string;
+                config?: {
+                  apiKey?: { source?: string; provider?: string; id?: string };
+                };
               };
             };
           };
-        };
-      }>(ws, "talk.config", {
-        includeSecrets: true,
-      });
-      expect(res.ok).toBe(true);
-      expect(validateTalkConfigResult(res.payload)).toBe(true);
-      expect(res.payload?.config?.talk?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
+        }>(ws, "talk.config", {
+          includeSecrets: true,
+        });
+        expect(res.ok).toBe(true);
+        expect(validateTalkConfigResult(res.payload)).toBe(true);
+        expect(res.payload?.config?.talk?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        });
+        expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        });
+        expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
+        expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        });
       });
     });
   });
