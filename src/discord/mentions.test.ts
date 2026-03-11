@@ -68,6 +68,30 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("email a@alice.com and ping <@123456789>");
   });
 
+  it("does not rewrite unicode local-part email addresses", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "777777777",
+      handles: ["alice.com"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("邮件 用户@alice.com", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("邮件 用户@alice.com");
+  });
+
+  it("does not rewrite handles in URL paths", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("profile https://x.com/@alice and ping @alice", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("profile https://x.com/@alice and ping <@123456789>");
+  });
+
   it("preserves unknown mentions and reserved mentions", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",
