@@ -75,7 +75,6 @@ export function createExecApprovalHandlers(
       const effectiveAgentId = approvalContext.agentId;
       const effectiveSessionKey = approvalContext.sessionKey;
       const effectiveCommandText = approvalContext.commandText;
-      const effectiveCommandPreview = approvalContext.commandPreview;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -90,6 +89,10 @@ export function createExecApprovalHandlers(
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "systemRunPlan is required for host=node"),
         );
+        return;
+      }
+      if (!effectiveCommandText) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
         return;
       }
       if (
@@ -123,8 +126,8 @@ export function createExecApprovalHandlers(
       }
       const request = {
         command: effectiveCommandText,
-        commandPreview: effectiveCommandPreview,
-        commandArgv: effectiveCommandArgv,
+        commandPreview: host === "node" ? undefined : approvalContext.commandPreview,
+        commandArgv: host === "node" ? undefined : effectiveCommandArgv,
         envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
