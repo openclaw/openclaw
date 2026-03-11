@@ -32,10 +32,10 @@ function makeConfig(
 ): OpenClawConfig {
   const providersCfg: Record<
     string,
-    { baseUrl: string; api: string; models: ModelDefinitionConfig[] }
+    { baseUrl: string; api: "openai-completions"; models: ModelDefinitionConfig[] }
   > = {};
   for (const [id, p] of Object.entries(providers)) {
-    providersCfg[id] = { baseUrl: p.baseUrl, api: "openai-completions", models: p.models };
+    providersCfg[id] = { baseUrl: p.baseUrl, api: "openai-completions" as const, models: p.models };
   }
   return {
     models: { providers: providersCfg },
@@ -179,7 +179,7 @@ describe("promptModelMetadata", () => {
       }) as unknown as WizardPrompter["text"],
       select: vi.fn(async () => "__auto" as never),
       confirm: vi.fn(async () => confirmResponses[confirmCall++] ?? false),
-      multiselect: vi.fn(async () => ["text", "image"]),
+      multiselect: vi.fn(async () => ["text", "image"]) as unknown as WizardPrompter["multiselect"],
     });
 
     const result = await promptModelMetadata(prompter);
@@ -210,7 +210,7 @@ describe("promptModelMetadata", () => {
       }) as unknown as WizardPrompter["text"],
       select: vi.fn(async () => "__auto" as never),
       confirm: vi.fn(async (params: { initialValue?: boolean }) => params.initialValue ?? false),
-      multiselect: vi.fn(async () => ["text"]),
+      multiselect: vi.fn(async () => ["text"]) as unknown as WizardPrompter["multiselect"],
     });
 
     await promptModelMetadata(prompter, current);
@@ -251,7 +251,7 @@ describe("promptModelMetadataForPrimary", () => {
         return params.initialValue ?? "";
       }) as unknown as WizardPrompter["text"],
       select: vi.fn(async () => "__auto" as never),
-      multiselect: vi.fn(async () => ["text"]),
+      multiselect: vi.fn(async () => ["text"]) as unknown as WizardPrompter["multiselect"],
     });
 
     const result = await promptModelMetadataForPrimary(cfg, prompter);
