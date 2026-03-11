@@ -374,8 +374,8 @@ export async function runAgentTurnWithFallback(params: {
                     return;
                   }
                   await params.opts.onPartialReply({
+                    ...payload,
                     text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
                   });
                 },
                 onAssistantMessageStart: async () => {
@@ -387,8 +387,8 @@ export async function runAgentTurnWithFallback(params: {
                     ? async (payload) => {
                         await params.typingSignals.signalReasoningDelta();
                         await params.opts?.onReasoningStream?.({
+                          ...payload,
                           text: payload.text,
-                          mediaUrls: payload.mediaUrls,
                         });
                       }
                     : undefined,
@@ -464,8 +464,8 @@ export async function runAgentTurnWithFallback(params: {
                             }
                             await params.typingSignals.signalTextDelta(text);
                             await optsToolResult({
+                              ...payload,
                               text,
-                              mediaUrls: payload.mediaUrls,
                             });
                           })
                           .catch((err) => {

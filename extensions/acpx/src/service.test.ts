@@ -89,6 +89,11 @@ describe("createAcpxRuntimeService", () => {
 
     await vi.waitFor(() => {
       expect(ensureAcpxSpy).toHaveBeenCalledOnce();
+      expect(ensureAcpxSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stripProviderAuthEnvVars: true,
+        }),
+      );
       expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
     });
 
