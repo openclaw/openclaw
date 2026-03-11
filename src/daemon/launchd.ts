@@ -468,6 +468,41 @@ export async function installLaunchAgent({
   return { plistPath };
 }
 
+
+async function rewriteLaunchAgentPlistForRestart({
+  env,
+  label,
+  plistPath,
+}: {
+  env: GatewayServiceEnv;
+  label: string;
+  plistPath: string;
+}): Promise<void> {
+  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  if (!existing?.programArguments?.length) {
+    return;
+  }
+
+  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  await ensureSecureDirectory(logDir);
+
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment: existing.environment,
+  });
+  const plist = buildLaunchAgentPlist({
+    label,
+    comment: serviceDescription,
+    programArguments: existing.programArguments,
+    workingDirectory: existing.workingDirectory,
+    stdoutPath,
+    stderrPath,
+    environment: existing.environment,
+  });
+  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
@@ -490,6 +525,8 @@ export async function restartLaunchAgent({
   if (typeof previousPid === "number") {
     await waitForPidExit(previousPid);
   }
+
+  await rewriteLaunchAgentPlistForRestart({ env: serviceEnv, label, plistPath });
 
   // launchd can persist "disabled" state after bootout; clear it before bootstrap
   // (matches the same guard in installLaunchAgent).
