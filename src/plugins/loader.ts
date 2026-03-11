@@ -15,6 +15,7 @@ import { clearPluginCommands } from "./command-registry-state.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
+  REASON_BUNDLED_DISABLED_BY_DEFAULT,
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
   type NormalizedPluginsConfig,
@@ -1102,7 +1103,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (!registrationMode) {
       record.status = "disabled";
-      record.error = enableState.reason;
+      // Do not show "bundled (disabled by default)" as an error — it's an informational reason.
+      if (enableState.reason !== REASON_BUNDLED_DISABLED_BY_DEFAULT) {
+        record.error = enableState.reason;
+      }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
