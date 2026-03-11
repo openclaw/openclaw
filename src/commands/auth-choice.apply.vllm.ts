@@ -9,14 +9,14 @@ import {
 } from "./vllm-default-model.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
 
-function resolveCurrentAgentModelRef(params: ApplyAuthChoiceParams): string | undefined {
-  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  if (!agentId) {
+function resolveAgentModelRef(config: OpenClawConfig, agentId?: string): string | undefined {
+  const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+  if (!normalizedAgentId) {
     return undefined;
   }
 
-  const entry = params.config.agents?.list?.find(
-    (candidate) => normalizeAgentId(candidate.id) === agentId,
+  const entry = config.agents?.list?.find(
+    (candidate) => normalizeAgentId(candidate.id) === normalizedAgentId,
   );
   if (!entry?.model) {
     return undefined;
@@ -95,7 +95,7 @@ export async function applyAuthChoiceVllm(
     });
     const shouldClearAgentModelOverride = isStaleManagedVllmModelRef(
       nextConfig,
-      resolveCurrentAgentModelRef(params),
+      resolveAgentModelRef(nextConfig, params.agentId),
     );
     return {
       config: nextConfig,
