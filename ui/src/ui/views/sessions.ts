@@ -223,28 +223,48 @@ function inferSessionChannel(row: GatewaySessionRow): string {
   return keyMatch?.[1]?.toLowerCase() ?? "";
 }
 
-function inferSessionHandle(row: GatewaySessionRow): string {
-  const keyDirectMatch = row.key.match(/^agent:[^:]+:[^:]+:direct:(.+)$/i)?.[1]?.trim() ?? "";
-  const candidates = [
-    row.displayName,
-    row.subject,
-    row.room,
-    row.label,
-    keyDirectMatch,
-  ]
+const CHANNEL_ICONS: Record<string, string> = {
+  telegram: "✈️",
+  whatsapp: "🟢",
+  discord: "🎮",
+  slack: "💬",
+  signal: "🔒",
+  imessage: "💭",
+  googlechat: "🗨️",
+  nostr: "⚡",
+  line: "📗",
+  irc: "#️⃣",
+  matrix: "🔷",
+  msteams: "👥",
+};
+
+function extractDirectPeerFromSessionKey(key: string): string {
+  const parts = key.split(":");
+  const directIndex = parts.findIndex((part) => part.toLowerCase() === "direct");
+  if (directIndex < 0 || directIndex + 1 >= parts.length) {
+    return "";
+  }
+  return parts.slice(directIndex + 1).join(":").trim();
+}
+
+function inferSessionHandle(row: GatewaySessionRow, channel: string): string {
+  const keyDirectMatch = extractDirectPeerFromSessionKey(row.key);
+  const candidates = [keyDirectMatch, row.displayName, row.subject, row.room, row.label]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
 
   for (const candidate of candidates) {
-    const atHandle = candidate.match(/@([A-Za-z0-9_]{4,})/);
-    if (atHandle) {
-      return `@${atHandle[1]}`;
-    }
-    if (/^[A-Za-z0-9_]{4,}$/.test(candidate) && !/^\d+$/.test(candidate)) {
-      return `@${candidate}`;
-    }
     if (/^\+?\d{8,}$/.test(candidate)) {
       return candidate;
+    }
+    if (channel === "telegram") {
+      const atHandle = candidate.match(/@([A-Za-z0-9_]{4,})/);
+      if (atHandle) {
+        return `@${atHandle[1]}`;
+      }
+      if (/^[A-Za-z0-9_]{4,}$/.test(candidate) && !/^\d+$/.test(candidate)) {
+        return `@${candidate}`;
+      }
     }
   }
 
@@ -253,13 +273,14 @@ function inferSessionHandle(row: GatewaySessionRow): string {
 
 function renderSessionPlatformMeta(row: GatewaySessionRow) {
   const channel = inferSessionChannel(row);
-  if (channel !== "telegram" && channel !== "whatsapp") {
+  const icon = CHANNEL_ICONS[channel];
+  if (!icon) {
     return nothing;
   }
-  const icon = channel === "telegram" ? "✈️" : "🟢";
-  const handle = inferSessionHandle(row);
-  const fallback = channel === "telegram" ? "Telegram" : "WhatsApp";
-  return html`<span class="muted session-platform-meta">${icon} ${handle || fallback}</span>`;
+  const handle = inferSessionHandle(row, channel);
+  return html`<span class="muted session-platform-meta" title=${channel}>${icon}${
+    handle ? ` ${handle}` : ""
+  }</span>`;
 }
 
 function renderRow(

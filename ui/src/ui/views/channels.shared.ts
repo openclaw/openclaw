@@ -2,6 +2,29 @@ import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
+const CHANNEL_ICONS: Record<string, string> = {
+  whatsapp: "🟢",
+  telegram: "✈️",
+  discord: "🎮",
+  googlechat: "🗨️",
+  slack: "💬",
+  signal: "🔒",
+  imessage: "💭",
+  nostr: "⚡",
+  line: "📗",
+  irc: "#️⃣",
+  matrix: "🔷",
+  msteams: "👥",
+};
+
+export function channelIcon(key: string): string {
+  return CHANNEL_ICONS[key] ?? "🔌";
+}
+
+export function renderChannelTitleIcon(key: string, label?: string) {
+  return html`<span title=${label ?? key}>${channelIcon(key)}</span>`;
+}
+
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
   const snapshot = props.snapshot;
   const channels = snapshot?.channels as Record<string, unknown> | null;

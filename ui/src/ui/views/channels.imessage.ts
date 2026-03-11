@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { IMessageStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import { renderChannelTitleIcon } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderIMessageCard(params: {
@@ -13,7 +14,7 @@ export function renderIMessageCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">iMessage</div>
+      <div class="card-title">${renderChannelTitleIcon("imessage", "iMessage")}</div>
       <div class="card-sub">macOS bridge status and channel configuration.</div>
       ${accountCountLabel}
 

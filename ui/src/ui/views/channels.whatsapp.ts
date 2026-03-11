@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import { renderChannelTitleIcon } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderWhatsAppCard(params: {
@@ -13,7 +14,7 @@ export function renderWhatsAppCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">WhatsApp</div>
+      <div class="card-title">${renderChannelTitleIcon("whatsapp", "WhatsApp")}</div>
       <div class="card-sub">Link WhatsApp Web and monitor connection health.</div>
       ${accountCountLabel}
 

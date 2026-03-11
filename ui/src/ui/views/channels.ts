@@ -19,7 +19,7 @@ import { renderDiscordCard } from "./channels.discord.ts";
 import { renderGoogleChatCard } from "./channels.googlechat.ts";
 import { renderIMessageCard } from "./channels.imessage.ts";
 import { renderNostrCard } from "./channels.nostr.ts";
-import { channelEnabled, renderChannelAccountCount } from "./channels.shared.ts";
+import { channelEnabled, renderChannelAccountCount, renderChannelTitleIcon } from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
@@ -193,7 +193,7 @@ function renderGenericChannelCard(
 
   return html`
     <div class="card">
-      <div class="card-title">${label}</div>
+      <div class="card-title">${renderChannelTitleIcon(key, label)}</div>
       <div class="card-sub">Channel status and configuration.</div>
       ${accountCountLabel}
 

@@ -73,6 +73,49 @@ describe("sessions view", () => {
     expect(platformMeta?.textContent).toContain("+919999888777");
   });
 
+  it("prefers key phone for whatsapp even if displayName looks like a handle", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:whatsapp:direct:+919111222333",
+            kind: "direct",
+            updatedAt: Date.now(),
+            displayName: "Alice",
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("+919111222333");
+    expect(platformMeta?.textContent).not.toContain("@Alice");
+  });
+
+  it("parses account-scoped direct keys for telegram", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:atlas:direct:muhammedirfan00",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("✈️");
+    expect(platformMeta?.textContent).toContain("@muhammedirfan00");
+  });
+
   it("renders verbose=full without falling back to inherit", async () => {
     const container = document.createElement("div");
     render(
