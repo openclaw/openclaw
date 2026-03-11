@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 /**
- * Copy HOOK.md files from src/hooks/bundled to dist/bundled
+ * Copy HOOK.md files from src/hooks/bundled to dist/hooks/bundled.
+ * Must match resolveBundledHooksDir() in src/hooks/bundled-dir.ts (dir of bundled-dir.js + "bundled").
  */
 
 import fs from "node:fs";
@@ -12,7 +13,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const verbose = process.env.OPENCLAW_BUILD_VERBOSE === "1";
 
 const srcBundled = path.join(projectRoot, "src", "hooks", "bundled");
-const distBundled = path.join(projectRoot, "dist", "bundled");
+const distBundled = path.join(projectRoot, "dist", "hooks", "bundled");
 
 function copyHookMetadata() {
   if (!fs.existsSync(srcBundled)) {
