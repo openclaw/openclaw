@@ -69,12 +69,13 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
  *   - OSC:           ESC ] ... BEL/ST        e.g. \x1b]0;title\x07
  *   - DCS/SOS/PM/APC: ESC P/X/^/_ ... ST   e.g. \x1bPdata\x1b\\
  *   - Other Fe:      ESC <single char>       e.g. \x1bc (RIS reset)
+ *   - Bare ESC:      ESC at end of string    e.g. "myprofile\x1b"
  */
 function sanitizeProfileId(id: string): string {
   return id
     .replace(
       // eslint-disable-next-line no-control-regex
-      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S])/g,
+      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
       "",
     )
     .replace(/[\r\n]/g, "");

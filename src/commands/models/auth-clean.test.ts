@@ -723,4 +723,26 @@ describe("modelsAuthCleanCommand", () => {
     expect(combined).toContain("anthropic:");
     expect(combined).toContain("name");
   });
+
+  it("strips a bare trailing ESC byte (\\x1b with nothing after it) from profile IDs", async () => {
+    // A lone \x1b at the end of a string has no sequence character following it,
+    // so the previous regex (requiring [\s\S] — at least one char after ESC)
+    // would leave it unsanitized. The fix uses [\s\S]? (0 or 1 chars) so a
+    // trailing bare ESC is also consumed and removed.
+    const maliciousId = "anthropic:myprofile\x1b";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // The bare trailing ESC byte must be stripped
+    expect(combined).not.toContain("\x1b");
+    // The non-escape text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("myprofile");
+  });
 });
