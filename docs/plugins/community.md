@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Vocab Coach** — Adaptive spaced-repetition vocabulary plugin for OpenClaw. Pushes IELTS/TOEFL/CET words to Feishu, Telegram, WhatsApp and more with LLM-enriched cards.
+  npm: `@jungle666/openclaw-vocab-coach`
+  repo: `https://github.com/JungleLiu-LHJ/openclaw-vocab-coach`
+  install: `openclaw plugins install @jungle666/openclaw-vocab-coach`
