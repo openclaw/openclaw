@@ -60,24 +60,24 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
           card.args && typeof (card.args as Record<string, unknown>).command === "string"
             ? ((card.args as Record<string, unknown>).command as string).trim()
             : undefined;
+        const hasUsableCommand = rawCommand !== undefined && rawCommand !== "";
         const rawArgsJson =
-          card.args && typeof card.args === "object" && !rawCommand
+          card.args && typeof card.args === "object" && !hasUsableCommand
             ? JSON.stringify(card.args, null, 2)
             : undefined;
-        const commandBlock =
-          rawCommand !== undefined
-            ? `**Command:**\n\`\`\`\n${rawCommand}\n\`\`\`\n\n`
-            : rawArgsJson !== undefined
-              ? `**Arguments:**\n\`\`\`json\n${rawArgsJson}\n\`\`\`\n\n`
-              : detail
-                ? `**Command:** \`${detail}\`\n\n`
-                : "";
+        // Sanitize backticks so fenced code blocks are not broken by command content.
+        const safeForFence = (s: string) => s.replace(/`{3,}/g, (m) => m.replace(/`/g, "ˋ"));
+        const commandBlock = hasUsableCommand
+          ? `**Command:**\n\`\`\`\n${safeForFence(rawCommand)}\n\`\`\`\n\n`
+          : rawArgsJson !== undefined
+            ? `**Arguments:**\n\`\`\`json\n${safeForFence(rawArgsJson)}\n\`\`\`\n\n`
+            : detail
+              ? `**Command:** \`${detail}\`\n\n`
+              : "";
         if (hasText) {
           const output = formatToolOutputForSidebar(card.text!);
           onOpenSidebar!(
-            commandBlock
-              ? `## ${display.label}\n\n${commandBlock}**Output:**\n\n${output}`
-              : output,
+            `## ${display.label}\n\n${commandBlock}${commandBlock ? "**Output:**\n\n" : ""}${output}`,
           );
           return;
         }
