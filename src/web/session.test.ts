@@ -71,7 +71,10 @@ describe("web session", () => {
     await createWaSocket(true, false);
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
     expect(makeWASocket).toHaveBeenCalledWith(
-      expect.objectContaining({ printQRInTerminal: false }),
+      expect.objectContaining({
+        printQRInTerminal: false,
+        generateHighQualityLinkPreview: true,
+      }),
     );
     const passed = makeWASocket.mock.calls[0][0];
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
