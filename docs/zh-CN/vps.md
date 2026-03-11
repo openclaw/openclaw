@@ -160,14 +160,11 @@ sudo systemctl restart openclaw
    cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
    ```
 
-3. **直接测试 Node.js fetch** 以隔离 SSL 问题：
+3. **检查 OpenClaw 日志中的代理/TLS 错误**（不需要额外 Node 包）：
 
    ```bash
-   node -e "const {EnvHttpProxyAgent, fetch} = require('undici'); \
-     fetch('https://api.anthropic.com', {dispatcher: new EnvHttpProxyAgent()}) \
-     .then(r => console.log('OK:', r.status)) \
-     .catch(e => console.error('Error:', e.cause || e))"
+   sudo journalctl -u openclaw -n 200 --no-pager | grep -Ei 'SELF_SIGNED_CERT_IN_CHAIN|CERT|ECONN|ETIMEDOUT|timeout|proxy'
    ```
 
    - 如果看到 `SELF_SIGNED_CERT_IN_CHAIN`，验证 `NODE_EXTRA_CA_CERTS` 指向正确的 CA 文件。
-   - 如果看到连接超时，验证代理 URL 和网络可达性。
+   - 如果看到超时/连接错误，验证代理 URL 和网络可达性。

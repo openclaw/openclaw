@@ -168,14 +168,11 @@ If LLM requests still fail after configuration:
    cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
    ```
 
-3. **Test Node.js fetch directly** to isolate SSL issues:
+3. **Check OpenClaw logs for proxy/TLS errors** (no extra Node packages required):
 
    ```bash
-   node -e "const {EnvHttpProxyAgent, fetch} = require('undici'); \
-     fetch('https://api.anthropic.com', {dispatcher: new EnvHttpProxyAgent()}) \
-     .then(r => console.log('OK:', r.status)) \
-     .catch(e => console.error('Error:', e.cause || e))"
+   sudo journalctl -u openclaw -n 200 --no-pager | grep -Ei 'SELF_SIGNED_CERT_IN_CHAIN|CERT|ECONN|ETIMEDOUT|timeout|proxy'
    ```
 
    - If you see `SELF_SIGNED_CERT_IN_CHAIN`, verify `NODE_EXTRA_CA_CERTS` points to the correct CA file.
-   - If you see connection timeout, verify the proxy URL and network reachability.
+   - If you see timeout/connection errors, verify the proxy URL and network reachability.
