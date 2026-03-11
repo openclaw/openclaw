@@ -123,3 +123,6 @@ dist/protocol.schema.json
 # Synthing
 **/.stfolder/
 .dev-state
+/deployment/data/
+/deployment/data/workspace/
+/deployment/config/

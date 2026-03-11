@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_DIR="${SCRIPT_DIR}/runtime"
+ENTRY="${RUNTIME_DIR}/openclaw.mjs"
+
+if [[ ! -f "${ENTRY}" ]]; then
+  echo "[error] missing bundled runtime: ${ENTRY}" >&2
+  echo "[hint] run: ./deployment/build-local-runtime.sh" >&2
+  exit 1
+fi
+
+normalize_os() {
+  case "$(uname -s)" in
+    Darwin) echo "darwin" ;;
+    Linux) echo "linux" ;;
+    *)
+      echo "[error] unsupported OS: $(uname -s)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+normalize_arch() {
+  case "$(uname -m)" in
+    x86_64 | amd64) echo "x86_64" ;;
+    arm64 | aarch64) echo "arm64" ;;
+    *)
+      echo "[error] unsupported architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+OS="$(normalize_os)"
+ARCH="$(normalize_arch)"
+NODE_BIN="${SCRIPT_DIR}/node-${OS}-${ARCH}"
+
+if [[ ! -x "${NODE_BIN}" ]]; then
+  echo "[error] missing bundled node binary: ${NODE_BIN}" >&2
+  echo "[hint] place Node 22+ binary at deployment/bin/node-${OS}-${ARCH}" >&2
+  exit 1
+fi
+
+exec "${NODE_BIN}" "${ENTRY}" "$@"
