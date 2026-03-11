@@ -448,6 +448,45 @@ describe("session cost usage", () => {
     });
   });
 
+  it("uses the candidate session directory for archived fallback lookups", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-custom-archive-"));
+    const customSessionsDir = path.join(root, "custom-store", "sessions");
+    await fs.mkdir(customSessionsDir, { recursive: true });
+
+    const activePath = path.join(customSessionsDir, "sess-custom.jsonl");
+    const archivePath = path.join(
+      customSessionsDir,
+      "sess-custom.jsonl.deleted.2026-02-12T12-00-00.000Z",
+    );
+
+    await fs.writeFile(
+      archivePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "custom archived answer",
+          usage: { input: 9, output: 3, totalTokens: 12, cost: { total: 0.012 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    const summary = await loadSessionCostSummary({
+      sessionId: "sess-custom",
+      sessionFile: activePath,
+    });
+    const logs = await loadSessionLogs({
+      sessionId: "sess-custom",
+      sessionFile: activePath,
+    });
+
+    expect(summary?.totalTokens).toBe(12);
+    expect(summary?.sessionFile).toBe(archivePath);
+    expect(logs?.[0]?.content).toContain("custom archived answer");
+  });
+
   it("picks the newest archive by timestamp when reset and deleted archives coexist", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-archive-order-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");

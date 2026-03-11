@@ -318,7 +318,9 @@ export function resolveExistingUsageSessionFile(params: {
   }
 
   try {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(params.agentId);
+    const sessionsDir = candidate
+      ? path.dirname(candidate)
+      : resolveSessionTranscriptsDirForAgent(params.agentId);
     const baseFileName = `${sessionId}.jsonl`;
     const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
       return (
