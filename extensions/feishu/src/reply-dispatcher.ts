@@ -143,8 +143,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     !threadReplyMode &&
     renderMode !== "raw" &&
     (streamingConfig === true ||
-      (typeof streamingConfig === "object" && streamingConfig?.enabled !== false) ||
-      (streamingConfig !== true && typeof streamingConfig !== "object"));
+      (typeof streamingConfig === "object" && streamingConfig?.enabled !== false));
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -205,9 +204,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         createFeishuClient(account),
         creds,
         (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+        throttleMs,
       );
-      // Set throttle interval from config
-      (streaming as any).updateThrottleMs = throttleMs;
 
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {

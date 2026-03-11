@@ -49,10 +49,8 @@ const StreamingConfigSchema = z.union([
     enabled: z.boolean().optional(),
     throttleMs: z.number().int().min(100).max(5000).optional(),
     title: z.string().optional(),
-  }),
-])
-  .strict()
-  .optional();
+  }).strict(),
+]).optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
@@ -177,7 +175,7 @@ const FeishuSharedConfigShape = {
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
-  streaming: StreamingModeSchema,
+  streaming: StreamingConfigSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
