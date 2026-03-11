@@ -73,6 +73,9 @@ Welcome to the lobster tank! 🦞
 - **Robin Waslander** - Security, PR triage, bug fixes
   - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
 
+- **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
+  - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
@@ -83,6 +86,7 @@ Welcome to the lobster tank! 🦞
 
 - Test locally with your OpenClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
+- If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
@@ -96,6 +100,8 @@ If a review bot leaves review conversations on your PR, you are expected to hand
 - Resolve the conversation yourself once the code or explanation fully addresses the bot's concern
 - Reply and leave it open only when you need maintainer or reviewer judgment
 - Do not leave "fixed" bot review conversations for maintainers to clean up for you
+- If Codex leaves comments, address every relevant one or resolve it with a short explanation when it is not applicable to your change
+- If GitHub Codex review does not trigger for some reason, run `codex review --base origin/main` locally anyway and treat that output as required review work
 
 This applies to both human-authored and AI-assisted PRs.
 
@@ -124,6 +130,7 @@ Please include in your PR:
 - [ ] Note the degree of testing (untested / lightly tested / fully tested)
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
+- [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review
 - [ ] Resolve or reply to bot review conversations after you address them
 
 AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for. If you are using an LLM coding agent, instruct it to resolve bot review conversations it has addressed instead of leaving them for maintainers.

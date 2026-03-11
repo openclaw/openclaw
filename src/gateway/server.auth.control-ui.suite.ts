@@ -391,9 +391,16 @@ export function registerControlUiAndPairingSuite(): void {
           expect(res.ok).toBe(false);
           expect(res.error?.message ?? "").toContain("gateway token mismatch");
           expect(res.error?.message ?? "").not.toContain("device token mismatch");
-          expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-            ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
-          );
+          const details = res.error?.details as
+            | {
+                code?: string;
+                canRetryWithDeviceToken?: boolean;
+                recommendedNextStep?: string;
+              }
+            | undefined;
+          expect(details?.code).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
+          expect(details?.canRetryWithDeviceToken).toBe(true);
+          expect(details?.recommendedNextStep).toBe("retry_with_device_token");
         },
       },
       {

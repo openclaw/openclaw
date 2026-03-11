@@ -313,6 +313,68 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-2" });
   });
 
+  it("sends outbound payload media lists and keeps buttons on the first message only", async () => {
+    const sendMessageTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-3", chatId: "12345" })
+      .mockResolvedValueOnce({ messageId: "tg-4", chatId: "12345" });
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          sendMessageTelegram,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Approval required",
+        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+        channelData: {
+          telegram: {
+            quoteText: "quoted",
+            buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+          },
+        },
+      },
+      mediaLocalRoots: ["/tmp/media"],
+      accountId: "ops",
+      silent: true,
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      "12345",
+      "Approval required",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/1.jpg",
+        mediaLocalRoots: ["/tmp/media"],
+        quoteText: "quoted",
+        silent: true,
+        buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+      }),
+    );
+    expect(sendMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      "12345",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/2.jpg",
+        mediaLocalRoots: ["/tmp/media"],
+        quoteText: "quoted",
+        silent: true,
+      }),
+    );
+    expect(
+      (sendMessageTelegram.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons,
+    ).toBeUndefined();
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-4" });
+  });
+
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;

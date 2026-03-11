@@ -46,6 +46,7 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
+  patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";

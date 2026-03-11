@@ -13,6 +13,7 @@ export type TestDraftStream = {
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   materialize: ReturnType<typeof vi.fn<() => Promise<number | undefined>>>;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
+  sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
   setMessageId: (value: number | undefined) => void;
 };
 
@@ -47,6 +48,7 @@ export function createTestDraftStream(params?: {
         messageId = undefined;
       }
     }),
+    sendMayHaveLanded: vi.fn().mockReturnValue(false),
     setMessageId: (value: number | undefined) => {
       messageId = value;
     },
@@ -77,6 +79,7 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;
     }),
+    sendMayHaveLanded: vi.fn().mockReturnValue(false),
     setMessageId: (value: number | undefined) => {
       activeMessageId = value;
     },
