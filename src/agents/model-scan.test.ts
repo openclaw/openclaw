@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { scanOpenRouterModels } from "./model-scan.js";
+import { ensureImageInput, scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {
   return withFetchPreconnect(
@@ -79,5 +79,55 @@ describe("scanOpenRouterModels", () => {
         }),
       ).rejects.toThrow(/Missing OpenRouter API key/);
     });
+  });
+});
+
+describe("ensureImageInput", () => {
+  const baseModel = {
+    id: "test/model",
+    provider: "openai-completions",
+    contextWindow: 4096,
+    maxTokens: 1024,
+  } as const;
+
+  it("adds image to model without input field (undefined)", () => {
+    const model = { ...baseModel, input: undefined } as unknown as Parameters<
+      typeof ensureImageInput
+    >[0];
+    const result = ensureImageInput(model);
+    expect(result.input).toContain("image");
+    expect(result.input).toBeDefined();
+    expect(Array.isArray(result.input)).toBe(true);
+  });
+
+  it("adds image to model with null input", () => {
+    const model = { ...baseModel, input: null } as unknown as Parameters<
+      typeof ensureImageInput
+    >[0];
+    const result = ensureImageInput(model);
+    expect(result.input).toContain("image");
+    expect(result.input).toBeDefined();
+    expect(Array.isArray(result.input)).toBe(true);
+  });
+
+  it("adds image to model with empty input array", () => {
+    const model = { ...baseModel, input: [] as ("text" | "image")[] };
+    const result = ensureImageInput(model);
+    expect(result.input).toContain("image");
+    expect(result.input).toHaveLength(1);
+  });
+
+  it("preserves existing image capability without modification", () => {
+    const model = { ...baseModel, input: ["text", "image"] as ("text" | "image")[] };
+    const result = ensureImageInput(model);
+    expect(result.input).toEqual(["text", "image"]);
+    expect(result.input).toHaveLength(2);
+  });
+
+  it("adds image to text-only model while preserving text", () => {
+    const model = { ...baseModel, input: ["text"] as ("text" | "image")[] };
+    const result = ensureImageInput(model);
+    expect(result.input).toContain("image");
+    expect(result.input).toContain("text");
   });
 });
