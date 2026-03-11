@@ -5,6 +5,8 @@ import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
+import { parseAdaptiveCardMarkers } from "./adaptive-card-parse.ts";
+import { renderAdaptiveCard } from "./adaptive-card-render.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -246,7 +248,11 @@ function renderGroupedMessage(
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+
+  // Detect adaptive card markers before markdown conversion.
+  const parsedCard = markdownBase ? parseAdaptiveCardMarkers(markdownBase) : null;
+  const markdown = parsedCard ? (parsedCard.fallbackText || null) : markdownBase;
+
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
 
   const bubbleClasses = [
@@ -258,11 +264,11 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  if (!markdown && !parsedCard && hasToolCards && isToolResult) {
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  if (!markdown && !parsedCard && !hasToolCards && !hasImages) {
     return nothing;
   }
 
@@ -282,6 +288,7 @@ function renderGroupedMessage(
           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
+      ${parsedCard ? renderAdaptiveCard(parsedCard) : nothing}
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;
