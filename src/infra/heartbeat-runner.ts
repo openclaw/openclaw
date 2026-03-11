@@ -5,8 +5,17 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { resolveCircuitBreakerConfig } from "../agents/circuit-breaker/config.js";
+import {
+  clearCircuitBreakerErrors,
+  executeCircuitBreakerActions,
+  isCircuitBreakerTripped,
+  recordCircuitBreakerError,
+} from "../agents/circuit-breaker/state.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
+import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { isLikelyContextOverflowError } from "../agents/pi-embedded-helpers.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -658,6 +667,16 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
+  // Circuit breaker: skip if session is tripped.
+  const cbConfig = resolveCircuitBreakerConfig(cfg, agentId);
+  if (entry && isCircuitBreakerTripped(entry, cbConfig, startedAt)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "circuit-breaker",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "circuit-breaker" };
+  }
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -778,6 +797,10 @@ export async function runHeartbeatOnce(opts: {
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    // Circuit breaker: clear error count on successful model call.
+    if (entry) {
+      clearCircuitBreakerErrors(entry);
+    }
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -994,6 +1017,34 @@ export async function runHeartbeatOnce(opts: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
+    // Circuit breaker: record model-level errors.
+    const isModelError = isFailoverError(err) || isLikelyContextOverflowError(reason);
+    if (entry && isModelError) {
+      const failoverReason = isFailoverError(err)
+        ? (describeFailoverError(err).reason ?? "unknown")
+        : "timeout";
+      const { tripped } = recordCircuitBreakerError(entry, cbConfig, failoverReason, Date.now());
+      if (tripped) {
+        await executeCircuitBreakerActions({
+          entry,
+          config: cbConfig!,
+          sessionKey,
+          agentId,
+          cfg,
+          deps: opts.deps,
+        });
+      }
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            store[sessionKey] = { ...current, ...entry };
+          }
+        });
+      } catch {
+        // Best-effort persistence.
+      }
+    }
     emitHeartbeatEvent({
       status: "failed",
       reason,

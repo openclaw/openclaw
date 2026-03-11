@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
+  CircuitBreakerSchema,
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentModelSchema,
@@ -190,6 +191,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    circuitBreaker: CircuitBreakerSchema,
   })
   .strict()
   .optional();
