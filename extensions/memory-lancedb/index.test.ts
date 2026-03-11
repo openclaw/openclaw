@@ -218,6 +218,118 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("memory_forget query mode includes full UUID candidates", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const firstId = "47b07b81-e29b-41d4-a716-446655440000";
+    const secondId = "f9e8d7c6-b5a4-4321-8def-001122334455";
+    const toArray = vi.fn(async () => [
+      {
+        id: firstId,
+        text: "The user prefers dark mode for all applications",
+        vector: [0.11, 0.22, 0.33],
+        importance: 0.8,
+        category: "preference",
+        createdAt: Date.now(),
+        _distance: 0.1,
+      },
+      {
+        id: secondId,
+        text: "The user wants concise replies by default",
+        vector: [0.21, 0.32, 0.43],
+        importance: 0.7,
+        category: "preference",
+        createdAt: Date.now(),
+        _distance: 0.2,
+      },
+    ]);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const deleteMemory = vi.fn(async () => undefined);
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 2),
+          add: vi.fn(async () => undefined),
+          delete: deleteMemory,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath,
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerCli: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerService: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+      const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+      expect(forgetTool).toBeDefined();
+
+      const forgetResult = await forgetTool.execute("test-call-forget-query", {
+        query: "dark mode preference",
+      });
+
+      expect(forgetResult.details?.action).toBe("candidates");
+      expect(forgetResult.details?.candidates?.map((c: { id: string }) => c.id)).toEqual([
+        firstId,
+        secondId,
+      ]);
+      const contentText = forgetResult.content?.[0]?.text ?? "";
+      expect(contentText).toContain(`[${firstId}]`);
+      expect(contentText).toContain(`[${secondId}]`);
+      expect(contentText).not.toContain(`[${firstId.slice(0, 8)}]`);
+      expect(deleteMemory).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
