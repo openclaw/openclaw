@@ -813,6 +813,30 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBe("resolved-local-fallback-password"); // pragma: allowlist secret
   });
 
+  it("fails closed when unresolved local token SecretRef would otherwise fall back to remote token", async () => {
+    process.env.LOCAL_REMOTE_FALLBACK_TOKEN = "resolved-local-remote-fallback-token";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
+        },
+        remote: {
+          token: { source: "env", provider: "default", id: "LOCAL_REMOTE_FALLBACK_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.token");
+  });
+
   it.each(["none", "trusted-proxy"] as const)(
     "ignores unresolved local password ref when auth mode is %s",
     async (mode) => {

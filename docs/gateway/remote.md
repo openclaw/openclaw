@@ -110,8 +110,8 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - CLI URL overrides (`--url`) never reuse implicit config/env credentials.
   - Env URL overrides (`OPENCLAW_GATEWAY_URL`) may use env credentials only (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
 - Local mode defaults:
-  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token`
-  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password`
+  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token` (remote fallback applies only when local auth token input is unset)
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password` (remote fallback applies only when local auth password input is unset)
 - Remote mode defaults:
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
@@ -140,7 +140,8 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
   set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
 - `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
-- Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
+- Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
   headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
