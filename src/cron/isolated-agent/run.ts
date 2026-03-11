@@ -741,10 +741,24 @@ export async function runCronIsolatedAgentTurn(params: {
   const finalRunResult = runResult;
   const payloads = finalRunResult.payloads ?? [];
 
-  // Circuit breaker: clear error count on successful model call.
-  // A run that completes without throwing indicates the model responded,
-  // even if the content has error payloads from tools.
-  if (!finalRunResult.meta?.error) {
+  // Circuit breaker: handle model-level errors returned via meta.error
+  // (context_overflow, compaction_failure, role_ordering, retry_limit).
+  // These don't throw but indicate a structurally broken session.
+  const metaError = finalRunResult.meta?.error;
+  if (metaError) {
+    const reason = metaError.kind ?? "model_error";
+    const { tripped } = recordCircuitBreakerError(cronSession.sessionEntry, cbConfig, reason);
+    if (tripped && cbConfig) {
+      await executeCircuitBreakerActions({
+        entry: cronSession.sessionEntry,
+        config: cbConfig,
+        sessionKey: agentSessionKey,
+        agentId,
+        cfg: cfgWithAgentDefaults,
+      });
+    }
+  } else {
+    // Successful model call — clear error count.
     clearCircuitBreakerErrors(cronSession.sessionEntry);
   }
 

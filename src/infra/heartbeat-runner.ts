@@ -797,8 +797,36 @@ export async function runHeartbeatOnce(opts: {
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
-    // Circuit breaker: clear error count on successful model call.
-    if (entry && clearCircuitBreakerErrors(entry)) {
+    const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+
+    // Circuit breaker: detect model-level error payloads returned by
+    // getReplyFromConfig (which catches all model errors internally and
+    // returns them as "⚠️ ..." text payloads instead of throwing).
+    const replyText = replyPayload?.text?.trim() ?? "";
+    const isModelErrorReply = entry && replyText.startsWith("\u26A0\uFE0F");
+    if (entry && isModelErrorReply) {
+      const { tripped } = recordCircuitBreakerError(entry, cbConfig, "model_error", Date.now());
+      if (tripped && cbConfig) {
+        await executeCircuitBreakerActions({
+          entry,
+          config: cbConfig,
+          sessionKey,
+          agentId,
+          cfg,
+          deps: opts.deps,
+        });
+      }
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            store[sessionKey] = { ...current, ...entry };
+          }
+        });
+      } catch {
+        // Best-effort persistence.
+      }
+    } else if (entry && clearCircuitBreakerErrors(entry)) {
       try {
         await updateSessionStore(storePath, (store) => {
           const current = store[sessionKey];
@@ -810,7 +838,6 @@ export async function runHeartbeatOnce(opts: {
         // Best-effort persistence.
       }
     }
-    const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
