@@ -411,12 +411,32 @@ async function handleDiscordReactionEvent(
     }
 
     const isGuildMessage = Boolean(data.guild_id);
-    const guildInfo = isGuildMessage
+    let guildInfo = isGuildMessage
       ? resolveDiscordGuildEntry({
           guild: data.guild ?? undefined,
           guildEntries,
         })
       : null;
+    if (isGuildMessage && !guildInfo && data.guild_id && guildEntries) {
+      const guildEntryById = guildEntries[data.guild_id];
+      if (guildEntryById) {
+        guildInfo = {
+          ...guildEntryById,
+          id: data.guild_id,
+          slug: guildEntryById.slug ?? data.guild_id,
+        };
+      }
+      if (!guildInfo) {
+        const wildcardGuildEntry = guildEntries["*"];
+        if (wildcardGuildEntry) {
+          guildInfo = {
+            ...wildcardGuildEntry,
+            id: data.guild_id,
+            slug: wildcardGuildEntry.slug ?? data.guild_id,
+          };
+        }
+      }
+    }
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
@@ -504,6 +524,45 @@ async function handleDiscordReactionEvent(
         contextKey,
       });
     };
+    const emitReactionCommand = (parentPeerId?: string) => {
+      if (action !== "added") {
+        return;
+      }
+      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+      const reactionCommand =
+        emojiLabel === "✅"
+          ? "accept"
+          : emojiLabel === "❌"
+            ? "reject"
+            : emojiLabel === "🔁"
+              ? "correct"
+              : emojiLabel === "✨"
+                ? "confirm"
+                : null;
+      if (!reactionCommand) {
+        return;
+      }
+      const { contextKey } = resolveReactionBase();
+      const route = resolveAgentRoute({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: params.accountId,
+        guildId: data.guild_id ?? undefined,
+        memberRoleIds,
+        peer: {
+          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? user.id : data.channel_id,
+        },
+        parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
+      });
+      enqueueSystemEvent(
+        `Reaction command: ${reactionCommand} (${emojiLabel}) for message ${data.message_id}`,
+        {
+          sessionKey: route.sessionKey,
+          contextKey: `${contextKey}:cmd:${reactionCommand}`,
+        },
+      );
+    };
     const shouldNotifyReaction = (options: {
       mode: "off" | "own" | "all" | "allowlist";
       messageAuthorId?: string;
@@ -586,6 +645,7 @@ async function handleDiscordReactionEvent(
 
         const { baseText } = resolveReactionBase();
         emitReaction(baseText, parentId);
+        emitReactionCommand(parentId);
         return;
       }
 
@@ -604,6 +664,7 @@ async function handleDiscordReactionEvent(
       }
 
       emitReactionWithAuthor(message);
+      emitReactionCommand(parentId);
       return;
     }
 
@@ -643,6 +704,7 @@ async function handleDiscordReactionEvent(
 
       const { baseText } = resolveReactionBase();
       emitReaction(baseText, parentId);
+      emitReactionCommand(parentId);
       return;
     }
 
@@ -654,6 +716,7 @@ async function handleDiscordReactionEvent(
     }
 
     emitReactionWithAuthor(message);
+    emitReactionCommand(parentId);
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
