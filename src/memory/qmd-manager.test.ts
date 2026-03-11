@@ -1109,7 +1109,7 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("normalizes mixed Han-script BM25 queries before qmd search", async () => {
+  it("keeps mixed Han-script queries unchanged before qmd search", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1146,7 +1146,7 @@ describe("QmdMemoryManager", () => {
     );
     expect(searchCall?.[1]).toEqual([
       "search",
-      "記憶 憶系 系統 統升 升級 qmd",
+      "記憶系統升級 QMD",
       "--json",
       "-n",
       String(maxResults),

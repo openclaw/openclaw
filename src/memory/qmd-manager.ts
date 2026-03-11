@@ -36,7 +36,6 @@ import type {
   ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
 import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
-import { extractKeywords } from "./query-expansion.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -47,7 +46,6 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
-const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
 
@@ -60,29 +58,7 @@ function normalizeHanBm25Query(query: string): string {
   if (!trimmed || !hasHanScript(trimmed)) {
     return trimmed;
   }
-  const keywords = extractKeywords(trimmed);
-  const normalizedKeywords: string[] = [];
-  const seen = new Set<string>();
-  for (const keyword of keywords) {
-    const token = keyword.trim();
-    if (!token || seen.has(token)) {
-      continue;
-    }
-    const includesHan = hasHanScript(token);
-    // Han unigrams are usually too broad for BM25 and can drown signal.
-    if (includesHan && Array.from(token).length < 2) {
-      continue;
-    }
-    if (!includesHan && token.length < 2) {
-      continue;
-    }
-    seen.add(token);
-    normalizedKeywords.push(token);
-    if (normalizedKeywords.length >= QMD_BM25_HAN_KEYWORD_LIMIT) {
-      break;
-    }
-  }
-  return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
+  return trimmed;
 }
 
 async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
