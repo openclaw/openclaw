@@ -12,6 +12,11 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
+const OPENAI_CODEX_GPT_54_MODEL_ALIASES = new Set([
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID,
+]);
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
@@ -123,9 +128,13 @@ function resolveOpenAICodexForwardCompatModel(
 
   let templateIds: readonly string[];
   let eligibleProviders: Set<string>;
-  if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
+  let resolvedModelId = trimmedModelId;
+  if (OPENAI_CODEX_GPT_54_MODEL_ALIASES.has(lower)) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
+    // Keep runtime on the canonical transport model id even when users
+    // configure legacy "-codex" aliases.
+    resolvedModelId = OPENAI_CODEX_GPT_54_MODEL_ID;
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
     templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
     eligibleProviders = CODEX_GPT53_ELIGIBLE_PROVIDERS;
@@ -144,14 +153,14 @@ function resolveOpenAICodexForwardCompatModel(
     }
     return normalizeModelCompat({
       ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
+      id: resolvedModelId,
+      name: resolvedModelId,
     } as Model<Api>);
   }
 
   return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
+    id: resolvedModelId,
+    name: resolvedModelId,
     api: "openai-codex-responses",
     provider: normalizedProvider,
     baseUrl: "https://chatgpt.com/backend-api",

@@ -23,6 +23,30 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
+const OPENAI_CODEX_PROVIDER = "openai-codex";
+const OPENAI_CODEX_GPT54_LEGACY_MODEL_ID = "gpt-5.4-codex";
+const OPENAI_CODEX_GPT54_CANONICAL_MODEL_ID = "gpt-5.4";
+
+function normalizeModelIdForRuntime(params: { provider: string; model: Model<Api> }): Model<Api> {
+  if (normalizeProviderId(params.provider) !== OPENAI_CODEX_PROVIDER) {
+    return params.model;
+  }
+  const modelId = String(params.model.id ?? "").trim();
+  if (modelId.toLowerCase() !== OPENAI_CODEX_GPT54_LEGACY_MODEL_ID) {
+    return params.model;
+  }
+  const modelName = String(params.model.name ?? "").trim();
+
+  return {
+    ...params.model,
+    id: OPENAI_CODEX_GPT54_CANONICAL_MODEL_ID,
+    name:
+      modelName.toLowerCase() === OPENAI_CODEX_GPT54_LEGACY_MODEL_ID
+        ? OPENAI_CODEX_GPT54_CANONICAL_MODEL_ID
+        : (params.model.name ?? params.model.id),
+  };
+}
+
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -145,13 +169,16 @@ export function resolveModelWithRegistry(params: {
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
-    return normalizeModelCompat(
-      applyConfiguredProviderOverrides({
-        discoveredModel: model,
-        providerConfig,
-        modelId,
-      }),
-    );
+    return normalizeModelIdForRuntime({
+      provider,
+      model: normalizeModelCompat(
+        applyConfiguredProviderOverrides({
+          discoveredModel: model,
+          providerConfig,
+          modelId,
+        }),
+      ),
+    });
   }
 
   const providers = cfg?.models?.providers ?? {};
@@ -161,64 +188,76 @@ export function resolveModelWithRegistry(params: {
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
   if (inlineMatch) {
-    return normalizeModelCompat(inlineMatch as Model<Api>);
+    return normalizeModelIdForRuntime({
+      provider,
+      model: normalizeModelCompat(inlineMatch as Model<Api>),
+    });
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
   // Otherwise, configured providers can default to a generic API and break specific transports.
   const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
-    return normalizeModelCompat(
-      applyConfiguredProviderOverrides({
-        discoveredModel: forwardCompat,
-        providerConfig,
-        modelId,
-      }),
-    );
+    return normalizeModelIdForRuntime({
+      provider,
+      model: normalizeModelCompat(
+        applyConfiguredProviderOverrides({
+          discoveredModel: forwardCompat,
+          providerConfig,
+          modelId,
+        }),
+      ),
+    });
   }
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
   if (normalizedProvider === "openrouter") {
-    return normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      api: "openai-completions",
+    return normalizeModelIdForRuntime({
       provider,
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: DEFAULT_CONTEXT_TOKENS,
-      // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-      maxTokens: 8192,
-    } as Model<Api>);
+      model: normalizeModelCompat({
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider,
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+        maxTokens: 8192,
+      } as Model<Api>),
+    });
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
   if (providerConfig || modelId.startsWith("mock-")) {
-    return normalizeModelCompat({
-      id: modelId,
-      name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+    return normalizeModelIdForRuntime({
       provider,
-      baseUrl: providerConfig?.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers:
-        providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
-    } as Model<Api>);
+      model: normalizeModelCompat({
+        id: modelId,
+        name: modelId,
+        api: providerConfig?.api ?? "openai-responses",
+        provider,
+        baseUrl: providerConfig?.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers:
+          providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      } as Model<Api>),
+    });
   }
 
   return undefined;

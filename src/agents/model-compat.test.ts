@@ -302,6 +302,7 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-codex" })).toBe(true);
   });
 
   it("excludes opencode minimax variants from modern selection", () => {

@@ -480,6 +480,48 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("maps legacy openai-codex gpt-5.4-codex alias to canonical gpt-5.4", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.4-codex", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("applies explicit per-model overrides when using gpt-5.4-codex alias", () => {
+    mockOpenAICodexTemplateModel();
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.4-codex",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 321000,
+                maxTokens: 64000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4-codex", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      reasoning: false,
+      contextWindow: 321000,
+      maxTokens: 64000,
+    });
+  });
+
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel({
       provider: "openai",
@@ -609,6 +651,10 @@ describe("resolveModel", () => {
 
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     expectUnknownModelError("openai-codex", "gpt-4.1-mini");
+  });
+
+  it("keeps unknown-model errors for lookalike codex aliases that are not supported", () => {
+    expectUnknownModelError("openai-codex", "gpt-5.4-codex-mini");
   });
 
   it("uses codex fallback even when openai-codex provider is configured", () => {
