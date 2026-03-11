@@ -1,6 +1,7 @@
-import { ethers } from "hardhat";
+import hardhat from "hardhat";
 
 async function main() {
+  const { ethers } = hardhat as any;
   const [deployer] = await ethers.getSigners();
   console.log("Deploying ClawToken with account:", deployer.address);
 

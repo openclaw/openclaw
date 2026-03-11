@@ -11,11 +11,57 @@ cd agent-commerce
 
 # Install dependencies
 pnpm install
+```
 
-# Run tests
+## Local Hardhat Instructions
+
+The easiest way to test `agent-commerce` without pending real gas is using the local Hardhat network included with this extension.
+
+### 1. Start the Local Network
+
+In a separate terminal, run the local Hardhat node. This will give you 20 pre-funded test accounts with 10,000 fake ETH:
+
+```bash
+cd extensions/agent-commerce
+npx hardhat node
+```
+
+### 2. Deploy the ClawToken Contract
+
+With the node running, deploy the ERC20 token to the local network:
+
+```bash
+cd extensions/agent-commerce
+npx hardhat run scripts/deploy.ts --network localhost
+```
+
+This script will output the deployed `Contract Address`.
+
+### 3. Update `moltbot.json`
+
+Update your `~/.clawdbot/moltbot.json` to configure the extension with the local credentials:
+
+```json
+"agent-commerce": {
+    "enabled": true,
+    "rpcUrl": "http://127.0.0.1:8545",
+    "contractAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "chainId": 31337,
+    "privateKey": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+}
+```
+
+_(The private key above is Account #0 provided by Hardhat)._
+
+## Running Tests
+
+```bash
 pnpm test
+```
 
-# Type-check
+## Type-check
+
+```bash
 pnpm build
 ```
 
