@@ -8,7 +8,8 @@ import {
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
-import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
+import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import {
   chunkMarkdown,
   hashText,
@@ -549,10 +550,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
+    // Truncate query text to the embedding model's input limit to prevent 400 errors.
+    const maxInputTokens = resolveEmbeddingMaxInputTokens(this.provider);
+    let truncated = text;
+    if (estimateUtf8Bytes(text) > maxInputTokens) {
+      const parts = splitTextToUtf8ByteLimit(text, maxInputTokens);
+      truncated = parts[0] ?? text;
+      log.debug("memory embeddings: query truncated", {
+        originalBytes: estimateUtf8Bytes(text),
+        maxInputTokens,
+      });
+    }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
-      this.provider.embedQuery(text),
+      this.provider.embedQuery(truncated),
       timeoutMs,
       `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
