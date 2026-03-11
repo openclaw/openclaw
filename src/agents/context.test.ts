@@ -41,8 +41,11 @@ describe("applyDiscoveredContextWindows", () => {
 });
 
 describe("applyConfiguredContextWindows", () => {
-  it("overrides discovered cache values with explicit models.providers contextWindow", () => {
-    const cache = new Map<string, number>([["anthropic/claude-opus-4-6", 1_000_000]]);
+  it("writes bare model id to cache; does not touch raw provider-qualified discovery entries", () => {
+    // Discovery stored a provider-qualified entry; config override goes into the
+    // bare key only. resolveContextTokensForModel now scans config directly, so
+    // there is no need (and no benefit) to also write a synthetic qualified key.
+    const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
       modelsConfig: {
@@ -55,18 +58,18 @@ describe("applyConfiguredContextWindows", () => {
     });
 
     expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
-    // Qualified key must also be written so resolveContextTokensForModel
-    // (which tries the qualified key first) returns the config override, not
-    // the discovered value stored at "openrouter/anthropic/claude-opus-4-6".
-    expect(cache.get("openrouter/anthropic/claude-opus-4-6")).toBe(200_000);
+    // Discovery entry is untouched — no synthetic write that could corrupt
+    // an unrelated provider's raw slash-containing model ID.
+    expect(cache.get("openrouter/anthropic/claude-opus-4-6")).toBe(1_000_000);
   });
 
-  it("stores provider-qualified key so config overrides beat qualified discovery entries (bare model id)", () => {
-    // Discovery emits provider-qualified IDs; config uses bare IDs.
-    // Without the qualified key in cache, resolveContextTokensForModel
-    // (which tries the qualified key first) would return the discovered value.
+  it("does not write synthetic provider-qualified keys; only bare model ids go into cache", () => {
+    // applyConfiguredContextWindows must NOT write "google-gemini-cli/gemini-3.1-pro-preview"
+    // into the cache — that keyspace is reserved for raw discovery model IDs and
+    // a synthetic write would overwrite unrelated entries (e.g. OpenRouter's
+    // "google/gemini-2.5-pro" being clobbered by a Google provider config).
     const cache = new Map<string, number>();
-    cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576);
+    cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576); // discovery entry
     applyConfiguredContextWindows({
       cache,
       modelsConfig: {
@@ -78,52 +81,10 @@ describe("applyConfiguredContextWindows", () => {
       },
     });
 
+    // Bare key is written.
     expect(cache.get("gemini-3.1-pro-preview")).toBe(200_000);
-    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(200_000);
-  });
-
-  it("stores provider-qualified key so config overrides beat qualified discovery entries (slash model id)", () => {
-    // OpenRouter model ids already contain a slash (e.g. "anthropic/claude-sonnet-4-5").
-    // Discovery may store these under the fully-qualified "openrouter/anthropic/claude-sonnet-4-5"
-    // key. resolveContextTokensForModel tries the qualified key first, so the config
-    // override must also be written to that key — not skipped because modelId includes "/".
-    const cache = new Map<string, number>();
-    cache.set("openrouter/anthropic/claude-sonnet-4-5", 1_048_576);
-    applyConfiguredContextWindows({
-      cache,
-      modelsConfig: {
-        providers: {
-          openrouter: {
-            models: [{ id: "anthropic/claude-sonnet-4-5", contextWindow: 200_000 }],
-          },
-        },
-      },
-    });
-
-    // Bare key override must be present.
-    expect(cache.get("anthropic/claude-sonnet-4-5")).toBe(200_000);
-    // Qualified key must also be overridden so the qualified-first lookup in
-    // resolveContextTokensForModel returns the config value, not the discovered one.
-    expect(cache.get("openrouter/anthropic/claude-sonnet-4-5")).toBe(200_000);
-  });
-
-  it("normalizes provider keys before writing provider-qualified override entries", () => {
-    const cache = new Map<string, number>();
-    cache.set("openrouter/anthropic/claude-sonnet-4-5", 1_048_576);
-    applyConfiguredContextWindows({
-      cache,
-      modelsConfig: {
-        providers: {
-          " OpenRouter ": {
-            models: [{ id: "anthropic/claude-sonnet-4-5", contextWindow: 200_000 }],
-          },
-        },
-      },
-    });
-
-    expect(cache.get("anthropic/claude-sonnet-4-5")).toBe(200_000);
-    expect(cache.get("openrouter/anthropic/claude-sonnet-4-5")).toBe(200_000);
-    expect(cache.has(" OpenRouter /anthropic/claude-sonnet-4-5")).toBe(false);
+    // Discovery entry is NOT overwritten.
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 
   it("adds config-only model context windows and ignores invalid entries", () => {

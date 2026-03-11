@@ -28,10 +28,6 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   jitter: 0,
 };
 
-function resolveQualifiedContextWindowKey(providerId: string, modelId: string): string {
-  return `${normalizeProviderId(providerId)}/${modelId}`;
-}
-
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
@@ -66,7 +62,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const [providerId, provider] of Object.entries(providers)) {
+  for (const provider of Object.values(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -78,12 +74,6 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
       params.cache.set(modelId, contextWindow);
-      // Always store under the provider-qualified key so that qualified lookups
-      // in resolveContextTokensForModel respect explicit config overrides over
-      // discovered values. This covers both bare IDs (e.g. "claude-opus-4" →
-      // "anthropic/claude-opus-4") and slash-containing IDs common in OpenRouter
-      // (e.g. "anthropic/claude-sonnet-4-5" → "openrouter/anthropic/claude-sonnet-4-5").
-      params.cache.set(resolveQualifiedContextWindowKey(providerId, modelId), contextWindow);
     }
   }
 }
@@ -251,6 +241,42 @@ function resolveProviderModelRef(params: {
   return { provider, model };
 }
 
+// Look up an explicit contextWindow override for a specific provider+model
+// directly from config, without going through the shared discovery cache.
+// This avoids the cache keyspace collision where "provider/model" synthetic
+// keys overlap with raw slash-containing model IDs (e.g. OpenRouter's
+// "google/gemini-2.5-pro" stored as a raw catalog entry).
+function resolveConfiguredProviderContextWindow(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): number | undefined {
+  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (normalizeProviderId(providerId) !== normalizedProvider) {
+      continue;
+    }
+    if (!Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const m of providerConfig.models) {
+      if (
+        typeof m?.id === "string" &&
+        m.id === model &&
+        typeof m?.contextWindow === "number" &&
+        m.contextWindow > 0
+      ) {
+        return m.contextWindow;
+      }
+    }
+  }
+  return undefined;
+}
+
 function isAnthropic1MModel(provider: string, model: string): boolean {
   if (provider !== "anthropic") {
     return false;
@@ -282,18 +308,29 @@ export function resolveContextTokensForModel(params: {
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
+    // When provider is known, check config first for an explicit contextWindow
+    // override. This avoids writing synthetic "provider/model" keys into the
+    // shared discovery cache (which would overwrite unrelated slash-containing
+    // raw model IDs such as OpenRouter's "google/gemini-2.5-pro").
+    const configuredWindow = resolveConfiguredProviderContextWindow(
+      params.cfg,
+      ref.provider,
+      ref.model,
+    );
+    if (configuredWindow !== undefined) {
+      return configuredWindow;
+    }
   }
 
-  // When provider is known and the model id is bare (no slash), prefer the
-  // provider-qualified key so the correct entry is found when the same bare
-  // model id is catalogued under multiple providers with different limits.
-  // Skip the qualified key when the model id already contains a slash: those
-  // ids are themselves provider-qualified (e.g. OpenRouter's "google/gemini-2.5-pro")
-  // and the bare lookup is already the correct scoped key, preventing collisions
-  // with synthetic "provider/model" keys in the same cache.
+  // For bare model ids, also try the provider-qualified cache key so that
+  // discovery entries stored under qualified IDs (e.g. the registry returns
+  // "google-gemini-cli/gemini-3.1-pro-preview") are reachable when the caller
+  // provides separate provider/model fields. Only attempted for bare model ids
+  // (no slash) to avoid double-prefixing slash-containing ids such as
+  // OpenRouter's "google/gemini-2.5-pro".
   const qualifiedKey =
     ref && !ref.model.includes("/")
-      ? resolveQualifiedContextWindowKey(ref.provider, ref.model)
+      ? `${normalizeProviderId(ref.provider)}/${ref.model}`
       : undefined;
   return (
     (qualifiedKey ? lookupContextTokens(qualifiedKey) : undefined) ??
