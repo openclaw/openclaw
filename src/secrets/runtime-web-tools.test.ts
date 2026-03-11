@@ -299,9 +299,9 @@ describe("runtime web tools resolution", () => {
     vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
       version: 1,
       profiles: {
-        "minimax-portal:default": {
+        "minimax-cn:default": {
           type: "oauth",
-          provider: "minimax-portal",
+          provider: "minimax-cn",
           access: "profile-oauth-token", // pragma: allowlist secret
           refresh: "refresh-token", // pragma: allowlist secret
           expires: Date.now() + 60_000,
@@ -310,11 +310,11 @@ describe("runtime web tools resolution", () => {
       order: {},
     } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
     vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
-      provider === "minimax-portal" ? ["minimax-portal:default"] : [],
+      provider === "minimax-cn" ? ["minimax-cn:default"] : [],
     );
     const resolveApiKeySpy = vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
       apiKey: "profile-oauth-token", // pragma: allowlist secret
-      provider: "minimax-portal",
+      provider: "minimax-cn",
     });
 
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
@@ -334,11 +334,61 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBe("minimax");
     expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.baseUrl).toBe("https://api.minimaxi.com");
     expect(resolveApiKeySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         env: {},
       }),
     );
+  });
+
+  it("prefers configured minimax-portal baseUrl when auth profile fallback is minimax-portal", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-portal:default": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "profile-oauth-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax-portal" ? ["minimax-portal:default"] : [],
+    );
+    vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
+      apiKey: "profile-oauth-token", // pragma: allowlist secret
+      provider: "minimax-portal",
+    });
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+        models: {
+          providers: {
+            "minimax-portal": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.baseUrl).toBe("https://api.minimaxi.com");
   });
 
   it("treats configured provider as primary and falls back to next available provider", async () => {

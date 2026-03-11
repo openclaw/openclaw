@@ -21,6 +21,12 @@ const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 const MINIMAX_AUTH_PROFILE_PROVIDERS = ["minimax-portal", "minimax-cn", "minimax"] as const;
+type MinimaxAuthProfileProvider = (typeof MINIMAX_AUTH_PROFILE_PROVIDERS)[number];
+const MINIMAX_DEFAULT_API_HOST_BY_PROVIDER: Record<MinimaxAuthProfileProvider, string> = {
+  minimax: "https://api.minimax.io",
+  "minimax-portal": "https://api.minimax.io",
+  "minimax-cn": "https://api.minimaxi.com",
+};
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
@@ -356,10 +362,67 @@ function resolveProviderKeyValue(
   return scoped.apiKey;
 }
 
+function resolveMinimaxBaseUrlValue(search: Record<string, unknown>): unknown {
+  const scoped = search["minimax"];
+  if (!isRecord(scoped)) {
+    return undefined;
+  }
+  return scoped.baseUrl;
+}
+
+function setResolvedWebSearchMinimaxBaseUrl(params: {
+  resolvedConfig: OpenClawConfig;
+  value: string;
+}): void {
+  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureObject(tools, "web");
+  const search = ensureObject(web, "search");
+  const minimax = ensureObject(search, "minimax");
+  minimax.baseUrl = params.value;
+}
+
+function normalizeUrlOrigin(raw: string | undefined): string | undefined {
+  const trimmed = normalizeSecretInput(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    // Not a full URL yet; retry below by prefixing "https://".
+  }
+  try {
+    return new URL(`https://${trimmed}`).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveMinimaxApiHostFromProfile(params: {
+  sourceConfig: OpenClawConfig;
+  profileProvider: MinimaxAuthProfileProvider;
+}): string {
+  const providers = isRecord(params.sourceConfig.models?.providers)
+    ? (params.sourceConfig.models.providers as Record<string, unknown>)
+    : undefined;
+  const provider = providers?.[params.profileProvider];
+  if (isRecord(provider)) {
+    const configured = normalizeUrlOrigin(
+      typeof provider.baseUrl === "string" ? provider.baseUrl : undefined,
+    );
+    if (configured) {
+      return configured;
+    }
+  }
+  return MINIMAX_DEFAULT_API_HOST_BY_PROVIDER[params.profileProvider];
+}
+
 async function resolveMinimaxApiKeyFromAuthProfiles(params: {
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
-}): Promise<string | undefined> {
+}): Promise<
+  { apiKey: string; profileProvider: MinimaxAuthProfileProvider; apiHost: string } | undefined
+> {
   let store: ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
   try {
     store = loadAuthProfileStoreForSecretsRuntime(params.context.env.OPENCLAW_AGENT_DIR);
@@ -385,7 +448,14 @@ async function resolveMinimaxApiKeyFromAuthProfiles(params: {
         });
         const value = normalizeSecretInput(resolved?.apiKey);
         if (value) {
-          return value;
+          return {
+            apiKey: value,
+            profileProvider: provider,
+            apiHost: resolveMinimaxApiHostFromProfile({
+              sourceConfig: params.sourceConfig,
+              profileProvider: provider,
+            }),
+          };
         }
       } catch {
         // Ignore profile-specific failures and continue probing next profile.
@@ -477,16 +547,25 @@ export async function resolveRuntimeWebTools(params: {
       });
 
       if (provider === "minimax" && !resolution.value) {
-        const authProfileValue = await resolveMinimaxApiKeyFromAuthProfiles({
+        const authProfileMatch = await resolveMinimaxApiKeyFromAuthProfiles({
           sourceConfig: params.sourceConfig,
           context: params.context,
         });
-        if (authProfileValue) {
+        if (authProfileMatch) {
           resolution = {
             ...resolution,
-            value: authProfileValue,
+            value: authProfileMatch.apiKey,
             source: "auth_profile",
           };
+          const hasConfiguredMinimaxBaseUrl = Boolean(
+            normalizeSecretInput(resolveMinimaxBaseUrlValue(search)),
+          );
+          if (!hasConfiguredMinimaxBaseUrl) {
+            setResolvedWebSearchMinimaxBaseUrl({
+              resolvedConfig: params.resolvedConfig,
+              value: authProfileMatch.apiHost,
+            });
+          }
         }
       }
 
