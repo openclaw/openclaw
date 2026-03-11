@@ -227,7 +227,7 @@ export async function repairLaunchAgentBootstrap(args: {
   // launchd can persist "disabled" state after bootout; clear it before bootstrap
   // (matches the same guard in installLaunchAgent and restartLaunchAgent).
   await execLaunchctl(["enable", `${domain}/${label}`]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  const boot = await bootstrapWithRetry(domain, plistPath);
   if (boot.code !== 0) {
     return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
   }
@@ -376,6 +376,7 @@ const RESTART_SIGKILL_WAIT_MS = 5_000;
 const RESTART_WAIT_INTERVAL_MS = 200;
 // Retry bootstrap up to this many times when EIO indicates the old process is
 // still alive (e.g. kernel hasn't reaped it yet despite SIGKILL).
+// Exponential backoff delays: 500, 1000, 2000, 4000 ms (total ≤ 7.5 s).
 const BOOTSTRAP_EIO_RETRY_COUNT = 4;
 const BOOTSTRAP_EIO_RETRY_BASE_MS = 500;
 
@@ -430,6 +431,11 @@ export async function waitForPidExitWithEscalation(pid: number): Promise<void> {
   }
 
   // Phase 2: process survived the graceful window — escalate to SIGKILL.
+  // One final check before sending SIGKILL to guard against PID reuse: if the
+  // process exited during the last polling sleep we must not kill a recycled PID.
+  if (!isProcessAlive(pid)) {
+    return;
+  }
   try {
     process.kill(pid, "SIGKILL");
   } catch {
@@ -454,8 +460,8 @@ export async function waitForPidExitWithEscalation(pid: number): Promise<void> {
  * process table even though bootout succeeded and the process is no longer
  * scheduled. This race is common on macOS 15+ where kernel reaping is
  * asynchronous relative to launchd's domain book-keeping. Retrying with
- * exponential backoff lets the kernel catch up without requiring callers to
- * handle the error.
+ * exponential backoff (500 ms × 2^(attempt−1)) lets the kernel catch up without
+ * requiring callers to handle the error.
  *
  * Non-retriable errors (unsupported GUI domain, permission denied, etc.) are
  * returned immediately on the first attempt.
@@ -474,7 +480,7 @@ export async function bootstrapWithRetry(
       // Not an EIO/process-alive error — don't retry.
       return result;
     }
-    await sleepMs(BOOTSTRAP_EIO_RETRY_BASE_MS * attempt);
+    await sleepMs(BOOTSTRAP_EIO_RETRY_BASE_MS * 2 ** (attempt - 1));
     result = await execLaunchctl(["bootstrap", domain, plistPath]);
   }
   return result;
@@ -521,6 +527,14 @@ export async function installLaunchAgent({
   await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
 
+  // Read the current running PID before writing the new plist so we can wait
+  // for it to exit after bootout (same pattern as restartLaunchAgent).
+  const runtimeBefore = await execLaunchctl(["print", `${domain}/${label}`]);
+  const previousPid =
+    runtimeBefore.code === 0
+      ? parseLaunchctlPrint(runtimeBefore.stdout || runtimeBefore.stderr || "").pid
+      : undefined;
+
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({
     label,
@@ -536,6 +550,9 @@ export async function installLaunchAgent({
 
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
+  if (typeof previousPid === "number") {
+    await waitForPidExitWithEscalation(previousPid);
+  }
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await bootstrapWithRetry(domain, plistPath);

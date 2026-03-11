@@ -195,6 +195,28 @@ describe("launchctl list detection", () => {
 });
 
 describe("launchd bootstrap repair", () => {
+  it("retries bootstrap on EIO and recovers", async () => {
+    const eioError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapErrorSequence.push(eioError);
+
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+
+    vi.useFakeTimers();
+    try {
+      const repairPromise = repairLaunchAgentBootstrap({ env });
+      await vi.advanceTimersByTimeAsync(1000);
+      const repair = await repairPromise;
+      expect(repair.ok).toBe(true);
+      // Initial attempt (EIO) + one retry = 2 bootstrap calls.
+      expect(state.launchctlCalls.filter((c) => c[0] === "bootstrap").length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("enables, bootstraps, and kickstarts the resolved label", async () => {
     const env: Record<string, string | undefined> = {
       HOME: "/Users/test",
@@ -448,11 +470,13 @@ describe("launchd install", () => {
 
 describe("waitForPidExitWithEscalation", () => {
   it("returns immediately when pid is invalid", async () => {
-    // No kill calls should be made for invalid pids.
+    // No kill calls should be made for invalid pids (0, -1, NaN, 1, Infinity).
     const killSpy = vi.spyOn(process, "kill");
     await waitForPidExitWithEscalation(0);
     await waitForPidExitWithEscalation(-1);
     await waitForPidExitWithEscalation(NaN);
+    await waitForPidExitWithEscalation(1);
+    await waitForPidExitWithEscalation(Infinity);
     expect(killSpy).not.toHaveBeenCalled();
     killSpy.mockRestore();
   });
@@ -505,6 +529,38 @@ describe("waitForPidExitWithEscalation", () => {
 
       expect(sigkillReceived).toBe(true);
       expect(killSpy).toHaveBeenCalledWith(1234, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+    }
+  });
+
+  it("does not send SIGKILL when process exits at the graceful deadline", async () => {
+    // Simulate process exiting during the last sleep before the deadline.
+    // The final isProcessAlive guard before SIGKILL must prevent sending SIGKILL.
+    let callCount = 0;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((_, signal) => {
+      if (signal === 0) {
+        callCount++;
+        if (callCount >= 2) {
+          // Gone before SIGKILL is attempted.
+          const err = new Error("no such process") as NodeJS.ErrnoException;
+          err.code = "ESRCH";
+          throw err;
+        }
+        return true;
+      }
+      return true;
+    });
+
+    vi.useFakeTimers();
+    try {
+      const waitPromise = waitForPidExitWithEscalation(7777);
+      // Advance past the graceful window so the loop exits.
+      await vi.advanceTimersByTimeAsync(15_200);
+      await waitPromise;
+      // SIGKILL must not have been sent because the final guard detected exit.
+      expect(killSpy).not.toHaveBeenCalledWith(7777, "SIGKILL");
     } finally {
       vi.useRealTimers();
       killSpy.mockRestore();
@@ -615,7 +671,8 @@ describe("bootstrapWithRetry", () => {
     vi.useFakeTimers();
     try {
       const retryPromise = bootstrapWithRetry(domain, plistPath);
-      await vi.advanceTimersByTimeAsync(10_000);
+      // Exponential delays: 500+1000+2000+4000 = 7500 ms total.
+      await vi.advanceTimersByTimeAsync(8_000);
       const result = await retryPromise;
       expect(result.code).toBe(1);
       expect((result.stderr || result.stdout).trim()).toBe(eioMsg);
