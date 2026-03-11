@@ -40,6 +40,7 @@ export type ResolvedQmdUpdateConfig = {
 
 export type ResolvedQmdLimitsConfig = {
   maxResults: number;
+  minScore: number;
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
@@ -83,6 +84,7 @@ const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
+  minScore: 0.5,
   maxSnippetChars: 700,
   maxInjectedChars: 4_000,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
