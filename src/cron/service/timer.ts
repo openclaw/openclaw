@@ -292,11 +292,16 @@ export function applyJobResult(
   },
 ): boolean {
   job.state.runningAtMs = undefined;
-  // For manual triggers, preserve the existing lastRunAtMs so that the
-  // schedule anchor is not displaced.  The next automatic run should still
-  // fire at its original cadence (e.g. 07:00 daily) rather than being
-  // shifted to `now + interval` (#33940).
-  if (!result.manual) {
+  // For manual triggers on recurring schedules (every/cron), preserve the
+  // existing lastRunAtMs so that the schedule anchor is not displaced.  The
+  // next automatic run should still fire at its original cadence (e.g. 07:00
+  // daily) rather than being shifted to `now + interval` (#33940).
+  //
+  // One-shot `at` jobs must always update lastRunAtMs so that
+  // computeJobNextRunAtMs can correctly identify them as already-run and
+  // avoid re-firing or miscalculating their next state.
+  const isRecurring = job.schedule.kind === "every" || job.schedule.kind === "cron";
+  if (!result.manual || !isRecurring) {
     job.state.lastRunAtMs = result.startedAt;
   }
   job.state.lastRunStatus = result.status;

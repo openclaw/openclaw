@@ -126,3 +126,44 @@ describe("Cron issue #33940 — manual run must not displace schedule anchor", (
     expect(job.state.nextRunAtMs).toBe(scheduledRunMs + DAY_MS);
   });
 });
+
+describe("issue-33940: manual run on at-schedule job updates lastRunAtMs (#34110 review)", () => {
+  const { makeStorePath } = createCronStoreHarness();
+  const log = createNoopLogger();
+
+  function createAtJob(params: { atMs: number }): CronJob {
+    return {
+      id: "one-shot",
+      schedule: { kind: "at", at: new Date(params.atMs).toISOString(), atMs: params.atMs },
+      payload: { kind: "systemEvent", text: "ping" },
+      sessionTarget: "main",
+      enabled: true,
+      createdAtMs: params.atMs - 1000,
+      updatedAtMs: params.atMs - 1000,
+      state: {
+        nextRunAtMs: params.atMs,
+      },
+    };
+  }
+
+  it("force-run of an at-schedule job updates lastRunAtMs so computeJobNextRunAtMs works correctly", async () => {
+    const atMs = 1_700_000_000_000;
+    const manualMs = atMs + 60_000; // trigger 1 minute after scheduled time
+
+    const { storePath } = await makeStorePath();
+    const state = createRunningCronServiceState({
+      storePath,
+      log,
+      nowMs: () => manualMs,
+      jobs: [createAtJob({ atMs })],
+    });
+
+    await run(state, "one-shot", "force");
+
+    const job = state.store!.jobs.find((j) => j.id === "one-shot")!;
+    // For at-schedule jobs, lastRunAtMs must be set even on manual triggers
+    // so that computeJobNextRunAtMs can detect the job as already-run.
+    expect(job.state.lastRunAtMs).toBe(manualMs);
+    expect(job.state.lastStatus).toBe("ok");
+  });
+});
