@@ -184,4 +184,25 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts web fetch firecrawl config overrides", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            readability: true,
+            firecrawl: {
+              apiKey: "fc-test",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: true,
+              maxAgeMs: 172800000,
+              timeoutSeconds: 60,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
