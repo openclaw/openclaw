@@ -54,6 +54,7 @@ export async function loginOpenAICodexOAuth(params: {
       onAuth: baseOnAuth,
       onPrompt,
       onProgress: (msg: string) => spin.update(msg),
+      originator: "openclaw",
     });
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;

@@ -35,7 +35,11 @@ import type {
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
-import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
+import {
+  parseQmdMcporterJson,
+  parseQmdQueryJson,
+  type QmdQueryResult,
+} from "./qmd-query-parser.js";
 import { extractKeywords } from "./query-expansion.js";
 
 const log = createSubsystemLogger("memory");
@@ -1325,38 +1329,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
     );
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
-      typeof value === "object" && value !== null && !Array.isArray(value);
-
-    const structured =
-      isRecord(parsedUnknown) && isRecord(parsedUnknown.structuredContent)
-        ? parsedUnknown.structuredContent
-        : parsedUnknown;
-
-    const results: unknown[] =
-      isRecord(structured) && Array.isArray(structured.results)
-        ? (structured.results as unknown[])
-        : Array.isArray(structured)
-          ? structured
-          : [];
-
-    const out: QmdQueryResult[] = [];
-    for (const item of results) {
-      if (!isRecord(item)) {
-        continue;
-      }
-      const docidRaw = item.docid;
-      const docid = typeof docidRaw === "string" ? docidRaw.replace(/^#/, "").trim() : "";
-      if (!docid) {
-        continue;
-      }
-      const scoreRaw = item.score;
-      const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
-      const snippet = typeof item.snippet === "string" ? item.snippet : "";
-      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
-    }
-    return out;
+    return parseQmdMcporterJson(result.stdout, result.stderr);
   }
 
   private async readPartialText(
