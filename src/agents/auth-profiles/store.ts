@@ -428,9 +428,9 @@ function loadAuthProfileStoreForAgent(
 
   // Legacy migration (auth.json → auth-profiles.json) is suppressed when the
   // caller passes readOnly:true (dry-run or probe-mode loads that must not write).
-  // For actual cleanup calls the probe is loaded with readOnly:false, so migration
-  // still runs and auth-profiles.json is created before updateAuthProfileStoreWithLock's
-  // ensureAuthStoreFile can create an empty placeholder.  (#2914491523, #2914711181)
+  // auth-clean.ts probes readOnly:true, then performs a separate readOnly:false
+  // load after guards pass to trigger migration before updateAuthProfileStoreWithLock's
+  // ensureAuthStoreFile can create an empty placeholder. (#2914491523, #2914711181, #2915530629)
   const shouldMigrateLegacy = !readOnly && !forceReadOnly && legacy !== null;
   // External-CLI / OAuth extras are still suppressed during read-only probes.
   const shouldPersistExtras = !readOnly && !forceReadOnly && (mergedOAuth || syncedCli);
