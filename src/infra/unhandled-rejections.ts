@@ -12,9 +12,25 @@ const unhandledRejectionsInstallKey = Symbol.for("openclaw.unhandled-rejections.
 
 type UnhandledRejectionsInstallState = {
   installed: boolean;
+  handlers: Set<UnhandledRejectionHandler>;
 };
 
-const handlers = new Set<UnhandledRejectionHandler>();
+function getUnhandledRejectionsState(): UnhandledRejectionsInstallState {
+  const globalState = globalThis as typeof globalThis & {
+    [unhandledRejectionsInstallKey]?: UnhandledRejectionsInstallState;
+  };
+
+  let state = globalState[unhandledRejectionsInstallKey];
+  if (!state) {
+    state = {
+      installed: false,
+      handlers: new Set<UnhandledRejectionHandler>(),
+    };
+    globalState[unhandledRejectionsInstallKey] = state;
+  }
+
+  return state;
+}
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -200,6 +216,7 @@ export function isTransientNetworkError(err: unknown): boolean {
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
+  const { handlers } = getUnhandledRejectionsState();
   handlers.add(handler);
   return () => {
     handlers.delete(handler);
@@ -207,6 +224,7 @@ export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHan
 }
 
 export function isUnhandledRejectionHandled(reason: unknown): boolean {
+  const { handlers } = getUnhandledRejectionsState();
   for (const handler of handlers) {
     try {
       if (handler(reason)) {
@@ -223,10 +241,8 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
-  const globalState = globalThis as typeof globalThis & {
-    [unhandledRejectionsInstallKey]?: UnhandledRejectionsInstallState;
-  };
-  if (globalState[unhandledRejectionsInstallKey]?.installed) {
+  const state = getUnhandledRejectionsState();
+  if (state.installed) {
     return;
   }
 
@@ -266,7 +282,5 @@ export function installUnhandledRejectionHandler(): void {
     process.exit(1);
   });
 
-  globalState[unhandledRejectionsInstallKey] = {
-    installed: true,
-  };
+  state.installed = true;
 }
