@@ -158,6 +158,58 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
+  it("fails closed when local token SecretRef is unresolved and remote token fallback exists", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+            },
+            remote: {
+              token: "remote-token",
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrow("gateway.auth.token");
+  });
+
+  it("fails closed when local password SecretRef is unresolved and remote password fallback exists", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "password",
+              password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
+            },
+            remote: {
+              password: "remote-password", // pragma: allowlist secret
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrow("gateway.auth.password");
+  });
+
   it("throws when local password auth relies on an unresolved SecretRef", () => {
     expect(() =>
       resolveGatewayCredentialsFromConfig({
