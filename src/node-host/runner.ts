@@ -167,8 +167,10 @@ function resolveNodeHostHeaders(params: {
           }
         }
       }
-    } catch {
-      // Ignore invalid JSON
+    } catch (e) {
+      console.warn(
+        `[openclaw] Warning: OPENCLAW_NODE_HEADERS contains invalid JSON and was ignored: ${String(e)}`,
+      );
     }
   }
   const cfId = env.CF_ACCESS_CLIENT_ID?.trim();

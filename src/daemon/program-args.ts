@@ -252,7 +252,6 @@ export async function resolveNodeProgramArguments(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
-  headers?: Record<string, string>;
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
@@ -263,11 +262,6 @@ export async function resolveNodeProgramArguments(params: {
   }
   if (params.tlsFingerprint) {
     args.push("--tls-fingerprint", params.tlsFingerprint);
-  }
-  if (params.headers && Object.keys(params.headers).length > 0) {
-    for (const [key, value] of Object.entries(params.headers)) {
-      args.push("--header", `${key}: ${value}`);
-    }
   }
   if (params.nodeId) {
     args.push("--node-id", params.nodeId);

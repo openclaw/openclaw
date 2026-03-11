@@ -69,7 +69,7 @@ openclaw node run --host gateway.example.com --port 443 --tls \
   --header "CF-Access-Client-Secret: your-client-secret"
 ```
 
-For an installed service, you can pass the same `--header` flags to `openclaw node install`, or set environment variables so secrets are not stored in config or command lines:
+For an installed service, you can pass the same `--header` flags to `openclaw node install`, or set environment variables so secrets are not stored in config or command lines. When you use `openclaw node install --header`, header values are passed into the service via the `OPENCLAW_NODE_HEADERS` environment variable (not on the command line), so they are not visible in process listings or in `openclaw node status`.
 
 - `OPENCLAW_NODE_HEADERS`: JSON object of header name to value, e.g. `{"CF-Access-Client-Id":"id","CF-Access-Client-Secret":"secret"}`
 - `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`: Automatically added as `CF-Access-Client-Id` and `CF-Access-Client-Secret` on the WebSocket request

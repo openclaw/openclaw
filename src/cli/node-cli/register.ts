@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { parsePort } from "../daemon-cli/shared.js";
@@ -58,13 +59,21 @@ export function registerNodeCli(program: Command) {
       const host =
         (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
       const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
-      const headers = parseHeaderArgs(opts.header as string[] | undefined);
+      let headers: Record<string, string> | undefined;
+      try {
+        const parsed = parseHeaderArgs(opts.header as string[] | undefined);
+        headers = Object.keys(parsed).length > 0 ? parsed : undefined;
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        process.exitCode = 1;
+        return;
+      }
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
         gatewayTls: Boolean(opts.tls) || Boolean(opts.tlsFingerprint),
         gatewayTlsFingerprint: opts.tlsFingerprint,
-        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        headers,
         nodeId: opts.nodeId,
         displayName: opts.displayName,
       });

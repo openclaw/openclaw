@@ -42,7 +42,6 @@ export async function buildNodeInstallPlan(params: {
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,
     displayName: params.displayName,
-    headers: params.headers,
     dev: devMode,
     runtime: params.runtime,
     nodePath,
@@ -57,6 +56,9 @@ export async function buildNodeInstallPlan(params: {
   });
 
   const environment = buildNodeServiceEnvironment({ env: params.env });
+  if (params.headers && Object.keys(params.headers).length > 0) {
+    environment.OPENCLAW_NODE_HEADERS = JSON.stringify(params.headers);
+  }
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,
   });
