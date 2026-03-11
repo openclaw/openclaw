@@ -48,6 +48,23 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
+export function buildToolSidebarContent(params: {
+  label: string;
+  detail?: string;
+  text?: string;
+}): string {
+  const hasText = Boolean(params.text?.trim());
+  const heading = `## ${params.label}`;
+  const command = params.detail ? `\n\n**Command:** \`${params.detail}\`` : "";
+
+  if (!hasText) {
+    return `${heading}${command}\n\n*No output — tool completed successfully.*`;
+  }
+
+  const body = formatToolOutputForSidebar(params.text!);
+  return `${heading}${command}\n\n${body}`;
+}
+
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -56,14 +73,13 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
-          return;
-        }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+        onOpenSidebar!(
+          buildToolSidebarContent({
+            label: display.label,
+            detail,
+            text: card.text,
+          }),
+        );
       }
     : undefined;
 
