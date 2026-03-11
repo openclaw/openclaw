@@ -27,6 +27,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import {
   clearActiveTurn,
   clearPendingInboundEntries,
+  readActiveTurn,
   readPendingInbound,
   readStaleActiveTurns,
 } from "../infra/pending-inbound-store.js";
@@ -279,6 +280,30 @@ export async function startGatewaySidecars(params: {
         if (turn.startedAt >= processStartedAt) {
           params.log.warn(
             `active-turn recovery: skipping live turn ${turn.sessionId} (startedAt=${turn.startedAt} >= processStartedAt=${processStartedAt})`,
+          );
+          continue;
+        }
+
+        // Re-validate the current store entry before clearing.  Between the
+        // snapshot (readStaleActiveTurns) and now, a fresh turn could have
+        // been written under the same sessionId — e.g. if a channel handler
+        // started a new turn whose sessionId collides with a stale one.
+        // Only clear if the on-disk entry still has the same startedAt we
+        // saw in the snapshot (i.e. it has NOT been refreshed by this process).
+        const currentEntry = await readActiveTurn(stateDir, turn.sessionId);
+        if (!currentEntry) {
+          // Already cleared by something else — nothing to do.
+          continue;
+        }
+        if (currentEntry.startedAt !== turn.startedAt) {
+          // A fresh turn was written under the same sessionId after our snapshot.
+          // The startedAt guard above already protects against this case when the
+          // new turn's startedAt >= processStartedAt, but a recycled sessionId
+          // whose new startedAt still happens to be < processStartedAt (due to
+          // clock imprecision or test-injected timestamps) would slip through.
+          // Comparing startedAt values is the most reliable way to detect staleness.
+          params.log.warn(
+            `active-turn recovery: skipping refreshed turn ${turn.sessionId} (snapshot startedAt=${turn.startedAt}, current startedAt=${currentEntry.startedAt})`,
           );
           continue;
         }

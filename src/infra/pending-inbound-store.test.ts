@@ -8,6 +8,7 @@ import {
   clearAllActiveTurns,
   clearPendingInbound,
   clearPendingInboundEntries,
+  readActiveTurn,
   readPendingInbound,
   readStaleActiveTurns,
   writeActiveTurn,
@@ -503,6 +504,86 @@ describe("pending-inbound-store", () => {
     expect(liveTurns).toHaveLength(3);
     // None should be recovered — all are from "this process"
     expect(allTurns.filter((t) => t.startedAt < processStartedAt)).toHaveLength(0);
+  });
+
+  // --- readActiveTurn (single-entry re-validation, TOCTOU guard) ---
+
+  it("readActiveTurn returns the entry for an existing sessionId", async () => {
+    const turn: ActiveTurnEntry = {
+      sessionId: "sess-read-001",
+      sessionKey: "telegram:12345",
+      channel: "telegram",
+      startedAt: 1700000010000,
+    };
+    await writeActiveTurn(stateDir, turn);
+
+    const result = await readActiveTurn(stateDir, "sess-read-001");
+    expect(result).toEqual(turn);
+  });
+
+  it("readActiveTurn returns undefined for a non-existent sessionId", async () => {
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-read-002",
+      sessionKey: "telegram:99999",
+      channel: "telegram",
+      startedAt: 1700000010000,
+    });
+
+    const result = await readActiveTurn(stateDir, "sess-read-MISSING");
+    expect(result).toBeUndefined();
+  });
+
+  it("readActiveTurn returns undefined after the entry is cleared", async () => {
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-read-003",
+      sessionKey: "telegram:77777",
+      channel: "telegram",
+      startedAt: 1700000010000,
+    });
+
+    await clearActiveTurn(stateDir, "sess-read-003");
+
+    const result = await readActiveTurn(stateDir, "sess-read-003");
+    expect(result).toBeUndefined();
+  });
+
+  it("readActiveTurn returns undefined on missing file", async () => {
+    const result = await readActiveTurn(stateDir, "sess-read-no-file");
+    expect(result).toBeUndefined();
+  });
+
+  it("readActiveTurn reflects an updated startedAt after a re-write (TOCTOU guard)", async () => {
+    const processStartedAt = 1700000005000;
+
+    // Simulate stale turn from previous process written before snapshot
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-toctou-001",
+      sessionKey: "telegram:111",
+      channel: "telegram",
+      startedAt: 1700000000000, // stale: before processStartedAt
+    });
+
+    // Take snapshot (mirrors readStaleActiveTurns in server-startup)
+    const snapshot = await readStaleActiveTurns(stateDir);
+    expect(snapshot).toHaveLength(1);
+    const snapshotTurn = snapshot[0];
+    expect(snapshotTurn.startedAt).toBeLessThan(processStartedAt);
+
+    // Simulate a fresh turn written under the same sessionId AFTER the snapshot
+    // (e.g. channel handler started a new turn that recycled the sessionId)
+    await writeActiveTurn(stateDir, {
+      sessionId: "sess-toctou-001",
+      sessionKey: "telegram:111",
+      channel: "telegram",
+      startedAt: 1700000010000, // fresh: after processStartedAt
+    });
+
+    // Re-validate by reading the current store entry
+    const current = await readActiveTurn(stateDir, "sess-toctou-001");
+    expect(current).toBeDefined();
+    // startedAt has changed — the recovery loop should skip this entry
+    expect(current!.startedAt).not.toBe(snapshotTurn.startedAt);
+    expect(current!.startedAt).toBe(1700000010000);
   });
 
   // --- File permission tests (Aisle Low #3) ---

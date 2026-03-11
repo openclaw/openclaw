@@ -284,6 +284,21 @@ export async function readStaleActiveTurns(stateDir: string): Promise<ActiveTurn
   return Object.values(data.activeTurns);
 }
 
+/**
+ * Read a single active-turn entry by sessionId.
+ * Returns undefined if the entry does not exist.
+ * Use this to re-validate a turn before clearing it, avoiding TOCTOU races
+ * where a fresh turn with the same sessionId is written after a snapshot is taken.
+ */
+export async function readActiveTurn(
+  stateDir: string,
+  sessionId: string,
+): Promise<ActiveTurnEntry | undefined> {
+  const filePath = resolveStorePath(stateDir);
+  const data = await readPendingInboundFile(filePath);
+  return data.activeTurns?.[sessionId];
+}
+
 async function readPendingInboundFile(filePath: string): Promise<PendingInboundFile> {
   const data = await readJsonFile<PendingInboundFile>(filePath);
   if (data && data.version === 1 && typeof data.entries === "object" && data.entries !== null) {
