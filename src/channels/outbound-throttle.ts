@@ -13,6 +13,10 @@ export class OutboundThrottle {
   private readonly delayMs: number;
   private lastDoneAt = 0;
   private queue: Pending[] = [];
+  /** True while a run() is executing fn(); blocks concurrent run() from starting. */
+  private inFlight = false;
+  /** Single timer for the next drain; prevents duplicate timers for the same head. */
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(delayMs: number) {
     this.delayMs = Math.max(0, Math.floor(delayMs));
@@ -26,16 +30,20 @@ export class OutboundThrottle {
     const now = Date.now();
     const waitUntil = Math.max(now, this.lastDoneAt + this.delayMs);
     const mustWait =
-      this.queue.length > 0 || (this.lastDoneAt > 0 && now < this.lastDoneAt + this.delayMs);
+      this.inFlight ||
+      this.queue.length > 0 ||
+      (this.lastDoneAt > 0 && now < this.lastDoneAt + this.delayMs);
     if (mustWait) {
       await new Promise<void>((resolve) => {
         this.queue.push({ resolve, runAt: waitUntil });
         this.drain();
       });
     }
+    this.inFlight = true;
     try {
       return await fn();
     } finally {
+      this.inFlight = false;
       this.lastDoneAt = Date.now();
       this.drain();
     }
@@ -45,12 +53,20 @@ export class OutboundThrottle {
     if (this.queue.length === 0) {
       return;
     }
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
     const now = Date.now();
     const next = this.queue[0];
     const waitUntil = Math.max(next.runAt, this.lastDoneAt + this.delayMs);
     const waitMs = Math.max(0, waitUntil - now);
     if (waitMs > 0) {
-      setTimeout(() => {
+      this.drainTimer = setTimeout(() => {
+        this.drainTimer = null;
+        if (this.queue[0] !== next) {
+          return;
+        }
         this.queue.shift();
         next.resolve();
         this.lastDoneAt = Date.now();
