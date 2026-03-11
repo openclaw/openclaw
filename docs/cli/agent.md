@@ -16,8 +16,8 @@ Related:
 
 ## Options
 
-| Flag | Description |
-|------|-------------|
+| Flag           | Description                                                                                                                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--model <id>` | Override the model for this turn only (e.g. `openai/gpt-4o`). Not persisted to the session — applies to the current invocation only. Throws an error if the model id is invalid or not in the configured allowlist. |
 
 ## Examples
