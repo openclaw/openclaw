@@ -34,6 +34,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { createAnthropicVertexStreamFn } from "../../anthropic-vertex-stream.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -1899,6 +1900,18 @@ export async function runEmbeddedAttempt(
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
           activeSession.agent.streamFn = streamSimple;
         }
+      } else if (params.model.provider === "anthropic-vertex") {
+        // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
+        // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
+        const project =
+          process.env.GOOGLE_CLOUD_PROJECT?.trim() ||
+          process.env.ANTHROPIC_VERTEX_PROJECT_ID?.trim() ||
+          "";
+        const region =
+          process.env.GOOGLE_CLOUD_LOCATION?.trim() ||
+          process.env.CLOUD_ML_REGION?.trim() ||
+          "us-central1";
+        activeSession.agent.streamFn = createAnthropicVertexStreamFn(project, region);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;

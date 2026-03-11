@@ -355,6 +355,24 @@ export function resolveEnvApiKey(
     }
     return { apiKey: envKey, source: "gcloud adc" };
   }
+
+  if (normalized === "anthropic-vertex") {
+    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
+    // Return a sentinel so the model resolver considers this provider available.
+    if (
+      process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+      process.env.GOOGLE_CLOUD_PROJECT ||
+      process.env.ANTHROPIC_VERTEX_PROJECT_ID
+    ) {
+      return { apiKey: "gcp-vertex-credentials", source: "gcloud adc" }; // pragma: allowlist secret
+    }
+    const envKey = getEnvApiKey("google-vertex");
+    if (!envKey) {
+      return null;
+    }
+    return { apiKey: envKey, source: "gcloud adc" };
+  }
+
   return null;
 }
 
