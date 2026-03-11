@@ -144,7 +144,12 @@ describe("normalizeStoredCronJobs", () => {
     const jobs = [
       {
         id: "trim-unknown-kind",
+        name: "Trim unknown kind",
         schedule: { kind: "every", everyMs: 60_000 },
+        state: {},
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "main",
         payload: {
           kind: " customEvent ",
           text: "ping",
@@ -155,6 +160,7 @@ describe("normalizeStoredCronJobs", () => {
     const result = normalizeStoredCronJobs(jobs);
 
     expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(1);
     expect((jobs[0]?.payload as Record<string, unknown> | undefined)?.kind).toBe("customEvent");
   });
 });
