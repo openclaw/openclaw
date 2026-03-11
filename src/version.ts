@@ -91,6 +91,7 @@ export type RuntimeVersionEnv = {
 };
 
 export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+const NON_VERSION_RUNTIME_MARKERS = new Set(["beta", "dev", "latest", "stable", "unknown"]);
 
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
   const trimmed = version?.trim();
@@ -99,7 +100,20 @@ export function resolveUsableRuntimeVersion(version: string | undefined): string
   if (!trimmed || trimmed === "0.0.0") {
     return undefined;
   }
+  if (NON_VERSION_RUNTIME_MARKERS.has(trimmed.toLowerCase())) {
+    return undefined;
+  }
   return trimmed;
+}
+
+function firstUsableRuntimeVersion(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const usable = resolveUsableRuntimeVersion(value);
+    if (usable) {
+      return usable;
+    }
+  }
+  return undefined;
 }
 
 export function resolveRuntimeServiceVersion(
@@ -109,7 +123,7 @@ export function resolveRuntimeServiceVersion(
   const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
 
   return (
-    firstNonEmpty(
+    firstUsableRuntimeVersion(
       env["OPENCLAW_VERSION"],
       runtimeVersion,
       env["OPENCLAW_SERVICE_VERSION"],

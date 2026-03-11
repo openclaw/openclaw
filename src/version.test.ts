@@ -149,6 +149,9 @@ describe("version resolution", () => {
     expect(resolveUsableRuntimeVersion(" \t ")).toBeUndefined();
     expect(resolveUsableRuntimeVersion("0.0.0")).toBeUndefined();
     expect(resolveUsableRuntimeVersion(" 0.0.0 ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("dev")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" stable ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("unknown")).toBeUndefined();
     expect(resolveUsableRuntimeVersion("2026.3.2")).toBe("2026.3.2");
     expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
   });
@@ -176,6 +179,27 @@ describe("version resolution", () => {
           OPENCLAW_VERSION: "",
           OPENCLAW_SERVICE_VERSION: " ",
           npm_package_version: "",
+        },
+        "fallback",
+      ),
+    ).toBe(VERSION);
+  });
+
+  it("ignores non-version OPENCLAW_VERSION markers and falls back to concrete versions", () => {
+    expect(
+      resolveRuntimeServiceVersion({
+        OPENCLAW_VERSION: "dev",
+        OPENCLAW_SERVICE_VERSION: "2.4.6-service",
+        npm_package_version: "1.0.0-package",
+      }),
+    ).toBe(VERSION);
+
+    expect(
+      resolveRuntimeServiceVersion(
+        {
+          OPENCLAW_VERSION: "stable",
+          OPENCLAW_SERVICE_VERSION: " ",
+          npm_package_version: "1.0.0-package",
         },
         "fallback",
       ),

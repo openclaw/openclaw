@@ -3,6 +3,8 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -27,6 +29,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
+      serverVersion: string;
     };
   }
 
@@ -170,6 +173,32 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("main");
       },
     });
+  });
+
+  it("ignores non-version OPENCLAW_VERSION markers in bootstrap serverVersion", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_VERSION: "dev",
+        OPENCLAW_SERVICE_VERSION: "2026.3.8",
+      },
+      async () => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const { res, end } = makeMockHttpResponse();
+            const handled = handleControlUiHttpRequest(
+              { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+              },
+            );
+            expect(handled).toBe(true);
+            const parsed = parseBootstrapPayload(end);
+            expect(parsed.serverVersion).toBe(VERSION);
+          },
+        });
+      },
+    );
   });
 
   it("serves bootstrap config JSON under basePath", async () => {
