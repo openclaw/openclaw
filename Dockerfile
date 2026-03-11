@@ -104,6 +104,8 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm-sli
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
 ARG TERRAFORM_VERSION=1.14.5
+ARG OPENCLAW_INSTALL_FOUNDRY=""
+ARG OPENCLAW_FOUNDRY_VERSION=""
 ARG TARGETARCH
 
 # OCI base-image metadata for downstream image consumers.
@@ -182,6 +184,33 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node /home/node/.cache/ms-playwright; \
+    fi
+
+# Optionally install Foundry CLI tools for onchain debugging workflows.
+# Build with:
+#   docker build --build-arg OPENCLAW_INSTALL_FOUNDRY=1 ...
+# Optional:
+#   docker build --build-arg OPENCLAW_FOUNDRY_VERSION=1.3.1 ...
+# Trust boundary: the installer script itself is fetched over HTTPS and piped to
+# bash. foundryup then verifies downloaded release binaries via GitHub
+# attestations before activation.
+RUN if [ "$OPENCLAW_INSTALL_FOUNDRY" = "1" ]; then \
+      export FOUNDRY_DIR=/opt/foundry && \
+      curl -fsSL https://foundry.paradigm.xyz | bash && \
+      if [ -n "$OPENCLAW_FOUNDRY_VERSION" ]; then \
+        /opt/foundry/bin/foundryup --install "$OPENCLAW_FOUNDRY_VERSION"; \
+      else \
+        /opt/foundry/bin/foundryup; \
+      fi && \
+      chmod -R a+rX /opt/foundry && \
+      ln -sf /opt/foundry/bin/forge /usr/local/bin/forge && \
+      ln -sf /opt/foundry/bin/cast /usr/local/bin/cast && \
+      ln -sf /opt/foundry/bin/anvil /usr/local/bin/anvil && \
+      ln -sf /opt/foundry/bin/chisel /usr/local/bin/chisel && \
+      forge --version >/dev/null && \
+      cast --version >/dev/null && \
+      anvil --version >/dev/null && \
+      chisel --version >/dev/null; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.

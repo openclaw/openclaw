@@ -139,6 +139,19 @@ scripts/sandbox-common-setup.sh
 Then set `agents.defaults.sandbox.docker.image` to
 `openclaw-sandbox-common:bookworm-slim`.
 
+For Foundry-based EVM debugging (`cast`, `anvil`, `forge`, `chisel`), build the
+same image with:
+
+```bash
+INSTALL_FOUNDRY=1 scripts/sandbox-common-setup.sh
+```
+
+Optional pinned release:
+
+```bash
+INSTALL_FOUNDRY=1 FOUNDRY_VERSION=1.3.1 scripts/sandbox-common-setup.sh
+```
+
 Sandboxed browser image:
 
 ```bash

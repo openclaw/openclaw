@@ -13,6 +13,8 @@ ARG INSTALL_BUN=1
 ARG BUN_INSTALL_DIR=/opt/bun
 ARG INSTALL_BREW=1
 ARG BREW_INSTALL_DIR=/home/linuxbrew/.linuxbrew
+ARG INSTALL_FOUNDRY=0
+ARG FOUNDRY_VERSION=
 ARG FINAL_USER=sandbox
 
 ARG BOUNDARY_VERSION=0.20.1
@@ -49,6 +51,28 @@ RUN if [ "${INSTALL_BREW}" = "1" ]; then \
   if [ ! -e "${BREW_INSTALL_DIR}/Library" ]; then ln -s "${BREW_INSTALL_DIR}/Homebrew/Library" "${BREW_INSTALL_DIR}/Library"; fi; \
   if [ ! -x "${BREW_INSTALL_DIR}/bin/brew" ]; then echo \"brew install failed\"; exit 1; fi; \
   ln -sf "${BREW_INSTALL_DIR}/bin/brew" /usr/local/bin/brew; \
+fi
+
+# Trust boundary: the installer script itself is fetched over HTTPS and piped to
+# bash. foundryup then verifies downloaded release binaries via GitHub
+# attestations before activation.
+RUN if [ "${INSTALL_FOUNDRY}" = "1" ]; then \
+  export FOUNDRY_DIR=/opt/foundry && \
+  curl -fsSL https://foundry.paradigm.xyz | bash && \
+  if [ -n "${FOUNDRY_VERSION}" ]; then \
+    /opt/foundry/bin/foundryup --install "${FOUNDRY_VERSION}"; \
+  else \
+    /opt/foundry/bin/foundryup; \
+  fi && \
+  chmod -R a+rX /opt/foundry && \
+  ln -sf /opt/foundry/bin/forge /usr/local/bin/forge && \
+  ln -sf /opt/foundry/bin/cast /usr/local/bin/cast && \
+  ln -sf /opt/foundry/bin/anvil /usr/local/bin/anvil && \
+  ln -sf /opt/foundry/bin/chisel /usr/local/bin/chisel && \
+  forge --version >/dev/null && \
+  cast --version >/dev/null && \
+  anvil --version >/dev/null && \
+  chisel --version >/dev/null; \
 fi
 
 # Default is sandbox, but allow BASE_IMAGE overrides to select another final user.

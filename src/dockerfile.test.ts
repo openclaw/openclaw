@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const sandboxCommonDockerfilePath = join(repoRoot, "Dockerfile.sandbox-common");
 
 describe("Dockerfile", () => {
   it("uses shared multi-arch base image refs for all root Node stages", async () => {
@@ -65,5 +66,23 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
     );
+  });
+
+  it("installs Foundry into a non-root-readable path", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain("export FOUNDRY_DIR=/opt/foundry");
+    expect(dockerfile).toContain("chmod -R a+rX /opt/foundry");
+    expect(dockerfile).toContain("ln -sf /opt/foundry/bin/cast /usr/local/bin/cast");
+    expect(dockerfile).toContain("ln -sf /opt/foundry/bin/anvil /usr/local/bin/anvil");
+    expect(dockerfile).not.toContain("/root/.foundry/bin/cast");
+  });
+
+  it("keeps sandbox-common Foundry in the same non-root-readable path", async () => {
+    const dockerfile = await readFile(sandboxCommonDockerfilePath, "utf8");
+    expect(dockerfile).toContain("export FOUNDRY_DIR=/opt/foundry");
+    expect(dockerfile).toContain("chmod -R a+rX /opt/foundry");
+    expect(dockerfile).toContain("ln -sf /opt/foundry/bin/cast /usr/local/bin/cast");
+    expect(dockerfile).toContain('if [ "${INSTALL_FOUNDRY}" = "1" ]; then');
+    expect(dockerfile).not.toContain("/root/.foundry/bin/cast");
   });
 });

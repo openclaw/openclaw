@@ -61,6 +61,8 @@ Optional env vars:
 - `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTENSIONS` — pre-install extension dependencies at build time (space-separated extension names, e.g. `diagnostics-otel matrix`)
+- `OPENCLAW_INSTALL_FOUNDRY` — build arg passthrough for local image builds (`1` installs Foundry tools: `forge`, `cast`, `anvil`, `chisel`)
+- `OPENCLAW_FOUNDRY_VERSION` — optional Foundry version passed to `foundryup --install <version>` (default: latest stable)
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 - `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
@@ -698,6 +700,20 @@ This builds `openclaw-sandbox-common:bookworm-slim`. To use it:
   },
 }
 ```
+
+To add Foundry for `cast`/`anvil` workflows, build the same image with:
+
+```bash
+INSTALL_FOUNDRY=1 scripts/sandbox-common-setup.sh
+```
+
+Optional pinned release:
+
+```bash
+INSTALL_FOUNDRY=1 FOUNDRY_VERSION=1.3.1 scripts/sandbox-common-setup.sh
+```
+
+This keeps onchain debugging tools inside the sandbox image instead of relying on a host-global install.
 
 ### Sandbox browser image
 
