@@ -116,7 +116,7 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
       file-type:
-        specifier: ^21.3.1
+        specifier: 21.3.1
         version: 21.3.1
       grammy:
         specifier: ^1.41.1
