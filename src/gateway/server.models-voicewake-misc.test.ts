@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache } from "../config/config.js";
@@ -191,6 +192,28 @@ describe("gateway server models + voicewake", () => {
     }
   };
 
+  const withIsolatedModelAuth = async <T>(
+    env: Record<string, string | undefined>,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    clearRuntimeAuthProfileStoreSnapshots();
+    try {
+      return await withTempHome(async () =>
+        withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ANTHROPIC_API_KEY: undefined,
+            ANTHROPIC_OAUTH_TOKEN: undefined,
+            ...env,
+          },
+          fn,
+        ),
+      );
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  };
+
   const expectAllowlistedModels = async (options: {
     primary: string;
     models: Record<string, object>;
@@ -302,18 +325,20 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list returns model catalog", async () => {
-    seedPiCatalog();
+    await withIsolatedModelAuth({}, async () => {
+      seedPiCatalog();
 
-    const res1 = await listModels();
-    const res2 = await listModels();
+      const res1 = await listModels();
+      const res2 = await listModels();
 
-    expect(res1.ok).toBe(true);
-    expect(res2.ok).toBe(true);
+      expect(res1.ok).toBe(true);
+      expect(res2.ok).toBe(true);
 
-    const models = res1.payload?.models ?? [];
-    expect(models).toEqual(expectedSortedCatalog());
+      const models = res1.payload?.models ?? [];
+      expect(models).toEqual(expectedSortedCatalog());
 
-    expect(piSdkMock.discoverCalls).toBe(1);
+      expect(piSdkMock.discoverCalls).toBe(1);
+    });
   });
 
   test("models.list filters to allowlisted configured models by default", async () => {
@@ -337,6 +362,34 @@ describe("gateway server models + voicewake", () => {
         },
       ],
     });
+  });
+
+  test("models.list filters to authenticated providers when no allowlist is configured", async () => {
+    await withIsolatedModelAuth(
+      {
+        OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
+      },
+      async () => {
+        await withModelsConfig({}, async () => {
+          seedPiCatalog();
+          const res = await listModels();
+          expect(res.ok).toBe(true);
+          expect(res.payload?.models).toEqual([
+            {
+              id: "gpt-test-a",
+              name: "A-Model",
+              provider: "openai",
+              contextWindow: 8000,
+            },
+            {
+              id: "gpt-test-z",
+              name: "gpt-test-z",
+              provider: "openai",
+            },
+          ]);
+        });
+      },
+    );
   });
 
   test("models.list includes synthetic entries for allowlist models absent from catalog", async () => {
