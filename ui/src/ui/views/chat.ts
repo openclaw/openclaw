@@ -81,6 +81,10 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Pagination
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -270,6 +274,22 @@ export function renderChat(props: ChatProps) {
         props.loading
           ? html`
               <div class="muted">Loading chat…</div>
+            `
+          : nothing
+      }
+      ${
+        !props.loading && props.hasMore && props.onLoadMore
+          ? html`
+              <div class="chat-load-more">
+                <button
+                  class="btn chat-load-more__btn"
+                  type="button"
+                  ?disabled=${props.loadingMore}
+                  @click=${props.onLoadMore}
+                >
+                  ${props.loadingMore ? "Loading…" : "Load earlier messages"}
+                </button>
+              </div>
             `
           : nothing
       }

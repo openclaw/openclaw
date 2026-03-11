@@ -41,6 +41,12 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  /** Whether older messages exist beyond the current window. */
+  chatHasMore: boolean;
+  /** Cursor for fetching the next older page of messages. */
+  chatOldestCursor: string | null;
+  /** True while a "load more" request is in flight. */
+  chatLoadingMore: boolean;
 };
 
 export type ChatEventPayload = {
@@ -70,16 +76,20 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 50,
-      },
-    );
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+      hasMore?: boolean;
+      oldestCursor?: string;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 50,
+    });
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatHasMore = res.hasMore === true;
+    state.chatOldestCursor = typeof res.oldestCursor === "string" ? res.oldestCursor : null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
@@ -89,6 +99,34 @@ export async function loadChatHistory(state: ChatState) {
     state.lastError = String(err);
   } finally {
     state.chatLoading = false;
+  }
+}
+
+/** Fetch the next older page and prepend to existing messages. */
+export async function loadMoreChatHistory(state: ChatState) {
+  if (!state.client || !state.connected || !state.chatHasMore || !state.chatOldestCursor) {
+    return;
+  }
+  state.chatLoadingMore = true;
+  try {
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      hasMore?: boolean;
+      oldestCursor?: string;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 50,
+      before: state.chatOldestCursor,
+    });
+    const older = Array.isArray(res.messages) ? res.messages : [];
+    const filtered = older.filter((message) => !isAssistantSilentReply(message));
+    state.chatMessages = [...filtered, ...state.chatMessages];
+    state.chatHasMore = res.hasMore === true;
+    state.chatOldestCursor = typeof res.oldestCursor === "string" ? res.oldestCursor : null;
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.chatLoadingMore = false;
   }
 }
 
