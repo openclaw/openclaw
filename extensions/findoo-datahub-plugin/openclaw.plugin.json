@@ -1,57 +1,26 @@
 {
   "id": "findoo-datahub-plugin",
   "name": "Findoo DataHub",
-  "description": "Unified financial data source — 172 endpoints covering equity (A/HK/US), crypto, macro, derivatives, index, ETF via OpenBB DataHub. Works out of the box.",
+  "description": "Unified financial data source — 172 endpoints covering equity (A/HK/US), crypto, macro, derivatives, index, ETF. Works out of the box.",
   "kind": "financial",
   "version": "2026.3.2",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "properties": {
-      "datahubApiUrl": {
-        "type": "string",
-        "default": "http://43.134.61.136:8088",
-        "description": "DataHub REST API base URL. Change only for self-hosted OpenBB instances"
-      },
-      "datahubUsername": {
-        "type": "string",
-        "default": "admin",
-        "description": "DataHub HTTP Basic Auth username"
-      },
       "datahubApiKey": {
         "type": "string",
-        "description": "DataHub API key (required). Set via config or DATAHUB_API_KEY env var.",
+        "description": "DataHub API key. Leave empty to use built-in dev key.",
         "sensitive": true
-      },
-      "requestTimeoutMs": {
-        "type": "number",
-        "default": 30000,
-        "minimum": 1000,
-        "maximum": 120000
       }
     }
   },
   "uiHints": {
     "datahubApiKey": {
       "label": "API Key",
-      "help": "DataHub API 密钥。默认使用内置 dev key，生产环境请替换。",
+      "help": "DataHub API 密钥。留空则使用内置 dev key。",
       "sensitive": true,
-      "placeholder": "98ffa5c5-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-    },
-    "datahubApiUrl": {
-      "label": "API URL",
-      "help": "DataHub REST API 地址，仅自建实例需修改。",
-      "advanced": true
-    },
-    "datahubUsername": {
-      "label": "Username",
-      "help": "HTTP Basic Auth 用户名，默认 admin。",
-      "advanced": true
-    },
-    "requestTimeoutMs": {
-      "label": "Request Timeout (ms)",
-      "help": "API 请求超时时间，默认 30 秒。",
-      "advanced": true
+      "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     }
   }
 }
