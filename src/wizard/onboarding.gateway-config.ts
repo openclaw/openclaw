@@ -333,7 +333,7 @@ export async function configureGatewayForOnboarding(
       ...nextConfig,
       gateway: {
         ...nextConfig.gateway,
-        ...(nodeMaxOldSpaceMb !== undefined ? { nodeMaxOldSpaceMb } : {}),
+        nodeMaxOldSpaceMb,
       },
     };
   }

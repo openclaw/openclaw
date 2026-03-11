@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.js";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
@@ -27,6 +28,8 @@ export async function buildNodeInstallPlan(params: {
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
+  /** Full config to read gateway.nodeMaxOldSpaceMb from, if available. */
+  config?: OpenClawConfig;
 }): Promise<NodeInstallPlan> {
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
@@ -54,7 +57,10 @@ export async function buildNodeInstallPlan(params: {
     title: "Node daemon runtime",
   });
 
-  const environment = buildNodeServiceEnvironment({ env: params.env });
+  const environment = buildNodeServiceEnvironment({
+    env: params.env,
+    nodeMaxOldSpaceMb: params.config?.gateway?.nodeMaxOldSpaceMb,
+  });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,
   });

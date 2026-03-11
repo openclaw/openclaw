@@ -418,6 +418,22 @@ describe("buildNodeServiceEnvironment", () => {
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
+
+  it("injects nodeMaxOldSpaceMb into NODE_OPTIONS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      nodeMaxOldSpaceMb: 4096,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=4096");
+  });
+
+  it("does not override existing --max-old-space-size in NODE_OPTIONS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", NODE_OPTIONS: "--max-old-space-size=2048" },
+      nodeMaxOldSpaceMb: 4096,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=2048");
+  });
 });
 
 describe("shared Node TLS env defaults", () => {

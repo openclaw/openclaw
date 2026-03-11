@@ -306,6 +306,8 @@ export function buildServiceEnvironment(params: {
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** gateway.nodeMaxOldSpaceMb from config, if set by the user. */
+  nodeMaxOldSpaceMb?: number;
 }): Record<string, string | undefined> {
   const { env } = params;
   const platform = params.platform ?? process.platform;
@@ -313,7 +315,7 @@ export function buildNodeServiceEnvironment(params: {
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
-    ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...buildCommonServiceEnvironment(env, sharedEnv, params.nodeMaxOldSpaceMb),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
