@@ -40,6 +40,7 @@ describe("buildAuthChoiceOptions", () => {
       "mistral-api-key",
       "volcengine-api-key",
       "byteplus-api-key",
+      "sglang",
       "vllm",
     ]) {
       expect(options.some((opt) => opt.value === value)).toBe(true);
@@ -79,5 +80,16 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+  });
+
+  it("shows SGLang in grouped provider selection", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const sglangGroup = groups.find((group) => group.value === "sglang");
+
+    expect(sglangGroup).toBeDefined();
+    expect(sglangGroup?.options.some((opt) => opt.value === "sglang")).toBe(true);
   });
 });

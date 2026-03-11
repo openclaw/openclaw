@@ -14,10 +14,12 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
+import { promptAndConfigureSglang } from "./sglang-setup.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
+const SGLANG_VALUE = "__sglang__";
 const VLLM_VALUE = "__vllm__";
 const PROVIDER_FILTER_THRESHOLD = 30;
 
@@ -31,6 +33,7 @@ type PromptDefaultModelParams = {
   prompter: WizardPrompter;
   allowKeep?: boolean;
   includeManual?: boolean;
+  includeSglang?: boolean;
   includeVllm?: boolean;
   ignoreAllowlist?: boolean;
   preferredProvider?: string;
@@ -180,6 +183,7 @@ export async function promptDefaultModel(
   const cfg = params.config;
   const allowKeep = params.allowKeep ?? true;
   const includeManual = params.includeManual ?? true;
+  const includeSglang = params.includeSglang ?? false;
   const includeVllm = params.includeVllm ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
   const preferredProviderRaw = params.preferredProvider?.trim();
@@ -286,6 +290,13 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
+  if (includeSglang && agentDir) {
+    options.push({
+      value: SGLANG_VALUE,
+      label: "SGLang (custom)",
+      hint: "Enter SGLang URL + API key + model",
+    });
+  }
   if (includeVllm && agentDir) {
     options.push({
       value: VLLM_VALUE,
@@ -336,6 +347,22 @@ export async function promptDefaultModel(
       allowBlank: false,
       initialValue: configuredRaw || resolvedKey || undefined,
     });
+  }
+  if (selection === SGLANG_VALUE) {
+    if (!agentDir) {
+      await params.prompter.note(
+        "SGLang setup requires an agent directory context.",
+        "SGLang not available",
+      );
+      return {};
+    }
+    const { config: nextConfig, modelRef } = await promptAndConfigureSglang({
+      cfg,
+      prompter: params.prompter,
+      agentDir,
+    });
+
+    return { model: modelRef, config: nextConfig };
   }
   if (selection === VLLM_VALUE) {
     if (!agentDir) {

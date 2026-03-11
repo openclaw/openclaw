@@ -373,6 +373,33 @@ ollama pull llama3.3
 
 Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
+### SGLang
+
+SGLang is a local (or self-hosted) OpenAI-compatible server:
+
+- Provider: `sglang`
+- Auth: Optional (depends on your server)
+- Default base URL: `http://127.0.0.1:30000/v1`
+- Env var: `SGLANG_API_KEY`
+
+To opt in to auto-discovery locally (any value works if your server doesn't enforce auth):
+
+```bash
+export SGLANG_API_KEY="sglang-local"
+```
+
+Then set a model (replace with one of the IDs returned by `/v1/models`):
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "sglang/your-model-id" } },
+  },
+}
+```
+
+See [/providers/sglang](/providers/sglang) for details.
+
 ### vLLM
 
 vLLM is a local (or self-hosted) OpenAI-compatible server:
