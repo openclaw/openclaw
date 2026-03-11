@@ -135,6 +135,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not rewrite generic OAuth refresh failures without token-reuse signal", () => {
+    const msg = makeAssistantError(
+      "OAuth token refresh failed for openai-codex: request timed out while contacting auth endpoint",
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "LLM request timed out.",
+    );
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");

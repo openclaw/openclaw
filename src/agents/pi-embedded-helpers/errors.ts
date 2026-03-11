@@ -48,11 +48,14 @@ function isOauthRefreshReauthRequiredMessage(raw: string): boolean {
     return false;
   }
   const lower = raw.toLowerCase();
-  return (
+  const hasRefreshFailureContext =
     lower.includes("oauth token refresh failed") ||
-    lower.includes("refresh_token_reused") ||
-    lower.includes("refresh token has already been used")
-  );
+    lower.includes("token refresh failed") ||
+    lower.includes("refresh token");
+  const hasTokenReuseSignal =
+    lower.includes("refresh_token_reused") || lower.includes("refresh token has already been used");
+
+  return hasRefreshFailureContext && hasTokenReuseSignal;
 }
 
 function formatOauthRefreshReauthCopy(provider?: string): string {

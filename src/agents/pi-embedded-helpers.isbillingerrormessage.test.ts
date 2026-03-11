@@ -625,6 +625,11 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("auth");
     expect(
+      classifyFailoverReason(
+        "OAuth token refresh failed for openai-codex: request timed out while contacting auth endpoint",
+      ),
+    ).toBe("timeout");
+    expect(
       classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
     ).toBe("rate_limit");
     expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
