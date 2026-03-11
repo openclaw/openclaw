@@ -14,6 +14,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { stripAssistantInternalScaffolding } from "../../shared/text/assistant-visible-text.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -272,17 +273,28 @@ function truncateChatHistoryText(text: string): { text: string; truncated: boole
   };
 }
 
-function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; changed: boolean } {
+function sanitizeAssistantHistoryTextForDisplay(text: string): { text: string; changed: boolean } {
+  const stripped = stripAssistantInternalScaffolding(text);
+  return { text: stripped, changed: stripped !== text };
+}
+
+function sanitizeChatHistoryContentBlock(
+  block: unknown,
+  options?: { stripAssistantInternal?: boolean },
+): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
   }
   const entry = { ...(block as Record<string, unknown>) };
   let changed = false;
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const visible = options?.stripAssistantInternal
+      ? sanitizeAssistantHistoryTextForDisplay(entry.text)
+      : { text: entry.text, changed: false };
+    const stripped = stripInlineDirectiveTagsForDisplay(visible.text);
     const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= visible.changed || stripped.changed || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateChatHistoryText(entry.partialJson);
@@ -335,12 +347,20 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const visible =
+      entry.role === "assistant"
+        ? sanitizeAssistantHistoryTextForDisplay(entry.content)
+        : { text: entry.content, changed: false };
+    const stripped = stripInlineDirectiveTagsForDisplay(visible.text);
     const res = truncateChatHistoryText(stripped.text);
     entry.content = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= visible.changed || stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
+    const updated = entry.content.map((block) =>
+      sanitizeChatHistoryContentBlock(block, {
+        stripAssistantInternal: entry.role === "assistant",
+      }),
+    );
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
@@ -348,10 +368,14 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const visible =
+      entry.role === "assistant"
+        ? sanitizeAssistantHistoryTextForDisplay(entry.text)
+        : { text: entry.text, changed: false };
+    const stripped = stripInlineDirectiveTagsForDisplay(visible.text);
     const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    changed ||= visible.changed || stripped.changed || res.truncated;
   }
 
   return { message: changed ? entry : message, changed };

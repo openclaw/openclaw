@@ -496,6 +496,34 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.history strips assistant relevant-memories scaffolding from user-visible history", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: [
+              "Visible intro",
+              "<relevant-memories>",
+              "private memory",
+              "</relevant-memories>",
+              "Visible outro",
+            ].join("\n"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    const textValues = collectHistoryTextValues(historyMessages);
+    expect(textValues).toHaveLength(1);
+    expect(textValues[0]).toContain("Visible intro");
+    expect(textValues[0]).toContain("Visible outro");
+    expect(textValues[0]).not.toContain("relevant-memories");
+    expect(textValues[0]).not.toContain("private memory");
+  });
+
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
