@@ -20,7 +20,11 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "./catalog.js";
-import { resolveChannelConfigWrites } from "./config-writes.js";
+import {
+  authorizeConfigWrite,
+  resolveChannelConfigWrites,
+  resolveConfigWriteScopesFromPath,
+} from "./config-writes.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -322,6 +326,34 @@ describe("resolveChannelConfigWrites", () => {
   it("matches account ids case-insensitively", () => {
     const cfg = makeSlackConfigWritesCfg("Work");
     expect(resolveChannelConfigWrites({ cfg, channelId: "slack", accountId: "work" })).toBe(false);
+  });
+});
+
+describe("authorizeConfigWrite", () => {
+  it("blocks when a target account disables writes", () => {
+    const cfg = makeSlackConfigWritesCfg("work");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        targets: [{ channelId: "slack", accountId: "work" }],
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: { kind: "target", scope: { channelId: "slack", accountId: "work" } },
+    });
+  });
+
+  it("rejects ambiguous channel collection writes", () => {
+    expect(resolveConfigWriteScopesFromPath(["channels", "telegram"])).toEqual({
+      targets: [{ channelId: "telegram" }],
+      hasAmbiguousTarget: true,
+    });
+    expect(resolveConfigWriteScopesFromPath(["channels", "telegram", "accounts"])).toEqual({
+      targets: [{ channelId: "telegram" }],
+      hasAmbiguousTarget: true,
+    });
   });
 });
 
