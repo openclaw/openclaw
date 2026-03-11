@@ -791,6 +791,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
   }
 
+  private deleteFileRecord(pathname: string, source: MemorySource): void {
+    this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
+  }
+
   private isStructuredInputTooLargeError(message: string): boolean {
     return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
       message,
@@ -816,6 +820,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
       if (!multimodalChunk) {
         this.clearIndexedFileData(entry.path, options.source);
+        this.deleteFileRecord(entry.path, options.source);
         return;
       }
       structuredInputBytes = multimodalChunk.structuredInputBytes;

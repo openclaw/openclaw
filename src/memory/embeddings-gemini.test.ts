@@ -311,6 +311,21 @@ describe("gemini-embedding-2-preview provider", () => {
     expect(body.outputDimensionality).toBe(768);
   });
 
+  it("sanitizes and normalizes embedQuery responses", async () => {
+    const fetchMock = createGeminiFetchMock([3, 4, Number.NaN]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test")).resolves.toEqual([0.6, 0.8, 0]);
+  });
+
   it("uses custom outputDimensionality for each embedBatch request", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
     vi.stubGlobal("fetch", fetchMock);
@@ -331,6 +346,31 @@ describe("gemini-embedding-2-preview provider", () => {
       expect.objectContaining({ outputDimensionality: 768 }),
       expect.objectContaining({ outputDimensionality: 768 }),
     ]);
+  });
+
+  it("sanitizes and normalizes structured batch responses", async () => {
+    const fetchMock = createGeminiBatchFetchMock(1, [0, Number.POSITIVE_INFINITY, 5]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    await expect(
+      provider.embedBatchInputs?.([
+        {
+          text: "Image file: diagram.png",
+          parts: [
+            { type: "text", text: "Image file: diagram.png" },
+            { type: "inline-data", mimeType: "image/png", data: "img" },
+          ],
+        },
+      ]),
+    ).resolves.toEqual([[0, 0, 1]]);
   });
 
   it("supports multimodal embedBatchInputs requests", async () => {

@@ -340,6 +340,53 @@ describe("memory index", () => {
     await manager.close?.();
   });
 
+  it("reindexes a multimodal file after a transient mid-sync disappearance", async () => {
+    const mediaDir = path.join(workspaceDir, "media-race");
+    const imagePath = path.join(mediaDir, "diagram.png");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(imagePath, Buffer.from("png"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-race-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const realReadFile = fs.readFile.bind(fs);
+    let imageReads = 0;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const [targetPath] = args;
+      if (typeof targetPath === "string" && targetPath === imagePath) {
+        imageReads += 1;
+        if (imageReads === 2) {
+          const err = Object.assign(
+            new Error(`ENOENT: no such file or directory, open '${imagePath}'`),
+            {
+              code: "ENOENT",
+            },
+          ) as NodeJS.ErrnoException;
+          throw err;
+        }
+      }
+      return await realReadFile(...args);
+    });
+
+    await manager.sync({ reason: "test" });
+    readSpy.mockRestore();
+
+    const callsAfterFirstSync = embedBatchInputCalls;
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    await manager.sync({ reason: "test" });
+
+    expect(embedBatchInputCalls).toBeGreaterThan(callsAfterFirstSync);
+    const results = await manager.search("image");
+    expect(results.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+
+    await manager.close?.();
+  });
+
   it("keeps dirty false in status-only manager after prior indexing", async () => {
     const cfg = createCfg({ storePath: indexStatusPath });
 
