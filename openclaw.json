@@ -22,6 +22,11 @@
     "defaultSessionKey": "hook:ingress",
     "allowRequestSessionKey": false
   },
+  "tools": {
+    "alsoAllow": [
+      "revenue-executor"
+    ]
+  },
   "agents": {
     "defaults": {
       "sandbox": {
