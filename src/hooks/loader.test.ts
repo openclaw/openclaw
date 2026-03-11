@@ -98,6 +98,7 @@ describe("loader", () => {
     message: string;
     dirName?: string;
     handlerCode?: string;
+    openClawMetadata?: Record<string, unknown>;
   }): Promise<string> {
     const hookDir = path.join(params.hooksRoot, params.dirName ?? params.hookName);
     await fs.mkdir(hookDir, { recursive: true });
@@ -107,7 +108,12 @@ describe("loader", () => {
         "---",
         `name: ${params.hookName}`,
         `description: ${params.hookName} test hook`,
-        `metadata: ${JSON.stringify({ openclaw: { events: params.events } })}`,
+        `metadata: ${JSON.stringify({
+          openclaw: {
+            events: params.events,
+            ...params.openClawMetadata,
+          },
+        })}`,
         "---",
         "",
         `# ${params.hookName}`,
@@ -630,6 +636,46 @@ describe("loader", () => {
       const opsEvent = createInternalHookEvent("command", "new", "agent:ops:chat");
       await triggerInternalHook(opsEvent);
       expect(opsEvent.messages).toEqual(["shared"]);
+    });
+
+    it("does not suppress shared hooks when the matching workspace-local hook is ineligible", async () => {
+      const mainWorkspace = path.join(tmpDir, "workspace-main");
+      const opsWorkspace = path.join(tmpDir, "workspace-ops");
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeHook({
+        hooksRoot: managedHooksDir,
+        hookName: "override-me",
+        events: ["command:new"],
+        message: "shared",
+      });
+      await writeHook({
+        hooksRoot: path.join(mainWorkspace, "hooks"),
+        hookName: "override-me",
+        events: ["command:new"],
+        message: "main-local",
+        openClawMetadata: {
+          requires: {
+            bins: ["__missing_openclaw_test_bin__"],
+          },
+        },
+      });
+
+      const cfg = createMultiAgentHooksConfig({ mainWorkspace, opsWorkspace });
+      const count = await loadInternalHooksForStartup(
+        cfg,
+        mainWorkspace,
+        [mainWorkspace, opsWorkspace],
+        {
+          managedHooksDir,
+          bundledHooksDir: path.join(tmpDir, "bundled-empty"),
+        },
+      );
+
+      expect(count).toBe(1);
+
+      const event = createInternalHookEvent("command", "new", "agent:main:chat");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["shared"]);
     });
 
     it("uses the configured default agent workspace for legacy session keys without agent context", async () => {

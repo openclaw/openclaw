@@ -60,7 +60,10 @@ export async function loadInternalHooksForStartup(
   const workspaceEntriesByDir = new Map<string, HookEntry[]>();
   for (const workspaceDir of normalizedWorkspaceDirs) {
     try {
-      workspaceEntriesByDir.set(workspaceDir, loadWorkspaceLocalHookEntries(workspaceDir));
+      workspaceEntriesByDir.set(
+        workspaceDir,
+        filterRegisterableHookEntries(cfg, loadWorkspaceLocalHookEntries(workspaceDir)),
+      );
     } catch (err) {
       log.error(
         `Failed to load hooks for workspace ${workspaceDir}: ${err instanceof Error ? err.message : String(err)}`,
@@ -160,14 +163,9 @@ async function registerHookEntries(
   },
 ): Promise<number> {
   let loadedCount = 0;
-  const eligible = entries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
+  const registerableEntries = filterRegisterableHookEntries(cfg, entries);
 
-  for (const entry of eligible) {
-    const hookConfig = resolveHookConfig(cfg, entry.hook.name);
-    if (hookConfig?.enabled === false) {
-      continue;
-    }
-
+  for (const entry of registerableEntries) {
     try {
       const loaded = await loadDirectoryHookHandler(entry);
       if (!loaded) {
@@ -378,6 +376,19 @@ function buildWorkspaceOverrideMap(
     }
   }
   return overrides;
+}
+
+function filterRegisterableHookEntries(
+  cfg: OpenClawConfig,
+  entries: readonly HookEntry[],
+): HookEntry[] {
+  return entries.filter((entry) => {
+    if (!shouldIncludeHook({ entry, config: cfg })) {
+      return false;
+    }
+    const hookConfig = resolveHookConfig(cfg, entry.hook.name);
+    return hookConfig?.enabled !== false;
+  });
 }
 
 function createWorkspaceScopedHandler(params: {
