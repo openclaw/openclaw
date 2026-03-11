@@ -92,12 +92,23 @@ export async function generateThreadTitle(params: {
       agentDir: selection.agentDir,
       profileId: selection.profileId,
     });
-    const apiKey = apiKeyInfo.apiKey?.trim();
-    if (!apiKey) {
+    const rawApiKey = apiKeyInfo.apiKey?.trim();
+    if (!rawApiKey && apiKeyInfo.mode !== "aws-sdk") {
       logVerbose(
         `thread-title: missing API key for agent ${params.agentId}: ${selection.provider}/${selection.modelId}`,
       );
       return null;
+    }
+    if (rawApiKey) {
+      if (model.provider === "github-copilot") {
+        const { resolveCopilotApiToken } = await import("../../../github-copilot/token.js");
+        const copilotToken = await resolveCopilotApiToken({
+          githubToken: rawApiKey,
+        });
+        authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+      } else {
+        authStorage.setRuntimeApiKey(model.provider, rawApiKey);
+      }
     }
 
     const timeoutMs = Math.max(
@@ -141,7 +152,6 @@ export async function generateThreadTitle(params: {
           ],
         },
         {
-          apiKey,
           maxTokens: 24,
           temperature: 0.2,
           signal: controller.signal,
