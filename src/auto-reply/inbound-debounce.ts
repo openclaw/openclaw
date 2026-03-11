@@ -37,6 +37,7 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  flushing: boolean;
 };
 
 export type InboundDebounceCreateParams<T> = {
@@ -61,19 +62,38 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
-    buffers.delete(key);
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
-    if (buffer.items.length === 0) {
+    if (buffer.flushing) {
+      if (buffer.items.length > 0) {
+        scheduleFlush(key, buffer);
+      }
       return;
     }
-    try {
-      await params.onFlush(buffer.items);
-    } catch (err) {
-      params.onError?.(err, buffer.items);
+    if (buffer.items.length === 0) {
+      buffers.delete(key);
+      return;
     }
+    const items = buffer.items.splice(0);
+    buffer.flushing = true;
+    let flushFailed = false;
+    try {
+      await params.onFlush(items);
+    } catch (err) {
+      flushFailed = true;
+      // Preserve ordering when retrying the failed batch.
+      buffer.items.unshift(...items);
+      params.onError?.(err, items);
+    } finally {
+      buffer.flushing = false;
+    }
+    if (flushFailed || buffer.items.length > 0) {
+      scheduleFlush(key, buffer);
+      return;
+    }
+    buffers.delete(key);
   };
 
   const flushKey = async (key: string) => {
@@ -119,7 +139,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
 
-    const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
+    const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs, flushing: false };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
   };

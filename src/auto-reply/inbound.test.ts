@@ -346,6 +346,43 @@ describe("createInboundDebouncer", () => {
 
     vi.useRealTimers();
   });
+
+  it("retries a failed flush without dropping buffered items", async () => {
+    vi.useFakeTimers();
+    try {
+      let shouldFailFirstFlush = true;
+      const delivered: Array<string[]> = [];
+      const errors: unknown[] = [];
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          if (shouldFailFirstFlush) {
+            shouldFailFirstFlush = false;
+            throw new Error("timeout acquiring session store lock");
+          }
+          delivered.push(items.map((entry) => entry.id));
+        },
+        onError: (err) => {
+          errors.push(err);
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await vi.advanceTimersByTimeAsync(10); // First flush fails.
+      expect(errors).toHaveLength(1);
+      expect(delivered).toEqual([]);
+
+      // A subsequent message should not cause the failed buffered item to be lost.
+      await debouncer.enqueue({ key: "a", id: "2" });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered).toEqual([["1", "2"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
