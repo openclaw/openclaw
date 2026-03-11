@@ -129,6 +129,14 @@ export type SessionConfig = {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  /**
+   * When enabled and dmScope is an isolated mode (per-peer / per-channel-peer /
+   * per-account-channel-peer), outbound messages sent via the message tool are
+   * also recorded as assistant messages in the target user's session transcript.
+   * This preserves conversation context so the target user's next reply includes
+   * the sent message in its history.  Default: false.
+   */
+  injectOutboundToTargetSession?: boolean;
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
