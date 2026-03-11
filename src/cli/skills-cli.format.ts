@@ -38,8 +38,12 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
   return theme.error("✗ missing");
 }
 
+function normalizeSkillEmoji(emoji?: string): string {
+  return (emoji ?? "📦").replaceAll("\uFE0E", "\uFE0F");
+}
+
 function formatSkillName(skill: SkillStatusEntry): string {
-  const emoji = (skill.emoji ?? "📦").replaceAll("\uFE0E", "\uFE0F");
+  const emoji = normalizeSkillEmoji(skill.emoji);
   return `${emoji} ${theme.command(skill.name)}`;
 }
 
@@ -154,7 +158,7 @@ export function formatSkillInfo(
   }
 
   const lines: string[] = [];
-  const emoji = skill.emoji ?? "📦";
+  const emoji = normalizeSkillEmoji(skill.emoji);
   const status = skill.eligible
     ? theme.success("✓ Ready")
     : skill.disabled
@@ -282,7 +286,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     lines.push("");
     lines.push(theme.heading("Ready to use:"));
     for (const skill of eligible) {
-      const emoji = skill.emoji ?? "📦";
+      const emoji = normalizeSkillEmoji(skill.emoji);
       lines.push(`  ${emoji} ${skill.name}`);
     }
   }
@@ -291,7 +295,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     lines.push("");
     lines.push(theme.heading("Missing requirements:"));
     for (const skill of missingReqs) {
-      const emoji = skill.emoji ?? "📦";
+      const emoji = normalizeSkillEmoji(skill.emoji);
       const missing = formatSkillMissingSummary(skill);
       lines.push(`  ${emoji} ${skill.name} ${theme.muted(`(${missing})`)}`);
     }
