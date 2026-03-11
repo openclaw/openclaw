@@ -199,6 +199,9 @@ export async function applySessionsPatchToStore(params: {
         return invalid("workspace cannot be cleared once set");
       }
     } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("workspace is only supported for subagent:* or acp:* sessions");
+      }
       const trimmed = String(raw).trim();
       if (!trimmed) {
         return invalid("invalid workspace: empty");
