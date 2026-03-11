@@ -126,4 +126,32 @@ describe("embeddings-ollama", () => {
       }),
     );
   });
+
+  it("limits embed batch fan-out to avoid request storms", async () => {
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const fetchMock = vi.fn(async () => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return new Response(JSON.stringify({ embedding: [1, 0] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedBatch(Array.from({ length: 12 }, (_, i) => `batch-${i}`));
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+    expect(peakInFlight).toBeLessThanOrEqual(4);
+  });
 });
