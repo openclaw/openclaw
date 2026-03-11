@@ -104,7 +104,7 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
-        stopReason: "end_turn",
+        stopReason: "stop",
         errorMessage: "insufficient credits for embedding model",
         content: [{ type: "text", text: "Handle payment required errors in your API." }],
       }),

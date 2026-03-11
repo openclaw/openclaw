@@ -133,11 +133,11 @@ export function buildEmbeddedRunPayloads(params: {
       ? suppressAssistantArtifacts
         ? undefined
         : formatAssistantErrorText(params.lastAssistant, {
-          cfg: params.config,
-          sessionKey: params.sessionKey,
-          provider: params.provider,
-          model: params.model,
-        })
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            model: params.model,
+          })
       : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined

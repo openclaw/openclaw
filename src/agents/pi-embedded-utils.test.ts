@@ -139,7 +139,7 @@ describe("extractAssistantText", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       errorMessage: "insufficient credits for embedding model",
-      stopReason: "end_turn",
+      stopReason: "stop",
       content: [{ type: "text", text: responseText }],
       timestamp: Date.now(),
     });
