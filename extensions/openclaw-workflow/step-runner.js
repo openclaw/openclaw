@@ -56,12 +56,15 @@ const execFileAsync = promisify(execFile);
  * @constant {string}
  */
 const EXEC_POLL_PREAMBLE = `\
-IMPORTANT — exec tool behaviour: if any exec call returns "Command still running \
-(session <name>...)", the command was backgrounded because it takes >10s. In that \
-case you MUST call process(action="poll", sessionId="<name>", timeout=60000) to \
-retrieve the full output before proceeding. Never interpret a backgrounded exec as \
-a failure. Only report failure if the final exit code is non-zero or the output \
-explicitly indicates an error.
+IMPORTANT — exec tool behaviour:
+1. For any command that may take longer than 10 seconds, always pass yieldMs=300000 \
+to the exec tool. This prevents backgrounding and returns output inline.
+2. If an exec call returns "Command still running (session <name>...)", the command \
+was backgrounded. In that case you MUST immediately call \
+process(action="poll", sessionId="<name>", timeout=60000) to retrieve the full \
+output before proceeding.
+3. Never interpret a backgrounded exec as a failure. Only report failure if the \
+final exit code is non-zero or the output explicitly indicates an error.
 
 `;
 
