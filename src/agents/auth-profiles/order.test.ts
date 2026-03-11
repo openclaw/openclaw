@@ -72,6 +72,41 @@ describe("resolveAuthProfileOrder", () => {
 
     expect(order).toEqual(["openai:account1"]);
   });
+
+  it("per-agent binding overrides session-level profile via effectivePreferredProfile", () => {
+    // Simulates the integration scenario where a per-agent binding (account2)
+    // should take priority over a session-level preferred profile (account1).
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:account1": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-1",
+        },
+        "openai:account2": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-2",
+        },
+      },
+    };
+
+    // Session requests account1, but per-agent config binds to account2.
+    const sessionPreferred = "openai:account1";
+    const agentAuthBinding = "openai:account2";
+    const effectivePreferred = agentAuthBinding || sessionPreferred;
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "openai",
+      preferredProfile: effectivePreferred,
+    });
+
+    // Per-agent binding (account2) must come first, not the session override (account1)
+    expect(order[0]).toBe("openai:account2");
+    expect(order).toContain("openai:account1");
+  });
 });
 
 describe("AgentEntrySchema auth field", () => {

@@ -420,7 +420,8 @@ export async function runEmbeddedPiAgent(
       )?.auth?.[normalizedProvider];
       const effectivePreferredProfile = agentAuthBinding?.trim() || preferredProfileId;
 
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      let lockedProfileId =
+        params.authProfileIdSource === "user" ? effectivePreferredProfile : undefined;
       if (lockedProfileId) {
         const lockedProfile = authStore.profiles[lockedProfileId];
         if (
