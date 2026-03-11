@@ -41,9 +41,18 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
-// for incremental text display with a "Thinking..." placeholder
-const StreamingModeSchema = z.boolean().optional();
+// Streaming configuration for CardKit-based typewriter effect
+// Supports boolean (legacy) or object config for fine-tuning
+const StreamingConfigSchema = z.union([
+  z.boolean(),
+  z.object({
+    enabled: z.boolean().optional(),
+    throttleMs: z.number().int().min(100).max(5000).optional(),
+    title: z.string().optional(),
+  }),
+])
+  .strict()
+  .optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
