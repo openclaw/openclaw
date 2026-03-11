@@ -468,8 +468,8 @@ async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
   const platform = resolvePlatform();
   const metadata = {
-    ideType: "ANTIGRAVITY",
-    platform,
+    ideType: "IDE_UNSPECIFIED",
+    platform: "PLATFORM_UNSPECIFIED",
     pluginType: "GEMINI",
   };
   const headers = {
