@@ -226,11 +226,12 @@ describe("resolveModel", () => {
           custom: {
             baseUrl: "http://localhost:9999",
             api: "openai-completions",
+            // Intentionally keep this minimal — the discovered model provides the rest.
             models: [{ id: "missing-input", name: "missing-input" }],
           },
         },
       },
-    } as OpenClawConfig);
+    } as unknown as OpenClawConfig);
 
     expect(result.error).toBeUndefined();
     expect(Array.isArray(result.model?.input)).toBe(true);
