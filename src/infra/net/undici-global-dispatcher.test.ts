@@ -173,8 +173,43 @@ describe("withTemporaryEnvProxyDispatcher", () => {
 
     await withTemporaryEnvProxyDispatcher(async () => {});
 
-    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("does not override unsupported custom proxy dispatchers", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    const customDispatcher = new ProxyAgent("http://custom-proxy.test:8080");
+    setCurrentDispatcher(customDispatcher);
+
+    await withTemporaryEnvProxyDispatcher(async () => {
+      expect(getCurrentDispatcher()).toBe(customDispatcher);
+    });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getCurrentDispatcher()).toBe(customDispatcher);
+  });
+
+  it("keeps nested temporary proxy scopes composable", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    const seenDispatchers: unknown[] = [];
+
+    await withTemporaryEnvProxyDispatcher(async () => {
+      seenDispatchers.push(getCurrentDispatcher());
+
+      await withTemporaryEnvProxyDispatcher(async () => {
+        seenDispatchers.push(getCurrentDispatcher());
+      });
+
+      seenDispatchers.push(getCurrentDispatcher());
+    });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(4);
+    expect(seenDispatchers[0]).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(seenDispatchers[1]).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(seenDispatchers[1]).not.toBe(seenDispatchers[0]);
+    expect(seenDispatchers[2]).toBe(seenDispatchers[0]);
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
   });
 
   it("restores the previous dispatcher after errors", async () => {

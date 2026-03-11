@@ -130,7 +130,8 @@ export async function withTemporaryEnvProxyDispatcher<T>(
     return await fn();
   }
 
-  if (resolveDispatcherKind(dispatcher) === "env-proxy") {
+  const kind = resolveDispatcherKind(dispatcher);
+  if (kind === "unsupported") {
     return await fn();
   }
 
