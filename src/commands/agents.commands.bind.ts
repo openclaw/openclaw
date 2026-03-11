@@ -261,26 +261,20 @@ export async function agentsBindCommand(
         runtime.log("Enabled cross-channel shared memory.");
       }
     } else {
-      // Agent not in config list - need to ensure agents config exists
+      // Agent not in config list - add new agent entry with crossChannelMemory enabled
       if (!result.config.agents) {
         result.config.agents = { ...cfg.agents };
       }
       if (!result.config.agents.list) {
-        result.config.agents.list = cfg.agents?.list || [];
+        result.config.agents.list = cfg.agents?.list ? [...cfg.agents.list] : [];
       }
-      // Add the agent with crossChannelMemory enabled
-      const existingAgent = result.config.agents.list.find(
-        (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
-      );
-      if (!existingAgent) {
-        result.config.agents.list.push({
-          id: agentId,
-          crossChannelMemory: true,
-        });
-        configUpdated = true;
-        if (!opts.json) {
-          runtime.log("Enabled cross-channel shared memory.");
-        }
+      result.config.agents.list.push({
+        id: agentId,
+        crossChannelMemory: true,
+      });
+      configUpdated = true;
+      if (!opts.json) {
+        runtime.log("Enabled cross-channel shared memory.");
       }
     }
   }

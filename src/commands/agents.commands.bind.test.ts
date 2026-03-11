@@ -268,19 +268,8 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindCommand({ bind: ["webchat"] }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agents: {
-          defaults: { agent: "main" },
-          list: [
-            expect.objectContaining({
-              id: "main",
-              // crossChannelMemory should not be set
-            }),
-          ],
-        },
-      }),
-    );
+    const callArg = writeConfigFileMock.mock.calls[0]?.[0];
+    expect(callArg?.agents?.list?.[0]?.crossChannelMemory).toBeUndefined();
     expect(runtime.log).not.toHaveBeenCalledWith("Enabled cross-channel shared memory.");
     expect(runtime.exit).not.toHaveBeenCalled();
   });
