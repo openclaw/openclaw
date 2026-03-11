@@ -207,6 +207,58 @@ describe("promptAndConfigureVllm", () => {
       apiKey: "resolved-vllm-env-key", // pragma: allowlist secret
     });
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("allows blank API keys when an existing endpoint is backed by a SecretRef", async () => {
+    buildVllmProvider.mockResolvedValue({
+      baseUrl: "http://gpu-box:8000/v1",
+      api: "openai-completions",
+      models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+    });
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__manage_endpoint__")
+      .mockResolvedValueOnce("vllm")
+      .mockResolvedValueOnce("__endpoint_update__");
+    const text = vi.fn().mockResolvedValueOnce("http://gpu-box:8000/v1").mockResolvedValueOnce("");
+    const multiselect = vi.fn().mockResolvedValue(["meta-llama/Meta-Llama-3-8B-Instruct"]);
+    const prompter = makePrompter({ select, text: text as never, multiselect });
+    const config = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "VLLM_API_KEY",
+            },
+            models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptAndConfigureVllm({
+      cfg: config,
+      prompter,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("Expected a configured vLLM result");
+    }
+    expect(text.mock.calls[1]?.[0]?.message).toContain("blank to keep current");
+    expect(result.config.models?.providers?.vllm?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "VLLM_API_KEY",
+    });
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("discovers models from the configured endpoint and lets the user choose multiple models", async () => {

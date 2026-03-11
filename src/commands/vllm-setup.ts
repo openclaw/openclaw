@@ -10,6 +10,7 @@ import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { buildVllmProvider } from "../agents/models-config.providers.discovery.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { hasConfiguredSecretInput, type SecretInput } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
@@ -44,7 +45,7 @@ type ManagedVllmProvider = {
   providerKey: string;
   profileId?: string;
   credential?: ApiKeyCredential;
-  configuredApiKey?: string;
+  configuredApiKey?: SecretInput;
   baseUrl: string;
   models: ModelDefinitionConfig[];
 };
@@ -70,8 +71,11 @@ function createManualModelDefinition(id: string): ModelDefinitionConfig {
   };
 }
 
-function resolveConfiguredScanApiKey(apiKey?: string): string | undefined {
-  const trimmed = apiKey?.trim();
+function resolveConfiguredScanApiKey(apiKey?: SecretInput): string | undefined {
+  if (typeof apiKey !== "string") {
+    return undefined;
+  }
+  const trimmed = apiKey.trim();
   if (!trimmed) {
     return undefined;
   }
@@ -133,7 +137,7 @@ function collectManagedVllmProviders(params: {
         providerKey,
         profileId: matchedProfile?.profileId,
         credential: matchedProfile?.credential,
-        configuredApiKey: typeof provider.apiKey === "string" ? provider.apiKey : undefined,
+        configuredApiKey: provider.apiKey,
         baseUrl: normalizeBaseUrl(provider.baseUrl),
         models: Array.isArray(provider.models) ? provider.models : [],
       } satisfies ManagedVllmProvider;
@@ -254,7 +258,7 @@ function updateVllmProviderConfig(params: {
   providerKey: string;
   baseUrl: string;
   models: ModelDefinitionConfig[];
-  apiKey?: string;
+  apiKey?: SecretInput;
 }): OpenClawConfig {
   const providers = { ...params.cfg.models?.providers };
   const existingProvider = providers[params.providerKey];
@@ -394,7 +398,7 @@ async function configureEndpoint(params: {
     params.existing?.providerKey ??
     generateNextVllmProviderKey(Object.keys(params.cfg.models?.providers ?? {}));
   const canKeepExistingApiKey = Boolean(
-    params.existing?.profileId || params.existing?.configuredApiKey?.trim(),
+    params.existing?.profileId || hasConfiguredSecretInput(params.existing?.configuredApiKey),
   );
 
   const baseUrlRaw = await params.prompter.text({
