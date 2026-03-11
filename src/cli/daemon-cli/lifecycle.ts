@@ -3,7 +3,9 @@ import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
+import { launchAgentPlistExists, repairLaunchAgentBootstrap } from "../../daemon/launchd.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import type { GatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
 import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
@@ -162,11 +164,37 @@ async function stopGatewayWithoutServiceManager(port: number) {
   };
 }
 
-async function restartGatewayWithoutServiceManager(port: number) {
+async function maybeBootstrapLaunchAgent(service: GatewayService) {
+  if (process.platform !== "darwin" || service.label !== "LaunchAgent") {
+    return null;
+  }
+  const plistExists = await launchAgentPlistExists(process.env).catch(() => false);
+  if (!plistExists) {
+    return null;
+  }
+  const repair = await repairLaunchAgentBootstrap({ env: process.env });
+  if (!repair.ok) {
+    const detail = repair.detail ? `: ${repair.detail}` : "";
+    throw new Error(`LaunchAgent bootstrap failed${detail}`);
+  }
+  let loaded = true;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = true;
+  }
+  return {
+    result: "restarted" as const,
+    message: "LaunchAgent was not loaded; bootstrapped from existing plist.",
+    loaded,
+  };
+}
+
+async function restartGatewayWithoutServiceManager(port: number, service: GatewayService) {
   await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
-    return null;
+    return await maybeBootstrapLaunchAgent(service);
   }
   if (pids.length > 1) {
     throw new Error(
@@ -234,7 +262,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
-      const handled = await restartGatewayWithoutServiceManager(restartPort);
+      const handled = await restartGatewayWithoutServiceManager(restartPort, service);
       if (handled) {
         restartedWithoutServiceManager = true;
       }
