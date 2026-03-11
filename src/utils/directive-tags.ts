@@ -16,12 +16,27 @@ type InlineDirectiveParseOptions = {
 
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
+const FENCED_CODE_BLOCK_RE = /```[\s\S]*?```/g;
+
+function normalizeDirectiveWhitespaceSegment(text: string): string {
+  return text.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+}
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  if (!text.includes("```")) {
+    return normalizeDirectiveWhitespaceSegment(text).trim();
+  }
+
+  let normalized = "";
+  let cursor = 0;
+  for (const match of text.matchAll(FENCED_CODE_BLOCK_RE)) {
+    const start = match.index ?? 0;
+    normalized += normalizeDirectiveWhitespaceSegment(text.slice(cursor, start));
+    normalized += match[0];
+    cursor = start + match[0].length;
+  }
+  normalized += normalizeDirectiveWhitespaceSegment(text.slice(cursor));
+  return normalized.trim();
 }
 
 type StripInlineDirectiveTagsResult = {
