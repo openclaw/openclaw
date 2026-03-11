@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatXHighModelHint,
   listThinkingLevelLabels,
   listThinkingLevels,
   normalizeReasoningLevel,
@@ -54,7 +55,8 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
   });
 
-  it("includes xhigh for openai-codex gpt-5.4", () => {
+  it("includes xhigh for openai-codex gpt-5.2 and gpt-5.4", () => {
+    expect(listThinkingLevels("openai-codex", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
   });
 
@@ -70,6 +72,10 @@ describe("listThinkingLevels", () => {
   it("always includes adaptive", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
+  });
+
+  it("includes openai-codex/gpt-5.2 in the xhigh model hint", () => {
+    expect(formatXHighModelHint()).toContain("openai-codex/gpt-5.2");
   });
 });
 
