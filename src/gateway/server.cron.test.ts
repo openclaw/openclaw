@@ -182,7 +182,7 @@ async function addWebhookCronJob(params: {
 async function runCronJobForce(ws: WebSocket, id: string) {
   const response = await rpcReq(ws, "cron.run", { id, mode: "force" }, 20_000);
   expect(response.ok).toBe(true);
-  expect(response.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+  expect(response.payload).toEqual({ ok: true, ran: true });
   return response;
 }
 
@@ -269,7 +269,7 @@ describe("gateway server cron", () => {
 
       const runRes = await rpcReq(ws, "cron.run", { id: routeJobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(runRes.payload).toEqual({ ok: true, ran: true });
       const events = await waitForSystemEvent();
       expect(events.some((event) => event.includes("cron route check"))).toBe(true);
 
@@ -476,7 +476,7 @@ describe("gateway server cron", () => {
       );
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(runRes.payload).toEqual({ ok: true, ran: true });
       const finishedPayload = await finishedRun;
       expect(finishedPayload).toMatchObject({
         jobId,
@@ -544,7 +544,7 @@ describe("gateway server cron", () => {
     }
   }, 45_000);
 
-  test("returns from cron.run immediately while isolated work continues in background", async () => {
+  test("cron.run blocks until job completes", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-detached-",
     });
@@ -552,17 +552,13 @@ describe("gateway server cron", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
-    cronIsolatedRun.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRun = resolve as (value: { status: "ok"; summary: string }) => void;
-        }),
+    cronIsolatedRun.mockImplementationOnce(() =>
+      Promise.resolve({ status: "ok", summary: "run completed" }),
     );
 
     try {
       const addRes = await rpcReq(ws, "cron.add", {
-        name: "detached run test",
+        name: "blocking run test",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
@@ -575,34 +571,16 @@ describe("gateway server cron", () => {
       const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
       expect(jobId.length > 0).toBe(true);
 
-      const startedRun = waitForCronEvent(
-        ws,
-        (payload) => payload?.jobId === jobId && payload?.action === "started",
-      );
-      const finishedRun = waitForCronEvent(
-        ws,
-        (payload) => payload?.jobId === jobId && payload?.action === "finished",
-      );
-      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
+      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
-      await startedRun;
+      expect(runRes.payload).toEqual({ ok: true, ran: true });
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-
-      resolveRun?.({ status: "ok", summary: "background finished" });
-      const finishedPayload = await finishedRun;
-      expect(finishedPayload).toMatchObject({
-        jobId,
-        action: "finished",
-        status: "ok",
-        summary: "background finished",
-      });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   });
 
-  test("returns already-running without starting background work", async () => {
+  test("returns already-running when second run overlaps first", async () => {
     const now = Date.now();
     let resolveRun: ((result: { status: "ok"; summary: string }) => void) | undefined;
     cronIsolatedRun.mockImplementationOnce(
@@ -641,9 +619,7 @@ describe("gateway server cron", () => {
         ws,
         (payload) => payload?.jobId === "busy-job" && payload?.action === "started",
       );
-      const firstRunRes = await rpcReq(ws, "cron.run", { id: "busy-job", mode: "force" }, 1_000);
-      expect(firstRunRes.ok).toBe(true);
-      expect(firstRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      const firstRunPromise = rpcReq(ws, "cron.run", { id: "busy-job", mode: "force" }, 20_000);
       await startedRun;
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
@@ -657,6 +633,9 @@ describe("gateway server cron", () => {
         (payload) => payload?.jobId === "busy-job" && payload?.action === "finished",
       );
       resolveRun?.({ status: "ok", summary: "busy done" });
+      const firstRunRes = await firstRunPromise;
+      expect(firstRunRes.ok).toBe(true);
+      expect(firstRunRes.payload).toEqual({ ok: true, ran: true });
       await finishedRun;
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
@@ -786,7 +765,7 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      expect(legacyRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(legacyRunRes.payload).toEqual({ ok: true, ran: true });
       await legacyFinished;
       const legacyCall = getWebhookCall(1);
       expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
@@ -815,7 +794,7 @@ describe("gateway server cron", () => {
       );
       const silentRunRes = await rpcReq(ws, "cron.run", { id: silentJobId, mode: "force" }, 20_000);
       expect(silentRunRes.ok).toBe(true);
-      expect(silentRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(silentRunRes.payload).toEqual({ ok: true, ran: true });
       await silentFinished;
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
