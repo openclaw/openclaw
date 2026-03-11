@@ -21,6 +21,9 @@ type SearchProviderEntry = {
   signupUrl: string;
 };
 
+const MINIMAX_SIGNUP_URL_GLOBAL = "https://platform.minimax.io/";
+const MINIMAX_SIGNUP_URL_CN = "https://platform.minimaxi.com/";
+
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
   {
     value: "brave",
@@ -60,7 +63,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     hint: "MiniMax web search · OAuth works (API key optional)",
     envKeys: ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"],
     placeholder: "minimax-...",
-    signupUrl: "https://platform.minimax.io/",
+    signupUrl: MINIMAX_SIGNUP_URL_GLOBAL,
   },
   {
     value: "perplexity",
@@ -74,6 +77,39 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
+}
+
+function resolveSearchProviderSignupUrl(
+  config: OpenClawConfig,
+  entry: SearchProviderEntry,
+): string {
+  if (entry.value !== "minimax") {
+    return entry.signupUrl;
+  }
+
+  const modelPrimary = config.agents?.defaults?.model?.primary?.trim().toLowerCase() ?? "";
+  if (modelPrimary.startsWith("minimax-cn/")) {
+    return MINIMAX_SIGNUP_URL_CN;
+  }
+
+  const providers = config.models?.providers;
+  if (providers && typeof providers === "object") {
+    const minimaxCn = providers["minimax-cn"];
+    if (minimaxCn && typeof minimaxCn === "object") {
+      return MINIMAX_SIGNUP_URL_CN;
+    }
+
+    const minimax = providers.minimax;
+    if (minimax && typeof minimax === "object") {
+      const baseUrl =
+        "baseUrl" in minimax && typeof minimax.baseUrl === "string" ? minimax.baseUrl : "";
+      if (baseUrl.toLowerCase().includes("minimaxi.com")) {
+        return MINIMAX_SIGNUP_URL_CN;
+      }
+    }
+  }
+
+  return MINIMAX_SIGNUP_URL_GLOBAL;
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
@@ -257,6 +293,7 @@ export async function setupSearch(
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
+  const signupUrl = resolveSearchProviderSignupUrl(config, entry);
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
@@ -312,7 +349,7 @@ export async function setupSearch(
   await prompter.note(
     [
       "No API key stored — web_search won't work until a key is available.",
-      `Get your key at: ${entry.signupUrl}`,
+      `Get your key at: ${signupUrl}`,
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",

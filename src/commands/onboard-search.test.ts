@@ -175,6 +175,44 @@ describe("setupSearch", () => {
     }
   });
 
+  it("uses MiniMax CN signup URL when config indicates minimax-cn", async () => {
+    const originalApiKey = process.env.MINIMAX_API_KEY;
+    const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+    try {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "placeholder",
+              models: [],
+            },
+          },
+        },
+      };
+      const { prompter, notes } = createPrompter({
+        selectValue: "minimax",
+        textValue: "",
+      });
+      await setupSearch(cfg, runtime, prompter);
+      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      expect(missingNote?.message).toContain("https://platform.minimaxi.com/");
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = originalApiKey;
+      }
+      if (originalOauthToken === undefined) {
+        delete process.env.MINIMAX_OAUTH_TOKEN;
+      } else {
+        process.env.MINIMAX_OAUTH_TOKEN = originalOauthToken;
+      }
+    }
+  });
+
   it("keeps existing key when user leaves input blank", async () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
