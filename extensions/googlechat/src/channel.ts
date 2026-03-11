@@ -94,6 +94,17 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
   normalizeEntry: (raw) => formatAllowFromEntry(raw),
 });
 
+function resolveGoogleChatThread(params: {
+  cfg: OpenClawConfig;
+  replyToId?: string | number | null;
+  threadId?: string | number | null;
+}): string | undefined {
+  if (params.cfg.channels?.googlechat?.replyToMode === "off") {
+    return undefined;
+  }
+  return (params.threadId ?? params.replyToId ?? undefined) as string | undefined;
+}
+
 export const googlechatDock: ChannelDock = {
   id: "googlechat",
   capabilities: {
@@ -359,7 +370,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+      const thread = resolveGoogleChatThread({ cfg, replyToId, threadId });
       const result = await sendGoogleChatMessage({
         account,
         space,
@@ -390,7 +401,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
+      const thread = resolveGoogleChatThread({ cfg, replyToId, threadId });
       const runtime = getGoogleChatRuntime();
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
