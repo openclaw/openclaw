@@ -1423,7 +1423,9 @@ async function runBaiduSearch(params: {
   count: number;
 }): Promise<{ results: BaiduSearchResult[] }> {
   const body: Record<string, unknown> = {
-    resource_type_filter: [{ type: "web", top_k: params.count > 0 ? params.count : DEFAULT_SEARCH_COUNT }],
+    resource_type_filter: [
+      { type: "web", top_k: params.count > 0 ? params.count : DEFAULT_SEARCH_COUNT },
+    ],
     messages: [
       {
         role: "user",
