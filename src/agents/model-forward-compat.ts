@@ -187,6 +187,9 @@ function resolveOpenAICodexForwardCompatModel(
   } as Model<Api>);
 }
 
+// Providers that serve Anthropic Claude models and share the same model ID scheme.
+const ANTHROPIC_FAMILY_PROVIDERS = new Set(["anthropic", "anthropic-vertex"]);
+
 function resolveAnthropic46ForwardCompatModel(params: {
   provider: string;
   modelId: string;
@@ -199,7 +202,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, dashModelId, dotModelId } = params;
   const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "anthropic") {
+  if (!ANTHROPIC_FAMILY_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
 
@@ -223,12 +226,39 @@ function resolveAnthropic46ForwardCompatModel(params: {
   }
   templateIds.push(...params.fallbackTemplateIds);
 
-  return cloneFirstTemplateModel({
+  // Search for templates under the actual provider first, then fall back
+  // to the base "anthropic" provider (cloud providers like anthropic-vertex
+  // register models under their own provider key, but templates may only
+  // exist under "anthropic" in the built-in registry).
+  const direct = cloneFirstTemplateModel({
     normalizedProvider,
     trimmedModelId,
     templateIds,
     modelRegistry,
   });
+  if (direct) {
+    return direct;
+  }
+
+  // Cross-provider template lookup: find the template under "anthropic" but
+  // rebrand the cloned model to the actual provider so auth, streaming, and
+  // URL routing use the correct provider-specific paths.
+  if (normalizedProvider !== "anthropic") {
+    const crossProvider = cloneFirstTemplateModel({
+      normalizedProvider: "anthropic",
+      trimmedModelId,
+      templateIds,
+      modelRegistry,
+    });
+    if (crossProvider) {
+      return normalizeModelCompat({
+        ...crossProvider,
+        provider: normalizedProvider,
+      } as Model<Api>);
+    }
+  }
+
+  return undefined;
 }
 
 function resolveAnthropicOpus46ForwardCompatModel(
