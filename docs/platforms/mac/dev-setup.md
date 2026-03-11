@@ -21,7 +21,7 @@ Before building the app, ensure you have the following installed:
 Install the project-wide dependencies:
 
 ```bash
-pnpm install
+npm install
 ```
 
 ## 2. Build and Package the App
