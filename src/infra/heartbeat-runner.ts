@@ -698,6 +698,16 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
   });
+  const mainSessionKey =
+    cfg.session?.scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId });
+  const shouldPruneEventDrivenMainTranscript =
+    sessionKey === mainSessionKey &&
+    (preflight.isExecEventReason ||
+      preflight.isCronEventReason ||
+      preflight.isWakeReason ||
+      preflight.hasTaggedCronEvents ||
+      hasExecCompletion ||
+      hasCronEvents);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -757,9 +767,17 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
+  let transcriptState: Awaited<ReturnType<typeof captureTranscriptState>> | undefined;
+  const maybePruneEventDrivenMainTranscript = async () => {
+    if (!shouldPruneEventDrivenMainTranscript || !transcriptState) {
+      return;
+    }
+    await pruneHeartbeatTranscript(transcriptState);
+  };
+
   try {
-    // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
-    const transcriptState = await captureTranscriptState({
+    // Capture transcript state before the heartbeat run so we can prune when needed.
+    transcriptState = await captureTranscriptState({
       storePath,
       sessionKey,
       agentId,
@@ -890,6 +908,7 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
+      await maybePruneEventDrivenMainTranscript();
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
@@ -907,6 +926,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await maybePruneEventDrivenMainTranscript();
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
@@ -929,6 +949,7 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        await maybePruneEventDrivenMainTranscript();
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -981,6 +1002,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
+    await maybePruneEventDrivenMainTranscript();
     emitHeartbeatEvent({
       status: "sent",
       to: delivery.to,
@@ -993,6 +1015,9 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
+    if (shouldPruneEventDrivenMainTranscript && transcriptState) {
+      await pruneHeartbeatTranscript(transcriptState).catch(() => undefined);
+    }
     const reason = formatErrorMessage(err);
     emitHeartbeatEvent({
       status: "failed",

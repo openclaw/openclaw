@@ -44,6 +44,7 @@ describe("heartbeat transcript pruning", () => {
       };
     };
     expectPruned: boolean;
+    reason?: string;
   }) {
     await withTempTelegramHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
@@ -71,7 +72,7 @@ describe("heartbeat transcript pruning", () => {
 
         await runHeartbeatOnce({
           agentId: undefined,
-          reason: "test",
+          reason: params.reason ?? "test",
           cfg,
           deps: { sendTelegram: vi.fn() },
         });
@@ -95,6 +96,18 @@ describe("heartbeat transcript pruning", () => {
       reply: {
         text: "HEARTBEAT_OK",
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      },
+      expectPruned: true,
+    });
+  });
+
+  it("prunes transcript for event-driven heartbeat runs with meaningful content", async () => {
+    await runTranscriptScenario({
+      sessionId: "test-session-event-prune",
+      reason: "exec-event",
+      reply: {
+        text: "Sent gateway status update to WhatsApp.",
+        usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
       expectPruned: true,
     });
