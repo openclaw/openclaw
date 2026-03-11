@@ -716,8 +716,9 @@ export function createNodesTool(options?: {
               agentId,
             });
             if (shouldAutoApproveNodeRun(execPolicy)) {
+              const approvalId = crypto.randomUUID();
+              let approvalPreResolved = false;
               try {
-                const approvalId = crypto.randomUUID();
                 await callGatewayTool(
                   "exec.approval.request",
                   { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
@@ -745,13 +746,17 @@ export function createNodesTool(options?: {
                   id: approvalId,
                   decision: "allow-once",
                 });
+                approvalPreResolved = true;
+              } catch {
+                // Fall back to the standard approval workflow if pre-resolve fails.
+              }
+
+              if (approvalPreResolved) {
                 const raw = await invokeWithApproval({
                   approvalId,
                   approvalDecision: "allow-once",
                 });
                 return jsonResult(raw?.payload ?? {});
-              } catch {
-                // Fall back to the standard approval workflow if pre-resolve fails.
               }
             }
 

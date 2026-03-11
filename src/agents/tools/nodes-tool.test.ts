@@ -132,6 +132,17 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
     expect(prepareCall?.params).not.toHaveProperty("rawCommand");
   });
+});
+
+describe("createNodesTool run approvals", () => {
+  beforeEach(() => {
+    gatewayMocks.callGatewayTool.mockReset();
+    gatewayMocks.readGatewayCallOptions.mockReset();
+    gatewayMocks.readGatewayCallOptions.mockReturnValue({});
+    nodeUtilsMocks.resolveNodeId.mockClear();
+    screenMocks.parseScreenRecordPayload.mockClear();
+    screenMocks.writeScreenRecordToFile.mockClear();
+  });
 
   it("auto-resolves allow-once for run when tools.exec is full/off", async () => {
     nodeUtilsMocks.listNodes.mockResolvedValue([
@@ -201,5 +212,70 @@ describe("createNodesTool screen_record duration guardrails", () => {
       (call) => call[0] === "exec.approval.request",
     )?.[2];
     expect(approvalRequestCall?.twoPhase).toBe(true);
+  });
+
+  it("does not swallow system.run errors after full/off auto-approval", async () => {
+    nodeUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, payload) => {
+      if (method === "node.invoke" && payload?.command === "system.run.prepare") {
+        return {
+          payload: {
+            cmdText: "echo hi",
+            plan: {
+              argv: ["echo", "hi"],
+              cwd: null,
+              rawCommand: "echo hi",
+              agentId: null,
+              sessionKey: null,
+            },
+          },
+        };
+      }
+      if (method === "exec.approval.request") {
+        return {
+          status: "accepted",
+          id: payload?.id,
+        };
+      }
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
+      }
+      if (method === "node.invoke" && payload?.command === "system.run") {
+        if (payload?.params?.approved !== true) {
+          throw new Error("unexpected legacy fallback");
+        }
+        throw new Error("transport failure");
+      }
+      throw new Error(`unexpected call: ${method}`);
+    });
+    const tool = createNodesTool({
+      config: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    await expect(
+      tool.execute("call-3", {
+        action: "run",
+        node: "macbook",
+        command: ["echo", "hi"],
+      }),
+    ).rejects.toThrow("transport failure");
+
+    const runCalls = gatewayMocks.callGatewayTool.mock.calls.filter(
+      (call) => call[0] === "node.invoke" && call[2]?.command === "system.run",
+    );
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0]?.[2]?.params?.approved).toBe(true);
   });
 });
