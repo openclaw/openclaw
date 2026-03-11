@@ -119,6 +119,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     await writePendingInbound(stateDir, {
       channel: "discord",
       id: String(message.id ?? Date.now()),
+      accountId,
       payload: {
         channelId: messageChannelId,
         messageId: message.id,
