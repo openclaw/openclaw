@@ -2,12 +2,38 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { CONFIG_DIR } from "../utils.js";
 import type { CronStoreFile } from "./types.js";
 
-export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
+/**
+ * Resolve the default cron directory at runtime to respect OPENCLAW_STATE_DIR.
+ * This function is called lazily to ensure environment variables are loaded before path resolution.
+ */
+export function resolveDefaultCronDir(): string {
+  return path.join(resolveStateDir(), "cron");
+}
+
+/**
+ * Resolve the default cron store path at runtime to respect OPENCLAW_STATE_DIR.
+ * This function is called lazily to ensure environment variables are loaded before path resolution.
+ */
+export function resolveDefaultCronStorePath(): string {
+  return path.join(resolveDefaultCronDir(), "jobs.json");
+}
+
+/**
+ * @deprecated Use resolveDefaultCronDir() instead.
+ * This constant is kept for backward compatibility but may not respect OPENCLAW_STATE_DIR when loaded before dotenv.
+ */
+export const DEFAULT_CRON_DIR = path.join(resolveStateDir(), "cron");
+
+/**
+ * @deprecated Use resolveDefaultCronStorePath() instead.
+ * This constant is kept for backward compatibility but may not respect OPENCLAW_STATE_DIR when loaded before dotenv.
+ */
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
+
 const serializedStoreCache = new Map<string, string>();
 
 export function resolveCronStorePath(storePath?: string) {
@@ -18,7 +44,7 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
-  return DEFAULT_CRON_STORE_PATH;
+  return resolveDefaultCronStorePath();
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
