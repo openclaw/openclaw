@@ -199,6 +199,9 @@ export class OpenAIRealtimeVoiceBridge {
   /** Accumulate tool call arguments (streamed as deltas) */
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
 
+  /** Guards onReady/greeting so it fires only on the first session, not reconnects */
+  private sessionReadyFired = false;
+
   constructor(config: RealtimeVoiceConfig) {
     if (!config.apiKey) {
       throw new Error("[RealtimeVoice] OpenAI API key is required");
@@ -333,15 +336,10 @@ export class OpenAIRealtimeVoiceBridge {
         console.log("[RealtimeVoice] WebSocket connected");
         this.connected = true;
         this.reconnectAttempts = 0;
-
-        // Small delay to ensure the server is ready before sending session.update
-        // (mirrors the reference implementation's setTimeout(initializeSession, 100))
-        setTimeout(() => {
-          this.sendSessionUpdate();
-          this.drainPendingAudio();
-          this.config.onReady?.();
-          resolve();
-        }, 100);
+        // Send session config immediately — no need to wait; the server
+        // confirms receipt via session.created which triggers drain + onReady.
+        this.sendSessionUpdate();
+        resolve();
       });
 
       this.ws.on("message", (data: Buffer) => {
@@ -409,6 +407,9 @@ export class OpenAIRealtimeVoiceBridge {
         voice: cfg.voice ?? "alloy",
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
+        // whisper-1 is the only model currently supported by the Realtime API for
+        // inline user-speech transcription. This is distinct from the streaming
+        // STT path (streaming.sttModel) which uses gpt-4o-transcribe.
         input_audio_transcription: {
           model: "whisper-1",
         },
@@ -491,6 +492,12 @@ export class OpenAIRealtimeVoiceBridge {
       // ---- Session lifecycle ----
       case "session.created":
         console.log("[RealtimeVoice] Session created");
+        this.drainPendingAudio();
+        // Fire onReady exactly once — not on reconnects (greeting already played)
+        if (!this.sessionReadyFired) {
+          this.sessionReadyFired = true;
+          this.config.onReady?.();
+        }
         break;
 
       case "session.updated":
@@ -716,6 +723,7 @@ export class OpenAIRealtimeVoiceBridge {
 /**
  * Configuration for the provider factory.
  * Holds shared/default settings; per-call config is passed to createSession().
+ * @internal Not used by the plugin's built-in realtime handler; exposed for external consumers.
  */
 export interface RealtimeVoiceProviderConfig {
   /** OpenAI API key */
@@ -784,6 +792,7 @@ export class OpenAIRealtimeVoiceProvider {
 /**
  * Minimal interface that the bridge integration needs from MediaStreamHandler.
  * This matches the actual MediaStreamHandler's method signatures.
+ * @internal Not used by the plugin's built-in realtime handler; exposed for external consumers.
  */
 export interface MediaStreamHandlerLike {
   sendAudio(streamSid: string, muLaw: Buffer): void;
@@ -793,6 +802,7 @@ export interface MediaStreamHandlerLike {
 
 /**
  * Create a RealtimeVoiceBridge wired to an existing MediaStreamHandler session.
+ * @internal Not used by the plugin's built-in realtime handler; exposed for external consumers.
  *
  * Drop-in helper for use inside media-stream.ts handleStart():
  *
