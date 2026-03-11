@@ -40,6 +40,7 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   createAgentToAgentPolicy,
+  looksLikeSessionKey,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -189,14 +190,25 @@ export function createSessionStatusTool(opts?: {
       const a2aPolicy = createAgentToAgentPolicy(cfg);
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
-      let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+      const fallbackAgentSessionKey = opts?.agentSessionKey?.trim();
+      let requestedKeyRaw = requestedKeyParam ?? fallbackAgentSessionKey;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
 
       const requesterAgentId = resolveAgentIdFromSessionKey(
-        opts?.agentSessionKey ?? requestedKeyRaw,
+        fallbackAgentSessionKey ?? requestedKeyRaw,
       );
+      if (
+        !requestedKeyParam &&
+        fallbackAgentSessionKey &&
+        !looksLikeSessionKey(fallbackAgentSessionKey)
+      ) {
+        requestedKeyRaw = buildAgentMainSessionKey({
+          agentId: requesterAgentId,
+          mainKey,
+        });
+      }
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
