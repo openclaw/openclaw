@@ -96,6 +96,20 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("does not rewrite HTTP-prefixed raw API JSON payloads without errorContext", () => {
+    const text =
+      '400 {"type":"error","error":{"type":"server_error","code":"server_error","message":"Example payload for docs"}}';
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("still rewrites HTTP-prefixed raw API payloads in errorContext", () => {
+    const text =
+      '400 {"type":"error","error":{"type":"server_error","code":"server_error","message":"Provider failed"}}';
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toBe(
+      "HTTP 400 server_error: Provider failed",
+    );
+  });
+
   it("does not rewrite regular assistant JSON that only contains error-shaped fields", () => {
     const text =
       '{"request_id":"example-123","error":{"code":"example_code","message":"Example payload for docs"}}';

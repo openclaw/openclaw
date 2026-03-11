@@ -615,16 +615,10 @@ function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
     return false;
   }
 
-  if (info.httpCode) {
-    const parsedCode = Number(info.httpCode);
-    if (Number.isFinite(parsedCode) && parsedCode >= 400) {
-      return true;
-    }
-  }
-
   // Outside explicit errorContext, only rewrite payloads that strongly look like
   // streamed provider error events (sequence marker + provider *_error type).
-  // This avoids clobbering legitimate assistant JSON examples.
+  // Do not rewrite solely based on HTTP-prefixed JSON here to avoid clobbering
+  // assistant-authored docs/examples outside explicit error handling paths.
   const payload = parseApiErrorPayload(raw);
   if (!payload || !hasProviderStreamSequenceMarker(payload)) {
     return false;
