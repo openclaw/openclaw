@@ -60,12 +60,24 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
 
 /**
  * Sanitize a profile ID string for safe output in terminal/log messages.
- * Strips ANSI/VT escape sequences and newlines to prevent terminal injection
+ * Strips ALL terminal escape sequences and newlines to prevent terminal injection
  * (log forging) via maliciously crafted profile IDs.
+ *
+ * Handles:
+ *   - Standard CSI:  ESC [ ... final        e.g. \x1b[31m, \x1b[1;32m
+ *   - Private CSI:   ESC [ ? ... final       e.g. \x1b[?25l (cursor hide)
+ *   - OSC:           ESC ] ... BEL/ST        e.g. \x1b]0;title\x07
+ *   - DCS/SOS/PM/APC: ESC P/X/^/_ ... ST   e.g. \x1bPdata\x1b\\
+ *   - Other Fe:      ESC <single char>       e.g. \x1bc (RIS reset)
  */
 function sanitizeProfileId(id: string): string {
-  // eslint-disable-next-line no-control-regex
-  return id.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/[\r\n]/g, "");
+  return id
+    .replace(
+      // eslint-disable-next-line no-control-regex
+      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S])/g,
+      "",
+    )
+    .replace(/[\r\n]/g, "");
 }
 
 /**

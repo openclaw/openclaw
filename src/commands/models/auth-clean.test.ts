@@ -630,4 +630,46 @@ describe("modelsAuthCleanCommand", () => {
     // The sanitized prefix (before the stripped \n) should still appear
     expect(runtime.logs.some((line) => line.includes("anthropic:legit"))).toBe(true);
   });
+
+  it("strips private CSI escape sequences (e.g. cursor hide) from profile IDs", async () => {
+    // Private CSI sequences like \x1b[?25l (cursor hide) contain a '?' parameter
+    // prefix not matched by the old [0-9;]* pattern — they must be stripped.
+    const maliciousId = "anthropic:\x1b[?25lhidden\x1b[?25h";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // Private CSI sequences must be stripped
+    expect(combined).not.toContain("\x1b[?25l");
+    expect(combined).not.toContain("\x1b[?25h");
+    // The non-escape text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("hidden");
+  });
+
+  it("strips OSC escape sequences (e.g. window title) from profile IDs", async () => {
+    // OSC sequences like \x1b]0;title\x07 set terminal window titles; they are
+    // not matched by CSI-only patterns and must be stripped to prevent injection.
+    const maliciousId = "anthropic:\x1b]0;injected-title\x07name";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // OSC sequence must be stripped
+    expect(combined).not.toContain("\x1b]0;");
+    expect(combined).not.toContain("\x07");
+    // The non-escape text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("name");
+  });
 });
