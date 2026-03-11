@@ -39,10 +39,37 @@ function isRateLimitError(err: unknown): boolean {
 }
 
 /**
+ * Extract the raw `retry-after` string from a headers-like object.
+ *
+ * Handles plain objects (`{ "retry-after": "5" }`) and `Headers` instances
+ * (which require `.get("retry-after")`).
+ */
+function getRetryAfterRaw(headers: unknown): string | undefined {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  // Headers instance (Fetch API / SDK wrappers)
+  if (typeof (headers as { get?: unknown }).get === "function") {
+    const val = (headers as { get(name: string): string | null }).get("retry-after");
+    if (typeof val === "string" && val.length > 0) {
+      return val;
+    }
+  }
+  // Plain record
+  const val = (headers as Record<string, unknown>)["retry-after"];
+  if (typeof val === "string" && val.length > 0) {
+    return val;
+  }
+  return undefined;
+}
+
+/**
  * Parse the `Retry-After` header value from an error, if present.
  *
- * Supports both delta-seconds (`Retry-After: 5`) and HTTP-date
- * (`Retry-After: Sun, 09 Mar 2026 15:00:10 GMT`) per RFC 7231 §7.1.3.
+ * Checks `err.headers` (Anthropic/OpenAI SDK) and `err.response.headers`
+ * (Axios-style wrappers). Supports both delta-seconds (`Retry-After: 5`)
+ * and HTTP-date (`Retry-After: Sun, 09 Mar 2026 15:00:10 GMT`) per
+ * RFC 7231 §7.1.3.
  *
  * Returns the delay in milliseconds, or `undefined` if absent/unparseable.
  */
@@ -50,12 +77,16 @@ function parseRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const headers = (err as Record<string, unknown>).headers;
-  if (!headers || typeof headers !== "object") {
-    return undefined;
-  }
-  const raw = (headers as Record<string, unknown>)["retry-after"];
-  if (typeof raw !== "string" || raw.length === 0) {
+  const obj = err as Record<string, unknown>;
+  // Try err.headers first, then err.response.headers (Axios-style).
+  const raw =
+    getRetryAfterRaw(obj.headers) ??
+    getRetryAfterRaw(
+      obj.response && typeof obj.response === "object"
+        ? (obj.response as Record<string, unknown>).headers
+        : undefined,
+    );
+  if (!raw) {
     return undefined;
   }
   // Try delta-seconds first (most common).

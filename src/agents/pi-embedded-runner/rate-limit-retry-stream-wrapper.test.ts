@@ -137,6 +137,36 @@ describe("createRateLimitRetryStreamWrapper", () => {
     vi.useRealTimers();
   });
 
+  it("reads Retry-After from err.response.headers (Axios-style)", async () => {
+    const err = Object.assign(new Error("Too Many Requests"), {
+      status: 429,
+      response: { status: 429, headers: { "retry-after": "7" } },
+    });
+    const inner = makeStreamFn([
+      () => Promise.reject(err) as unknown as ReturnType<StreamFn>,
+      () => createAssistantMessageEventStream(),
+    ]);
+    const wrapped = createRateLimitRetryStreamWrapper(inner);
+    await wrapped(model, context, {});
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(7_000, undefined);
+  });
+
+  it("reads Retry-After from Headers instance", async () => {
+    const headers = new Headers();
+    headers.set("retry-after", "3");
+    const err = Object.assign(new Error("Too Many Requests"), {
+      status: 429,
+      headers,
+    });
+    const inner = makeStreamFn([
+      () => Promise.reject(err) as unknown as ReturnType<StreamFn>,
+      () => createAssistantMessageEventStream(),
+    ]);
+    const wrapped = createRateLimitRetryStreamWrapper(inner);
+    await wrapped(model, context, {});
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(3_000, undefined);
+  });
+
   it("does not retry when abort signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
