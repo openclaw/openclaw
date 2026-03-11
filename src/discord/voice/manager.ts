@@ -8,6 +8,7 @@ import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   AudioPlayerStatus,
   EndBehaviorType,
+  NetworkingStatusCode,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -15,6 +16,7 @@ import {
   joinVoiceChannel,
   type AudioPlayer,
   type VoiceConnection,
+  type VoiceConnectionState,
 } from "@discordjs/voice";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -39,6 +41,8 @@ import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tt
 import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
+import { formatVoiceIngressPrompt } from "./prompt.js";
+import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
 const require = createRequire(import.meta.url);
 
@@ -46,12 +50,17 @@ const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const MIN_SEGMENT_SECONDS = 0.35;
-const SILENCE_DURATION_MS = 1_000;
-const PLAYBACK_READY_TIMEOUT_MS = 15_000;
+const CAPTURE_FINALIZE_GRACE_MS = 1_200;
+const PLAYBACK_READY_TIMEOUT_MS = 30_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
+const VOICE_JOIN_MAX_ATTEMPTS = 2;
+const VOICE_JOIN_RETRY_DELAY_MS = 1_500;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
 const DECRYPT_FAILURE_PATTERN = /DecryptionFailed\(/;
+const DAVE_PASSTHROUGH_DISABLED_PATTERN = /UnencryptedWhenPassthroughDisabled/;
+const DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS = 30;
+const DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS = 15;
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
 
 const logger = createSubsystemLogger("discord/voice");
@@ -59,6 +68,134 @@ const logger = createSubsystemLogger("discord/voice");
 const logVoiceVerbose = (message: string) => {
   logVerbose(`discord voice: ${message}`);
 };
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = "name" in err ? stringifyUnknown((err as { name?: unknown }).name) : "";
+  const message =
+    "message" in err
+      ? stringifyUnknown((err as { message?: unknown }).message)
+      : stringifyUnknown(err);
+  return (
+    name === "AbortError" ||
+    message.includes("The operation was aborted") ||
+    message.includes("aborted")
+  );
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    return value.message || value.name;
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+function summarizeError(err: unknown): string {
+  if (!err) {
+    return "<empty error>";
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  if (typeof err !== "object") {
+    return stringifyUnknown(err);
+  }
+  const e = err as { name?: unknown; message?: unknown; code?: unknown; cause?: unknown };
+  const bits = [
+    `name=${stringifyUnknown(e.name)}`,
+    `message=${stringifyUnknown(e.message)}`,
+    `code=${stringifyUnknown(e.code)}`,
+    `cause=${stringifyUnknown(e.cause)}`,
+  ];
+  return bits.join(" ");
+}
+
+function statusName(status: VoiceConnectionStatus | AudioPlayerStatus): string {
+  return String(status);
+}
+
+function logVoiceConnectionState(guildId: string, channelId: string, state: VoiceConnectionState) {
+  logger.info(
+    `discord voice: state guild=${guildId} channel=${channelId} status=${statusName(state.status)}`,
+  );
+}
+
+function sanitizeVoiceLogValue(value: unknown): string {
+  return stringifyUnknown(value).replace(/\s+/g, " ").trim();
+}
+
+function summarizeVoiceGatewayPayload(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return sanitizeVoiceLogValue(payload);
+  }
+  const record = payload as { op?: unknown; d?: unknown };
+  const parts = [`op=${sanitizeVoiceLogValue(record.op ?? "")}`];
+  if (record.d && typeof record.d === "object") {
+    const data = record.d as Record<string, unknown>;
+    for (const key of [
+      "guild_id",
+      "channel_id",
+      "user_id",
+      "session_id",
+      "self_deaf",
+      "self_mute",
+      "endpoint",
+    ]) {
+      if (key in data) {
+        parts.push(`${key}=${sanitizeVoiceLogValue(data[key])}`);
+      }
+    }
+    if ("token" in data) {
+      const token = data.token;
+      parts.push(
+        typeof token === "string" ? `token=redacted(len=${token.length})` : "token=present",
+      );
+    }
+  }
+  return parts.join(" ");
+}
+
+function summarizeVoiceGatewayUpdate(update: unknown, keys: readonly string[]): string {
+  if (!update || typeof update !== "object") {
+    return sanitizeVoiceLogValue(update);
+  }
+  const data = update as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of keys) {
+    if (key in data) {
+      parts.push(`${key}=${sanitizeVoiceLogValue(data[key])}`);
+    }
+  }
+  if ("token" in data) {
+    const token = data.token;
+    parts.push(typeof token === "string" ? `token=redacted(len=${token.length})` : "token=present");
+  }
+  return parts.join(" ");
+}
 
 type VoiceOperationResult = {
   ok: boolean;
@@ -77,6 +214,8 @@ type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   activeSpeakers: Set<string>;
+  activeCaptureStreams: Map<string, Readable>;
+  captureFinalizeTimers: Map<string, ReturnType<typeof setTimeout>>;
   decryptFailureCount: number;
   lastDecryptFailureAt: number;
   decryptRecoveryInFlight: boolean;
@@ -157,42 +296,113 @@ type OpusDecoder = {
   decode: (buffer: Buffer) => Buffer;
 };
 
-let warnedOpusMissing = false;
+type OpusDecoderFactory = {
+  load: () => OpusDecoder;
+  name: string;
+};
 
-function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
-  try {
-    const OpusScript = require("opusscript") as {
-      new (sampleRate: number, channels: number, application: number): OpusDecoder;
-      Application: { AUDIO: number };
-    };
-    const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
-    return { decoder, name: "opusscript" };
-  } catch (err) {
-    if (!warnedOpusMissing) {
-      warnedOpusMissing = true;
-      logger.warn(
-        `discord voice: opusscript unavailable (${formatErrorMessage(err)}); cannot decode voice audio`,
-      );
+let warnedOpusMissing = false;
+let cachedOpusDecoderFactory: OpusDecoderFactory | null | "unresolved" = "unresolved";
+
+function resolveOpusDecoderFactory(): OpusDecoderFactory | null {
+  const factories: OpusDecoderFactory[] = [
+    {
+      name: "@discordjs/opus",
+      load: () => {
+        const DiscordOpus = require("@discordjs/opus") as {
+          OpusEncoder: new (
+            sampleRate: number,
+            channels: number,
+          ) => {
+            decode: (buffer: Buffer) => Buffer;
+          };
+        };
+        return new DiscordOpus.OpusEncoder(SAMPLE_RATE, CHANNELS);
+      },
+    },
+    {
+      name: "opusscript",
+      load: () => {
+        const OpusScript = require("opusscript") as {
+          new (sampleRate: number, channels: number, application: number): OpusDecoder;
+          Application: { AUDIO: number };
+        };
+        return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
+      },
+    },
+  ];
+
+  const failures: string[] = [];
+  for (const factory of factories) {
+    try {
+      factory.load();
+      return factory;
+    } catch (err) {
+      failures.push(`${factory.name}: ${formatErrorMessage(err)}`);
     }
+  }
+
+  if (!warnedOpusMissing) {
+    warnedOpusMissing = true;
+    logger.warn(
+      `discord voice: no usable opus decoder available (${failures.join("; ")}); cannot decode voice audio`,
+    );
   }
   return null;
 }
 
-async function decodeOpusStream(stream: Readable): Promise<Buffer> {
+function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
+  const factory = getOrCreateOpusDecoderFactory();
+  if (!factory) {
+    return null;
+  }
+  return { decoder: factory.load(), name: factory.name };
+}
+
+function getOrCreateOpusDecoderFactory(): OpusDecoderFactory | null {
+  if (cachedOpusDecoderFactory !== "unresolved") {
+    return cachedOpusDecoderFactory;
+  }
+  cachedOpusDecoderFactory = resolveOpusDecoderFactory();
+  return cachedOpusDecoderFactory;
+}
+
+async function decodeOpusStream(stream: Readable): Promise<{
+  pcm: Buffer;
+  opusChunkCount: number;
+  opusBytes: number;
+  pcmChunkCount: number;
+  pcmBytes: number;
+}> {
   const selected = createOpusDecoder();
   if (!selected) {
-    return Buffer.alloc(0);
+    return {
+      pcm: Buffer.alloc(0),
+      opusChunkCount: 0,
+      opusBytes: 0,
+      pcmChunkCount: 0,
+      pcmBytes: 0,
+    };
   }
   logVoiceVerbose(`opus decoder: ${selected.name}`);
   const chunks: Buffer[] = [];
+  let opusChunkCount = 0;
+  let opusBytes = 0;
+  let pcmChunkCount = 0;
+  let pcmBytes = 0;
   try {
     for await (const chunk of stream) {
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
         continue;
       }
+      opusChunkCount += 1;
+      opusBytes += chunk.length;
       const decoded = selected.decoder.decode(chunk);
       if (decoded && decoded.length > 0) {
-        chunks.push(Buffer.from(decoded));
+        const decodedBuffer = Buffer.from(decoded);
+        pcmChunkCount += 1;
+        pcmBytes += decodedBuffer.length;
+        chunks.push(decodedBuffer);
       }
     }
   } catch (err) {
@@ -200,7 +410,13 @@ async function decodeOpusStream(stream: Readable): Promise<Buffer> {
       logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
     }
   }
-  return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
+  return {
+    pcm: chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0),
+    opusChunkCount,
+    opusBytes,
+    pcmChunkCount,
+    pcmBytes,
+  };
 }
 
 function estimateDurationSeconds(pcm: Buffer): number {
@@ -395,7 +611,7 @@ export class DiscordVoiceManager {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
 
-    const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
+    const rawAdapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = this.params.discordConfig.voice?.daveEncryption;
     const decryptionFailureTolerance = this.params.discordConfig.voice?.decryptionFailureTolerance;
     logVoiceVerbose(
@@ -403,22 +619,140 @@ export class DiscordVoiceManager {
         decryptionFailureTolerance ?? "default"
       }`,
     );
-    const connection = joinVoiceChannel({
-      channelId,
-      guildId,
-      adapterCreator,
-      selfDeaf: false,
-      selfMute: false,
-      daveEncryption,
-      decryptionFailureTolerance,
-    });
+    let connection: VoiceConnection | null = null;
+    let lastJoinError: unknown;
+    for (let attempt = 1; attempt <= VOICE_JOIN_MAX_ATTEMPTS; attempt++) {
+      const attemptStartedAt = Date.now();
+      let adapterCreateCount = 0;
+      let voiceStateUpdateCount = 0;
+      let voiceServerUpdateCount = 0;
+      let lastVoiceStateSummary = "none";
+      let lastVoiceServerSummary = "none";
+      let lastVoiceStateAtMs: number | null = null;
+      let lastVoiceServerAtMs: number | null = null;
+      const adapterCreator = ((methods: Parameters<typeof rawAdapterCreator>[0]) => {
+        adapterCreateCount += 1;
+        logger.info(
+          `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} adapter-create guild=${guildId} channel=${channelId} count=${adapterCreateCount} t+${Date.now() - attemptStartedAt}ms`,
+        );
+        const wrappedMethods = {
+          ...methods,
+          onVoiceStateUpdate: (update: Parameters<typeof methods.onVoiceStateUpdate>[0]) => {
+            voiceStateUpdateCount += 1;
+            lastVoiceStateAtMs = Date.now();
+            lastVoiceStateSummary = summarizeVoiceGatewayUpdate(update, [
+              "guild_id",
+              "channel_id",
+              "user_id",
+              "session_id",
+              "deaf",
+              "mute",
+              "self_deaf",
+              "self_mute",
+              "suppress",
+            ]);
+            logger.info(
+              `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} gateway-in VOICE_STATE_UPDATE guild=${guildId} channel=${channelId} count=${voiceStateUpdateCount} t+${lastVoiceStateAtMs - attemptStartedAt}ms ${lastVoiceStateSummary}`,
+            );
+            return methods.onVoiceStateUpdate(update);
+          },
+          onVoiceServerUpdate: (update: Parameters<typeof methods.onVoiceServerUpdate>[0]) => {
+            voiceServerUpdateCount += 1;
+            lastVoiceServerAtMs = Date.now();
+            lastVoiceServerSummary = summarizeVoiceGatewayUpdate(update, ["guild_id", "endpoint"]);
+            logger.info(
+              `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} gateway-in VOICE_SERVER_UPDATE guild=${guildId} channel=${channelId} count=${voiceServerUpdateCount} t+${lastVoiceServerAtMs - attemptStartedAt}ms ${lastVoiceServerSummary}`,
+            );
+            return methods.onVoiceServerUpdate(update);
+          },
+          destroy: () => {
+            logger.info(
+              `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} adapter-methods-destroy guild=${guildId} channel=${channelId} t+${Date.now() - attemptStartedAt}ms`,
+            );
+            return methods.destroy();
+          },
+        };
+        const adapter = rawAdapterCreator(wrappedMethods);
+        return {
+          sendPayload: (payload: Parameters<typeof adapter.sendPayload>[0]) => {
+            const accepted = adapter.sendPayload(payload);
+            logger.info(
+              `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} gateway-out guild=${guildId} channel=${channelId} accepted=${accepted} t+${Date.now() - attemptStartedAt}ms ${summarizeVoiceGatewayPayload(payload)}`,
+            );
+            return accepted;
+          },
+          destroy: () => {
+            logger.info(
+              `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} adapter-destroy guild=${guildId} channel=${channelId} t+${Date.now() - attemptStartedAt}ms`,
+            );
+            adapter.destroy();
+          },
+        };
+      }) as typeof rawAdapterCreator;
 
-    try {
-      await entersState(connection, VoiceConnectionStatus.Ready, PLAYBACK_READY_TIMEOUT_MS);
-      logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
-    } catch (err) {
-      connection.destroy();
-      return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
+      connection = joinVoiceChannel({
+        channelId,
+        guildId,
+        adapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+        debug: true,
+        daveEncryption,
+        decryptionFailureTolerance,
+      });
+
+      const stateChangeHandler = (
+        _oldState: VoiceConnectionState,
+        newState: VoiceConnectionState,
+      ) => {
+        logVoiceConnectionState(guildId, channelId, newState);
+      };
+      const debugHandler = (message: string) => {
+        logger.info(
+          `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} library-debug guild=${guildId} channel=${channelId} t+${Date.now() - attemptStartedAt}ms ${sanitizeVoiceLogValue(message)}`,
+        );
+      };
+      connection.on("stateChange", stateChangeHandler);
+      connection.on("debug", debugHandler);
+
+      try {
+        logger.info(
+          `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} started guild=${guildId} channel=${channelId}`,
+        );
+        await entersState(connection, VoiceConnectionStatus.Ready, PLAYBACK_READY_TIMEOUT_MS);
+        logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
+        logger.info(
+          `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} ready guild=${guildId} channel=${channelId} adapterCreates=${adapterCreateCount} voiceStateUpdates=${voiceStateUpdateCount} voiceServerUpdates=${voiceServerUpdateCount}`,
+        );
+        connection.off("stateChange", stateChangeHandler);
+        connection.off("debug", debugHandler);
+        break;
+      } catch (err) {
+        lastJoinError = err;
+        const retryable = isAbortLikeError(err) && attempt < VOICE_JOIN_MAX_ATTEMPTS;
+        const voiceStateLag =
+          lastVoiceStateAtMs === null ? "never" : `${lastVoiceStateAtMs - attemptStartedAt}ms`;
+        const voiceServerLag =
+          lastVoiceServerAtMs === null ? "never" : `${lastVoiceServerAtMs - attemptStartedAt}ms`;
+        logger.warn(
+          `discord voice: join attempt ${attempt}/${VOICE_JOIN_MAX_ATTEMPTS} failed guild=${guildId} channel=${channelId} retryable=${retryable} adapterCreates=${adapterCreateCount} voiceStateUpdates=${voiceStateUpdateCount}@${voiceStateLag} voiceServerUpdates=${voiceServerUpdateCount}@${voiceServerLag} lastVoiceState="${lastVoiceStateSummary}" lastVoiceServer="${lastVoiceServerSummary}" ${summarizeError(err)}`,
+        );
+        connection.off("stateChange", stateChangeHandler);
+        connection.off("debug", debugHandler);
+        connection.destroy();
+        if (!retryable) {
+          connection = null;
+          break;
+        }
+        await sleep(VOICE_JOIN_RETRY_DELAY_MS);
+      }
+    }
+
+    if (!connection) {
+      return {
+        ok: false,
+        message: `Failed to join voice channel: ${formatErrorMessage(lastJoinError)} (after ${VOICE_JOIN_MAX_ATTEMPTS} attempts)`,
+      };
     }
 
     const sessionChannelId = channelInfo?.id ?? channelId;
@@ -441,6 +775,7 @@ export class DiscordVoiceManager {
     connection.subscribe(player);
 
     let speakingHandler: ((userId: string) => void) | undefined;
+    let speakingEndHandler: ((userId: string) => void) | undefined;
     let disconnectedHandler: (() => Promise<void>) | undefined;
     let destroyedHandler: (() => void) | undefined;
     let playerErrorHandler: ((err: Error) => void) | undefined;
@@ -461,6 +796,8 @@ export class DiscordVoiceManager {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       activeSpeakers: new Set(),
+      activeCaptureStreams: new Map(),
+      captureFinalizeTimers: new Map(),
       decryptFailureCount: 0,
       lastDecryptFailureAt: 0,
       decryptRecoveryInFlight: false,
@@ -468,6 +805,17 @@ export class DiscordVoiceManager {
         if (speakingHandler) {
           connection.receiver.speaking.off("start", speakingHandler);
         }
+        if (speakingEndHandler) {
+          connection.receiver.speaking.off("end", speakingEndHandler);
+        }
+        for (const timer of entry.captureFinalizeTimers.values()) {
+          clearTimeout(timer);
+        }
+        entry.captureFinalizeTimers.clear();
+        for (const stream of entry.activeCaptureStreams.values()) {
+          stream.destroy();
+        }
+        entry.activeCaptureStreams.clear();
         if (disconnectedHandler) {
           connection.off(VoiceConnectionStatus.Disconnected, disconnectedHandler);
         }
@@ -482,10 +830,19 @@ export class DiscordVoiceManager {
       },
     };
 
+    this.enableDaveReceivePassthrough(
+      entry,
+      "post-join warmup",
+      DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
+    );
+
     speakingHandler = (userId: string) => {
       void this.handleSpeakingStart(entry, userId).catch((err) => {
         logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
       });
+    };
+    speakingEndHandler = (userId: string) => {
+      this.scheduleCaptureFinalize(entry, userId, "speaker end");
     };
 
     disconnectedHandler = async () => {
@@ -507,6 +864,7 @@ export class DiscordVoiceManager {
     };
 
     connection.receiver.speaking.on("start", speakingHandler);
+    connection.receiver.speaking.on("end", speakingEndHandler);
     connection.on(VoiceConnectionStatus.Disconnected, disconnectedHandler);
     connection.on(VoiceConnectionStatus.Destroyed, destroyedHandler);
     player.on("error", playerErrorHandler);
@@ -560,13 +918,62 @@ export class DiscordVoiceManager {
       .catch((err) => logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`));
   }
 
+  private clearCaptureFinalizeTimer(entry: VoiceSessionEntry, userId: string) {
+    const timer = entry.captureFinalizeTimers.get(userId);
+    if (!timer) {
+      return false;
+    }
+    clearTimeout(timer);
+    entry.captureFinalizeTimers.delete(userId);
+    return true;
+  }
+
+  private scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, reason: string) {
+    const stream = entry.activeCaptureStreams.get(userId);
+    if (!stream) {
+      return;
+    }
+    this.clearCaptureFinalizeTimer(entry, userId);
+    const timer = setTimeout(() => {
+      entry.captureFinalizeTimers.delete(userId);
+      const activeStream = entry.activeCaptureStreams.get(userId);
+      if (!activeStream) {
+        return;
+      }
+      logVoiceVerbose(
+        `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+      );
+      activeStream.destroy();
+    }, CAPTURE_FINALIZE_GRACE_MS);
+    entry.captureFinalizeTimers.set(userId, timer);
+    logVoiceVerbose(
+      `capture finalize scheduled: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+    );
+  }
+
   private async handleSpeakingStart(entry: VoiceSessionEntry, userId: string) {
-    if (!userId || entry.activeSpeakers.has(userId)) {
+    if (!userId) {
+      return;
+    }
+    if (entry.activeSpeakers.has(userId)) {
+      const extended = this.clearCaptureFinalizeTimer(entry, userId);
+      logVoiceVerbose(
+        `capture start ignored (already active): guild ${entry.guildId} channel ${entry.channelId} user ${userId}${extended ? " (finalize canceled)" : ""}`,
+      );
       return;
     }
     if (this.botUserId && userId === this.botUserId) {
+      logVoiceVerbose(
+        `capture start ignored (bot user): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
       return;
     }
+
+    this.enableDaveReceivePassthrough(
+      entry,
+      `speaker ${userId} start`,
+      DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
+    );
 
     entry.activeSpeakers.add(userId);
     logVoiceVerbose(
@@ -578,27 +985,58 @@ export class DiscordVoiceManager {
 
     const stream = entry.connection.receiver.subscribe(userId, {
       end: {
-        behavior: EndBehaviorType.AfterSilence,
-        duration: SILENCE_DURATION_MS,
+        behavior: EndBehaviorType.Manual,
       },
     });
+    entry.activeCaptureStreams.set(userId, stream);
+    this.clearCaptureFinalizeTimer(entry, userId);
+    logVoiceVerbose(
+      `receiver subscribe: guild ${entry.guildId} channel ${entry.channelId} user ${userId} end=Manual finalizeGrace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+    );
+    let streamAborted = false;
+    stream.on("end", () => {
+      logVoiceVerbose(
+        `receiver stream end: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+    });
+    stream.on("close", () => {
+      logVoiceVerbose(
+        `receiver stream close: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+    });
     stream.on("error", (err) => {
+      streamAborted = isAbortLikeError(err);
+      logger.warn(
+        `discord voice: receiver stream error guild=${entry.guildId} channel=${entry.channelId} user=${userId}: ${formatErrorMessage(err)}`,
+      );
       this.handleReceiveError(entry, err);
     });
 
     try {
-      const pcm = await decodeOpusStream(stream);
-      if (pcm.length === 0) {
+      const decoded = await decodeOpusStream(stream);
+      logVoiceVerbose(
+        `decode stats: guild ${entry.guildId} channel ${entry.channelId} user ${userId} opusChunks=${decoded.opusChunkCount} opusBytes=${decoded.opusBytes} pcmChunks=${decoded.pcmChunkCount} pcmBytes=${decoded.pcmBytes}`,
+      );
+      if (decoded.pcm.length === 0) {
         logVoiceVerbose(
           `capture empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
         );
         return;
       }
       this.resetDecryptFailureState(entry);
-      const { path: wavPath, durationSeconds } = await writeWavFile(pcm);
-      if (durationSeconds < MIN_SEGMENT_SECONDS) {
+      logVoiceVerbose(
+        `wav write start: guild ${entry.guildId} channel ${entry.channelId} user ${userId} pcmBytes=${decoded.pcm.length}`,
+      );
+      const { path: wavPath, durationSeconds } = await writeWavFile(decoded.pcm);
+      logVoiceVerbose(
+        `wav write done: guild ${entry.guildId} channel ${entry.channelId} user ${userId} path=${wavPath} duration=${durationSeconds.toFixed(2)}s aborted=${streamAborted}`,
+      );
+      const minimumDurationSeconds = streamAborted
+        ? Math.min(MIN_SEGMENT_SECONDS, 0.2)
+        : MIN_SEGMENT_SECONDS;
+      if (durationSeconds < minimumDurationSeconds) {
         logVoiceVerbose(
-          `capture too short (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+          `capture too short (${durationSeconds.toFixed(2)}s < ${minimumDurationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId} aborted=${streamAborted}`,
         );
         return;
       }
@@ -609,7 +1047,12 @@ export class DiscordVoiceManager {
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
       });
     } finally {
+      this.clearCaptureFinalizeTimer(entry, userId);
+      entry.activeCaptureStreams.delete(userId);
       entry.activeSpeakers.delete(userId);
+      logVoiceVerbose(
+        `capture end: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
     }
   }
 
@@ -621,7 +1064,10 @@ export class DiscordVoiceManager {
   }) {
     const { entry, wavPath, userId, durationSeconds } = params;
     logVoiceVerbose(
-      `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
+      `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId} wav=${wavPath}`,
+    );
+    logVoiceVerbose(
+      `transcription start: guild ${entry.guildId} channel ${entry.channelId} user ${userId} file=${wavPath}`,
     );
     const transcript = await transcribeAudio({
       cfg: this.params.cfg,
@@ -639,7 +1085,7 @@ export class DiscordVoiceManager {
     );
 
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
-    const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
+    const prompt = formatVoiceIngressPrompt(transcript, speaker.label);
 
     const result = await agentCommandFromIngress(
       {
@@ -678,7 +1124,8 @@ export class DiscordVoiceManager {
       ttsConfig.modelOverrides,
       ttsConfig.openai.baseUrl,
     );
-    const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
+    const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
+    const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, speaker.label);
     if (!speakText) {
       logVoiceVerbose(
         `tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -720,6 +1167,19 @@ export class DiscordVoiceManager {
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {
     const message = formatErrorMessage(err);
     logger.warn(`discord voice: receive error: ${message}`);
+    if (DAVE_PASSTHROUGH_DISABLED_PATTERN.test(message)) {
+      const rearmed = this.enableDaveReceivePassthrough(
+        entry,
+        "receive decrypt error",
+        DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
+      );
+      if (rearmed) {
+        logger.warn(
+          "discord voice: re-armed DAVE passthrough window after transition-time unencrypted packet",
+        );
+        return;
+      }
+    }
     if (!DECRYPT_FAILURE_PATTERN.test(message)) {
       return;
     }
@@ -749,6 +1209,40 @@ export class DiscordVoiceManager {
       .finally(() => {
         entry.decryptRecoveryInFlight = false;
       });
+  }
+
+  private enableDaveReceivePassthrough(
+    entry: Pick<VoiceSessionEntry, "guildId" | "channelId" | "connection">,
+    reason: string,
+    expirySeconds: number,
+  ): boolean {
+    const state = entry.connection.state;
+    if (state.status !== VoiceConnectionStatus.Ready) {
+      return false;
+    }
+    const networkingState = state.networking.state;
+    if (
+      networkingState.code !== NetworkingStatusCode.Ready &&
+      networkingState.code !== NetworkingStatusCode.Resuming
+    ) {
+      return false;
+    }
+    const daveSession = networkingState.dave?.session;
+    if (!daveSession) {
+      return false;
+    }
+    try {
+      daveSession.setPassthroughMode(true, expirySeconds);
+      logger.info(
+        `discord voice: enabled DAVE receive passthrough guild=${entry.guildId} channel=${entry.channelId} expiry=${expirySeconds}s reason=${reason}`,
+      );
+      return true;
+    } catch (passthroughErr) {
+      logger.warn(
+        `discord voice: failed to enable DAVE passthrough guild=${entry.guildId} channel=${entry.channelId} reason=${reason}: ${formatErrorMessage(passthroughErr)}`,
+      );
+      return false;
+    }
   }
 
   private resetDecryptFailureState(entry: VoiceSessionEntry) {

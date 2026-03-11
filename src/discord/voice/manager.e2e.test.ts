@@ -26,11 +26,26 @@ const {
       };
       subscribe: ReturnType<typeof vi.fn>;
     };
+    state: {
+      status: string;
+      networking: {
+        state: {
+          code: string;
+          dave: {
+            session: {
+              setPassthroughMode: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+      };
+    };
+    daveSetPassthroughMode: ReturnType<typeof vi.fn>;
     handlers: Map<string, EventHandler>;
   };
 
   const createConnectionMock = (): MockConnection => {
     const handlers = new Map<string, EventHandler>();
+    const daveSetPassthroughMode = vi.fn();
     const connection: MockConnection = {
       destroy: vi.fn(),
       subscribe: vi.fn(),
@@ -45,9 +60,24 @@ const {
         },
         subscribe: vi.fn(() => ({
           on: vi.fn(),
+          destroy: vi.fn(),
           [Symbol.asyncIterator]: async function* () {},
         })),
       },
+      state: {
+        status: "ready",
+        networking: {
+          state: {
+            code: "networking-ready",
+            dave: {
+              session: {
+                setPassthroughMode: daveSetPassthroughMode,
+              },
+            },
+          },
+        },
+      },
+      daveSetPassthroughMode,
       handlers,
     };
     return connection;
@@ -81,7 +111,11 @@ const {
 
 vi.mock("@discordjs/voice", () => ({
   AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
-  EndBehaviorType: { AfterSilence: "AfterSilence" },
+  EndBehaviorType: { AfterSilence: "AfterSilence", Manual: "Manual" },
+  NetworkingStatusCode: {
+    Ready: "networking-ready",
+    Resuming: "networking-resuming",
+  },
   VoiceConnectionStatus: {
     Ready: "ready",
     Disconnected: "disconnected",
@@ -217,6 +251,16 @@ describe("DiscordVoiceManager", () => {
         guildId: "g1",
         channelId: "c1",
         route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
+        connection: createConnectionMock(),
+        player: createAudioPlayerMock(),
+        playbackQueue: Promise.resolve(),
+        processingQueue: Promise.resolve(),
+        activeSpeakers: new Set<string>(),
+        activeCaptureStreams: new Map(),
+        captureFinalizeTimers: new Map(),
+        decryptFailureCount: 0,
+        lastDecryptFailureAt: 0,
+        decryptRecoveryInFlight: false,
       },
       wavPath: "/tmp/test.wav",
       userId,
@@ -273,6 +317,7 @@ describe("DiscordVoiceManager", () => {
 
     const player = createAudioPlayerMock.mock.results[0]?.value;
     expect(connection.receiver.speaking.off).toHaveBeenCalledWith("start", expect.any(Function));
+    expect(connection.receiver.speaking.off).toHaveBeenCalledWith("end", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("disconnected", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
@@ -296,7 +341,59 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("enables DAVE receive passthrough after join and on speaker start", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 30);
+
+    connection.daveSetPassthroughMode.mockClear();
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
+    expect(entry).toBeDefined();
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(connection.receiver.subscribe).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({
+        end: { behavior: "Manual" },
+      }),
+    );
+    expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
+  });
+
+  it("re-arms passthrough instead of rejoining on transition-time unencrypted packets", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    connection.daveSetPassthroughMode.mockClear();
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+  });
+
   it("attempts rejoin after repeated decrypt failures", async () => {
+    const connection = createConnectionMock();
+    connection.state.networking.state.dave.session.setPassthroughMode.mockImplementation(() => {
+      throw new Error("passthrough unavailable");
+    });
+    joinVoiceChannelMock
+      .mockReturnValueOnce(connection)
+      .mockReturnValueOnce(createConnectionMock());
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });

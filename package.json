@@ -357,6 +357,7 @@
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.14.1",
+    "@snazzah/davey": "^0.1.10",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
@@ -425,6 +426,9 @@
       "optional": true
     }
   },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.10.0"
+  },
   "engines": {
     "node": ">=22.16.0"
   },
@@ -447,6 +451,7 @@
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
