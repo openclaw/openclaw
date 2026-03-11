@@ -4,6 +4,7 @@ import {
   ensureAuthProfileStore,
   isProfileInCooldown,
   resolveAuthProfileOrder,
+  suggestOAuthProfileIdForLegacyDefault,
 } from "../auth-profiles.js";
 import { normalizeProviderId } from "../model-selection.js";
 
@@ -85,6 +86,59 @@ export async function resolveSessionAuthProfileOverride(params: {
     return undefined;
   }
 
+  const resolveCanonicalProfile = (profileId: string | undefined): string | undefined => {
+    if (!profileId) {
+      return undefined;
+    }
+    const suggested = suggestOAuthProfileIdForLegacyDefault({
+      cfg,
+      store,
+      provider,
+      legacyProfileId: profileId,
+    });
+    const candidate = suggested && suggested !== profileId ? suggested : undefined;
+    if (candidate && order.includes(candidate) && !isProfileInCooldown(store, candidate)) {
+      return candidate;
+    }
+    if (profileId.endsWith(":default")) {
+      const legacyEntry = store.profiles[profileId];
+      const fallback = order.find((candidateId) => {
+        if (candidateId === profileId || isProfileInCooldown(store, candidateId)) {
+          return false;
+        }
+        if (candidateId.endsWith(":default")) {
+          return false;
+        }
+        const entry = store.profiles[candidateId];
+        if (entry?.type !== "oauth") {
+          return false;
+        }
+        if (legacyEntry?.type === "oauth") {
+          const sameEmail =
+            typeof legacyEntry.email === "string" &&
+            typeof entry.email === "string" &&
+            legacyEntry.email.trim().length > 0 &&
+            legacyEntry.email.trim() === entry.email.trim();
+          const sameAccount =
+            typeof legacyEntry.accountId === "string" &&
+            typeof entry.accountId === "string" &&
+            legacyEntry.accountId.length > 0 &&
+            legacyEntry.accountId === entry.accountId;
+          if (sameEmail || sameAccount) {
+            return true;
+          }
+        }
+        // Compatibility fallback: any non-default oauth alias is still more canonical
+        // than provider:default for durable session overrides.
+        return true;
+      });
+      if (fallback) {
+        return fallback;
+      }
+    }
+    return profileId;
+  };
+
   const pickFirstAvailable = () =>
     order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
   const pickNextAvailable = (active: string) => {
@@ -118,14 +172,16 @@ export async function resolveSessionAuthProfileOverride(params: {
     return current;
   }
 
-  let next = current;
+  let next = resolveCanonicalProfile(current);
   if (isNewSession) {
-    next = current ? pickNextAvailable(current) : pickFirstAvailable();
+    next = current ? pickNextAvailable(next ?? current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
-    next = pickNextAvailable(current);
-  } else if (!current || isProfileInCooldown(store, current)) {
+    next = pickNextAvailable(next ?? current);
+  } else if (!next || isProfileInCooldown(store, next)) {
     next = pickFirstAvailable();
   }
+
+  next = resolveCanonicalProfile(next);
 
   if (!next) {
     return current;
