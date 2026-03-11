@@ -61,11 +61,13 @@ import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
+  withTemporaryEnvProxyDispatcher,
 } from "./undici-global-dispatcher.js";
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
@@ -134,5 +136,92 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
     });
+  });
+});
+
+describe("withTemporaryEnvProxyDispatcher", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    setCurrentDispatcher(new Agent());
+    getDefaultAutoSelectFamily.mockReturnValue(undefined);
+  });
+
+  it("temporarily installs EnvHttpProxyAgent when proxy env is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    const seenDispatchers: unknown[] = [];
+
+    await withTemporaryEnvProxyDispatcher(async () => {
+      seenDispatchers.push(getCurrentDispatcher());
+    });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(seenDispatchers[0]).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
+  });
+
+  it("does nothing when proxy env is absent", async () => {
+    await withTemporaryEnvProxyDispatcher(async () => {});
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
+  });
+
+  it("keeps existing EnvHttpProxyAgent dispatcher untouched", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    await withTemporaryEnvProxyDispatcher(async () => {});
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("does not override unsupported custom proxy dispatchers", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    const customDispatcher = new ProxyAgent("http://custom-proxy.test:8080");
+    setCurrentDispatcher(customDispatcher);
+
+    await withTemporaryEnvProxyDispatcher(async () => {
+      expect(getCurrentDispatcher()).toBe(customDispatcher);
+    });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getCurrentDispatcher()).toBe(customDispatcher);
+  });
+
+  it("keeps nested temporary proxy scopes composable", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    const seenDispatchers: unknown[] = [];
+
+    await withTemporaryEnvProxyDispatcher(async () => {
+      seenDispatchers.push(getCurrentDispatcher());
+
+      await withTemporaryEnvProxyDispatcher(async () => {
+        seenDispatchers.push(getCurrentDispatcher());
+      });
+
+      seenDispatchers.push(getCurrentDispatcher());
+    });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(seenDispatchers[0]).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(seenDispatchers[1]).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(seenDispatchers[1]).toBe(seenDispatchers[0]);
+    expect(seenDispatchers[2]).toBe(seenDispatchers[0]);
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
+  });
+
+  it("restores the previous dispatcher after errors", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
+
+    await expect(
+      withTemporaryEnvProxyDispatcher(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
   });
 });
