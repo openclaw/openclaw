@@ -61,6 +61,7 @@ export type TtsConfig = {
     baseUrl?: string;
     model?: string;
     voice?: string;
+    instructions?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

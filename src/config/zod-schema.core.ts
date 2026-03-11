@@ -404,6 +404,7 @@ export const TtsConfigSchema = z
         baseUrl: z.string().optional(),
         model: z.string().optional(),
         voice: z.string().optional(),
+        instructions: z.string().optional(),
       })
       .strict()
       .optional(),
