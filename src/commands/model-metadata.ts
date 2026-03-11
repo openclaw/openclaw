@@ -261,7 +261,7 @@ export async function promptModelMetadata(
     compat.maxTokensField = maxTokensFieldChoice;
 
     for (const [k, v] of Object.entries(compat)) {
-      if (v === false) {
+      if (v === false && k !== "supportsTools") {
         delete compat[k];
       }
     }
