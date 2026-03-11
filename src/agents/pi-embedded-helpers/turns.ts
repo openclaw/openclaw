@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ImageContent, TextContent, ThinkingContent, ToolCall } from "@mariozechner/pi-ai";
 
 function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(params: {
   messages: AgentMessage[];
@@ -46,13 +47,43 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
   return result;
 }
 
+/**
+ * Normalizes user message content to array form for merging.
+ * Converts string content to a TextContent block to preserve the text.
+ */
+function normalizeUserContentToArray(
+  content: string | (TextContent | ImageContent)[],
+): (TextContent | ImageContent)[] {
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "text", text: content }] : [];
+  }
+  return Array.isArray(content) ? content : [];
+}
+
+/**
+ * Normalizes assistant message content to array form for merging.
+ * Converts string content to a TextContent block to preserve the text.
+ */
+function normalizeAssistantContentToArray(
+  content: string | (TextContent | ThinkingContent | ToolCall)[],
+): (TextContent | ThinkingContent | ToolCall)[] {
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "text", text: content }] : [];
+  }
+  return Array.isArray(content) ? content : [];
+}
+
 function mergeConsecutiveAssistantTurns(
   previous: Extract<AgentMessage, { role: "assistant" }>,
   current: Extract<AgentMessage, { role: "assistant" }>,
 ): Extract<AgentMessage, { role: "assistant" }> {
   const mergedContent = [
-    ...(Array.isArray(previous.content) ? previous.content : []),
-    ...(Array.isArray(current.content) ? current.content : []),
+    ...normalizeAssistantContentToArray(
+      previous.content as string | (TextContent | ThinkingContent | ToolCall)[],
+    ),
+    ...normalizeAssistantContentToArray(
+      current.content as string | (TextContent | ThinkingContent | ToolCall)[],
+    ),
   ];
   return {
     ...previous,
@@ -83,8 +114,8 @@ export function mergeConsecutiveUserTurns(
   current: Extract<AgentMessage, { role: "user" }>,
 ): Extract<AgentMessage, { role: "user" }> {
   const mergedContent = [
-    ...(Array.isArray(previous.content) ? previous.content : []),
-    ...(Array.isArray(current.content) ? current.content : []),
+    ...normalizeUserContentToArray(previous.content),
+    ...normalizeUserContentToArray(current.content),
   ];
 
   return {

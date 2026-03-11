@@ -292,6 +292,68 @@ describe("validateAnthropicTurns", () => {
 });
 
 describe("mergeConsecutiveUserTurns", () => {
+  it("merges string content by converting to TextContent blocks", () => {
+    // This is critical for OpenAI-style messages where content is a string
+    // Previously this would silently drop the content (bug #27876)
+    const previous = {
+      role: "user",
+      content: "First message",
+      timestamp: 1000,
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
+      role: "user",
+      content: "Second message",
+      timestamp: 2000,
+    } as Extract<AgentMessage, { role: "user" }>;
+
+    const merged = mergeConsecutiveUserTurns(previous, current);
+
+    // String content should be converted to TextContent blocks
+    expect(merged.content).toEqual([
+      { type: "text", text: "First message" },
+      { type: "text", text: "Second message" },
+    ]);
+    expect(merged.timestamp).toBe(2000);
+  });
+
+  it("merges mixed string and array content", () => {
+    const previous = {
+      role: "user",
+      content: "String content",
+      timestamp: 1000,
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
+      role: "user",
+      content: [{ type: "text", text: "Array content" }],
+      timestamp: 2000,
+    } as Extract<AgentMessage, { role: "user" }>;
+
+    const merged = mergeConsecutiveUserTurns(previous, current);
+
+    expect(merged.content).toEqual([
+      { type: "text", text: "String content" },
+      { type: "text", text: "Array content" },
+    ]);
+  });
+
+  it("handles empty string content gracefully", () => {
+    const previous = {
+      role: "user",
+      content: "  ", // whitespace-only
+      timestamp: 1000,
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
+      role: "user",
+      content: "Real content",
+      timestamp: 2000,
+    } as Extract<AgentMessage, { role: "user" }>;
+
+    const merged = mergeConsecutiveUserTurns(previous, current);
+
+    // Empty/whitespace content should be filtered out
+    expect(merged.content).toEqual([{ type: "text", text: "Real content" }]);
+  });
+
   it("keeps newest metadata while merging content", () => {
     const previous = {
       role: "user",
