@@ -58,6 +58,19 @@ export async function buildNodeInstallPlan(params: {
   const environment = buildNodeServiceEnvironment({ env: params.env });
   if (params.headers && Object.keys(params.headers).length > 0) {
     environment.OPENCLAW_NODE_HEADERS = JSON.stringify(params.headers);
+  } else {
+    const envHeaders = params.env.OPENCLAW_NODE_HEADERS?.trim();
+    if (envHeaders) {
+      environment.OPENCLAW_NODE_HEADERS = envHeaders;
+    }
+  }
+  const cfId = params.env.CF_ACCESS_CLIENT_ID?.trim();
+  const cfSecret = params.env.CF_ACCESS_CLIENT_SECRET?.trim();
+  if (cfId) {
+    environment.CF_ACCESS_CLIENT_ID = cfId;
+  }
+  if (cfSecret) {
+    environment.CF_ACCESS_CLIENT_SECRET = cfSecret;
   }
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,

@@ -194,21 +194,27 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
   config.displayName = displayName;
 
+  const resolvedHeaders = resolveNodeHostHeaders({
+    configHeaders: config.gateway?.headers,
+    optsHeaders: opts.headers,
+    env: process.env,
+  });
   const gateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
-    headers: opts.headers !== undefined ? opts.headers : config.gateway?.headers,
+    headers:
+      Object.keys(resolvedHeaders).length > 0
+        ? resolvedHeaders
+        : opts.headers !== undefined
+          ? opts.headers
+          : config.gateway?.headers,
   };
   config.gateway = gateway;
   await saveNodeHostConfig(config);
 
-  const headers = resolveNodeHostHeaders({
-    configHeaders: config.gateway?.headers,
-    optsHeaders: opts.headers,
-    env: process.env,
-  });
+  const headers = resolvedHeaders;
 
   const cfg = loadConfig();
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);

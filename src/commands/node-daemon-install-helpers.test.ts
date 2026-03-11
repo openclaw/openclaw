@@ -67,4 +67,28 @@ describe("buildNodeInstallPlan", () => {
 
     expect(plan.environment.OPENCLAW_NODE_HEADERS).toBeUndefined();
   });
+
+  it("propagates OPENCLAW_NODE_HEADERS and CF_* from env when headers not provided", async () => {
+    const argv1 = path.resolve("/tmp/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const envHeaders = '{"CF-Access-Client-Id":"env-id","CF-Access-Client-Secret":"env-secret"}';
+    const plan = await buildNodeInstallPlan({
+      env: {
+        OPENCLAW_NODE_HEADERS: envHeaders,
+        CF_ACCESS_CLIENT_ID: "cf-id",
+        CF_ACCESS_CLIENT_SECRET: "cf-secret",
+      },
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+    });
+
+    expect(plan.environment.OPENCLAW_NODE_HEADERS).toBe(envHeaders);
+    expect(plan.environment.CF_ACCESS_CLIENT_ID).toBe("cf-id");
+    expect(plan.environment.CF_ACCESS_CLIENT_SECRET).toBe("cf-secret");
+  });
 });
