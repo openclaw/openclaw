@@ -264,6 +264,12 @@ export function createSynologyChatPlugin() {
           );
           return waitUntilAbort(ctx.abortSignal);
         }
+        if (account.token && !account.incomingUrl) {
+          log?.warn?.(
+            `Synology Chat account ${accountId} has bot token but no incomingUrl — DM replies will fail. ` +
+              `Set incomingUrl or remove the bot token for channel-only operation.`,
+          );
+        }
         if (
           account.token &&
           account.dmPolicy === "allowlist" &&
@@ -274,6 +280,18 @@ export function createSynologyChatPlugin() {
             `Synology Chat account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
           );
           return waitUntilAbort(ctx.abortSignal);
+        }
+
+        // Warn about token collision: same secret used for bot and a channel
+        if (account.token) {
+          for (const [chId, chToken] of Object.entries(account.channelTokens)) {
+            if (chToken === account.token) {
+              log?.warn?.(
+                `Synology Chat account ${accountId}: channel ${chId} uses the same token as the bot — ` +
+                  `channel messages will be misclassified as DM, bypassing groupPolicy. Use distinct tokens.`,
+              );
+            }
+          }
         }
 
         log?.info?.(

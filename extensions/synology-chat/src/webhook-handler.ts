@@ -430,6 +430,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         accountId: account.accountId,
         commandAuthorized,
         chatUserId: replyUserId,
+        channelId: isGroup ? channelId : undefined,
       });
 
       const timeoutPromise = new Promise<null>((_, reject) =>
