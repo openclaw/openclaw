@@ -916,7 +916,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       ).rejects.toMatchObject({
         name: "FailoverError",
-        reason: "rate_limit",
+        reason: "unknown",
         provider: "openai",
         model: "mock-1",
       });
@@ -1040,7 +1040,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       ).rejects.toMatchObject({
         name: "FailoverError",
-        reason: "rate_limit",
+        reason: "unknown",
         provider: "openai",
         model: "mock-1",
       });

@@ -418,7 +418,7 @@ function resolveCooldownDecision(params: {
       store: params.authStore,
       profileIds: params.profileIds,
       now: params.now,
-    }) ?? "rate_limit";
+    }) ?? "unknown";
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
   if (isPersistentAuthIssue) {
     return {
@@ -448,7 +448,10 @@ function resolveCooldownDecision(params: {
   // limits, which are often model-scoped and can recover on a sibling model.
   const shouldAttemptDespiteCooldown =
     (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
-    (!params.isPrimary && (inferredReason === "rate_limit" || inferredReason === "overloaded"));
+    (!params.isPrimary &&
+      (inferredReason === "rate_limit" ||
+        inferredReason === "overloaded" ||
+        inferredReason === "unknown"));
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "skip",
@@ -533,8 +536,42 @@ export async function runWithModelFallback<T>(params: {
         if (
           decision.reason === "rate_limit" ||
           decision.reason === "overloaded" ||
-          decision.reason === "billing"
+          decision.reason === "billing" ||
+          decision.reason === "unknown"
         ) {
+          // Probe at most once per provider per fallback run when all profiles
+          // are cooldowned. Re-probing every same-provider candidate can stall
+          // cross-provider fallback on providers with long internal retries.
+          const isTransientCooldownReason =
+            decision.reason === "rate_limit" ||
+            decision.reason === "overloaded" ||
+            decision.reason === "unknown";
+          if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
+            const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+            attempts.push({
+              provider: candidate.provider,
+              model: candidate.model,
+              error,
+              reason: decision.reason,
+            });
+            logModelFallbackDecision({
+              decision: "skip_candidate",
+              runId: params.runId,
+              requestedProvider: params.provider,
+              requestedModel: params.model,
+              candidate,
+              attempt: i + 1,
+              total: candidates.length,
+              reason: decision.reason,
+              error,
+              nextCandidate: candidates[i + 1],
+              isPrimary,
+              requestedModelMatched: requestedModel,
+              fallbackConfigured: hasFallbackCandidates,
+              profileCount: profileIds.length,
+            });
+            continue;
+          }
           runOptions = { allowTransientCooldownProbe: true };
         }
       }
