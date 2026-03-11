@@ -14,6 +14,7 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
+import { CommandLane } from "../../process/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
