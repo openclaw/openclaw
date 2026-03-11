@@ -1,4 +1,9 @@
-import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import type {
+  BrowserConfig,
+  BrowserProfileConfig,
+  BrowserProfileProxyConfig,
+  OpenClawConfig,
+} from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   deriveDefaultBrowserCdpPortRange,
@@ -47,6 +52,7 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "extension";
   attachOnly: boolean;
+  proxy?: BrowserProfileProxyConfig;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -339,6 +345,7 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    proxy: profile.proxy,
   };
 }
 

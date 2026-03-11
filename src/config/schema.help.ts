@@ -224,6 +224,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.list[].runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
+  "agents.list[].browser":
+    "Optional per-agent browser routing preferences. Use this when different agents should default to different browser profiles without repeating profile arguments in tool calls.",
+  "agents.list[].browser.profile":
+    "Default browser profile name for this specific agent when browser tool calls omit profile. Set explicit per-agent values to keep parallel agents isolated by profile.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
@@ -262,6 +266,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
     "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
+  "browser.profiles.*.proxy":
+    "Per-profile outbound proxy config used by locally launched managed browser profiles. Use this to keep concurrent agent profiles on separate network egress paths.",
+  "browser.profiles.*.proxy.server":
+    "Proxy server URL for this profile (http, https, or socks5). Keep credentials out of plaintext by using env interpolation or SecretRef inputs where possible.",
+  "browser.profiles.*.proxy.username":
+    "Optional proxy username for this profile when proxy auth is required. Prefer SecretRef or environment-backed values over committed plaintext credentials.",
+  "browser.profiles.*.proxy.password":
+    "Optional proxy password for this profile when proxy auth is required. Use SecretRef or environment-backed values instead of plaintext and rotate this credential regularly.",
   "browser.evaluateEnabled":
     "Enables browser-side evaluate helpers for runtime script evaluation capabilities where supported. Keep disabled unless your workflows require evaluate semantics beyond snapshots/navigation.",
   "browser.snapshotDefaults":
@@ -755,6 +767,10 @@ export const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.browser":
+    "Default browser routing preferences inherited by agents unless overridden in agents.list[].browser. Use this to define a safe global profile baseline for browser tool calls.",
+  "agents.defaults.browser.profile":
+    "Default browser profile name used when browser tool calls omit profile and the routed agent has no override. Choose a low-privilege profile to reduce accidental cross-agent state sharing.",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

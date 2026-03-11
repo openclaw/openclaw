@@ -76,7 +76,20 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      work: {
+        cdpPort: 18801,
+        color: "#0066CC",
+        proxy: "socks5://proxy-work.example:1080",
+      },
+      review: {
+        cdpPort: 18802,
+        color: "#00AA88",
+        proxy: {
+          server: "http://proxy-review.example:8080",
+          username: "${PROXY_REVIEW_USER}",
+          password: "${PROXY_REVIEW_PASS}",
+        },
+      },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
   },
@@ -97,9 +110,36 @@ Notes:
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
+- `profiles.<name>.proxy` sets per-profile outbound proxy for locally launched managed browsers (`http://`, `https://`, `socks5://`).
+- For structured proxy config, use `proxy.server` + optional `proxy.username`/`proxy.password`.
+- Prefer environment interpolation (`${VAR}`) or SecretRef input for proxy credentials instead of plaintext.
 - Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "chrome"` to opt into the Chrome extension relay.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
+
+## Per-agent profile binding
+
+You can bind browser defaults per agent so concurrent agents/sub-agents keep using separate browser profiles:
+
+```json5
+{
+  agents: {
+    defaults: {
+      browser: { profile: "openclaw" },
+    },
+    list: [
+      { id: "research", browser: { profile: "work" } },
+      { id: "ops", browser: { profile: "review" } },
+    ],
+  },
+}
+```
+
+Behavior:
+
+- If a browser tool call omits `profile`, OpenClaw uses `agents.list[].browser.profile`, then `agents.defaults.browser.profile`, then `browser.defaultProfile`.
+- Sub-agents inherit the routed agent identity by default, so they inherit the same browser-profile default unless they run under a different target agent.
+- Local profiles remain isolated by profile-specific user data dirs and distinct CDP ports.
 
 ## Use Brave (or another Chromium-based browser)
 

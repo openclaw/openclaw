@@ -19,6 +19,11 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+  proxyConfigured?: boolean;
+  proxy?: {
+    server?: string;
+    hasCredentials?: boolean;
+  };
 };
 
 export type ProfileStatus = {
@@ -26,6 +31,7 @@ export type ProfileStatus = {
   cdpPort: number;
   cdpUrl: string;
   color: string;
+  proxyConfigured: boolean;
   running: boolean;
   tabCount: number;
   isDefault: boolean;

@@ -2,6 +2,9 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadConfig } from "../config/config.js";
+import type { BrowserProfileProxyConfig } from "../config/types.browser.js";
+import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -76,6 +79,132 @@ export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSE
 
 function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
+}
+
+type ResolvedProfileProxy = {
+  server: string;
+  diagnosticLabel: string;
+  hasCredentials: boolean;
+};
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasServerField(value: unknown): value is { server: unknown } {
+  return isObjectRecord(value) && Object.hasOwn(value, "server");
+}
+
+async function resolveProxySecretInput(params: {
+  value: unknown;
+  path: string;
+  required?: boolean;
+  config: ReturnType<typeof loadConfig>;
+}) {
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.config,
+    env: process.env,
+    value: params.value,
+    path: params.path,
+    unresolvedReasonStyle: "detailed",
+  });
+
+  if (resolved.unresolvedRefReason) {
+    throw new Error(resolved.unresolvedRefReason);
+  }
+  if (resolved.value) {
+    return resolved.value;
+  }
+  if (params.required) {
+    throw new Error(`${params.path} is required.`);
+  }
+  return undefined;
+}
+
+function parseProxyServerUrl(rawServer: string, label: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawServer);
+  } catch {
+    throw new Error(`${label} must be a valid URL.`);
+  }
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "socks5:") {
+    throw new Error(`${label} must use http://, https://, or socks5://.`);
+  }
+  if (!parsed.hostname) {
+    throw new Error(`${label} must include a hostname.`);
+  }
+  if (parsed.pathname && parsed.pathname !== "/") {
+    throw new Error(`${label} must not include a path.`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${label} must not include query or hash segments.`);
+  }
+  return parsed;
+}
+
+function formatProxyDiagnosticLabel(proxyUrl: URL): string {
+  const protocol = proxyUrl.protocol.replace(":", "");
+  const host = proxyUrl.hostname.includes(":") ? `[${proxyUrl.hostname}]` : proxyUrl.hostname;
+  const defaultPort =
+    proxyUrl.protocol === "https:"
+      ? "443"
+      : proxyUrl.protocol === "http:"
+        ? "80"
+        : proxyUrl.protocol === "socks5:"
+          ? "1080"
+          : "";
+  const port = proxyUrl.port || defaultPort;
+  return port ? `${protocol}://${host}:${port}` : `${protocol}://${host}`;
+}
+
+async function resolveProfileProxy(
+  profileName: string,
+  proxyConfig: BrowserProfileProxyConfig | undefined,
+): Promise<ResolvedProfileProxy | undefined> {
+  if (!proxyConfig) {
+    return undefined;
+  }
+
+  const basePath = `browser.profiles.${profileName}.proxy`;
+  const isStructured = hasServerField(proxyConfig);
+  const cfg = loadConfig();
+  const rawServer = isStructured ? proxyConfig.server : proxyConfig;
+  const rawUsername = isStructured ? proxyConfig.username : undefined;
+  const rawPassword = isStructured ? proxyConfig.password : undefined;
+
+  const server = await resolveProxySecretInput({
+    value: rawServer,
+    path: isStructured ? `${basePath}.server` : basePath,
+    required: true,
+    config: cfg,
+  });
+  const username = await resolveProxySecretInput({
+    value: rawUsername,
+    path: `${basePath}.username`,
+    config: cfg,
+  });
+  const password = await resolveProxySecretInput({
+    value: rawPassword,
+    path: `${basePath}.password`,
+    config: cfg,
+  });
+
+  const parsed = parseProxyServerUrl(server, isStructured ? `${basePath}.server` : basePath);
+
+  if (isStructured) {
+    parsed.username = username ?? "";
+    parsed.password = password ?? "";
+  }
+
+  const normalizedServer = parsed.toString().replace(/\/$/, "");
+
+  return {
+    server: normalizedServer,
+    diagnosticLabel: formatProxyDiagnosticLabel(parsed),
+    hasCredentials: parsed.username.length > 0 || parsed.password.length > 0,
+  };
 }
 
 export async function isChromeReachable(
@@ -230,6 +359,15 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  let resolvedProxy: ResolvedProfileProxy | undefined;
+  try {
+    resolvedProxy = await resolveProfileProxy(profile.name, profile.proxy);
+  } catch (err) {
+    throw new Error(
+      `Failed to resolve browser proxy for profile "${profile.name}": ${String(err)}`,
+      { cause: err },
+    );
+  }
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
@@ -264,6 +402,9 @@ export async function launchOpenClawChrome(
     }
     if (process.platform === "linux") {
       args.push("--disable-dev-shm-usage");
+    }
+    if (resolvedProxy) {
+      args.push(`--proxy-server=${resolvedProxy.server}`);
     }
 
     // Append user-configured extra arguments (e.g., stealth flags, window size)
@@ -362,13 +503,20 @@ export async function launchOpenClawChrome(
       process.platform === "linux" && !resolved.noSandbox
         ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
         : "";
+    const proxyHint = resolvedProxy
+      ? `\nProxy: ${resolvedProxy.diagnosticLabel}\nHint: Verify proxy reachability and credentials for profile "${profile.name}".`
+      : "";
+    const proxyAuthHint =
+      resolvedProxy?.hasCredentials === true
+        ? "\nHint: This proxy includes credentials; verify auth method and username/password values."
+        : "";
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${proxyHint}${proxyAuthHint}${stderrHint}`,
     );
   }
 
@@ -377,8 +525,9 @@ export async function launchOpenClawChrome(
   stderrChunks.length = 0;
 
   const pid = proc.pid ?? -1;
+  const proxySuffix = resolvedProxy ? ` via proxy ${resolvedProxy.diagnosticLabel}` : "";
   log.info(
-    `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
+    `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort}${proxySuffix} (pid ${pid})`,
   );
 
   return {

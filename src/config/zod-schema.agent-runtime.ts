@@ -723,6 +723,12 @@ export const AgentEntrySchema = z
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
+    browser: z
+      .object({
+        profile: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

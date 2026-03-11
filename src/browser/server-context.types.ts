@@ -52,6 +52,7 @@ export type ProfileStatus = {
   cdpPort: number;
   cdpUrl: string;
   color: string;
+  proxyConfigured: boolean;
   running: boolean;
   tabCount: number;
   isDefault: boolean;

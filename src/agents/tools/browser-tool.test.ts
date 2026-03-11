@@ -190,6 +190,26 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
   });
 
+  it("uses configured default profile when profile param is omitted", async () => {
+    const tool = createBrowserTool({ defaultProfile: "work" });
+    await tool.execute?.("call-1", { action: "status" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "work" }),
+    );
+  });
+
+  it("prefers explicit profile over configured default profile", async () => {
+    const tool = createBrowserTool({ defaultProfile: "work" });
+    await tool.execute?.("call-1", { action: "status", profile: "chrome" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "chrome" }),
+    );
+  });
+
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });

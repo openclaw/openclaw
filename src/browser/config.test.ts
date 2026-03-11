@@ -129,6 +129,44 @@ describe("browser config", () => {
     expect(remote?.cdpIsLoopback).toBe(false);
   });
 
+  it("keeps per-profile proxy URL config", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: {
+          cdpPort: 18801,
+          color: "#0066CC",
+          proxy: "socks5://proxy.example:1080",
+        },
+      },
+    });
+
+    const work = resolveProfile(resolved, "work");
+    expect(work?.proxy).toBe("socks5://proxy.example:1080");
+  });
+
+  it("keeps per-profile structured proxy config", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: {
+          cdpPort: 18801,
+          color: "#0066CC",
+          proxy: {
+            server: "http://proxy.example:8080",
+            username: "alice",
+            password: "secret",
+          },
+        },
+      },
+    });
+
+    const work = resolveProfile(resolved, "work");
+    expect(work?.proxy).toEqual({
+      server: "http://proxy.example:8080",
+      username: "alice",
+      password: "secret",
+    });
+  });
+
   it("inherits attachOnly from global browser config when profile override is not set", () => {
     const resolved = resolveBrowserConfig({
       attachOnly: true,

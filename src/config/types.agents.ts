@@ -70,6 +70,11 @@ export type AgentConfig = {
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /** Optional per-agent browser routing preferences. */
+  browser?: {
+    /** Default browser profile for this agent when browser tool calls omit profile. */
+    profile?: string;
+  };
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;

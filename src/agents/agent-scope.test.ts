@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
+  resolveAgentBrowserProfile,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
@@ -61,6 +62,7 @@ describe("resolveAgentConfig", () => {
       agentDir: "~/.openclaw/agents/main",
       model: "anthropic/claude-opus-4",
       identity: undefined,
+      browser: undefined,
       groupChat: undefined,
       subagents: undefined,
       sandbox: undefined,
@@ -430,6 +432,34 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+});
+
+describe("resolveAgentBrowserProfile", () => {
+  it("returns per-agent browser profile when configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          browser: { profile: "openclaw" },
+        },
+        list: [{ id: "work", browser: { profile: "work" } }],
+      },
+    };
+
+    expect(resolveAgentBrowserProfile(cfg, "work")).toBe("work");
+  });
+
+  it("falls back to defaults browser profile", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          browser: { profile: "openclaw" },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(resolveAgentBrowserProfile(cfg, "main")).toBe("openclaw");
   });
 });
 

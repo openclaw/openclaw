@@ -189,6 +189,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         cdpPort: profile.cdpPort,
         cdpUrl: profile.cdpUrl,
         color: profile.color,
+        proxyConfigured: Boolean(profile.proxy),
         running,
         tabCount,
         isDefault: name === current.resolved.defaultProfile,

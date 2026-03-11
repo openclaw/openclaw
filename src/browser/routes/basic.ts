@@ -1,3 +1,4 @@
+import type { BrowserProfileProxyConfig } from "../../config/config.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -20,6 +21,55 @@ async function withBasicProfileRoute(params: {
   } catch (err) {
     jsonError(params.res, 500, String(err));
   }
+}
+
+function redactProxyServer(raw: string): string | undefined {
+  try {
+    const parsed = new URL(raw);
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveProxyStatus(proxy: BrowserProfileProxyConfig | undefined) {
+  if (!proxy) {
+    return { proxyConfigured: false, proxy: undefined };
+  }
+  if (typeof proxy === "string") {
+    return {
+      proxyConfigured: true,
+      proxy: {
+        server: redactProxyServer(proxy),
+        hasCredentials: false,
+      },
+    };
+  }
+  if (typeof proxy !== "object" || proxy === null || !("server" in proxy)) {
+    return {
+      proxyConfigured: true,
+      proxy: {
+        server: undefined,
+        hasCredentials: false,
+      },
+    };
+  }
+  const structured = proxy as { server?: unknown; username?: unknown; password?: unknown };
+  const server =
+    typeof structured.server === "string" ? redactProxyServer(structured.server) : undefined;
+  const hasCredentials =
+    structured.username !== undefined && structured.username !== null
+      ? true
+      : structured.password !== undefined && structured.password !== null;
+  return {
+    proxyConfigured: true,
+    proxy: {
+      server,
+      hasCredentials,
+    },
+  };
 }
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
@@ -67,6 +117,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     } catch (err) {
       detectError = String(err);
     }
+    const proxyStatus = resolveProxyStatus(profileCtx.profile.proxy);
 
     res.json({
       enabled: current.resolved.enabled,
@@ -87,6 +138,8 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
       attachOnly: profileCtx.profile.attachOnly,
+      proxyConfigured: proxyStatus.proxyConfigured,
+      proxy: proxyStatus.proxy,
     });
   });
 

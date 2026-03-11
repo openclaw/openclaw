@@ -364,6 +364,19 @@ export const OpenClawSchema = z
                   .optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
+                proxy: z
+                  .union([
+                    SecretInputSchema,
+                    z
+                      .object({
+                        server: SecretInputSchema,
+                        username: SecretInputSchema.optional().register(sensitive),
+                        password: SecretInputSchema.optional().register(sensitive),
+                      })
+                      .strict(),
+                  ])
+                  .optional()
+                  .register(sensitive),
               })
               .strict()
               .refine((value) => value.cdpPort || value.cdpUrl, {

@@ -206,6 +206,11 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
+  /** Agent default browser routing preferences. */
+  browser?: {
+    /** Default browser profile used by browser tool calls when profile is omitted. */
+    profile?: string;
+  };
   timeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;

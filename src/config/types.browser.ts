@@ -1,3 +1,16 @@
+import type { SecretInput } from "./types.secrets.js";
+
+export type BrowserProfileProxyConfig =
+  | SecretInput
+  | {
+      /** Proxy server URL, for example "socks5://host:1080" or "http://host:8080". */
+      server: SecretInput;
+      /** Optional proxy username (prefer SecretRef/env interpolation over plaintext). */
+      username?: SecretInput;
+      /** Optional proxy password (prefer SecretRef/env interpolation over plaintext). */
+      password?: SecretInput;
+    };
+
 export type BrowserProfileConfig = {
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
@@ -9,6 +22,8 @@ export type BrowserProfileConfig = {
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Optional per-profile outbound proxy config for locally launched managed browsers. */
+  proxy?: BrowserProfileProxyConfig;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */

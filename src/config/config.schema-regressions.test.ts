@@ -184,4 +184,42 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts browser profile proxy config", () => {
+    const res = validateConfigObject({
+      browser: {
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            color: "#FF4500",
+            proxy: {
+              server: "socks5://proxy.example:1080",
+              username: "proxy-user",
+              password: "proxy-pass",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agent default browser profile settings", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          browser: { profile: "openclaw" },
+        },
+        list: [
+          {
+            id: "work",
+            browser: { profile: "work" },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

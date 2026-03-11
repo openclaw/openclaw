@@ -2345,7 +2345,20 @@ See [Plugins](/tools/plugin).
     },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      work: {
+        cdpPort: 18801,
+        color: "#0066CC",
+        proxy: "socks5://proxy-work.example:1080",
+      },
+      review: {
+        cdpPort: 18802,
+        color: "#00AA88",
+        proxy: {
+          server: "http://proxy-review.example:8080",
+          username: "${PROXY_REVIEW_USER}",
+          password: "${PROXY_REVIEW_PASS}",
+        },
+      },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
     color: "#FF4500",
@@ -2364,10 +2377,29 @@ See [Plugins](/tools/plugin).
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
+- `profiles.<name>.proxy` sets per-profile outbound proxy for locally launched managed browsers.
+- `profiles.<name>.proxy.server` accepts `http://`, `https://`, or `socks5://`; optional `username`/`password` are supported in structured mode.
+- Prefer `${ENV_VAR}` interpolation or SecretRef values for proxy credentials.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
+
+Per-agent defaults:
+
+```json5
+{
+  agents: {
+    defaults: { browser: { profile: "openclaw" } },
+    list: [
+      { id: "research", browser: { profile: "work" } },
+      { id: "ops", browser: { profile: "review" } },
+    ],
+  },
+}
+```
+
+- Browser tool profile resolution order when `profile` is omitted: `agents.list[].browser.profile` → `agents.defaults.browser.profile` → `browser.defaultProfile`.
 
 ---
 

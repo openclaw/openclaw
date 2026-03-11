@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentBrowserProfile, resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -71,6 +71,13 @@ export function createOpenClawTools(
     sessionId?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: options?.agentSessionKey,
+    config: options?.config,
+  });
+  const defaultBrowserProfile = options?.config
+    ? resolveAgentBrowserProfile(options.config, sessionAgentId)
+    : undefined;
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
@@ -126,6 +133,7 @@ export function createOpenClawTools(
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
       agentSessionKey: options?.agentSessionKey,
+      defaultProfile: defaultBrowserProfile,
     }),
     createCanvasTool({ config: options?.config }),
     createNodesTool({
@@ -198,10 +206,7 @@ export function createOpenClawTools(
       config: options?.config,
       workspaceDir,
       agentDir: options?.agentDir,
-      agentId: resolveSessionAgentId({
-        sessionKey: options?.agentSessionKey,
-        config: options?.config,
-      }),
+      agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
       messageChannel: options?.agentChannel,

@@ -33,6 +33,7 @@ type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  browser?: AgentEntry["browser"];
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
@@ -135,6 +136,7 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    browser: entry.browser,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
@@ -173,6 +175,25 @@ export function resolveAgentExplicitModelPrimary(
 ): string | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
   return resolveModelPrimary(raw);
+}
+
+function normalizeBrowserProfileName(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function resolveAgentBrowserProfile(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  const perAgent = normalizeBrowserProfileName(resolveAgentConfig(cfg, agentId)?.browser?.profile);
+  if (perAgent) {
+    return perAgent;
+  }
+  return normalizeBrowserProfileName(cfg.agents?.defaults?.browser?.profile);
 }
 
 export function resolveAgentEffectiveModelPrimary(
