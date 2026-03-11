@@ -18,6 +18,8 @@ Consolidate Operator1's scattered config and state files into **two storage laye
 
 **Fork strategy:** Operator1 is intentionally diverging from upstream OpenClaw. Dedicated developers will handle upstream merge reconciliation. This migration should not be constrained by upstream compatibility concerns.
 
+**Cleanup policy:** No backward compatibility. After each phase, old JSON file I/O code is **removed** (not commented out, not kept as fallback). Each phase is a hard cutover — once data is migrated to SQLite, the JSON code paths are deleted and the source JSON files are removed. This keeps the codebase clean and avoids dual-path maintenance burden. The `openclaw state export` CLI (Phase 0) provides a JSON dump for debugging/emergency recovery if ever needed.
+
 ---
 
 ## Current State: The Problem
@@ -714,14 +716,13 @@ src/infra/state-db/
 └── index.ts                    # NEW: Exports getStateDb(), runMigrations()
 ```
 
-### Session Store Adapter (Phase 1)
+### Session Store (Phase 1 — replaces JSON entirely)
 
 ```
 src/config/sessions/
-├── store.ts                    # Current JSON implementation (kept as fallback)
-├── store-sqlite.ts             # NEW: SQLite implementation
-├── store-interface.ts          # NEW: Common interface
-└── store-migrate.ts            # NEW: JSON → SQLite migration
+├── store.ts                    # REWRITTEN: SQLite implementation (replaces JSON)
+├── store-migrate.ts            # NEW: One-shot JSON → SQLite migration (run once, then delete old files)
+└── store.test.ts               # UPDATED: Tests target SQLite store
 ```
 
 ### Config Flow — After P0-P2 (sessions/state in SQLite)
@@ -772,7 +773,7 @@ Gateway RPC → UI / CLI / Agents
 
 - [ ] Create `src/infra/state-db/connection.ts` — singleton `DatabaseSync` (node:sqlite), WAL mode, `synchronous=NORMAL`, `busy_timeout=5000`, `wal_autocheckpoint=1000`
 - [ ] Create `src/infra/state-db/schema.ts` — schema version tracking + all P0 table definitions (prefixed names)
-- [ ] Create `src/infra/state-db/integrity.ts` — `PRAGMA integrity_check` on startup; if corrupt, log error + fall back to JSON
+- [ ] Create `src/infra/state-db/integrity.ts` — `PRAGMA integrity_check` on startup; if corrupt, log error, rename corrupt DB, create fresh empty DB
 - [ ] Create `src/infra/state-db/retention.ts` — scheduled cleanup for cron_runs, audit tables, delivery_queue
 - [ ] Create `src/infra/state-db/index.ts` — `getStateDb()` export, auto-create on first access
 - [ ] DB location: `~/.openclaw/operator1.db`
@@ -782,61 +783,94 @@ Gateway RPC → UI / CLI / Agents
 
 ### Phase 1: Sessions → SQLite (P0, 2-3 days)
 
-- [ ] Create `src/config/sessions/store-interface.ts` — `SessionStoreBackend` interface
-- [ ] Create `src/config/sessions/store-sqlite.ts` — SQLite implementation using `session_entries` table
-- [ ] Wire `loadSessionStore`/`saveSessionStore`/`updateSessionStore` through interface
+- [ ] Rewrite `src/config/sessions/store.ts` — replace JSON file I/O with SQLite `session_entries` table
+- [ ] Keep the same exported function signatures (`loadSessionStore`, `saveSessionStore`, `updateSessionStore`) but backed by SQLite
 - [ ] Replace pruning/capping with `DELETE FROM session_entries WHERE updated_at < ?`
 - [ ] Eliminate in-process lock queue (SQLite WAL handles read concurrency; see Technical Notes for write contention)
-- [ ] JSON → SQLite migration for existing session files
+- [ ] Create `store-migrate.ts` — one-shot JSON → SQLite migration for existing session files
 - [ ] All existing session tests pass
+
+**Phase 1 cleanup:**
+
+- [ ] Remove all JSON file read/write/lock logic from `store.ts` (no fallback to JSON)
+- [ ] Delete `src/config/sessions/store-migrate.ts` after migration runs successfully (or keep as a CLI-only utility)
+- [ ] Delete migrated `agents/{id}/sessions/sessions.json` files after successful migration
+- [ ] Remove any file-lock utilities that were only used by the session store (check for other consumers first)
 
 ### Phase 2: Delivery Queue + Teams → SQLite (P0, 2-3 days)
 
-- [ ] Migrate `src/infra/outbound/delivery-queue.ts` — files → `delivery_queue` rows
+- [ ] Rewrite `src/infra/outbound/delivery-queue.ts` — replace file-per-message with `delivery_queue` table
 - [ ] Implement retry backoff using `next_attempt_at` column (poll: `WHERE status = 'pending' AND next_attempt_at <= unixepoch()`)
-- [ ] Migrate `src/teams/team-store.ts` — operator1-owned, clean migration
+- [ ] Rewrite `src/teams/team-store.ts` — replace `teams.json` with normalized SQLite tables
 - [ ] Normalize teams into `op1_team_registry` + `op1_team_members` + `op1_team_tasks` + `op1_team_messages` tables
-- [ ] Eliminate ephemeral delivery-queue file cleanup logic (retention.ts handles it)
+- [ ] One-shot migration: read existing `delivery-queue/*.json` + `teams/teams.json` → insert into SQLite
+
+**Phase 2 cleanup:**
+
+- [ ] Remove all file-based delivery queue logic (file creation, scanning, cleanup, globbing)
+- [ ] Remove `teams/teams.json` file I/O from `team-store.ts`
+- [ ] Delete migrated `delivery-queue/*.json` files and `teams/teams.json` after successful migration
+- [ ] Remove ephemeral delivery-queue file cleanup logic (retention.ts replaces it)
 
 ### Phase 3: Auth, Pairing, Thread Bindings → SQLite (P1, 2-3 days)
 
-- [ ] Migrate `src/agents/subagent-registry.store.ts` → `agent_subagent_runs`
-- [ ] Migrate `src/agents/auth-profiles/store.ts` → `agent_auth_profiles`
-- [ ] Migrate `src/pairing/pairing-store.ts` → `channel_pairing` table
-- [ ] Migrate allowlists to normalized `channel_allowlist_entries` table (one row per allowed sender)
-- [ ] Migrate `src/telegram/thread-bindings.ts` → `channel_thread_bindings`
-- [ ] Migrate `src/discord/monitor/thread-bindings.state.ts` → `channel_thread_bindings`
+- [ ] Rewrite `src/agents/subagent-registry.store.ts` → `agent_subagent_runs` (SQLite)
+- [ ] Rewrite `src/agents/auth-profiles/store.ts` → `agent_auth_profiles` (SQLite)
+- [ ] Rewrite `src/pairing/pairing-store.ts` → `channel_pairing` table (SQLite)
+- [ ] Rewrite allowlists → normalized `channel_allowlist_entries` table (one row per allowed sender)
+- [ ] Rewrite `src/telegram/thread-bindings.ts` → `channel_thread_bindings` (SQLite)
+- [ ] Rewrite `src/discord/monitor/thread-bindings.state.ts` → `channel_thread_bindings` (SQLite)
+- [ ] One-shot migration: read existing JSON files → insert into SQLite tables
 - [ ] Enable `audit_state` triggers for security-sensitive tables (`auth_credentials`, `agent_auth_profiles`, `channel_pairing`, `channel_allowlist_entries`, `security_exec_approvals`)
+
+**Phase 3 cleanup:**
+
+- [ ] Remove all JSON file I/O from each rewritten store module
+- [ ] Delete migrated files: `subagents/runs.json`, `agents/{id}/agent/auth-profiles.json`, `credentials/*-pairing.json`, `credentials/*-allowFrom.json`, `telegram/thread-bindings-*.json`, `discord/thread-bindings.json`
+- [ ] Remove file-lock/atomic-write helpers if no longer used by any remaining module
 
 ### Phase 4: Settings, Cron, Channel State, Workspace → SQLite (P2, 3-4 days)
 
-- [ ] Migrate `src/cron/store.ts` + `src/cron/run-log.ts` → `cron_jobs` + `cron_runs`
-- [ ] Implement cron_runs retention (cap 500 per job)
-- [ ] Migrate `src/infra/voicewake.ts`, `src/tts/tts.ts` → `core_settings` table
-- [ ] Migrate `src/infra/device-identity.ts`, `src/infra/device-auth-store.ts` → `core_settings`
-- [ ] Migrate `src/telegram/update-offset-store.ts`, `src/telegram/sticker-cache.ts` → `channel_tg_state`
-- [ ] Migrate `src/discord/monitor/model-picker-preferences.ts` → `channel_dc_state`
-- [ ] Migrate `src/infra/restart-sentinel.ts`, `src/infra/update-startup.ts` → `core_settings`
-- [ ] Migrate `src/infra/push-apns.ts` → `core_settings`
-- [ ] Migrate `src/providers/github-copilot-token.ts` (with `expires_at`) → `auth_credentials`
-- [ ] Migrate `src/web/auth-store.ts`, `credentials/oauth.json` (with `expires_at`) → `auth_credentials`
-- [ ] Migrate `src/infra/exec-approvals.ts` → `security_exec_approvals` (add to audit scope)
-- [ ] Migrate `src/channels/plugins/catalog.ts` → `plugin_catalog`
-- [ ] Migrate `src/agents/workspace.ts` workspace-state.json → `workspace_state`
-- [ ] Migrate `src/gateway/server-methods/clawhub.ts` catalog/previews/lock → `op1_clawhub_catalog` + `op1_clawhub_locks`
-- [ ] Migrate heartbeat-state.json → `op1_settings` (scope=`heartbeat`)
-- [ ] Migrate matrix-agents.json → `op1_settings` (scope=`matrix_agents`, temporary)
+- [ ] Rewrite `src/cron/store.ts` + `src/cron/run-log.ts` → `cron_jobs` + `cron_runs` (SQLite)
+- [ ] Activate cron_runs retention (cap 500 per job) in `retention.ts`
+- [ ] Rewrite `src/infra/voicewake.ts`, `src/tts/tts.ts` → `core_settings` table (SQLite)
+- [ ] Rewrite `src/infra/device-identity.ts`, `src/infra/device-auth-store.ts` → `core_settings` (SQLite)
+- [ ] Rewrite `src/telegram/update-offset-store.ts`, `src/telegram/sticker-cache.ts` → `channel_tg_state` (SQLite)
+- [ ] Rewrite `src/discord/monitor/model-picker-preferences.ts` → `channel_dc_state` (SQLite)
+- [ ] Rewrite `src/infra/restart-sentinel.ts`, `src/infra/update-startup.ts` → `core_settings` (SQLite)
+- [ ] Rewrite `src/infra/push-apns.ts` → `core_settings` (SQLite)
+- [ ] Rewrite `src/providers/github-copilot-token.ts` (with `expires_at`) → `auth_credentials` (SQLite)
+- [ ] Rewrite `src/web/auth-store.ts`, `credentials/oauth.json` (with `expires_at`) → `auth_credentials` (SQLite)
+- [ ] Rewrite `src/infra/exec-approvals.ts` → `security_exec_approvals` (SQLite, add to audit scope)
+- [ ] Rewrite `src/channels/plugins/catalog.ts` → `plugin_catalog` (SQLite)
+- [ ] Rewrite `src/agents/workspace.ts` workspace-state → `workspace_state` (SQLite)
+- [ ] Rewrite `src/gateway/server-methods/clawhub.ts` catalog/previews/lock → `op1_clawhub_catalog` + `op1_clawhub_locks` (SQLite)
+- [ ] Rewrite heartbeat-state → `op1_settings` (scope=`heartbeat`) (SQLite)
+- [ ] Rewrite matrix-agents → `op1_settings` (scope=`matrix_agents`, temporary) (SQLite)
+- [ ] One-shot migration: read all existing JSON files for this phase → insert into SQLite
+
+**Phase 4 cleanup:**
+
+- [ ] Remove all JSON file I/O from every rewritten module above
+- [ ] Delete migrated files: `cron/jobs.json`, `cron/runs/*.jsonl`, `settings/voicewake.json`, `settings/tts.json`, `identity/device.json`, `identity/device-auth.json`, `telegram/update-offset-*.json`, `telegram/sticker-cache.json`, `discord/model-picker-preferences.json`, `restart-sentinel.json`, `update-check.json`, `node.json`, `push/apns-registrations.json`, `credentials/oauth.json`, `credentials/github-copilot.token.json`, `exec-approvals.json`, `mpm/catalog.json`, `plugins/catalog.json`, `{workspace}/.openclaw/workspace-state.json`, `{workspace}/.openclaw/clawhub/catalog.json`, `{workspace}/.openclaw/clawhub/clawhub.lock.json`, `{workspace}/.openclaw/clawhub/previews/*.json`, `{workspace}/memory/heartbeat-state.json`, `matrix-agents.json`
+- [ ] Remove file-based helpers (`json-file.ts` read/write functions, etc.) if no remaining consumers
 
 ### Phase 5: Agent Manifests → SQLite (P3, 2-3 days)
 
-- [ ] Migrate 30+ `agents/*/agent.yaml` into `op1_agent_manifests` table
-- [ ] Simplify or remove `src/config/agent-config-sync.ts` (no more YAML ↔ JSON drift)
-- [ ] Simplify or remove `src/config/agent-manifest-validation.ts`
-- [ ] Simplify or remove `src/config/agent-registry-sync.ts`
-- [ ] Simplify or remove `src/config/agent-workspace-deploy.ts`
+- [ ] Import 30+ `agents/*/agent.yaml` into `op1_agent_manifests` table (one-shot migration)
+- [ ] Migrate matrix-agents from `op1_settings(scope=matrix_agents)` blob into `op1_agent_manifests` table (proper rows)
 - [ ] Agent CRUD now goes directly through SQLite, no YAML round-trip
 - [ ] UI agent management reads/writes DB directly via gateway RPC
-- [ ] Migrate matrix-agents from `op1_settings(scope=matrix_agents)` blob into `op1_agent_manifests` table (proper rows)
+
+**Phase 5 cleanup:**
+
+- [ ] Delete `src/config/agent-config-sync.ts` (no more YAML ↔ JSON drift detection)
+- [ ] Delete `src/config/agent-manifest-validation.ts` (validation moves to SQLite insert path)
+- [ ] Delete `src/config/agent-registry-sync.ts` (no more registry sync)
+- [ ] Delete `src/config/agent-workspace-deploy.ts` (workspace deploy reads from DB)
+- [ ] Delete `agents/*/agent.yaml` manifest files (38 files) — data now lives in `op1_agent_manifests` table
+- [ ] Remove `op1_settings(scope=matrix_agents)` blob row (data migrated to proper table)
+- [ ] Remove YAML parsing dependencies if no longer used elsewhere (`js-yaml`, etc.)
 
 ### Phase 6: Config → SQLite (P3, 2-3 days)
 
@@ -850,21 +884,33 @@ Gateway RPC → UI / CLI / Agents
 
 - [ ] Resolve `$include` strategy (Option A or B above)
 - [ ] Store config in `core_config` table with `scope = 'main'`
-- [ ] `io.ts` read path: `db.prepare("SELECT body FROM core_config WHERE scope = ?").get('main')` instead of `fs.readFileSync()`
-- [ ] `io.ts` write path: `db.prepare("UPDATE core_config SET body = ?, hash = ? WHERE scope = ?").run()` instead of atomic file write
+- [ ] Rewrite `io.ts` read path: `db.prepare("SELECT body FROM core_config WHERE scope = ?").get('main')` instead of `fs.readFileSync()`
+- [ ] Rewrite `io.ts` write path: `db.prepare("UPDATE core_config SET body = ?, hash = ? WHERE scope = ?").run()` instead of atomic file write
 - [ ] All processing pipeline (env vars, validation, defaults) stays identical
 - [ ] Config audit moves from `config-audit.jsonl` to `audit_config` table
-- [ ] `openclaw.json` no longer needed (but `openclaw state export` available for backup)
 
-### Phase 7: Final Testing + Cleanup (1-2 days)
+**Phase 6 cleanup:**
 
-- [ ] `openclaw state migrate` — one-shot migration of all remaining JSON files → operator1.db
-- [ ] Auto-detection: if `operator1.db` exists → use SQLite; else → JSON fallback
+- [ ] Delete `openclaw.json` (data now in `core_config` table)
+- [ ] Delete all `$include` target files (content inlined into DB at migration time, assuming Option A)
+- [ ] Delete `src/config/includes.ts` (no more file-based includes)
+- [ ] Remove `fs.readFileSync`/`fs.writeFileSync` config paths from `io.ts`
+- [ ] Delete `logs/config-audit.jsonl` (audit now in `audit_config` table)
+
+### Phase 7: Final Validation + Dead Code Sweep (1-2 days)
+
 - [ ] Gateway RPC methods work unchanged across old UI, new UI, CLI
 - [ ] Concurrent access stress test (gateway + CLI + multiple agents)
 - [ ] Retention cleanup runs on schedule without issues
 - [ ] Full test suite passes
-- [ ] Remove dead JSON file I/O code paths (after transition period)
+
+**Final cleanup sweep:**
+
+- [ ] Grep for any remaining `fs.readFileSync`/`fs.writeFileSync`/`fs.existsSync` calls that reference old JSON state files — remove them
+- [ ] Grep for any remaining references to deleted JSON file paths (e.g., `sessions.json`, `teams.json`, `runs.json`) — remove them
+- [ ] Remove unused imports, dead helper functions, and orphaned utility modules
+- [ ] Verify `~/.openclaw/` directory is clean: only `operator1.db`, `operator1.db-wal`, `operator1.db-shm`, session JSONL files, and `mcp/servers.yaml` remain
+- [ ] Update `openclaw doctor` to check DB health instead of JSON file presence
 
 **Total: ~18-24 days across all phases**
 
@@ -909,10 +955,14 @@ The entire `io.ts` processing pipeline (JSON5 parse → env var substitution →
 
 On gateway startup, run `PRAGMA integrity_check` (quick mode) against `operator1.db`. If corruption is detected:
 
-1. Log a warning with details
+1. Log an error with details
 2. Rename corrupt DB to `operator1.db.corrupt.{timestamp}`
-3. Fall back to JSON file backends
+3. Create a fresh empty DB and run migrations (starts with empty state — user must restore from `openclaw state export` backup if needed)
 4. Surface the issue in `openclaw doctor` output
+
+> **No JSON fallback.** Since old JSON files are deleted after each phase, there is no file-based
+> backend to fall back to. The recovery path is: restore from a prior `openclaw state export` dump,
+> or start fresh. This is acceptable because SQLite corruption is extremely rare in practice.
 
 ### Audit Table Scope
 
@@ -926,9 +976,13 @@ Each subsystem migration (JSON → SQLite) must be atomic per-subsystem:
 2. Begin SQLite transaction
 3. Insert all rows
 4. Commit transaction
-5. Only after successful commit: rename source JSON files to `*.migrated` (not delete — safety net)
+5. Only after successful commit: **delete** source JSON files
 
-If step 4 fails, the JSON files remain untouched and the system continues using them. The `*.migrated` files can be cleaned up after a configurable retention period (default: 30 days) or manually via `openclaw state cleanup-migrated`.
+If step 4 fails, the migration aborts and the JSON files remain. The developer should fix the issue and re-run. There is no dual-mode operation — once a phase is complete, the JSON files are gone and only SQLite is used.
+
+> **Pre-migration safety:** Before running any phase's migration, the developer should run
+> `openclaw state export` to create a JSON backup. This is manual and intentional — no automatic
+> dual-write or shadow-read complexity.
 
 ### Session Transcript JSONL Files
 
@@ -936,14 +990,16 @@ Session transcript files (`agents/{id}/sessions/{sessionId}.jsonl`) **stay as fi
 
 ---
 
-## Rollback Plan
+## Recovery Plan
 
-Each phase has independent rollback:
+> **No backward compatibility.** There is no JSON fallback. Each phase is a hard cutover.
 
-1. **Per-subsystem:** Each migrated store checks for SQLite first, falls back to JSON files if table is missing or DB is unavailable
-2. **Full rollback:** `openclaw state export --format json` dumps everything back to files, delete `operator1.db`
-3. **Corruption recovery:** Startup integrity check auto-falls back to JSON if DB is corrupt (see Technical Notes)
-4. **Export CLI available from Phase 0** — rollback path is tested before any data migration begins
+Recovery options if something goes wrong:
+
+1. **Pre-migration backup:** Before each phase, run `openclaw state export` to dump current DB to JSON files. This is the developer's responsibility before running migration code.
+2. **Git revert:** Each phase is committed and pushed independently. If a phase causes issues, `git revert` the phase commit and restore data from the pre-migration export.
+3. **Corruption recovery:** Startup integrity check detects corruption → renames corrupt DB → creates fresh empty DB. Restore data from last `openclaw state export` backup.
+4. **Export CLI available from Phase 0** — the recovery tool is built before any data migration begins.
 
 ---
 
@@ -961,8 +1017,8 @@ Each phase has independent rollback:
 ## Success Criteria
 
 - [ ] Single `operator1.db` file replaces 30+ scattered JSON files
-- [ ] All tables use domain-prefixed names (core*, session*, team*, agent*, channel\_, etc.)
-- [ ] `openclaw.json` still works as fallback during transition
+- [ ] All tables use domain-prefixed names (core*, session*, op1*team*, agent*, channel*, etc.)
+- [ ] All old JSON state files deleted (no dual-mode, no fallback)
 - [ ] All gateway RPC methods work unchanged
 - [ ] Old UI + new UI + CLI all function correctly
 - [ ] No data loss during migration

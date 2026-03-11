@@ -215,6 +215,19 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "state",
+        description: "Inspect and export the operator1 SQLite state database",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.state.js");
+      mod.registerStateCommand(program);
+    },
+  },
 ];
 
 function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
