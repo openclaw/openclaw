@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
+import { parseFeishuCardToMarkdownString } from "./card-parser.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
@@ -86,34 +87,7 @@ export type FeishuMessageInfo = {
 };
 
 function parseInteractiveCardContent(parsed: unknown): string {
-  if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
-  }
-
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
-  }
-
-  const texts: string[] = [];
-  for (const element of candidate.elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
-    }
-  }
-  return texts.join("\n").trim() || "[Interactive Card]";
+  return parseFeishuCardToMarkdownString(parsed);
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
@@ -177,6 +151,7 @@ export async function getMessageFeishu(params: {
   try {
     const response = (await client.im.message.get({
       path: { message_id: messageId },
+      params: { card_msg_content_type: "raw_card_content" } as Record<string, unknown>,
     })) as {
       code?: number;
       msg?: string;

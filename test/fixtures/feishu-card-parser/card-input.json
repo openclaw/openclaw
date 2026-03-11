@@ -1,0 +1,1331 @@
+{
+  "body": {
+    "id": "_1",
+    "property": {
+      "elements": [
+        {
+          "id": "_2",
+          "property": {
+            "elements": [
+              {
+                "id": "_2_0",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_0_0",
+                      "property": {
+                        "content": "Technical Documentation Sample",
+                        "textAlign": "left"
+                      },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 1
+                },
+                "tag": "heading"
+              },
+              { "id": "_2_1", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_2",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_2_0",
+                      "property": { "content": "1. Introduction", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_3",
+                "property": { "content": "Welcome to the ", "textAlign": "left" },
+                "tag": "plain_text"
+              },
+              {
+                "id": "_2_4",
+                "property": {
+                  "content": "API Integration Guide",
+                  "textAlign": "left",
+                  "textStyle": { "attributes": ["bold"] }
+                },
+                "tag": "plain_text"
+              },
+              {
+                "id": "_2_5",
+                "property": {
+                  "content": ". This document provides comprehensive documentation for developers integrating with our REST API.",
+                  "textAlign": "left"
+                },
+                "tag": "plain_text"
+              },
+              {
+                "id": "_2_6",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_6_0",
+                      "property": {
+                        "content": "Note:",
+                        "textAlign": "left",
+                        "textStyle": { "attributes": ["bold"] }
+                      },
+                      "tag": "plain_text"
+                    },
+                    {
+                      "id": "_2_6_1",
+                      "property": {
+                        "content": " This is a sample document with rich formatting for demonstration purposes.",
+                        "textAlign": "left"
+                      },
+                      "tag": "plain_text"
+                    }
+                  ]
+                },
+                "tag": "blockquote"
+              },
+              { "id": "_2_7", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_8",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_8_0",
+                      "property": { "content": "2. Installation", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_9",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_9_0",
+                      "property": { "content": "Prerequisites", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 3
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_10",
+                "property": {
+                  "items": [
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_10_0_0",
+                          "property": { "content": "Node.js 18+", "textAlign": "left" },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_10_1_0",
+                          "property": { "content": "npm or yarn", "textAlign": "left" },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_10_2_0",
+                          "property": { "content": "API Key", "textAlign": "left" },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    }
+                  ]
+                },
+                "tag": "list"
+              },
+              {
+                "id": "_2_11",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_11_0",
+                      "property": { "content": "Quick Start", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 3
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_12",
+                "property": {
+                  "contents": [
+                    {
+                      "contents": [
+                        { "content": "# Install the SDK", "contentType": "comment" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "npm", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "install", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "@example/api-sdk", "contentType": "text" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    { "contents": [{ "content": "\n", "contentType": "text" }] },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "# Initialize", "contentType": "comment" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "const", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "api", "contentType": "variable" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "=", "contentType": "operator" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "require", "contentType": "text" },
+                        { "content": "(", "contentType": "operator" },
+                        { "content": "'@example/api-sdk'", "contentType": "string" },
+                        { "content": ")", "contentType": "operator" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "const", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "client", "contentType": "variable" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "=", "contentType": "operator" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "new", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "api.Client", "contentType": "text" },
+                        { "content": "(", "contentType": "operator" },
+                        { "content": "{", "contentType": "operator" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "  ", "contentType": "text" },
+                        { "content": "apiKey:", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "'<YOUR_API_KEY>'", "contentType": "string" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "}", "contentType": "operator" },
+                        { "content": ")", "contentType": "operator" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    }
+                  ],
+                  "language": "bash"
+                },
+                "tag": "code_block"
+              },
+              { "id": "_2_13", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_14",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_14_0",
+                      "property": { "content": "3. API Reference", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_15",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_15_0",
+                      "property": { "content": "Endpoints", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 3
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_16_16",
+                "property": {
+                  "columns": [
+                    { "dataType": "markdown", "displayName": "Method", "name": "0" },
+                    { "dataType": "markdown", "displayName": "Endpoint", "name": "1" },
+                    { "dataType": "markdown", "displayName": "Description", "name": "2" }
+                  ],
+                  "freezeFirstColumn": false,
+                  "headerStyle": { "bold": true },
+                  "pageSize": 5,
+                  "rows": [
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_4",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_0_0__4_0",
+                                "property": { "content": "GET", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_5",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_0_1__5_0",
+                                "property": { "content": "/users" },
+                                "tag": "code_span"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "2": {
+                        "data": {
+                          "id": "_6",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_0_2__6_0",
+                                "property": { "content": "List all users", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_8",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_1_0__8_0",
+                                "property": { "content": "POST", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_9",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_1_1__9_0",
+                                "property": { "content": "/users" },
+                                "tag": "code_span"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "2": {
+                        "data": {
+                          "id": "_7",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_1_2__7_0",
+                                "property": { "content": "Create a new user", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_10",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_2_0__10_0",
+                                "property": { "content": "GET", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_11",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_2_1__11_0",
+                                "property": { "content": "/users/:id" },
+                                "tag": "code_span"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "2": {
+                        "data": {
+                          "id": "_12",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_2_2__12_0",
+                                "property": { "content": "Get user by ID", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_13",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_3_0__13_0",
+                                "property": { "content": "PUT", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_14",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_3_1__14_0",
+                                "property": { "content": "/users/:id" },
+                                "tag": "code_span"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "2": {
+                        "data": {
+                          "id": "_15",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_3_2__15_0",
+                                "property": { "content": "Update user", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_16",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_4_0__16_0",
+                                "property": { "content": "DELETE", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_17",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_4_1__17_0",
+                                "property": { "content": "/users/:id" },
+                                "tag": "code_span"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "2": {
+                        "data": {
+                          "id": "_18",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_16_4_2__18_0",
+                                "property": { "content": "Delete user", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "tag": "table"
+              },
+              {
+                "id": "_2_17",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_17_0",
+                      "property": { "content": "Request Example", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 3
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_18",
+                "property": {
+                  "contents": [
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "// Fetch user data\n", "contentType": "comment" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "comment" },
+                        { "content": "const", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "response", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "=", "contentType": "operator" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "await", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "client", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "get", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "'/users/123'", "contentType": "string" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "console", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "log", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "response", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "data", "contentType": "text" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        {
+                          "content": "// Output: { id: 123, name: \"John\", email: \"john@example.com\" }\n",
+                          "contentType": "comment"
+                        }
+                      ]
+                    }
+                  ],
+                  "language": "javascript"
+                },
+                "tag": "code_block"
+              },
+              { "id": "_2_19", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_20",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_20_0",
+                      "property": { "content": "4. Configuration Options", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_21",
+                "property": {
+                  "items": [
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_21_0_0",
+                          "property": {
+                            "content": "timeout",
+                            "textAlign": "left",
+                            "textStyle": { "attributes": ["bold"] }
+                          },
+                          "tag": "plain_text"
+                        },
+                        {
+                          "id": "_2_21_0_1",
+                          "property": {
+                            "content": ": Request timeout in milliseconds (default: 30000)",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_21_1_0",
+                          "property": {
+                            "content": "retries",
+                            "textAlign": "left",
+                            "textStyle": { "attributes": ["bold"] }
+                          },
+                          "tag": "plain_text"
+                        },
+                        {
+                          "id": "_2_21_1_1",
+                          "property": {
+                            "content": ": Number of retry attempts (default: 3)",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_21_2_0",
+                          "property": {
+                            "content": "baseURL",
+                            "textAlign": "left",
+                            "textStyle": { "attributes": ["bold"] }
+                          },
+                          "tag": "plain_text"
+                        },
+                        {
+                          "id": "_2_21_2_1",
+                          "property": { "content": ": Custom API endpoint", "textAlign": "left" },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_21_3_0",
+                          "property": {
+                            "content": "headers",
+                            "textAlign": "left",
+                            "textStyle": { "attributes": ["bold"] }
+                          },
+                          "tag": "plain_text"
+                        },
+                        {
+                          "id": "_2_21_3_1",
+                          "property": { "content": ": Custom HTTP headers", "textAlign": "left" },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    }
+                  ]
+                },
+                "tag": "list"
+              },
+              { "id": "_2_22", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_23",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_23_0",
+                      "property": { "content": "5. Error Handling", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_24",
+                "property": {
+                  "contents": [
+                    {
+                      "contents": [
+                        { "content": "try", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "{", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "  ", "contentType": "text" },
+                        { "content": "const", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "user", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "=", "contentType": "operator" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "await", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "client", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "get", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "'/users/999'", "contentType": "string" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "}", "contentType": "punctuation" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "catch", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "error", "contentType": "text" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "{", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "  ", "contentType": "text" },
+                        { "content": "if", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "error", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "code", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "===", "contentType": "operator" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "404", "contentType": "number" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "{", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "    ", "contentType": "text" },
+                        { "content": "console", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "log", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "'User not found'", "contentType": "string" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "  ", "contentType": "text" },
+                        { "content": "}", "contentType": "punctuation" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "else", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "if", "contentType": "keyword" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "error", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "code", "contentType": "text" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "===", "contentType": "operator" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "401", "contentType": "number" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": " ", "contentType": "text" },
+                        { "content": "{", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "    ", "contentType": "text" },
+                        { "content": "console", "contentType": "text" },
+                        { "content": ".", "contentType": "punctuation" },
+                        { "content": "log", "contentType": "text" },
+                        { "content": "(", "contentType": "punctuation" },
+                        { "content": "'Authentication failed'", "contentType": "string" },
+                        { "content": ")", "contentType": "punctuation" },
+                        { "content": ";", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "content": "  ", "contentType": "text" },
+                        { "content": "}", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    },
+                    {
+                      "contents": [
+                        { "contentType": "text" },
+                        { "content": "}", "contentType": "punctuation" },
+                        { "content": "\n", "contentType": "text" }
+                      ]
+                    }
+                  ],
+                  "language": "javascript"
+                },
+                "tag": "code_block"
+              },
+              {
+                "id": "_2_25",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_25_0",
+                      "property": { "content": "Error Codes", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 3
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_26_26",
+                "property": {
+                  "columns": [
+                    { "dataType": "markdown", "displayName": "Code", "name": "0" },
+                    { "dataType": "markdown", "displayName": "Meaning", "name": "1" }
+                  ],
+                  "freezeFirstColumn": false,
+                  "headerStyle": { "bold": true },
+                  "pageSize": 5,
+                  "rows": [
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_20",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_0_0__20_0",
+                                "property": { "content": "400", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_21",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_0_1__21_0",
+                                "property": { "content": "Bad Request", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_22",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_1_0__22_0",
+                                "property": { "content": "401", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_23",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_1_1__23_0",
+                                "property": { "content": "Unauthorized", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_24",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_2_0__24_0",
+                                "property": { "content": "403", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_25",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_2_1__25_0",
+                                "property": { "content": "Forbidden", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_26",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_3_0__26_0",
+                                "property": { "content": "404", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_27",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_3_1__27_0",
+                                "property": { "content": "Not Found", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    },
+                    {
+                      "0": {
+                        "data": {
+                          "id": "_28",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_4_0__28_0",
+                                "property": { "content": "500", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      },
+                      "1": {
+                        "data": {
+                          "id": "_29",
+                          "property": {
+                            "elements": [
+                              {
+                                "id": "_2_26_4_1__29_0",
+                                "property": { "content": "Server Error", "textAlign": "left" },
+                                "tag": "plain_text"
+                              }
+                            ],
+                            "markdownElements": [],
+                            "originTag": "markdown",
+                            "textAlign": "left"
+                          },
+                          "tag": "markdown"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "tag": "table"
+              },
+              { "id": "_2_27", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_28",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_28_0",
+                      "property": { "content": "6. Best Practices", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_29",
+                "property": {
+                  "items": [
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_29_0_0",
+                          "property": {
+                            "content": "Always use environment variables for API keys",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "order": 1,
+                      "type": "ol"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_29_1_0",
+                          "property": {
+                            "content": "Implement proper error handling",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "order": 2,
+                      "type": "ol"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_29_2_0",
+                          "property": { "content": "Use rate limiting", "textAlign": "left" },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "order": 3,
+                      "type": "ol"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_29_3_0",
+                          "property": {
+                            "content": "Cache responses when appropriate",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "order": 4,
+                      "type": "ol"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_29_4_0",
+                          "property": {
+                            "content": "Log all API requests for debugging",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "order": 5,
+                      "type": "ol"
+                    }
+                  ]
+                },
+                "tag": "list"
+              },
+              { "id": "_2_30", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_31",
+                "property": {
+                  "elements": [
+                    {
+                      "id": "_2_31_0",
+                      "property": { "content": "7. Support", "textAlign": "left" },
+                      "tag": "plain_text"
+                    }
+                  ],
+                  "level": 2
+                },
+                "tag": "heading"
+              },
+              {
+                "id": "_2_32",
+                "property": {
+                  "items": [
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_32_0_0",
+                          "property": {
+                            "content": "📧 Email: support@example.com",
+                            "textAlign": "left"
+                          },
+                          "tag": "plain_text"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_32_1_0",
+                          "property": { "content": "💬 Discord: ", "textAlign": "left" },
+                          "tag": "plain_text"
+                        },
+                        {
+                          "id": "_2_32_1_1",
+                          "property": {
+                            "content": "Join Community",
+                            "url": { "url": "https://discord.gg/example" }
+                          },
+                          "tag": "link"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "id": "_2_32_2_0",
+                          "property": { "content": "📖 Docs: ", "textAlign": "left" },
+                          "tag": "plain_text"
+                        },
+                        {
+                          "id": "_2_32_2_1",
+                          "property": {
+                            "content": "https://docs.example.com",
+                            "url": { "url": "https://docs.example.com" }
+                          },
+                          "tag": "link"
+                        }
+                      ],
+                      "level": 0,
+                      "type": "ul"
+                    }
+                  ]
+                },
+                "tag": "list"
+              },
+              { "id": "_2_33", "property": {}, "tag": "hr" },
+              {
+                "id": "_2_34",
+                "property": {
+                  "content": "Last updated: March 2026",
+                  "textAlign": "left",
+                  "textStyle": { "attributes": ["italic"] }
+                },
+                "tag": "plain_text"
+              }
+            ],
+            "markdownElements": [],
+            "originTag": "markdown",
+            "textAlign": "left"
+          },
+          "tag": "markdown"
+        }
+      ]
+    },
+    "tag": "body"
+  },
+  "config": { "convertVersion": 1, "enableForwardInteraction": false, "streamingMode": false },
+  "newBody": null,
+  "schema": "2.0",
+  "source": "json"
+}
