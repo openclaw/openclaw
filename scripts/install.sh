@@ -78,6 +78,7 @@ GUM=""
 GUM_STATUS="skipped"
 GUM_REASON=""
 LAST_NPM_INSTALL_CMD=""
+LAST_PNPM_INSTALL_CMD=""
 
 is_non_interactive_shell() {
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -674,13 +675,18 @@ auto_install_build_tools_for_npm_failure() {
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
+    local mode="${3:-normal}"
 
     local -a cmd
     cmd=(env "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
-    cmd+=(--no-fund --no-audit install -g "$spec")
+    if [[ "$mode" == "low-memory" ]]; then
+        cmd+=(--maxsockets=2 --prefer-dedupe --no-fund --no-audit install -g --omit=optional "$spec")
+    else
+        cmd+=(--no-fund --no-audit install -g "$spec")
+    fi
     local cmd_display=""
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
@@ -700,6 +706,12 @@ run_npm_global_install() {
     fi
 
     "${cmd[@]}" >"$log" 2>&1
+}
+
+install_log_indicates_low_memory_kill() {
+    local log="$1"
+    [[ -s "$log" ]] || return 1
+    grep -Eiq '(^|[[:space:]])Killed([[:space:]]|$)|out of memory|oom-kill|cannot allocate memory|heap out of memory|ENOMEM' "$log"
 }
 
 extract_npm_debug_log_path() {
@@ -787,10 +799,20 @@ install_openclaw_npm() {
     log="$(mktempfile)"
     if ! run_npm_global_install "$spec" "$log"; then
         local attempted_build_tool_fix=false
+        local attempted_low_memory_retry=false
         if auto_install_build_tools_for_npm_failure "$log"; then
             attempted_build_tool_fix=true
             ui_info "Retrying npm install after build tools setup"
             if run_npm_global_install "$spec" "$log"; then
+                ui_success "OpenClaw npm package installed"
+                return 0
+            fi
+        fi
+
+        if install_log_indicates_low_memory_kill "$log"; then
+            attempted_low_memory_retry=true
+            ui_warn "Detected low-memory install failure; retrying with reduced npm concurrency"
+            if run_npm_global_install "$spec" "$log" "low-memory"; then
                 ui_success "OpenClaw npm package installed"
                 return 0
             fi
@@ -801,6 +823,8 @@ install_openclaw_npm() {
         if [[ "$VERBOSE" != "1" ]]; then
             if [[ "$attempted_build_tool_fix" == "true" ]]; then
                 ui_warn "npm install still failed after build tools setup; showing last log lines"
+            elif [[ "$attempted_low_memory_retry" == "true" ]]; then
+                ui_warn "npm install still failed after low-memory retry; showing last log lines"
             else
                 ui_warn "npm install failed; showing last log lines"
             fi
@@ -1924,8 +1948,7 @@ install_openclaw_from_git() {
     fi
 
     cleanup_legacy_submodules "$repo_dir"
-
-    SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install
+    install_git_dependencies_with_retry "$repo_dir"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
@@ -1942,6 +1965,64 @@ EOF
     chmod +x "$HOME/.local/bin/openclaw"
     ui_success "OpenClaw wrapper installed to \$HOME/.local/bin/openclaw"
     ui_info "This checkout uses pnpm — run pnpm install (or corepack pnpm install) for deps"
+}
+
+run_pnpm_repo_install() {
+    local repo_dir="$1"
+    local log="$2"
+    local mode="${3:-normal}"
+
+    local -a cmd
+    cmd=(env "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "${PNPM_CMD[@]}" -C "$repo_dir" install)
+    if [[ "$mode" == "low-memory" ]]; then
+        cmd+=(--network-concurrency=8 --child-concurrency=1 --fetch-retries=5 --reporter append-only)
+    fi
+    local cmd_display=""
+    printf -v cmd_display '%q ' "${cmd[@]}"
+    LAST_PNPM_INSTALL_CMD="${cmd_display% }"
+
+    if [[ "$VERBOSE" == "1" ]]; then
+        "${cmd[@]}" 2>&1 | tee "$log"
+        return $?
+    fi
+
+    if [[ -n "$GUM" ]] && gum_is_tty; then
+        local cmd_quoted=""
+        local log_quoted=""
+        printf -v cmd_quoted '%q ' "${cmd[@]}"
+        printf -v log_quoted '%q' "$log"
+        run_with_spinner "Installing dependencies" bash -c "${cmd_quoted}>${log_quoted} 2>&1"
+        return $?
+    fi
+
+    "${cmd[@]}" >"$log" 2>&1
+}
+
+install_git_dependencies_with_retry() {
+    local repo_dir="$1"
+    local log
+    log="$(mktempfile)"
+
+    if run_pnpm_repo_install "$repo_dir" "$log"; then
+        return 0
+    fi
+
+    if install_log_indicates_low_memory_kill "$log"; then
+        ui_warn "pnpm install was killed (likely low memory); retrying with reduced concurrency"
+        if run_pnpm_repo_install "$repo_dir" "$log" "low-memory"; then
+            ui_success "Dependencies installed"
+            return 0
+        fi
+    fi
+
+    ui_error "Installing dependencies failed — re-run with --verbose for details"
+    if [[ -n "${LAST_PNPM_INSTALL_CMD}" ]]; then
+        echo "  Command: ${LAST_PNPM_INSTALL_CMD}" >&2
+    fi
+    if [[ -s "$log" ]]; then
+        tail -n 80 "$log" >&2 || true
+    fi
+    return 1
 }
 
 # Install OpenClaw
