@@ -542,6 +542,16 @@ export const dispatchTelegramMessage = async ({
             toolSummaryLines.length = 0;
           }
           if (info.kind === "tool") {
+            if (
+              shouldSuppressLocalTelegramExecApprovalPrompt({
+                cfg,
+                accountId: route.accountId,
+                payload,
+              })
+            ) {
+              queuedFinal = true;
+              return;
+            }
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             if (hasMedia) {
               toolSummaryMessageId = undefined;
@@ -555,10 +565,15 @@ export const dispatchTelegramMessage = async ({
             }
             toolSummaryLines.push(line);
             const aggregated = toolSummaryLines.join("\n");
+            const maxToolSummaryChars = Math.min(textLimit, 4096);
+            const safeAggregated =
+              aggregated.length > maxToolSummaryChars
+                ? `${aggregated.slice(0, maxToolSummaryChars - 20)}\n…`
+                : aggregated;
             if (toolSummaryMessageId === undefined) {
               const result = await deliverReplies({
                 ...deliveryBaseOptions,
-                replies: [{ ...payload, text: aggregated }],
+                replies: [{ ...payload, text: safeAggregated }],
                 onVoiceRecording: sendRecordVoice,
               });
               if (result.delivered) {
@@ -570,10 +585,12 @@ export const dispatchTelegramMessage = async ({
                   // to avoid re-sending the same lines in the next delivery.
                   toolSummaryLines.length = 0;
                 }
+              } else {
+                toolSummaryLines.length = 0;
               }
             }
             try {
-              await editMessageTelegram(chatId, toolSummaryMessageId, aggregated, {
+              await editMessageTelegram(chatId, toolSummaryMessageId, safeAggregated, {
                 api: bot.api,
                 cfg,
                 accountId: route.accountId,
@@ -584,14 +601,18 @@ export const dispatchTelegramMessage = async ({
               toolSummaryMessageId = undefined;
               const res = await deliverReplies({
                 ...deliveryBaseOptions,
-                replies: [{ ...payload, text: aggregated }],
+                replies: [{ ...payload, text: safeAggregated }],
                 onVoiceRecording: sendRecordVoice,
               });
               if (res.delivered) {
                 deliveryState.markDelivered();
                 if (res.firstMessageId != null) {
                   toolSummaryMessageId = res.firstMessageId;
+                } else {
+                  toolSummaryLines.length = 0;
                 }
+              } else {
+                toolSummaryLines.length = 0;
               }
             }
             return;
