@@ -1,3 +1,5 @@
+import { isAllowedParsedChatSender } from "../plugin-sdk/allow-from.js";
+
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
 export type ChatTargetPrefixesParams = {
@@ -13,8 +15,22 @@ export type ParsedChatTarget =
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string };
 
+export type ParsedChatAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
+
+export type ChatSenderAllowParams = {
+  allowFrom: Array<string | number>;
+  sender: string;
+  chatId?: number | null;
+  chatGuid?: string | null;
+  chatIdentifier?: string | null;
+};
+
 function stripPrefix(value: string, prefix: string): string {
   return value.slice(prefix.length).trim();
+}
+
+function startsWithAnyPrefix(value: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => value.startsWith(prefix));
 }
 
 export function resolveServicePrefixedTarget<TService extends string, TTarget>(params: {
@@ -39,6 +55,31 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
     return { kind: "handle", to: remainder, service };
   }
   return null;
+}
+
+export function resolveServicePrefixedChatTarget<TService extends string, TTarget>(params: {
+  trimmed: string;
+  lower: string;
+  servicePrefixes: Array<ServicePrefix<TService>>;
+  chatIdPrefixes: string[];
+  chatGuidPrefixes: string[];
+  chatIdentifierPrefixes: string[];
+  extraChatPrefixes?: string[];
+  parseTarget: (remainder: string) => TTarget;
+}): ({ kind: "handle"; to: string; service: TService } | TTarget) | null {
+  const chatPrefixes = [
+    ...params.chatIdPrefixes,
+    ...params.chatGuidPrefixes,
+    ...params.chatIdentifierPrefixes,
+    ...(params.extraChatPrefixes ?? []),
+  ];
+  return resolveServicePrefixedTarget({
+    trimmed: params.trimmed,
+    lower: params.lower,
+    servicePrefixes: params.servicePrefixes,
+    isChatTarget: (remainderLower) => startsWithAnyPrefix(remainderLower, chatPrefixes),
+    parseTarget: params.parseTarget,
+  });
 }
 
 export function parseChatTargetPrefixesOrThrow(
@@ -95,6 +136,56 @@ export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
     return params.parseAllowTarget(remainder);
   }
   return null;
+}
+
+export function resolveServicePrefixedOrChatAllowTarget<
+  TAllowTarget extends ParsedChatAllowTarget,
+>(params: {
+  trimmed: string;
+  lower: string;
+  servicePrefixes: Array<{ prefix: string }>;
+  parseAllowTarget: (remainder: string) => TAllowTarget;
+  chatIdPrefixes: string[];
+  chatGuidPrefixes: string[];
+  chatIdentifierPrefixes: string[];
+}): TAllowTarget | null {
+  const servicePrefixed = resolveServicePrefixedAllowTarget({
+    trimmed: params.trimmed,
+    lower: params.lower,
+    servicePrefixes: params.servicePrefixes,
+    parseAllowTarget: params.parseAllowTarget,
+  });
+  if (servicePrefixed) {
+    return servicePrefixed as TAllowTarget;
+  }
+
+  const chatTarget = parseChatAllowTargetPrefixes({
+    trimmed: params.trimmed,
+    lower: params.lower,
+    chatIdPrefixes: params.chatIdPrefixes,
+    chatGuidPrefixes: params.chatGuidPrefixes,
+    chatIdentifierPrefixes: params.chatIdentifierPrefixes,
+  });
+  if (chatTarget) {
+    return chatTarget as TAllowTarget;
+  }
+  return null;
+}
+
+export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTarget>(params: {
+  normalizeSender: (sender: string) => string;
+  parseAllowTarget: (entry: string) => TParsed;
+}): (input: ChatSenderAllowParams) => boolean {
+  return (input) =>
+    isAllowedParsedChatSender({
+      allowFrom: input.allowFrom,
+      sender: input.sender,
+      chatId: input.chatId,
+      chatGuid: input.chatGuid,
+      chatIdentifier: input.chatIdentifier,
+      normalizeSender: params.normalizeSender,
+      parseAllowTarget: params.parseAllowTarget,
+    });
 }
 
 export function parseChatAllowTargetPrefixes(

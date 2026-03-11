@@ -12,18 +12,16 @@ Feishu (Lark) is a team chat platform used by companies for messaging and collab
 
 ---
 
-## Plugin required
+## Bundled plugin
 
-Install the Feishu plugin:
+Feishu ships bundled with current OpenClaw releases, so no separate plugin install
+is required.
+
+If you are using an older build or a custom install that does not include bundled
+Feishu, install it manually:
 
 ```bash
 openclaw plugins install @openclaw/feishu
-```
-
-Local checkout (when running from a git repo):
-
-```bash
-openclaw plugins install ./extensions/feishu
 ```
 
 ---

@@ -34,7 +34,7 @@ describe("probeFeishu", () => {
   });
 
   it("returns error when appId is missing", async () => {
-    const result = await probeFeishu({ appSecret: "secret" } as never);
+    const result = await probeFeishu({ appSecret: "secret" } as never); // pragma: allowlist secret
     expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
   });
 
@@ -49,7 +49,7 @@ describe("probeFeishu", () => {
       bot: { bot_name: "TestBot", open_id: "ou_abc123" },
     });
 
-    const result = await probeFeishu({ appId: "cli_123", appSecret: "secret" });
+    const result = await probeFeishu({ appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
     expect(result).toEqual({
       ok: true,
       appId: "cli_123",
@@ -65,7 +65,7 @@ describe("probeFeishu", () => {
       bot: { bot_name: "TestBot", open_id: "ou_abc123" },
     });
 
-    await probeFeishu({ appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({ appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
 
     expect(requestFn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -98,7 +98,7 @@ describe("probeFeishu", () => {
     abortController.abort();
 
     const result = await probeFeishu(
-      { appId: "cli_123", appSecret: "secret" },
+      { appId: "cli_123", appSecret: "secret" }, // pragma: allowlist secret
       { abortSignal: abortController.signal },
     );
 
@@ -111,7 +111,7 @@ describe("probeFeishu", () => {
       bot: { bot_name: "TestBot", open_id: "ou_abc123" },
     });
 
-    const creds = { appId: "cli_123", appSecret: "secret" };
+    const creds = { appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
     const first = await probeFeishu(creds);
     const second = await probeFeishu(creds);
 
@@ -128,7 +128,7 @@ describe("probeFeishu", () => {
         bot: { bot_name: "TestBot", open_id: "ou_abc123" },
       });
 
-      const creds = { appId: "cli_123", appSecret: "secret" };
+      const creds = { appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
       await probeFeishu(creds);
       expect(requestFn).toHaveBeenCalledTimes(1);
 
@@ -148,7 +148,7 @@ describe("probeFeishu", () => {
       const requestFn = makeRequestFn({ code: 99, msg: "token expired" });
       createFeishuClientMock.mockReturnValue({ request: requestFn });
 
-      const creds = { appId: "cli_123", appSecret: "secret" };
+      const creds = { appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
       const first = await probeFeishu(creds);
       const second = await probeFeishu(creds);
       expect(first).toMatchObject({ ok: false, error: "API error: token expired" });
@@ -170,7 +170,7 @@ describe("probeFeishu", () => {
       const requestFn = vi.fn().mockRejectedValue(new Error("network error"));
       createFeishuClientMock.mockReturnValue({ request: requestFn });
 
-      const creds = { appId: "cli_123", appSecret: "secret" };
+      const creds = { appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
       const first = await probeFeishu(creds);
       const second = await probeFeishu(creds);
       expect(first).toMatchObject({ ok: false, error: "network error" });
@@ -192,15 +192,15 @@ describe("probeFeishu", () => {
       bot: { bot_name: "Bot1", open_id: "ou_1" },
     });
 
-    await probeFeishu({ appId: "cli_aaa", appSecret: "s1" });
+    await probeFeishu({ appId: "cli_aaa", appSecret: "s1" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(1);
 
     // Different appId should trigger a new API call
-    await probeFeishu({ appId: "cli_bbb", appSecret: "s2" });
+    await probeFeishu({ appId: "cli_bbb", appSecret: "s2" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(2);
 
     // Same appId + appSecret as first call should return cached
-    await probeFeishu({ appId: "cli_aaa", appSecret: "s1" });
+    await probeFeishu({ appId: "cli_aaa", appSecret: "s1" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
@@ -211,12 +211,12 @@ describe("probeFeishu", () => {
     });
 
     // First account with appId + secret A
-    await probeFeishu({ appId: "cli_shared", appSecret: "secret_aaa" });
+    await probeFeishu({ appId: "cli_shared", appSecret: "secret_aaa" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(1);
 
     // Second account with same appId but different secret (e.g. after rotation)
     // must NOT reuse the cached result
-    await probeFeishu({ appId: "cli_shared", appSecret: "secret_bbb" });
+    await probeFeishu({ appId: "cli_shared", appSecret: "secret_bbb" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
@@ -227,14 +227,14 @@ describe("probeFeishu", () => {
     });
 
     // Two accounts with same appId+appSecret but different accountIds are cached separately
-    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(1);
 
-    await probeFeishu({ accountId: "acct-2", appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({ accountId: "acct-2", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(2);
 
     // Same accountId should return cached
-    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" });
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
@@ -244,7 +244,7 @@ describe("probeFeishu", () => {
       bot: { bot_name: "TestBot", open_id: "ou_abc123" },
     });
 
-    const creds = { appId: "cli_123", appSecret: "secret" };
+    const creds = { appId: "cli_123", appSecret: "secret" }; // pragma: allowlist secret
     await probeFeishu(creds);
     expect(requestFn).toHaveBeenCalledTimes(1);
 
@@ -260,7 +260,7 @@ describe("probeFeishu", () => {
       data: { bot: { bot_name: "DataBot", open_id: "ou_data" } },
     });
 
-    const result = await probeFeishu({ appId: "cli_123", appSecret: "secret" });
+    const result = await probeFeishu({ appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
     expect(result).toEqual({
       ok: true,
       appId: "cli_123",

@@ -12,7 +12,7 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderValue,
@@ -106,7 +106,7 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
     // surface in the auth bucket instead of showing as unknown.
     return "auth";
   }
-  if (reason === "rate_limit") {
+  if (reason === "rate_limit" || reason === "overloaded") {
     return "rate_limit";
   }
   if (reason === "billing") {
@@ -372,8 +372,8 @@ export async function buildProbeTargets(params: {
     }
 
     const envKey = resolveEnvApiKey(providerKey);
-    const customKey = getCustomProviderApiKey(cfg, providerKey);
-    if (!envKey && !customKey) {
+    const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }
 

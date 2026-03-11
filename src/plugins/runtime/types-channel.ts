@@ -40,6 +40,7 @@ export type PluginRuntimeChannel = {
     resolveEnvelopeFormatOptions: typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
   };
   routing: {
+    buildAgentSessionKey: typeof import("../../routing/resolve-route.js").buildAgentSessionKey;
     resolveAgentRoute: typeof import("../../routing/resolve-route.js").resolveAgentRoute;
   };
   pairing: {

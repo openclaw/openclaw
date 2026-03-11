@@ -19,6 +19,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.command).toBe(ACPX_BUNDLED_BIN);
     expect(resolved.expectedVersion).toBe(ACPX_PINNED_VERSION);
     expect(resolved.allowPluginLocalInstall).toBe(true);
+    expect(resolved.stripProviderAuthEnvVars).toBe(true);
     expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
   });
@@ -35,6 +36,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.command).toBe(path.resolve(command));
     expect(resolved.expectedVersion).toBeUndefined();
     expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.stripProviderAuthEnvVars).toBe(false);
   });
 
   it("resolves relative command paths against workspace directory", () => {
@@ -48,6 +50,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.command).toBe(path.resolve("/home/user/repos/openclaw", "../acpx/dist/cli.js"));
     expect(resolved.expectedVersion).toBeUndefined();
     expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.stripProviderAuthEnvVars).toBe(false);
   });
 
   it("keeps bare command names as-is", () => {
@@ -61,6 +64,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.command).toBe("acpx");
     expect(resolved.expectedVersion).toBeUndefined();
     expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.stripProviderAuthEnvVars).toBe(false);
   });
 
   it("accepts exact expectedVersion override", () => {
@@ -76,6 +80,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.command).toBe(path.resolve(command));
     expect(resolved.expectedVersion).toBe("0.1.99");
     expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.stripProviderAuthEnvVars).toBe(false);
   });
 
   it("treats expectedVersion=any as no version constraint", () => {
