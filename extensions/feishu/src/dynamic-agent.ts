@@ -18,10 +18,13 @@ export async function maybeCreateDynamicAgent(params: {
   cfg: OpenClawConfig;
   runtime: PluginRuntime;
   senderOpenId: string;
+  accountId: string;
   dynamicCfg: DynamicAgentCreationConfig;
   log: (msg: string) => void;
 }): Promise<MaybeCreateDynamicAgentResult> {
-  const { cfg, runtime, senderOpenId, dynamicCfg, log } = params;
+  const { cfg, runtime, senderOpenId, accountId, dynamicCfg, log } = params;
+
+  const normalizedAccountId = normalizeAccountId(accountId);
 
   // Check if there's already a binding for this user
   const existingBindings = cfg.bindings ?? [];
@@ -29,7 +32,8 @@ export async function maybeCreateDynamicAgent(params: {
     (b) =>
       b.match?.channel === "feishu" &&
       b.match?.peer?.kind === "direct" &&
-      b.match?.peer?.id === senderOpenId,
+      b.match?.peer?.id === senderOpenId &&
+      bindingMatchesAccount(b.match?.accountId, normalizedAccountId),
   );
 
   if (hasBinding) {
@@ -66,6 +70,7 @@ export async function maybeCreateDynamicAgent(params: {
           agentId,
           match: {
             channel: "feishu",
+            accountId: normalizedAccountId,
             peer: { kind: "direct", id: senderOpenId },
           },
         },
@@ -108,6 +113,7 @@ export async function maybeCreateDynamicAgent(params: {
         agentId,
         match: {
           channel: "feishu",
+          accountId: normalizedAccountId,
           peer: { kind: "direct", id: senderOpenId },
         },
       },
@@ -128,4 +134,23 @@ function resolveUserPath(p: string): string {
     return path.join(os.homedir(), p.slice(2));
   }
   return p;
+}
+
+const DEFAULT_ACCOUNT_ID = "default";
+
+function normalizeAccountId(value: string | undefined): string {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
+}
+
+function bindingMatchesAccount(bindingAccountId: string | undefined, accountId: string): boolean {
+  const normalizedBindingAccountId = bindingAccountId?.trim().toLowerCase();
+  if (!normalizedBindingAccountId) {
+    // Legacy bindings without accountId only match the default account.
+    return accountId === DEFAULT_ACCOUNT_ID;
+  }
+  if (normalizedBindingAccountId === "*") {
+    return true;
+  }
+  return normalizedBindingAccountId === accountId;
 }
