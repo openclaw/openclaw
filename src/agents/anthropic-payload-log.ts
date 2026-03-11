@@ -133,8 +133,9 @@ export function createAnthropicPayloadLogger(params: {
 
   const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] = (streamFn) => {
     const wrapped: StreamFn = (model, context, options) => {
+      // NOTE: provider filter removed — log all providers for full message capture
       if (!isAnthropicModel(model)) {
-        return streamFn(model, context, options);
+        //   return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
         const redactedPayload = redactImageDataForDiagnostics(payload);
