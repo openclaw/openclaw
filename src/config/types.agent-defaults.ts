@@ -275,6 +275,8 @@ export type AgentDefaultsConfig = {
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
   };
+  /** Additional workspace file names allowed for agents.files.get/set (beyond built-in bootstrap and memory files). */
+  extraWorkspaceFiles?: string[];
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
 };

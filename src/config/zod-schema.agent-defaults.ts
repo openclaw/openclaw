@@ -176,6 +176,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    extraWorkspaceFiles: z.array(z.string()).optional(),
     sandbox: AgentSandboxSchema,
   })
   .strict()
