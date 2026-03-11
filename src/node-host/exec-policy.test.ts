@@ -140,4 +140,51 @@ describe("evaluateSystemRunPolicy", () => {
     expect(allowed.analysisOk).toBe(true);
     expect(allowed.allowlistSatisfied).toBe(true);
   });
+
+  it("allows execution when security=full and ask=off regardless of allowlist state", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          analysisOk: false,
+          allowlistSatisfied: false,
+        }),
+      ),
+    );
+    expect(allowed.requiresAsk).toBe(false);
+    expect(allowed.approvedByAsk).toBe(false);
+  });
+
+  it("allows execution when approved=true even if ask would normally require approval", () => {
+    // Simulates gateway pre-approving the command (security=full, ask=off on
+    // gateway) while the node has stricter defaults (ask=on-miss, allowlist miss).
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "allowlist",
+          ask: "on-miss",
+          analysisOk: true,
+          allowlistSatisfied: false,
+          approved: true,
+        }),
+      ),
+    );
+    expect(allowed.requiresAsk).toBe(true);
+    expect(allowed.approvedByAsk).toBe(true);
+  });
+
+  it("allows execution when approved=true overrides ask=always", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "always",
+          approved: true,
+        }),
+      ),
+    );
+    expect(allowed.requiresAsk).toBe(true);
+    expect(allowed.approvedByAsk).toBe(true);
+  });
 });

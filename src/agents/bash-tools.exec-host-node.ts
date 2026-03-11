@@ -423,11 +423,14 @@ export async function executeNodeHostCommand(
     };
   }
 
+  // The gateway-side policy check already determined no approval is needed
+  // (requiresAsk was false). Pass approved=true so the node-side policy
+  // evaluation does not re-gate execution when the node has stricter defaults.
   const startedAt = Date.now();
   const raw = await callGatewayTool(
     "node.invoke",
     { timeoutMs: invokeTimeoutMs },
-    buildInvokeParams(false, null),
+    buildInvokeParams(true, null),
   );
   const payload =
     raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
