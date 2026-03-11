@@ -1449,6 +1449,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Latches true after the first send/edit failure to prevent the interval
     // from being re-armed by a later onPartialReply call (ID=2964357928).
     let previewSendFailed = false;
+    // Count of turns already posted via streaming (flushed at assistant message boundaries).
+    // Used to skip re-delivery of those turns in the final reply array.
+    let streamedTurnCount = 0;
     const STREAM_PATCH_INTERVAL_MS = 200;
 
     // Edit-in-place streaming is opt-in: only activate when blockStreaming is
@@ -1580,6 +1583,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         typingCallbacks,
         deliver: async (payload: ReplyPayload, info) => {
           const isFinal = info.kind === "final";
+
+          // Skip turns that were already posted via streaming.
+          // onAssistantMessageStart flushes each completed turn's streaming message
+          // before the next turn starts. The core still returns all turns as final
+          // replies, so we skip the ones we already delivered.
+          if (isFinal && streamedTurnCount > 0) {
+            streamedTurnCount--;
+            runtime.log?.(
+              `stream-patch skipping already-delivered turn (${streamedTurnCount} remaining)`,
+            );
+            return;
+          }
 
           // Compute reply target divergence before flushing, so we don't
           // accidentally create a preview post in the wrong thread on flush.
@@ -1812,6 +1827,46 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   const fullText = core.channel.text.convertMarkdownTables(rawText, tableMode);
                   if (fullText) {
                     schedulePatch(fullText);
+                  }
+                }
+              : undefined,
+            // Finalize the current streaming message when a new assistant turn starts
+            // (after a tool call). This ensures each turn gets its own streamed post
+            // instead of overwriting the previous one. See GH issue #43020.
+            onAssistantMessageStart: blockStreamingClient
+              ? async () => {
+                  if (!streamMessageId) return;
+
+                  // Stop interval immediately to prevent further patches to the old message.
+                  stopPatchInterval();
+
+                  // Capture state before reset so we can finalize the old message async.
+                  const finalizeId = streamMessageId;
+                  const finalizeText = pendingPatchText;
+
+                  // Reset immediately — new onPartialReply calls will create a fresh message.
+                  streamMessageId = null;
+                  pendingPatchText = "";
+                  lastSentText = "";
+                  streamedTurnCount++;
+
+                  // Wait for any in-flight patch to complete before finalizing.
+                  const deadline = Date.now() + 2000;
+                  while (patchSending && Date.now() < deadline) {
+                    await new Promise<void>((r) => setTimeout(r, 20));
+                  }
+
+                  // Finalize the old streaming message with its complete text.
+                  if (!finalizeText) return;
+                  try {
+                    await updateMattermostPost(blockStreamingClient, finalizeId, {
+                      message: finalizeText,
+                    });
+                    runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
+                  } catch (err) {
+                    logVerboseMessage(
+                      `mattermost stream-patch turn finalize failed: ${String(err)}`,
+                    );
                   }
                 }
               : undefined,
