@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
@@ -337,6 +338,7 @@ type KimiConfig = {
 
 type MinimaxConfig = {
   apiKey?: string;
+  baseUrl?: string;
 };
 
 type GrokSearchResponse = {
@@ -956,18 +958,66 @@ function resolveMinimaxApiKey(minimax?: MinimaxConfig): string | undefined {
   return fromEnvApiKey || undefined;
 }
 
-function resolveMinimaxApiHost(): string {
-  const raw = normalizeSecretInput(process.env.MINIMAX_API_HOST) || DEFAULT_MINIMAX_API_HOST;
+function resolveUrlOrigin(raw?: string): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
   try {
-    return new URL(raw).origin;
+    return new URL(trimmed).origin;
   } catch {
     // Not a full URL yet; retry below by prefixing "https://".
   }
   try {
-    return new URL(`https://${raw}`).origin;
+    return new URL(`https://${trimmed}`).origin;
   } catch {
-    return DEFAULT_MINIMAX_API_HOST;
+    return undefined;
   }
+}
+
+function resolveConfiguredMinimaxProviderBaseUrl(params: {
+  cfg?: OpenClawConfig;
+  providerId: "minimax" | "minimax-cn";
+}): string | undefined {
+  const providers = params.cfg?.models?.providers as Record<string, unknown> | undefined;
+  if (!providers || typeof providers !== "object") {
+    return undefined;
+  }
+  const provider = providers[params.providerId];
+  if (!provider || typeof provider !== "object") {
+    return undefined;
+  }
+  const value = (provider as Record<string, unknown>).baseUrl;
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+function resolveMinimaxApiHost(params?: { cfg?: OpenClawConfig; minimax?: MinimaxConfig }): string {
+  const fromEnv = resolveUrlOrigin(normalizeSecretInput(process.env.MINIMAX_API_HOST));
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const fromSearchConfig = resolveUrlOrigin(params?.minimax?.baseUrl);
+  if (fromSearchConfig) {
+    return fromSearchConfig;
+  }
+
+  const modelPrimary = resolveAgentModelPrimaryValue(params?.cfg?.agents?.defaults?.model)
+    ?.trim()
+    .toLowerCase();
+  const providerOrder: Array<"minimax" | "minimax-cn"> = modelPrimary?.startsWith("minimax-cn/")
+    ? ["minimax-cn", "minimax"]
+    : ["minimax", "minimax-cn"];
+
+  for (const providerId of providerOrder) {
+    const baseUrl = resolveConfiguredMinimaxProviderBaseUrl({ cfg: params?.cfg, providerId });
+    const origin = resolveUrlOrigin(baseUrl);
+    if (origin) {
+      return origin;
+    }
+  }
+
+  return DEFAULT_MINIMAX_API_HOST;
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1596,6 +1646,7 @@ async function runMinimaxSearch(params: {
   apiKey: string;
   count: number;
   timeoutSeconds: number;
+  apiHost?: string;
 }): Promise<{
   results: Array<{
     title: string;
@@ -1606,7 +1657,7 @@ async function runMinimaxSearch(params: {
   }>;
   relatedSearches?: string[];
 }> {
-  const endpoint = new URL(MINIMAX_SEARCH_PATH, resolveMinimaxApiHost());
+  const endpoint = new URL(MINIMAX_SEARCH_PATH, params.apiHost ?? DEFAULT_MINIMAX_API_HOST);
   endpoint.searchParams.set("q", params.query);
   endpoint.searchParams.set("count", String(params.count));
 
@@ -1758,6 +1809,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  minimaxApiHost?: string;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1770,7 +1822,9 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : params.provider === "minimax"
+              ? (params.minimaxApiHost ?? DEFAULT_MINIMAX_API_HOST)
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1905,6 +1959,7 @@ async function runWebSearch(params: {
       apiKey: params.apiKey,
       count: params.count,
       timeoutSeconds: params.timeoutSeconds,
+      apiHost: params.minimaxApiHost,
     });
 
     const payload = {
@@ -2372,6 +2427,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        minimaxApiHost: resolveMinimaxApiHost({ cfg: options?.config, minimax: minimaxConfig }),
         braveMode,
       });
       return jsonResult(result);
@@ -2403,6 +2459,7 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   resolveMinimaxApiKey,
+  resolveMinimaxApiHost,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,

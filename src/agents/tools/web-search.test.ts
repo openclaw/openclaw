@@ -22,6 +22,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   resolveMinimaxApiKey,
+  resolveMinimaxApiHost,
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
@@ -377,6 +378,43 @@ describe("web_search minimax credential resolution", () => {
     withEnv({ [minimaxOauthTokenEnv]: undefined, [minimaxApiKeyEnv]: undefined }, () => {
       expect(resolveMinimaxApiKey({})).toBeUndefined();
       expect(resolveMinimaxApiKey(undefined)).toBeUndefined();
+    });
+  });
+});
+
+describe("web_search minimax api host resolution", () => {
+  it("prefers MINIMAX_API_HOST when configured", () => {
+    withEnv({ MINIMAX_API_HOST: "https://api.minimax.custom/v1" }, () => {
+      expect(resolveMinimaxApiHost()).toBe("https://api.minimax.custom");
+    });
+  });
+
+  it("falls back to minimax-cn provider baseUrl when default model is minimax-cn", () => {
+    withEnv({ MINIMAX_API_HOST: undefined }, () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "minimax-cn/MiniMax-M2.5",
+          },
+        },
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+            },
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+            },
+          },
+        },
+      } as unknown as import("../../config/config.js").OpenClawConfig;
+      expect(resolveMinimaxApiHost({ cfg })).toBe("https://api.minimaxi.com");
+    });
+  });
+
+  it("uses default host when env and config are unavailable", () => {
+    withEnv({ MINIMAX_API_HOST: undefined }, () => {
+      expect(resolveMinimaxApiHost()).toBe("https://api.minimax.io");
     });
   });
 });
