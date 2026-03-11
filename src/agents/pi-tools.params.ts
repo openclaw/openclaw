@@ -21,12 +21,12 @@ export const CLAUDE_PARAM_GROUPS = {
   edit: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
     {
-      keys: ["oldText", "old_string"],
-      label: "oldText (oldText or old_string)",
+      keys: ["oldText", "old_string", "old_text"],
+      label: "oldText (oldText, old_string, or old_text)",
     },
     {
-      keys: ["newText", "new_string"],
-      label: "newText (newText or new_string)",
+      keys: ["newText", "new_string", "new_text"],
+      label: "newText (newText, new_string, or new_text)",
       allowEmpty: true,
     },
   ],
@@ -96,15 +96,23 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.path = normalized.file_path;
     delete normalized.file_path;
   }
-  // old_string → oldText (edit)
+  // old_string / old_text → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
     normalized.oldText = normalized.old_string;
     delete normalized.old_string;
   }
-  // new_string → newText (edit)
+  if ("old_text" in normalized && !("oldText" in normalized)) {
+    normalized.oldText = normalized.old_text;
+    delete normalized.old_text;
+  }
+  // new_string / new_text → newText (edit)
   if ("new_string" in normalized && !("newText" in normalized)) {
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
+  }
+  if ("new_text" in normalized && !("newText" in normalized)) {
+    normalized.newText = normalized.new_text;
+    delete normalized.new_text;
   }
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
@@ -133,7 +141,9 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
   const aliasPairs: Array<{ original: string; alias: string }> = [
     { original: "path", alias: "file_path" },
     { original: "oldText", alias: "old_string" },
+    { original: "oldText", alias: "old_text" },
     { original: "newText", alias: "new_string" },
+    { original: "newText", alias: "new_text" },
   ];
 
   for (const { original, alias } of aliasPairs) {
