@@ -7,6 +7,7 @@ import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";
 
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
+const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/googlechat", () => ({
   createWebhookInFlightLimiter: vi.fn(() => ({})),
@@ -51,6 +52,7 @@ vi.mock("./api.js", () => ({
   downloadGoogleChatMedia: vi.fn(),
   deleteGoogleChatMessage: vi.fn(),
   sendGoogleChatMessage: sendGoogleChatMessageMock,
+  uploadGoogleChatAttachment: uploadGoogleChatAttachmentMock,
   updateGoogleChatMessage: vi.fn(),
 }));
 
@@ -171,7 +173,13 @@ function createCore(params: {
       deliver: (payload: { text?: string; replyToId?: string }) => Promise<void>;
     };
   }) => Promise<void> | void;
+  fetchRemoteMediaResult?: { buffer: Buffer; fileName: string; contentType: string };
 }): PluginRuntime {
+  const fetchRemoteMediaResult = params.fetchRemoteMediaResult ?? {
+    buffer: Buffer.from("media-bytes"),
+    fileName: "attachment.png",
+    contentType: "image/png",
+  };
   return {
     logging: {
       shouldLogVerbose: () => false,
@@ -189,7 +197,7 @@ function createCore(params: {
         }),
       },
       media: {
-        fetchRemoteMedia: vi.fn(),
+        fetchRemoteMedia: vi.fn(async () => fetchRemoteMediaResult),
         saveMediaBuffer: vi.fn(),
       },
       text: {
@@ -295,6 +303,58 @@ describe("Google Chat monitor threading", () => {
           space: "spaces/AAA",
           text: "Threaded reply",
           thread: threadName,
+        }),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
+  it("uses the preserved inbound thread for media replies", async () => {
+    const threadName = "spaces/AAA/threads/thread-3";
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "upload-token-1",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/reply-2",
+    });
+    const core = createCore({
+      onDispatchReply: async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ mediaUrl: "https://example.com/image.png" });
+      },
+    });
+    const unregister = registerGoogleChatWebhookTarget({
+      account: createAccount({ typingIndicator: "none" }),
+      config: createConfig(),
+      runtime: {},
+      core,
+      path: "/googlechat",
+      mediaMaxMb: 5,
+    });
+
+    try {
+      const handled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest(createMessageEvent(threadName)),
+        createMockServerResponse(),
+      );
+
+      expect(handled).toBe(true);
+      expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          space: "spaces/AAA",
+          filename: "attachment.png",
+        }),
+      );
+      expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          space: "spaces/AAA",
+          thread: threadName,
+          attachments: [
+            expect.objectContaining({
+              attachmentUploadToken: "upload-token-1",
+              contentName: "attachment.png",
+            }),
+          ],
         }),
       );
     } finally {
