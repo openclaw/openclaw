@@ -449,7 +449,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
     });
   });
 
-  it("falls back across providers for streaming server_error assistant failures", async () => {
+  it("applies overloaded cooldown/backoff for streaming server_error assistant failures", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryErrorThenFallbackSuccess(CODEX_SERVER_ERROR_PAYLOAD);
@@ -462,13 +462,13 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       });
 
       expect(result.provider).toBe("groq");
-      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.attempts[0]?.reason).toBe("overloaded");
 
       const usageStats = await readUsageStats(agentDir);
-      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-      expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
-      expect(computeBackoffMock).not.toHaveBeenCalled();
-      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
       expectOpenAiThenGroqAttemptOrder();
     });
   });

@@ -821,17 +821,17 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
-  it("classifies streaming server_error payloads as timeout", () => {
+  it("classifies streaming server_error payloads as overloaded", () => {
     expect(
       classifyFailoverReason(
         'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}',
       ),
-    ).toBe("timeout");
+    ).toBe("overloaded");
     expect(
       classifyFailoverReason(
         'OpenAI WebSocket response failed: {"type":"server_error","message":"Internal error"}',
       ),
-    ).toBe("timeout");
+    ).toBe("overloaded");
   });
   it("keeps oauth refresh failures in auth lane even when payload includes server_error", () => {
     expect(

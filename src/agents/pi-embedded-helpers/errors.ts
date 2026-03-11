@@ -1019,7 +1019,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "auth";
   }
   if (isStreamingProviderServerError(raw)) {
-    return "timeout";
+    // Treat provider-declared server_error as transient provider overload so
+    // auth-profile cooldown + overload backoff policy can engage.
+    return "overloaded";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
