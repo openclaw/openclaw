@@ -597,7 +597,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
-    state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
     state.deterministicApprovalPromptSent = false;
     resetAssistantMessageState(0);

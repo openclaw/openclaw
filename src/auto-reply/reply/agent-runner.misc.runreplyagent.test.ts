@@ -1220,6 +1220,34 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
   });
 
+  it("suppresses guard note when isolated cron exists for the same agent", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "isolated-job",
+          name: "reminder",
+          enabled: true,
+          sessionKey: undefined,
+          agentId: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll ping you tomorrow at 9am." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll ping you tomorrow at 9am.",
+    });
+  });
+
   it("still appends guard note when cron jobs exist but not for the current session", async () => {
     loadCronStoreMock.mockResolvedValueOnce({
       version: 1,

@@ -28,6 +28,7 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
 export async function hasSessionRelatedCronJobs(params: {
   cronStorePath?: string;
   sessionKey?: string;
+  agentId?: string;
 }): Promise<boolean> {
   try {
     const storePath = resolveCronStorePath(params.cronStorePath);
@@ -36,7 +37,19 @@ export async function hasSessionRelatedCronJobs(params: {
       return false;
     }
     if (params.sessionKey) {
-      return store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey);
+      const normalizedAgentId = params.agentId?.trim().toLowerCase();
+      return store.jobs.some((job) => {
+        if (!job.enabled) {
+          return false;
+        }
+        if (job.sessionKey === params.sessionKey) {
+          return true;
+        }
+        if (!job.sessionKey && normalizedAgentId) {
+          return (job.agentId ?? "").trim().toLowerCase() === normalizedAgentId;
+        }
+        return false;
+      });
     }
     return false;
   } catch {

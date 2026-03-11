@@ -25,6 +25,47 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
     expectFencedChunks(onBlockReply.mock.calls, "```json");
   });
+  it("preserves successful cron.add count across compaction retries", async () => {
+    const listeners: SessionEventHandler[] = [];
+    const session = {
+      subscribe: (listener: SessionEventHandler) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-cron-count",
+    });
+
+    for (const listener of listeners) {
+      listener({
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "cron-add-1",
+        args: { action: "add", job: { name: "reminder" } },
+      });
+      listener({
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "cron-add-1",
+        isError: false,
+        result: { details: { status: "ok" } },
+      });
+    }
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
+
+    for (const listener of listeners) {
+      listener({ type: "auto_compaction_end", willRetry: true });
+    }
+
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
+  });
+
   it("waits for auto-compaction retry and clears buffered text", async () => {
     const listeners: SessionEventHandler[] = [];
     const session = {
