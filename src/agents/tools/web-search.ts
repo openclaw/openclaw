@@ -1706,7 +1706,8 @@ async function runMinimaxSearch(params: {
         throw new Error(`MiniMax API error (${code})${msg ? `: ${msg}` : ""}`);
       }
 
-      const results = (data.organic ?? []).slice(0, params.count).map((entry) => {
+      const organic = Array.isArray(data.organic) ? data.organic : [];
+      const results = organic.slice(0, params.count).map((entry) => {
         const title = entry.title ?? "";
         const url = entry.link ?? "";
         const snippet = entry.snippet ?? "";
