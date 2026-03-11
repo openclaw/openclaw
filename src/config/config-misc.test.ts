@@ -170,6 +170,17 @@ describe("talk.voiceAliases", () => {
 });
 
 describe("gateway.remote.transport", () => {
+  it("accepts gateway.remote.enabled", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          enabled: false,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts direct transport", () => {
     const res = validateConfigObject({
       gateway: {
