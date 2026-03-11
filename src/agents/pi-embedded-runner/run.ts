@@ -1522,7 +1522,9 @@ export async function runEmbeddedPiAgent(
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
+                      id:
+                        attempt.clientToolCall.toolCallId.trim() ||
+                        randomBytes(5).toString("hex").slice(0, 9),
                       name: attempt.clientToolCall.name,
                       arguments: JSON.stringify(attempt.clientToolCall.params),
                     },

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AgentTool,
   AgentToolResult,
@@ -134,6 +135,11 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+function resolveClientToolCallId(toolCallId: string): string {
+  const normalized = toolCallId.trim();
+  return normalized || `hook-${randomUUID()}`;
+}
+
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
@@ -197,7 +203,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 // These tools are intercepted to return a "pending" result instead of executing
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
-  onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
+  onClientToolCall?: (
+    toolName: string,
+    params: Record<string, unknown>,
+    toolCallId: string,
+  ) => void,
   hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
@@ -209,10 +219,11 @@ export function toClientToolDefinitions(
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
+        const effectiveToolCallId = resolveClientToolCallId(toolCallId);
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,
-          toolCallId,
+          toolCallId: effectiveToolCallId,
           ctx: hookContext,
         });
         if (outcome.blocked) {
@@ -222,12 +233,13 @@ export function toClientToolDefinitions(
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
         // Notify handler that a client tool was called
         if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord);
+          onClientToolCall(func.name, paramsRecord, effectiveToolCallId);
         }
         // Return a pending result - the client will execute this tool
         return jsonResult({
           status: "pending",
           tool: func.name,
+          toolCallId: effectiveToolCallId,
           message: "Tool execution delegated to client",
         });
       },
