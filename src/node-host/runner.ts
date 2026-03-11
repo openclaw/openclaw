@@ -143,7 +143,7 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
   return nextConfig;
 }
 
-/** Merge headers from config, opts, and env (opts overrides config, env overrides both). */
+/** Merge headers from config, opts, and env. Precedence: config < opts < OPENCLAW_NODE_HEADERS; CF_* env only applied when that header key is not already set (so explicit --header wins). */
 function resolveNodeHostHeaders(params: {
   configHeaders?: Record<string, string>;
   optsHeaders?: Record<string, string>;
@@ -175,10 +175,10 @@ function resolveNodeHostHeaders(params: {
   }
   const cfId = env.CF_ACCESS_CLIENT_ID?.trim();
   const cfSecret = env.CF_ACCESS_CLIENT_SECRET?.trim();
-  if (cfId) {
+  if (cfId && out["CF-Access-Client-Id"] === undefined) {
     out["CF-Access-Client-Id"] = cfId;
   }
-  if (cfSecret) {
+  if (cfSecret && out["CF-Access-Client-Secret"] === undefined) {
     out["CF-Access-Client-Secret"] = cfSecret;
   }
   return out;
