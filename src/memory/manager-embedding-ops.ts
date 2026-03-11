@@ -98,7 +98,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const out = new Map<string, number[]>();
-    const baseParams = [this.provider.id, this.provider.model, this.providerKey];
+    const configuredDims = this.settings.dimensions;
+    const baseParams: Array<string | number | null> = [
+      this.provider.id,
+      this.provider.model,
+      this.providerKey,
+    ];
+    const dimsFilter = typeof configuredDims === "number" ? " AND dims = ?" : "";
+    if (typeof configuredDims === "number") {
+      baseParams.push(configuredDims);
+    }
     const batchSize = 400;
     for (let start = 0; start < unique.length; start += batchSize) {
       const batch = unique.slice(start, start + batchSize);
@@ -106,7 +115,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const rows = this.db
         .prepare(
           `SELECT hash, embedding FROM ${EMBEDDING_CACHE_TABLE}\n` +
-            ` WHERE provider = ? AND model = ? AND provider_key = ? AND hash IN (${placeholders})`,
+            ` WHERE provider = ? AND model = ? AND provider_key = ?${dimsFilter} AND hash IN (${placeholders})`,
         )
         .all(...baseParams, ...batch) as Array<{ hash: string; embedding: string }>;
       for (const row of rows) {
