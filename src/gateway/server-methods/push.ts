@@ -1,8 +1,11 @@
 import {
+  clearApnsRegistration,
   loadApnsRegistration,
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
+  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
+  shouldInvalidateApnsRegistration,
 } from "../../infra/push-apns.js";
 import { ErrorCodes, errorShape, validatePushTestParams } from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
@@ -50,23 +53,46 @@ export const pushHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const auth = await resolveApnsAuthConfigFromEnv(process.env);
-      if (!auth.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
+      const overrideEnvironment = normalizeApnsEnvironment(params.environment);
+      const result =
+        registration.transport === "direct"
+          ? await (async () => {
+              const auth = await resolveApnsAuthConfigFromEnv(process.env);
+              if (!auth.ok) {
+                respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
+                return null;
+              }
+              return await sendApnsAlert({
+                registration: {
+                  ...registration,
+                  environment: overrideEnvironment ?? registration.environment,
+                },
+                nodeId,
+                title,
+                body,
+                auth: auth.value,
+              });
+            })()
+          : await (async () => {
+              const relay = resolveApnsRelayConfigFromEnv(process.env);
+              if (!relay.ok) {
+                respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
+                return null;
+              }
+              return await sendApnsAlert({
+                registration,
+                nodeId,
+                title,
+                body,
+                relayConfig: relay.value,
+              });
+            })();
+      if (!result) {
         return;
       }
-
-      const overrideEnvironment = normalizeApnsEnvironment(params.environment);
-      const result = await sendApnsAlert({
-        auth: auth.value,
-        registration: {
-          ...registration,
-          environment: overrideEnvironment ?? registration.environment,
-        },
-        nodeId,
-        title,
-        body,
-      });
+      if (shouldInvalidateApnsRegistration(result)) {
+        await clearApnsRegistration(nodeId);
+      }
       respond(true, result, undefined);
     });
   },

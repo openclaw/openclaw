@@ -4,11 +4,13 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-beta-prepare.sh --build-number 7 [--team-id TEAMID]
+  OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com \
+    scripts/ios-beta-prepare.sh --build-number 7 [--team-id TEAMID]
 
 Prepares local beta-release inputs without touching local signing overrides:
 - reads package.json.version and writes apps/ios/build/Version.xcconfig
 - writes apps/ios/build/BetaRelease.xcconfig with canonical bundle IDs
+- configures the beta build for relay-backed APNs registration
 - regenerates apps/ios/OpenClaw.xcodeproj via xcodegen
 EOF
 }
@@ -22,6 +24,8 @@ VERSION_HELPER="${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
 
 BUILD_NUMBER=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
+PUSH_RELAY_BASE_URL="${OPENCLAW_PUSH_RELAY_BASE_URL:-${IOS_PUSH_RELAY_BASE_URL:-}}"
+PUSH_RELAY_BASE_URL_XCCONFIG=""
 PACKAGE_VERSION="$(cd "${ROOT_DIR}" && node -p "require('./package.json').version" 2>/dev/null || true)"
 
 prepare_build_dir() {
@@ -87,6 +91,18 @@ if [[ -z "${TEAM_ID}" ]]; then
   exit 1
 fi
 
+if [[ -z "${PUSH_RELAY_BASE_URL}" ]]; then
+  echo "Missing OPENCLAW_PUSH_RELAY_BASE_URL (or IOS_PUSH_RELAY_BASE_URL) for beta relay registration." >&2
+  exit 1
+fi
+
+# `.xcconfig` treats `//` as a comment opener. Break the URL with a helper setting
+# so Xcode still resolves it back to `https://...` at build time.
+PUSH_RELAY_BASE_URL_XCCONFIG="$(
+  printf '%s' "${PUSH_RELAY_BASE_URL}" \
+    | sed 's#//#$(OPENCLAW_URL_SLASH)$(OPENCLAW_URL_SLASH)#g'
+)"
+
 prepare_build_dir
 
 (
@@ -106,6 +122,11 @@ OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
 OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
 OPENCLAW_APP_PROFILE =
 OPENCLAW_SHARE_PROFILE =
+OPENCLAW_PUSH_TRANSPORT = relay
+OPENCLAW_PUSH_DISTRIBUTION = official
+OPENCLAW_URL_SLASH = /
+OPENCLAW_PUSH_RELAY_BASE_URL = ${PUSH_RELAY_BASE_URL_XCCONFIG}
+OPENCLAW_PUSH_APNS_ENVIRONMENT = production
 EOF
 
 (

@@ -4,16 +4,40 @@ import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import {
+  type ApnsRelayConfig,
+  type ApnsRelayConfigResolution,
+  type ApnsRelayPushResponse,
+  type ApnsRelayRequestSender,
+  resolveApnsRelayConfigFromEnv,
+  sendApnsRelayPush,
+} from "./push-apns.relay.js";
 
 export type ApnsEnvironment = "sandbox" | "production";
+export type ApnsTransport = "direct" | "relay";
 
-export type ApnsRegistration = {
+export type DirectApnsRegistration = {
   nodeId: string;
+  transport: "direct";
   token: string;
   topic: string;
   environment: ApnsEnvironment;
   updatedAtMs: number;
 };
+
+export type RelayApnsRegistration = {
+  nodeId: string;
+  transport: "relay";
+  relayHandle: string;
+  installationId: string;
+  topic: string;
+  environment: "production";
+  distribution: "official";
+  updatedAtMs: number;
+  tokenDebugSuffix?: string;
+};
+
+export type ApnsRegistration = DirectApnsRegistration | RelayApnsRegistration;
 
 export type ApnsAuthConfig = {
   teamId: string;
@@ -25,7 +49,7 @@ export type ApnsAuthConfigResolution =
   | { ok: true; value: ApnsAuthConfig }
   | { ok: false; error: string };
 
-export type ApnsPushAlertResult = {
+export type ApnsPushResult = {
   ok: boolean;
   status: number;
   apnsId?: string;
@@ -33,17 +57,11 @@ export type ApnsPushAlertResult = {
   tokenSuffix: string;
   topic: string;
   environment: ApnsEnvironment;
+  transport: ApnsTransport;
 };
 
-export type ApnsPushWakeResult = {
-  ok: boolean;
-  status: number;
-  apnsId?: string;
-  reason?: string;
-  tokenSuffix: string;
-  topic: string;
-  environment: ApnsEnvironment;
-};
+export type ApnsPushAlertResult = ApnsPushResult;
+export type ApnsPushWakeResult = ApnsPushResult;
 
 type ApnsPushType = "alert" | "background";
 
@@ -65,6 +83,29 @@ type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestRespo
 type ApnsRegistrationState = {
   registrationsByNodeId: Record<string, ApnsRegistration>;
 };
+
+type RegisterDirectApnsParams = {
+  nodeId: string;
+  transport?: "direct";
+  token: string;
+  topic: string;
+  environment?: unknown;
+  baseDir?: string;
+};
+
+type RegisterRelayApnsParams = {
+  nodeId: string;
+  transport: "relay";
+  relayHandle: string;
+  installationId: string;
+  topic: string;
+  environment?: unknown;
+  distribution?: unknown;
+  tokenDebugSuffix?: unknown;
+  baseDir?: string;
+};
+
+type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
 
 const APNS_STATE_FILENAME = "push/apns-registrations.json";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
@@ -89,8 +130,27 @@ function normalizeApnsToken(value: string): string {
     .toLowerCase();
 }
 
+function normalizeRelayHandle(value: string): string {
+  return value.trim();
+}
+
+function normalizeInstallationId(value: string): string {
+  return value.trim();
+}
+
 function normalizeTopic(value: string): string {
   return value.trim();
+}
+
+function normalizeTokenDebugSuffix(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^0-9a-z]/g, "");
+  return normalized.length > 0 ? normalized.slice(-8) : undefined;
 }
 
 function isLikelyApnsToken(value: string): boolean {
@@ -161,6 +221,97 @@ function normalizeNonEmptyString(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeDistribution(value: unknown): "official" | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "official" ? "official" : null;
+}
+
+function normalizeDirectRegistration(
+  record: Partial<DirectApnsRegistration> & { nodeId?: unknown; token?: unknown },
+): DirectApnsRegistration | null {
+  if (typeof record.nodeId !== "string" || typeof record.token !== "string") {
+    return null;
+  }
+  const nodeId = normalizeNodeId(record.nodeId);
+  const token = normalizeApnsToken(record.token);
+  const topic = normalizeTopic(typeof record.topic === "string" ? record.topic : "");
+  const environment = normalizeApnsEnvironment(record.environment) ?? "sandbox";
+  const updatedAtMs =
+    typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
+      ? Math.trunc(record.updatedAtMs)
+      : 0;
+  if (!nodeId || !topic || !isLikelyApnsToken(token)) {
+    return null;
+  }
+  return {
+    nodeId,
+    transport: "direct",
+    token,
+    topic,
+    environment,
+    updatedAtMs,
+  };
+}
+
+function normalizeRelayRegistration(
+  record: Partial<RelayApnsRegistration> & { nodeId?: unknown; relayHandle?: unknown },
+): RelayApnsRegistration | null {
+  if (
+    typeof record.nodeId !== "string" ||
+    typeof record.relayHandle !== "string" ||
+    typeof record.installationId !== "string"
+  ) {
+    return null;
+  }
+  const nodeId = normalizeNodeId(record.nodeId);
+  const relayHandle = normalizeRelayHandle(record.relayHandle);
+  const installationId = normalizeInstallationId(record.installationId);
+  const topic = normalizeTopic(typeof record.topic === "string" ? record.topic : "");
+  const environment = normalizeApnsEnvironment(record.environment);
+  const distribution = normalizeDistribution(record.distribution);
+  const updatedAtMs =
+    typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
+      ? Math.trunc(record.updatedAtMs)
+      : 0;
+  if (
+    !nodeId ||
+    !relayHandle ||
+    !installationId ||
+    !topic ||
+    environment !== "production" ||
+    distribution !== "official"
+  ) {
+    return null;
+  }
+  return {
+    nodeId,
+    transport: "relay",
+    relayHandle,
+    installationId,
+    topic,
+    environment,
+    distribution,
+    updatedAtMs,
+    tokenDebugSuffix: normalizeTokenDebugSuffix(record.tokenDebugSuffix),
+  };
+}
+
+function normalizeStoredRegistration(record: unknown): ApnsRegistration | null {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+  const candidate = record as Record<string, unknown>;
+  const transport =
+    typeof candidate.transport === "string" ? candidate.transport.trim().toLowerCase() : "direct";
+  if (transport === "relay") {
+    return normalizeRelayRegistration(candidate as Partial<RelayApnsRegistration>);
+  }
+  return normalizeDirectRegistration(candidate as Partial<DirectApnsRegistration>);
+}
+
 async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
   const filePath = resolveApnsRegistrationPath(baseDir);
   const existing = await readJsonFile<ApnsRegistrationState>(filePath);
@@ -173,7 +324,14 @@ async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistratio
     !Array.isArray(existing.registrationsByNodeId)
       ? existing.registrationsByNodeId
       : {};
-  return { registrationsByNodeId: registrations };
+  const normalized: Record<string, ApnsRegistration> = {};
+  for (const [nodeId, record] of Object.entries(registrations)) {
+    const registration = normalizeStoredRegistration(record);
+    if (registration) {
+      normalized[normalizeNodeId(nodeId)] = registration;
+    }
+  }
+  return { registrationsByNodeId: normalized };
 }
 
 async function persistRegistrationsState(
@@ -195,41 +353,84 @@ export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null
   return null;
 }
 
-export async function registerApnsToken(params: {
-  nodeId: string;
-  token: string;
-  topic: string;
-  environment?: unknown;
-  baseDir?: string;
-}): Promise<ApnsRegistration> {
+export async function registerApnsRegistration(
+  params: RegisterApnsParams,
+): Promise<ApnsRegistration> {
   const nodeId = normalizeNodeId(params.nodeId);
-  const token = normalizeApnsToken(params.token);
   const topic = normalizeTopic(params.topic);
-  const environment = normalizeApnsEnvironment(params.environment) ?? "sandbox";
-
   if (!nodeId) {
     throw new Error("nodeId required");
   }
   if (!topic) {
     throw new Error("topic required");
   }
-  if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
-  }
 
   return await withLock(async () => {
     const state = await loadRegistrationsState(params.baseDir);
-    const next: ApnsRegistration = {
-      nodeId,
-      token,
-      topic,
-      environment,
-      updatedAtMs: Date.now(),
-    };
+    const updatedAtMs = Date.now();
+
+    let next: ApnsRegistration;
+    if (params.transport === "relay") {
+      const relayHandle = normalizeRelayHandle(params.relayHandle);
+      const installationId = normalizeInstallationId(params.installationId);
+      const environment = normalizeApnsEnvironment(params.environment) ?? "production";
+      const distribution = normalizeDistribution(params.distribution) ?? "official";
+      if (!relayHandle) {
+        throw new Error("relayHandle required");
+      }
+      if (!installationId) {
+        throw new Error("installationId required");
+      }
+      if (environment !== "production") {
+        throw new Error("relay registrations must use production environment");
+      }
+      if (distribution !== "official") {
+        throw new Error("relay registrations must use official distribution");
+      }
+      next = {
+        nodeId,
+        transport: "relay",
+        relayHandle,
+        installationId,
+        topic,
+        environment,
+        distribution,
+        updatedAtMs,
+        tokenDebugSuffix: normalizeTokenDebugSuffix(params.tokenDebugSuffix),
+      };
+    } else {
+      const token = normalizeApnsToken(params.token);
+      const environment = normalizeApnsEnvironment(params.environment) ?? "sandbox";
+      if (!isLikelyApnsToken(token)) {
+        throw new Error("invalid APNs token");
+      }
+      next = {
+        nodeId,
+        transport: "direct",
+        token,
+        topic,
+        environment,
+        updatedAtMs,
+      };
+    }
+
     state.registrationsByNodeId[nodeId] = next;
     await persistRegistrationsState(state, params.baseDir);
     return next;
   });
+}
+
+export async function registerApnsToken(params: {
+  nodeId: string;
+  token: string;
+  topic: string;
+  environment?: unknown;
+  baseDir?: string;
+}): Promise<DirectApnsRegistration> {
+  return (await registerApnsRegistration({
+    ...params,
+    transport: "direct",
+  })) as DirectApnsRegistration;
 }
 
 export async function loadApnsRegistration(
@@ -242,6 +443,32 @@ export async function loadApnsRegistration(
   }
   const state = await loadRegistrationsState(baseDir);
   return state.registrationsByNodeId[normalizedNodeId] ?? null;
+}
+
+export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
+  const normalizedNodeId = normalizeNodeId(nodeId);
+  if (!normalizedNodeId) {
+    return false;
+  }
+  return await withLock(async () => {
+    const state = await loadRegistrationsState(baseDir);
+    if (!(normalizedNodeId in state.registrationsByNodeId)) {
+      return false;
+    }
+    delete state.registrationsByNodeId[normalizedNodeId];
+    await persistRegistrationsState(state, baseDir);
+    return true;
+  });
+}
+
+export function shouldInvalidateApnsRegistration(result: {
+  status: number;
+  reason?: string;
+}): boolean {
+  if (result.status === 410) {
+    return true;
+  }
+  return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
 }
 
 export async function resolveApnsAuthConfigFromEnv(
@@ -386,7 +613,10 @@ function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
     : DEFAULT_APNS_TIMEOUT_MS;
 }
 
-function resolveApnsSendContext(params: { auth: ApnsAuthConfig; registration: ApnsRegistration }): {
+function resolveDirectSendContext(params: {
+  auth: ApnsAuthConfig;
+  registration: DirectApnsRegistration;
+}): {
   token: string;
   topic: string;
   environment: ApnsEnvironment;
@@ -408,24 +638,7 @@ function resolveApnsSendContext(params: { auth: ApnsAuthConfig; registration: Ap
   };
 }
 
-function toApnsPushResult(params: {
-  response: ApnsRequestResponse;
-  token: string;
-  topic: string;
-  environment: ApnsEnvironment;
-}): ApnsPushWakeResult {
-  return {
-    ok: params.response.status === 200,
-    status: params.response.status,
-    apnsId: params.response.apnsId,
-    reason: parseReason(params.response.body),
-    tokenSuffix: params.token.slice(-8),
-    topic: params.topic,
-    environment: params.environment,
-  };
-}
-
-function createOpenClawPushMetadata(params: {
+function toPushMetadata(params: {
   kind: "push.test" | "node.wake";
   nodeId: string;
   reason?: string;
@@ -438,16 +651,61 @@ function createOpenClawPushMetadata(params: {
   };
 }
 
-async function sendApnsPush(params: {
-  auth: ApnsAuthConfig;
+function resolveRegistrationDebugSuffix(
+  registration: ApnsRegistration,
+  relayResult?: Pick<ApnsRelayPushResponse, "tokenSuffix">,
+): string {
+  if (registration.transport === "direct") {
+    return registration.token.slice(-8);
+  }
+  return (
+    relayResult?.tokenSuffix ?? registration.tokenDebugSuffix ?? registration.relayHandle.slice(-8)
+  );
+}
+
+function toPushResult(params: {
   registration: ApnsRegistration;
+  response: ApnsRequestResponse | ApnsRelayPushResponse;
+  tokenSuffix?: string;
+}): ApnsPushResult {
+  const response =
+    "body" in params.response
+      ? {
+          ok: params.response.status === 200,
+          status: params.response.status,
+          apnsId: params.response.apnsId,
+          reason: parseReason(params.response.body),
+          environment: params.registration.environment,
+          tokenSuffix: params.tokenSuffix,
+        }
+      : params.response;
+  return {
+    ok: response.ok,
+    status: response.status,
+    apnsId: response.apnsId,
+    reason: response.reason,
+    tokenSuffix:
+      params.tokenSuffix ??
+      resolveRegistrationDebugSuffix(
+        params.registration,
+        "tokenSuffix" in response ? response : undefined,
+      ),
+    topic: params.registration.topic,
+    environment: params.registration.transport === "relay" ? "production" : response.environment,
+    transport: params.registration.transport,
+  };
+}
+
+async function sendDirectApnsPush(params: {
+  auth: ApnsAuthConfig;
+  registration: DirectApnsRegistration;
   payload: object;
   timeoutMs?: number;
   requestSender?: ApnsRequestSender;
   pushType: ApnsPushType;
   priority: "10" | "5";
-}): Promise<ApnsPushWakeResult> {
-  const { token, topic, environment, bearerToken } = resolveApnsSendContext({
+}): Promise<ApnsPushResult> {
+  const { token, topic, environment, bearerToken } = resolveDirectSendContext({
     auth: params.auth,
     registration: params.registration,
   });
@@ -462,19 +720,34 @@ async function sendApnsPush(params: {
     pushType: params.pushType,
     priority: params.priority,
   });
-  return toApnsPushResult({ response, token, topic, environment });
+  return toPushResult({
+    registration: params.registration,
+    response,
+    tokenSuffix: token.slice(-8),
+  });
 }
 
-export async function sendApnsAlert(params: {
-  auth: ApnsAuthConfig;
-  registration: ApnsRegistration;
-  nodeId: string;
-  title: string;
-  body: string;
-  timeoutMs?: number;
-  requestSender?: ApnsRequestSender;
-}): Promise<ApnsPushAlertResult> {
-  const payload = {
+async function sendRelayApnsPush(params: {
+  relayConfig: ApnsRelayConfig;
+  registration: RelayApnsRegistration;
+  payload: object;
+  pushType: ApnsPushType;
+  priority: "10" | "5";
+  requestSender?: ApnsRelayRequestSender;
+}): Promise<ApnsPushResult> {
+  const response = await sendApnsRelayPush({
+    relayConfig: params.relayConfig,
+    relayHandle: params.registration.relayHandle,
+    payload: params.payload,
+    pushType: params.pushType,
+    priority: params.priority,
+    requestSender: params.requestSender,
+  });
+  return toPushResult({ registration: params.registration, response });
+}
+
+function createAlertPayload(params: { nodeId: string; title: string; body: string }): object {
+  return {
     aps: {
       alert: {
         title: params.title,
@@ -482,13 +755,60 @@ export async function sendApnsAlert(params: {
       },
       sound: "default",
     },
-    openclaw: createOpenClawPushMetadata({
+    openclaw: toPushMetadata({
       kind: "push.test",
       nodeId: params.nodeId,
     }),
   };
+}
 
-  return await sendApnsPush({
+function createBackgroundPayload(params: { nodeId: string; wakeReason?: string }): object {
+  return {
+    aps: {
+      "content-available": 1,
+    },
+    openclaw: toPushMetadata({
+      kind: "node.wake",
+      reason: params.wakeReason ?? "node.invoke",
+      nodeId: params.nodeId,
+    }),
+  };
+}
+
+export async function sendApnsAlert(params: {
+  auth?: ApnsAuthConfig;
+  relayConfig?: ApnsRelayConfig;
+  registration: ApnsRegistration;
+  nodeId: string;
+  title: string;
+  body: string;
+  timeoutMs?: number;
+  requestSender?: ApnsRequestSender;
+  relayRequestSender?: ApnsRelayRequestSender;
+}): Promise<ApnsPushAlertResult> {
+  const payload = createAlertPayload({
+    nodeId: params.nodeId,
+    title: params.title,
+    body: params.body,
+  });
+
+  if (params.registration.transport === "relay") {
+    if (!params.relayConfig) {
+      throw new Error("APNs relay config required");
+    }
+    return await sendRelayApnsPush({
+      relayConfig: params.relayConfig,
+      registration: params.registration,
+      payload,
+      pushType: "alert",
+      priority: "10",
+      requestSender: params.relayRequestSender,
+    });
+  }
+  if (!params.auth) {
+    throw new Error("APNs auth required");
+  }
+  return await sendDirectApnsPush({
     auth: params.auth,
     registration: params.registration,
     payload,
@@ -500,24 +820,37 @@ export async function sendApnsAlert(params: {
 }
 
 export async function sendApnsBackgroundWake(params: {
-  auth: ApnsAuthConfig;
+  auth?: ApnsAuthConfig;
+  relayConfig?: ApnsRelayConfig;
   registration: ApnsRegistration;
   nodeId: string;
   wakeReason?: string;
   timeoutMs?: number;
   requestSender?: ApnsRequestSender;
+  relayRequestSender?: ApnsRelayRequestSender;
 }): Promise<ApnsPushWakeResult> {
-  const payload = {
-    aps: {
-      "content-available": 1,
-    },
-    openclaw: createOpenClawPushMetadata({
-      kind: "node.wake",
-      reason: params.wakeReason ?? "node.invoke",
-      nodeId: params.nodeId,
-    }),
-  };
-  return await sendApnsPush({
+  const payload = createBackgroundPayload({
+    nodeId: params.nodeId,
+    wakeReason: params.wakeReason,
+  });
+
+  if (params.registration.transport === "relay") {
+    if (!params.relayConfig) {
+      throw new Error("APNs relay config required");
+    }
+    return await sendRelayApnsPush({
+      relayConfig: params.relayConfig,
+      registration: params.registration,
+      payload,
+      pushType: "background",
+      priority: "5",
+      requestSender: params.relayRequestSender,
+    });
+  }
+  if (!params.auth) {
+    throw new Error("APNs auth required");
+  }
+  return await sendDirectApnsPush({
     auth: params.auth,
     registration: params.registration,
     payload,
@@ -527,3 +860,5 @@ export async function sendApnsBackgroundWake(params: {
     priority: "5",
   });
 }
+
+export { type ApnsRelayConfig, type ApnsRelayConfigResolution, resolveApnsRelayConfigFromEnv };

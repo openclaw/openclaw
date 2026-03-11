@@ -10,10 +10,13 @@ const mocks = vi.hoisted(() => ({
     ok: true,
     params: rawParams,
   })),
+  clearApnsRegistration: vi.fn(),
   loadApnsRegistration: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
+  resolveApnsRelayConfigFromEnv: vi.fn(),
   sendApnsBackgroundWake: vi.fn(),
   sendApnsAlert: vi.fn(),
+  shouldInvalidateApnsRegistration: vi.fn(() => false),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -30,10 +33,13 @@ vi.mock("../node-invoke-sanitize.js", () => ({
 }));
 
 vi.mock("../../infra/push-apns.js", () => ({
+  clearApnsRegistration: mocks.clearApnsRegistration,
   loadApnsRegistration: mocks.loadApnsRegistration,
   resolveApnsAuthConfigFromEnv: mocks.resolveApnsAuthConfigFromEnv,
+  resolveApnsRelayConfigFromEnv: mocks.resolveApnsRelayConfigFromEnv,
   sendApnsBackgroundWake: mocks.sendApnsBackgroundWake,
   sendApnsAlert: mocks.sendApnsAlert,
+  shouldInvalidateApnsRegistration: mocks.shouldInvalidateApnsRegistration,
 }));
 
 type RespondCall = [
@@ -154,6 +160,7 @@ async function ackPending(nodeId: string, ids: string[]) {
 function mockSuccessfulWakeConfig(nodeId: string) {
   mocks.loadApnsRegistration.mockResolvedValue({
     nodeId,
+    transport: "direct",
     token: "abcd1234abcd1234abcd1234abcd1234",
     topic: "ai.openclaw.ios",
     environment: "sandbox",
@@ -173,6 +180,7 @@ function mockSuccessfulWakeConfig(nodeId: string) {
     tokenSuffix: "1234abcd",
     topic: "ai.openclaw.ios",
     environment: "sandbox",
+    transport: "direct",
   });
 }
 
@@ -189,9 +197,12 @@ describe("node.invoke APNs wake path", () => {
       ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
     );
     mocks.loadApnsRegistration.mockClear();
+    mocks.clearApnsRegistration.mockClear();
     mocks.resolveApnsAuthConfigFromEnv.mockClear();
+    mocks.resolveApnsRelayConfigFromEnv.mockClear();
     mocks.sendApnsBackgroundWake.mockClear();
     mocks.sendApnsAlert.mockClear();
+    mocks.shouldInvalidateApnsRegistration.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -257,6 +268,50 @@ describe("node.invoke APNs wake path", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expect(call?.[1]).toMatchObject({ ok: true, nodeId: "ios-node-reconnect" });
+  });
+
+  it("clears stale registrations after an invalid device token wake failure", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue({
+      nodeId: "ios-node-stale",
+      transport: "direct",
+      token: "abcd1234abcd1234abcd1234abcd1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      updatedAtMs: 1,
+    });
+    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+    mocks.sendApnsBackgroundWake.mockResolvedValue({
+      ok: false,
+      status: 400,
+      reason: "BadDeviceToken",
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+    mocks.shouldInvalidateApnsRegistration.mockReturnValue(true);
+
+    const nodeRegistry = {
+      get: vi.fn(() => undefined),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId: "ios-node-stale", idempotencyKey: "idem-stale" },
+    });
+
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.message).toBe("node not connected");
+    expect(mocks.clearApnsRegistration).toHaveBeenCalledWith("ios-node-stale");
   });
 
   it("forces one retry wake when the first wake still fails to reconnect", async () => {

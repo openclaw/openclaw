@@ -4,12 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearApnsRegistration,
   loadApnsRegistration,
   normalizeApnsEnvironment,
+  registerApnsRegistration,
   registerApnsToken,
   resolveApnsAuthConfigFromEnv,
+  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
+  shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
 
 const tempDirs: string[] = [];
@@ -46,10 +50,42 @@ describe("push APNs registration store", () => {
     const loaded = await loadApnsRegistration("ios-node-1", baseDir);
     expect(loaded).not.toBeNull();
     expect(loaded?.nodeId).toBe("ios-node-1");
-    expect(loaded?.token).toBe("abcd1234abcd1234abcd1234abcd1234");
+    expect(loaded?.transport).toBe("direct");
+    expect(loaded && loaded.transport === "direct" ? loaded.token : null).toBe(
+      "abcd1234abcd1234abcd1234abcd1234",
+    );
     expect(loaded?.topic).toBe("ai.openclaw.ios");
     expect(loaded?.environment).toBe("sandbox");
     expect(loaded?.updatedAtMs).toBe(saved.updatedAtMs);
+  });
+
+  it("stores and reloads relay-backed APNs registrations without a raw token", async () => {
+    const baseDir = await makeTempDir();
+    const saved = await registerApnsRegistration({
+      nodeId: "ios-node-relay",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      tokenDebugSuffix: "abcd1234",
+      baseDir,
+    });
+
+    const loaded = await loadApnsRegistration("ios-node-relay", baseDir);
+    expect(saved.transport).toBe("relay");
+    expect(loaded).toMatchObject({
+      nodeId: "ios-node-relay",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      tokenDebugSuffix: "abcd1234",
+    });
+    expect(loaded && "token" in loaded).toBe(false);
   });
 
   it("rejects invalid APNs tokens", async () => {
@@ -62,6 +98,19 @@ describe("push APNs registration store", () => {
         baseDir,
       }),
     ).rejects.toThrow("invalid APNs token");
+  });
+
+  it("clears registrations", async () => {
+    const baseDir = await makeTempDir();
+    await registerApnsToken({
+      nodeId: "ios-node-1",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      baseDir,
+    });
+
+    await expect(clearApnsRegistration("ios-node-1", baseDir)).resolves.toBe(true);
+    await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toBeNull();
   });
 });
 
@@ -97,6 +146,52 @@ describe("push APNs env config", () => {
     }
     expect(resolved.error).toContain("OPENCLAW_APNS_TEAM_ID");
   });
+
+  it("resolves APNs relay config from env", () => {
+    const resolved = resolveApnsRelayConfigFromEnv({
+      OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
+      OPENCLAW_APNS_RELAY_TIMEOUT_MS: "2500",
+    } as NodeJS.ProcessEnv);
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        baseUrl: "https://relay.example.com",
+        authToken: "relay-secret",
+        timeoutMs: 2500,
+      },
+    });
+  });
+
+  it("rejects insecure APNs relay http URLs by default", () => {
+    const resolved = resolveApnsRelayConfigFromEnv({
+      OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
+      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
+    } as NodeJS.ProcessEnv);
+    expect(resolved).toMatchObject({
+      ok: false,
+    });
+    if (resolved.ok) {
+      return;
+    }
+    expect(resolved.error).toContain("OPENCLAW_APNS_RELAY_ALLOW_HTTP=true");
+  });
+
+  it("allows APNs relay http URLs only when explicitly enabled", () => {
+    const resolved = resolveApnsRelayConfigFromEnv({
+      OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
+      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
+      OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
+    } as NodeJS.ProcessEnv);
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        baseUrl: "http://relay.example.com",
+        authToken: "relay-secret",
+        timeoutMs: 10_000,
+      },
+    });
+  });
 });
 
 describe("push APNs send semantics", () => {
@@ -108,13 +203,9 @@ describe("push APNs send semantics", () => {
     });
 
     const result = await sendApnsAlert({
-      auth: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: testAuthPrivateKey,
-      },
       registration: {
         nodeId: "ios-node-alert",
+        transport: "direct",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "ai.openclaw.ios",
         environment: "sandbox",
@@ -123,6 +214,11 @@ describe("push APNs send semantics", () => {
       nodeId: "ios-node-alert",
       title: "Wake",
       body: "Ping",
+      auth: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: testAuthPrivateKey,
+      },
       requestSender: send,
     });
 
@@ -142,6 +238,7 @@ describe("push APNs send semantics", () => {
     });
     expect(result.ok).toBe(true);
     expect(result.status).toBe(200);
+    expect(result.transport).toBe("direct");
   });
 
   it("sends background wake pushes with silent payload semantics", async () => {
@@ -152,13 +249,9 @@ describe("push APNs send semantics", () => {
     });
 
     const result = await sendApnsBackgroundWake({
-      auth: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: testAuthPrivateKey,
-      },
       registration: {
         nodeId: "ios-node-wake",
+        transport: "direct",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -166,6 +259,11 @@ describe("push APNs send semantics", () => {
       },
       nodeId: "ios-node-wake",
       wakeReason: "node.invoke",
+      auth: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: testAuthPrivateKey,
+      },
       requestSender: send,
     });
 
@@ -189,6 +287,7 @@ describe("push APNs send semantics", () => {
     expect(aps?.sound).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.environment).toBe("production");
+    expect(result.transport).toBe("direct");
   });
 
   it("defaults background wake reason when not provided", async () => {
@@ -199,19 +298,20 @@ describe("push APNs send semantics", () => {
     });
 
     await sendApnsBackgroundWake({
-      auth: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: testAuthPrivateKey,
-      },
       registration: {
         nodeId: "ios-node-wake-default-reason",
+        transport: "direct",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
         topic: "ai.openclaw.ios",
         environment: "sandbox",
         updatedAtMs: 1,
       },
       nodeId: "ios-node-wake-default-reason",
+      auth: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: testAuthPrivateKey,
+      },
       requestSender: send,
     });
 
@@ -223,5 +323,66 @@ describe("push APNs send semantics", () => {
         nodeId: "ios-node-wake-default-reason",
       },
     });
+  });
+
+  it("routes relay-backed alert pushes through the relay sender", async () => {
+    const send = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      apnsId: "relay-apns-id",
+      environment: "production",
+      tokenSuffix: "abcd1234",
+    });
+
+    const result = await sendApnsAlert({
+      relayConfig: {
+        baseUrl: "https://relay.example.com",
+        authToken: "relay-secret",
+        timeoutMs: 1000,
+      },
+      registration: {
+        nodeId: "ios-node-relay",
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        updatedAtMs: 1,
+        tokenDebugSuffix: "abcd1234",
+      },
+      nodeId: "ios-node-relay",
+      title: "Wake",
+      body: "Ping",
+      relayRequestSender: send,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      relayHandle: "relay-handle-123",
+      pushType: "alert",
+      priority: "10",
+      payload: {
+        aps: {
+          alert: { title: "Wake", body: "Ping" },
+          sound: "default",
+        },
+      },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      transport: "relay",
+      environment: "production",
+      tokenSuffix: "abcd1234",
+    });
+  });
+
+  it("flags invalid device responses for registration invalidation", () => {
+    expect(shouldInvalidateApnsRegistration({ status: 400, reason: "BadDeviceToken" })).toBe(true);
+    expect(shouldInvalidateApnsRegistration({ status: 410, reason: "Unregistered" })).toBe(true);
+    expect(shouldInvalidateApnsRegistration({ status: 429, reason: "TooManyRequests" })).toBe(
+      false,
+    );
   });
 });

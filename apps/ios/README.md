@@ -62,11 +62,16 @@ Release behavior:
 
 - Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
 - Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
+- Beta release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, and `OpenClawPushAPNsEnvironment=production`.
 - The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - Root `package.json.version` is the only version source for iOS.
 - A root version like `2026.3.11-beta.1` becomes:
   - `CFBundleShortVersionString = 2026.3.11`
   - `CFBundleVersion = next TestFlight build number for 2026.3.11`
+
+Required env for beta builds:
+
+- `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
 
 Archive without upload:
 
@@ -91,9 +96,17 @@ pnpm ios:beta -- --build-number 7
 - The app calls `registerForRemoteNotifications()` at launch.
 - `apps/ios/Sources/OpenClaw.entitlements` sets `aps-environment` to `development`.
 - APNs token registration to gateway happens only after gateway connection (`push.apns.register`).
+- Local/manual builds default to `OpenClawPushTransport=direct` and `OpenClawPushDistribution=local`.
 - Your selected team/profile must support Push Notifications for the app bundle ID you are signing.
 - If push capability or provisioning is wrong, APNs registration fails at runtime (check Xcode logs for `APNs registration failed`).
-- Debug builds register as APNs sandbox; Release builds use production.
+- Debug builds default to `OpenClawPushAPNsEnvironment=sandbox`; Release builds default to `production`.
+
+## APNs Expectations For Official Builds
+
+- Official/TestFlight builds register with the external push relay before they publish `push.apns.register` to the gateway.
+- The gateway registration for relay mode contains an opaque relay handle and installation metadata instead of the raw APNs token.
+- The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
+- Relay mode requires a reachable relay base URL and uses App Attest plus the app receipt during registration.
 
 ## What Works Now (Concrete)
 

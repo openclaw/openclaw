@@ -3,17 +3,23 @@ import { ErrorCodes } from "../protocol/index.js";
 import { pushHandlers } from "./push.js";
 
 vi.mock("../../infra/push-apns.js", () => ({
+  clearApnsRegistration: vi.fn(),
   loadApnsRegistration: vi.fn(),
   normalizeApnsEnvironment: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
+  resolveApnsRelayConfigFromEnv: vi.fn(),
   sendApnsAlert: vi.fn(),
+  shouldInvalidateApnsRegistration: vi.fn(),
 }));
 
 import {
+  clearApnsRegistration,
   loadApnsRegistration,
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
+  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
+  shouldInvalidateApnsRegistration,
 } from "../../infra/push-apns.js";
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
@@ -49,7 +55,10 @@ describe("push.test handler", () => {
     vi.mocked(loadApnsRegistration).mockClear();
     vi.mocked(normalizeApnsEnvironment).mockClear();
     vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
+    vi.mocked(resolveApnsRelayConfigFromEnv).mockClear();
     vi.mocked(sendApnsAlert).mockClear();
+    vi.mocked(clearApnsRegistration).mockClear();
+    vi.mocked(shouldInvalidateApnsRegistration).mockReturnValue(false);
   });
 
   it("rejects invalid params", async () => {
@@ -68,6 +77,7 @@ describe("push.test handler", () => {
   it("sends push test when registration and auth are available", async () => {
     vi.mocked(loadApnsRegistration).mockResolvedValue({
       nodeId: "ios-node-1",
+      transport: "direct",
       token: "abcd",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
@@ -88,6 +98,7 @@ describe("push.test handler", () => {
       tokenSuffix: "1234abcd",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
+      transport: "direct",
     });
 
     const { respond, invoke } = createInvokeParams({
@@ -101,5 +112,89 @@ describe("push.test handler", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expect(call?.[1]).toMatchObject({ ok: true, status: 200 });
+  });
+
+  it("sends push test through relay registrations", async () => {
+    vi.mocked(loadApnsRegistration).mockResolvedValue({
+      nodeId: "ios-node-1",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      installationId: "install-1",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      updatedAtMs: 1,
+      tokenDebugSuffix: "abcd1234",
+    });
+    vi.mocked(resolveApnsRelayConfigFromEnv).mockReturnValue({
+      ok: true,
+      value: {
+        baseUrl: "https://relay.example.com",
+        authToken: "relay-secret",
+        timeoutMs: 1000,
+      },
+    });
+    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
+    vi.mocked(sendApnsAlert).mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "abcd1234",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      transport: "relay",
+    });
+
+    const { respond, invoke } = createInvokeParams({
+      nodeId: "ios-node-1",
+      title: "Wake",
+      body: "Ping",
+    });
+    await invoke();
+
+    expect(resolveApnsAuthConfigFromEnv).not.toHaveBeenCalled();
+    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
+    expect(sendApnsAlert).toHaveBeenCalledTimes(1);
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({ ok: true, status: 200, transport: "relay" });
+  });
+
+  it("clears stale registrations after invalid token push-test failures", async () => {
+    vi.mocked(loadApnsRegistration).mockResolvedValue({
+      nodeId: "ios-node-1",
+      transport: "direct",
+      token: "abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      updatedAtMs: 1,
+    });
+    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
+    vi.mocked(sendApnsAlert).mockResolvedValue({
+      ok: false,
+      status: 400,
+      reason: "BadDeviceToken",
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+    vi.mocked(shouldInvalidateApnsRegistration).mockReturnValue(true);
+
+    const { invoke } = createInvokeParams({
+      nodeId: "ios-node-1",
+      title: "Wake",
+      body: "Ping",
+    });
+    await invoke();
+
+    expect(clearApnsRegistration).toHaveBeenCalledWith("ios-node-1");
   });
 });

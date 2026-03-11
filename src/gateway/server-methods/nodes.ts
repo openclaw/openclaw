@@ -10,10 +10,13 @@ import {
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import {
+  clearApnsRegistration,
   loadApnsRegistration,
   resolveApnsAuthConfigFromEnv,
+  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
+  shouldInvalidateApnsRegistration,
 } from "../../infra/push-apns.js";
 import {
   buildCanvasScopedHostUrl,
@@ -91,6 +94,32 @@ type PendingNodeAction = {
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
+async function resolveNodePushConfig(
+  registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
+) {
+  if (registration.transport === "relay") {
+    const relay = resolveApnsRelayConfigFromEnv(process.env);
+    return relay.ok
+      ? { ok: true as const, relayConfig: relay.value }
+      : { ok: false as const, error: relay.error };
+  }
+
+  const auth = await resolveApnsAuthConfigFromEnv(process.env);
+  return auth.ok
+    ? { ok: true as const, auth: auth.value }
+    : { ok: false as const, error: auth.error };
+}
+
+async function clearStaleApnsRegistrationIfNeeded(
+  nodeId: string,
+  params: { status: number; reason?: string },
+) {
+  if (!shouldInvalidateApnsRegistration(params)) {
+    return;
+  }
+  await clearApnsRegistration(nodeId);
+}
 
 function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   if (entry.role === "node") {
@@ -238,23 +267,25 @@ export async function maybeWakeNodeWithApns(
         return withDuration({ available: false, throttled: false, path: "no-registration" });
       }
 
-      const auth = await resolveApnsAuthConfigFromEnv(process.env);
-      if (!auth.ok) {
+      const resolved = await resolveNodePushConfig(registration);
+      if (!resolved.ok) {
         return withDuration({
           available: false,
           throttled: false,
           path: "no-auth",
-          apnsReason: auth.error,
+          apnsReason: resolved.error,
         });
       }
 
       state.lastWakeAtMs = Date.now();
       const wakeResult = await sendApnsBackgroundWake({
-        auth: auth.value,
         registration,
         nodeId,
         wakeReason: opts?.wakeReason ?? "node.invoke",
+        auth: "auth" in resolved ? resolved.auth : undefined,
+        relayConfig: "relayConfig" in resolved ? resolved.relayConfig : undefined,
       });
+      await clearStaleApnsRegistrationIfNeeded(nodeId, wakeResult);
       if (!wakeResult.ok) {
         return withDuration({
           available: true,
@@ -316,24 +347,26 @@ export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNu
   if (!registration) {
     return withDuration({ sent: false, throttled: false, reason: "no-registration" });
   }
-  const auth = await resolveApnsAuthConfigFromEnv(process.env);
-  if (!auth.ok) {
+  const resolved = await resolveNodePushConfig(registration);
+  if (!resolved.ok) {
     return withDuration({
       sent: false,
       throttled: false,
       reason: "no-auth",
-      apnsReason: auth.error,
+      apnsReason: resolved.error,
     });
   }
 
   try {
     const result = await sendApnsAlert({
-      auth: auth.value,
       registration,
       nodeId,
       title: "OpenClaw needs a quick reopen",
       body: "Tap to reopen OpenClaw and restore the node connection.",
+      auth: "auth" in resolved ? resolved.auth : undefined,
+      relayConfig: "relayConfig" in resolved ? resolved.relayConfig : undefined,
     });
+    await clearStaleApnsRegistrationIfNeeded(nodeId, result);
     if (!result.ok) {
       return withDuration({
         sent: false,
