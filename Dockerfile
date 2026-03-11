@@ -162,7 +162,6 @@ ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 # Ensure the directory exists and is writable by the node user, even if the browser isn't pre-installed.
 RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH && \
-    chown node:node $PLAYWRIGHT_BROWSERS_PATH && \
     chmod 775 $PLAYWRIGHT_BROWSERS_PATH
 
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
@@ -171,6 +170,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+      chown node:node $PLAYWRIGHT_BROWSERS_PATH && \
       # Clean up apt caches to reduce image size (apt-get clean is handled by the base image's configuration usually, but good practice)
       rm -rf /var/lib/apt/lists/*; \
       ln -sf $PLAYWRIGHT_BROWSERS_PATH/chromium-*/chrome-linux/chrome /usr/local/bin/chromium; \
