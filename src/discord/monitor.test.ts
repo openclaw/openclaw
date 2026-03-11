@@ -1276,6 +1276,38 @@ describe("discord DM reaction handling", () => {
     expect(sessionKey).toBe("discord:acc-1:dm:user-1");
     expect(dedupeKey).toBe("discord:reaction:cmd:added:msg-replay-1:123:✅:accept");
   });
+
+  it("does not emit triage command intents for non-bot-authored messages in allowlist mode", async () => {
+    enqueueSystemEventSpy.mockClear();
+
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      botAsAuthor: false,
+      emojiName: "✅",
+      userId: "123",
+      messageId: "msg-allowlist-nonbot",
+      guild: { name: "Test Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "allowlist",
+            users: ["123"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    const commandCalls = enqueueSystemEventSpy.mock.calls.filter(([text]) =>
+      String(text).includes("Reaction command:"),
+    );
+    expect(commandCalls).toHaveLength(0);
+  });
 });
 
 describe("discord reaction notification modes", () => {

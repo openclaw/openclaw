@@ -568,10 +568,25 @@ async function handleDiscordReactionEvent(
       const dedupeKey = `discord:reaction:cmd:added:${data.message_id}:${user.id}:${emojiLabel}:${reactionCommand}`;
       return { emojiLabel, reactionCommand, dedupeKey };
     };
+    const shouldEmitReactionCommandForMessageAuthor = (messageAuthorId?: string) =>
+      Boolean(botUserId && messageAuthorId && messageAuthorId === botUserId);
+    const shouldAttemptReactionCommand = (params: {
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+    }) => {
+      const resolved = resolveReactionCommand();
+      if (!resolved) {
+        return false;
+      }
+      if (action === "removed") {
+        return true;
+      }
+      return action === "added" && canEmitReactionCommand({ channelConfig: params.channelConfig });
+    };
     const emitReactionCommand = (params: {
       route: ReturnType<typeof resolveAgentRoute>;
       contextKey: string;
       channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+      messageAuthorId?: string;
     }) => {
       const resolved = resolveReactionCommand();
       if (!resolved) {
@@ -582,6 +597,9 @@ async function handleDiscordReactionEvent(
         return;
       }
       if (action !== "added" || !canEmitReactionCommand({ channelConfig: params.channelConfig })) {
+        return;
+      }
+      if (!shouldEmitReactionCommandForMessageAuthor(params.messageAuthorId)) {
         return;
       }
       enqueueSystemEvent(
@@ -617,6 +635,17 @@ async function handleDiscordReactionEvent(
       const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
       emitReaction(text, route, contextKey);
+    };
+    let reactionMessagePromise: Promise<{ author?: User } | null> | null = null;
+    const loadReactionMessage = async () => {
+      if (!reactionMessagePromise) {
+        reactionMessagePromise = data.message.fetch().catch(() => null);
+      }
+      return await reactionMessagePromise;
+    };
+    const loadReactionMessageAuthorId = async () => {
+      const message = await loadReactionMessage();
+      return message?.author?.id ?? undefined;
     };
     const loadThreadParentInfo = async () => {
       if (!parentId) {
@@ -680,17 +709,23 @@ async function handleDiscordReactionEvent(
           }
         }
 
+        const messageAuthorId = shouldAttemptReactionCommand({ channelConfig: threadChannelConfig })
+          ? await loadReactionMessageAuthorId()
+          : undefined;
         const route = resolveReactionRoute(parentId);
         const { baseText, contextKey } = resolveReactionBase();
         emitReaction(baseText, route, contextKey);
-        emitReactionCommand({ route, contextKey, channelConfig: threadChannelConfig });
+        emitReactionCommand({
+          route,
+          contextKey,
+          channelConfig: threadChannelConfig,
+          messageAuthorId,
+        });
         return;
       }
 
       // For "own" mode, we need to fetch the message to check the author
-      const messagePromise = data.message.fetch().catch(() => null);
-
-      const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
+      const [channelInfo, message] = await Promise.all([channelInfoPromise, loadReactionMessage()]);
       const threadAccess = await authorizeThreadChannelAccess(channelInfo);
       if (!threadAccess.allowed) {
         return;
@@ -705,7 +740,12 @@ async function handleDiscordReactionEvent(
       const route = resolveReactionRoute(parentId);
       const { contextKey } = resolveReactionBase();
       emitReactionWithAuthor(message, route, contextKey);
-      emitReactionCommand({ route, contextKey, channelConfig: threadChannelConfig });
+      emitReactionCommand({
+        route,
+        contextKey,
+        channelConfig: threadChannelConfig,
+        messageAuthorId,
+      });
       return;
     }
 
@@ -743,15 +783,18 @@ async function handleDiscordReactionEvent(
         }
       }
 
+      const messageAuthorId = shouldAttemptReactionCommand({ channelConfig })
+        ? await loadReactionMessageAuthorId()
+        : undefined;
       const route = resolveReactionRoute(parentId);
       const { baseText, contextKey } = resolveReactionBase();
       emitReaction(baseText, route, contextKey);
-      emitReactionCommand({ route, contextKey, channelConfig });
+      emitReactionCommand({ route, contextKey, channelConfig, messageAuthorId });
       return;
     }
 
     // For "own" mode, we need to fetch the message to check the author
-    const message = await data.message.fetch().catch(() => null);
+    const message = await loadReactionMessage();
     const messageAuthorId = message?.author?.id ?? undefined;
     if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
       return;
@@ -760,7 +803,7 @@ async function handleDiscordReactionEvent(
     const route = resolveReactionRoute(parentId);
     const { contextKey } = resolveReactionBase();
     emitReactionWithAuthor(message, route, contextKey);
-    emitReactionCommand({ route, contextKey, channelConfig });
+    emitReactionCommand({ route, contextKey, channelConfig, messageAuthorId });
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
