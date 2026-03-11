@@ -29,7 +29,6 @@ const READ_ONLY_ACTIONS = new Set([
   "inspect",
   "check",
   "probe",
-  "lookup",
 ]);
 
 const PROCESS_MUTATING_ACTIONS = new Set(["write", "send_keys", "submit", "paste", "kill"]);
@@ -130,9 +129,11 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         // Gateway uses compound dotted action names (e.g. "config.schema.lookup")
         // where the leaf verb indicates a read-only operation. Cron and canvas
         // only use flat action enums, so skip the leaf check for them.
+        // "lookup" is gateway-specific and not in the shared READ_ONLY_ACTIONS
+        // set to keep cron/canvas fail-closed for unsupported actions.
         if (normalized === "gateway") {
           const leaf = action.split(".").pop();
-          return !leaf || !READ_ONLY_ACTIONS.has(leaf);
+          return !leaf || !(READ_ONLY_ACTIONS.has(leaf) || leaf === "lookup");
         }
         return true;
       }

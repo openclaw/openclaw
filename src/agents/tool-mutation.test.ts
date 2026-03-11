@@ -86,5 +86,8 @@ describe("tool mutation helpers", () => {
     expect(isMutatingToolCall("cron", { action: "list" })).toBe(false);
     expect(isMutatingToolCall("cron", { action: "jobs.list" })).toBe(true);
     expect(isMutatingToolCall("canvas", { action: "nodes.get" })).toBe(true);
+    // "lookup" is gateway-specific; cron/canvas stay fail-closed for it
+    expect(isMutatingToolCall("cron", { action: "lookup" })).toBe(true);
+    expect(isMutatingToolCall("canvas", { action: "lookup" })).toBe(true);
   });
 });
