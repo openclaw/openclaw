@@ -710,9 +710,26 @@ export async function runCapability(params: {
   const activeProvider = params.activeModel?.provider?.trim();
   if (capability === "image" && activeProvider) {
     // Check if imageModel is explicitly configured via agent defaults or shared media models
+    // that actually support the image capability.
     const configuredImageModels = resolveImageModelFromAgentDefaults(cfg);
-    const sharedModels = cfg.tools?.media?.models ?? [];
-    const hasExplicitImageModel = configuredImageModels.length > 0 || sharedModels.length > 0;
+    let hasExplicitImageModel = configuredImageModels.length > 0;
+    if (!hasExplicitImageModel) {
+      // Also check shared models, filtering to those that support image capability
+      const sharedModels = cfg.tools?.media?.models ?? [];
+      for (const entry of sharedModels) {
+        const caps =
+          entry.capabilities && entry.capabilities.length > 0
+            ? entry.capabilities
+            : normalizeMediaProviderId(entry.provider ?? "")
+              ? params.providerRegistry.get(normalizeMediaProviderId(entry.provider ?? "") ?? "")
+                  ?.capabilities
+              : undefined;
+        if (caps?.includes("image")) {
+          hasExplicitImageModel = true;
+          break;
+        }
+      }
+    }
 
     if (!hasExplicitImageModel) {
       const catalog = await loadModelCatalog({ config: cfg });
