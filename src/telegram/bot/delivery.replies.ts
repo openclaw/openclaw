@@ -578,7 +578,7 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-}): Promise<{ delivered: boolean }> {
+}): Promise<{ delivered: boolean; firstMessageId?: number }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
@@ -592,6 +592,7 @@ export async function deliverReplies(params: {
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
+  let firstMessageId: number | undefined;
   for (const originalReply of params.replies) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
@@ -688,6 +689,9 @@ export async function deliverReplies(params: {
         firstDeliveredMessageId,
       });
 
+      if (firstMessageId == null && firstDeliveredMessageId != null) {
+        firstMessageId = firstDeliveredMessageId;
+      }
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
@@ -717,5 +721,8 @@ export async function deliverReplies(params: {
     }
   }
 
-  return { delivered: progress.hasDelivered };
+  return {
+    delivered: progress.hasDelivered,
+    firstMessageId,
+  };
 }

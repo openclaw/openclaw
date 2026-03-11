@@ -509,6 +509,8 @@ export const dispatchTelegramMessage = async ({
   });
 
   let queuedFinal = false;
+  let toolSummaryMessageId: number | undefined;
+  const toolSummaryLines: string[] = [];
 
   if (statusReactionController) {
     void statusReactionController.setThinking();
@@ -535,6 +537,62 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          if (info.kind === "block" || info.kind === "final") {
+            toolSummaryMessageId = undefined;
+            toolSummaryLines.length = 0;
+          }
+          if (info.kind === "tool") {
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            if (hasMedia) {
+              toolSummaryMessageId = undefined;
+              toolSummaryLines.length = 0;
+              await sendPayload(payload);
+              return;
+            }
+            const line = typeof payload.text === "string" ? payload.text.trim() : "";
+            if (!line) {
+              return;
+            }
+            toolSummaryLines.push(line);
+            const aggregated = toolSummaryLines.join("\n");
+            if (toolSummaryMessageId === undefined) {
+              const result = await deliverReplies({
+                ...deliveryBaseOptions,
+                replies: [{ ...payload, text: aggregated }],
+                onVoiceRecording: sendRecordVoice,
+              });
+              if (result.delivered) {
+                deliveryState.markDelivered();
+                if (result.firstMessageId != null) {
+                  toolSummaryMessageId = result.firstMessageId;
+                }
+              }
+              return;
+            }
+            try {
+              await editMessageTelegram(chatId, toolSummaryMessageId, aggregated, {
+                api: bot.api,
+                cfg,
+                accountId: route.accountId,
+                linkPreview: telegramCfg.linkPreview,
+              });
+            } catch (err) {
+              logVerbose(`telegram: tool summary edit failed, sending new message: ${String(err)}`);
+              toolSummaryMessageId = undefined;
+              const res = await deliverReplies({
+                ...deliveryBaseOptions,
+                replies: [{ ...payload, text: aggregated }],
+                onVoiceRecording: sendRecordVoice,
+              });
+              if (res.delivered) {
+                deliveryState.markDelivered();
+                if (res.firstMessageId != null) {
+                  toolSummaryMessageId = res.firstMessageId;
+                }
+              }
+            }
+            return;
+          }
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
