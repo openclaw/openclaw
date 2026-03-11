@@ -10,19 +10,18 @@ type SystemRunPrepareInput = {
 
 export function buildSystemRunPreparePayload(params: SystemRunPrepareInput) {
   const argv = Array.isArray(params.command) ? params.command.map(String) : [];
-  const rawCommand =
+  const previewCommand =
     typeof params.rawCommand === "string" && params.rawCommand.trim().length > 0
       ? params.rawCommand
       : null;
-  const formattedArgv = formatExecCommand(argv) || null;
-  const commandPreview = rawCommand && rawCommand !== formattedArgv ? rawCommand : null;
+  const commandText = formatExecCommand(argv) || "";
+  const commandPreview = previewCommand && previewCommand !== commandText ? previewCommand : null;
   return {
     payload: {
-      cmdText: rawCommand ?? argv.join(" "),
       plan: {
         argv,
         cwd: typeof params.cwd === "string" ? params.cwd : null,
-        rawCommand: formattedArgv,
+        commandText,
         commandPreview,
         agentId: typeof params.agentId === "string" ? params.agentId : null,
         sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : null,

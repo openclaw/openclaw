@@ -97,11 +97,11 @@ describe("createNodesTool screen_record duration guardrails", () => {
       if (payload?.command === "system.run.prepare") {
         return {
           payload: {
-            cmdText: "echo hi",
             plan: {
               argv: ["bash", "-lc", "echo hi"],
               cwd: null,
-              rawCommand: null,
+              commandText: 'bash -lc "echo hi"',
+              commandPreview: "echo hi",
               agentId: null,
               sessionKey: null,
             },

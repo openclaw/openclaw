@@ -16,6 +16,7 @@ import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
+import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
@@ -257,12 +258,11 @@ function createExecApprovalRequestContainer(params: {
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
-  const commandPreview = formatCommandPreview(commandText, 1000);
-  const commandSecondaryPreview = formatOptionalCommandPreview(
-    params.request.request.commandPreview,
-    500,
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
+    params.request.request,
   );
+  const commandPreview = formatCommandPreview(commandText, 1000);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 500);
   const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
 
   return new ExecApprovalContainer({
@@ -286,12 +286,11 @@ function createResolvedContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
-  const commandPreview = formatCommandPreview(commandText, 500);
-  const commandSecondaryPreview = formatOptionalCommandPreview(
-    params.request.request.commandPreview,
-    300,
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
+    params.request.request,
   );
+  const commandPreview = formatCommandPreview(commandText, 500);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 300);
 
   const decisionLabel =
     params.decision === "allow-once"
@@ -324,12 +323,11 @@ function createExpiredContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
-  const commandPreview = formatCommandPreview(commandText, 500);
-  const commandSecondaryPreview = formatOptionalCommandPreview(
-    params.request.request.commandPreview,
-    300,
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
+    params.request.request,
   );
+  const commandPreview = formatCommandPreview(commandText, 500);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 300);
 
   return new ExecApprovalContainer({
     cfg: params.cfg,

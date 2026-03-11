@@ -305,7 +305,7 @@ describe("exec approval handlers", () => {
     systemRunPlan: {
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/tmp",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     },
@@ -358,7 +358,7 @@ describe("exec approval handlers", () => {
       requestParams.systemRunPlan = {
         argv: commandArgv,
         cwd: cwdValue,
-        rawCommand: commandText,
+        commandText: commandText ?? commandArgv.join(" "),
         agentId:
           typeof (requestParams as { agentId?: unknown }).agentId === "string"
             ? ((requestParams as { agentId: string }).agentId ?? null)
@@ -586,7 +586,7 @@ describe("exec approval handlers", () => {
         systemRunPlan: {
           argv: ["/usr/bin/echo", "ok"],
           cwd: "/real/cwd",
-          rawCommand: "/usr/bin/echo ok",
+          commandText: "/usr/bin/echo ok",
           commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
@@ -597,15 +597,15 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).toBe("/usr/bin/echo ok");
-    expect(request["commandPreview"]).toBe("echo ok");
-    expect(request["commandArgv"]).toEqual(["/usr/bin/echo", "ok"]);
+    expect(request["commandPreview"]).toBeUndefined();
+    expect(request["commandArgv"]).toBeUndefined();
     expect(request["cwd"]).toBe("/real/cwd");
     expect(request["agentId"]).toBe("main");
     expect(request["sessionKey"]).toBe("agent:main:main");
     expect(request["systemRunPlan"]).toEqual({
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
       commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -625,7 +625,7 @@ describe("exec approval handlers", () => {
         systemRunPlan: {
           argv: ["./env", "sh", "-c", "jq --version"],
           cwd: "/real/cwd",
-          rawCommand: './env sh -c "jq --version"',
+          commandText: './env sh -c "jq --version"',
           agentId: "main",
           sessionKey: "agent:main:main",
         },
@@ -635,7 +635,10 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).toBe('./env sh -c "jq --version"');
-    expect(request["commandPreview"]).toBe("jq --version");
+    expect(request["commandPreview"]).toBeUndefined();
+    expect((request["systemRunPlan"] as { commandPreview?: string }).commandPreview).toBe(
+      "jq --version",
+    );
   });
 
   it("accepts resolve during broadcast", async () => {
