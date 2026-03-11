@@ -538,10 +538,9 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("falls back when sendMayHaveLanded is true but no prior visible preview exists", async () => {
+  it("retains when the first preview send may have landed without a message id", async () => {
     const stream = createTestDraftStream();
     stream.sendMayHaveLanded.mockReturnValue(true);
-    // No messageId and no prior preview → nothing visible for user to see
     const harness = createHarness({ answerStream: stream });
 
     const result = await harness.deliverLaneText({
@@ -551,10 +550,10 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
-    // Prefer fallback (possible duplicate) over silence (no message at all)
-    expect(result).toBe("sent");
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Hello final" }),
+    expect(result).toBe("preview-retained");
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("first preview send may have landed despite missing message id"),
     );
   });
 
