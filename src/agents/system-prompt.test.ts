@@ -169,6 +169,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sample_parameters");
     expect(prompt).toContain("error recovery");
     expect(prompt).toContain("anti-patterns");
+    // QVeris-first: data path comes before web_search path
+    expect(prompt).toContain("Prefer qveris_discover + qveris_invoke");
+    // Query rewrite examples: bilingual pairs converging on English capability
+    expect(prompt).toContain("stock quote real-time API");
+    expect(prompt).toContain("stock historical price time series API");
+    expect(prompt).toContain("company earnings report API");
+    expect(prompt).toContain("web page content extraction API");
+    // Chinese side of paired examples
+    expect(prompt).toContain("腾讯最新股价");
+    expect(prompt).toContain("抓取网页正文");
+    // English side of paired examples
+    expect(prompt).toContain("latest Tencent stock price");
+    expect(prompt).toContain("extract webpage content");
+    // web_search scoped to articles/research
+    expect(prompt).toContain("articles, opinions, explanations, documentation, or broad research");
   });
 
   it("includes qveris_inspect step when tool is available", () => {
@@ -182,13 +197,39 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("recover discovery_id");
   });
 
-  it("omits QVeris routing section when qveris_discover is not available", () => {
-    const prompt = buildAgentSystemPrompt({
+  it("narrows web_search summary when QVeris is available", () => {
+    const withQveris = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["qveris_discover", "qveris_invoke", "web_search"],
+    });
+
+    expect(withQveris).toContain("prefer qveris_discover");
+    expect(withQveris).toContain(
+      "articles, opinions, explanations, documentation, and broad research",
+    );
+    expect(withQveris).toContain("historical sequence data");
+
+    const withoutQveris = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["web_search", "read"],
     });
 
-    expect(prompt).not.toContain("## Tool Routing: QVeris vs Local vs Web");
+    expect(withoutQveris).not.toContain("prefer qveris_discover");
+    expect(withoutQveris).not.toContain("## Tool Routing: QVeris vs Local vs Web");
+  });
+
+  it("does not instruct unavailable QVeris or web tools", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["qveris_discover", "web_search"],
+    });
+
+    expect(prompt).toContain("qveris_invoke is unavailable in this session");
+    expect(prompt).not.toContain("qveris_invoke error recovery");
+    expect(prompt).not.toContain("web_search + web_fetch");
+    expect(prompt).toContain(
+      "Use web_search for articles, opinions, explanations, documentation, and broad research.",
+    );
   });
 
   it("omits QVeris routing section in minimal prompt mode", () => {

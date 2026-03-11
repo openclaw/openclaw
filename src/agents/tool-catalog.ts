@@ -244,7 +244,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "qveris_discover",
     label: "qveris_discover",
-    description: "Discover third-party tools by capability",
+    description: "Discover specialized third-party tools by capability",
     sectionId: "web",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -252,7 +252,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "qveris_invoke",
     label: "qveris_invoke",
-    description: "Invoke a discovered third-party tool",
+    description: "Invoke a discovered third-party API or service",
     sectionId: "web",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -260,7 +260,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "qveris_inspect",
     label: "qveris_inspect",
-    description: "Inspect known third-party tools by ID",
+    description: "Inspect known third-party tools by ID for reuse",
     sectionId: "web",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,

@@ -468,11 +468,10 @@ function makeDiscoverResultTracker() {
 const QverisDiscoverSchema = Type.Object({
   query: Type.String({
     description:
-      "Capability-oriented discovery query in English. " +
-      "This discovers TOOLS (APIs/services), not data — results are tool candidates with metadata. " +
-      "GOOD: 'weather forecast API', 'web page content extraction', 'stock price real-time data'. " +
-      "BAD: 'what is the weather in Beijing', 'AAPL stock price today', 'ACP protocol documentation'. " +
-      "Describe the type of API tool you need, not your end task or question.",
+      "English API capability description. Describe the type of tool, not your task or question. " +
+      "GOOD: 'stock quote real-time API', 'stock historical price time series API', 'web page content extraction API'. " +
+      "BAD: 'what is the weather in Beijing' (question), 'AAPL stock price today' (task). " +
+      "Chinese input should also produce English capability: '腾讯最新股价' -> 'stock quote real-time API'.",
   }),
   limit: Type.Optional(
     Type.Number({
@@ -493,6 +492,12 @@ const QverisInvokeSchema = Type.Object({
       description:
         "The discovery_id from qveris_discover or qveris_inspect. " +
         "Required unless this session already knows the discovery_id for the tool_id from a prior discovery/inspect.",
+    }),
+  ),
+  search_id: Type.Optional(
+    Type.String({
+      description:
+        "Legacy alias for discovery_id. Prefer discovery_id for new calls, but older clients may still send search_id.",
     }),
   ),
   params_to_tool: Type.String({
@@ -596,11 +601,12 @@ export function createQverisTools(options?: {
     label: "QVeris Discover",
     name: "qveris_discover",
     description:
-      "Discover third-party API tools by capability type. " +
-      "Returns TOOL CANDIDATES with metadata (not data results). " +
-      "Use for: real-time data APIs (prices, weather, metrics), external services (image gen, OCR, TTS, translation), and geo/location APIs. " +
-      "NOT for: local operations, documentation/tutorials, software configuration, or general web content. " +
-      "Describe the TOOL CAPABILITY you need in English (e.g. 'weather forecast API'), not your task goal or question.",
+      "Find specialized API tools for exact current values, historical sequence data, structured reports, " +
+      "web extraction/crawling, PDF workflows, or external service capabilities " +
+      "(OCR, speech, image/video understanding or generation, translation, geocoding). " +
+      "Preferred over web_search when a specialized provider can return the answer or perform the work directly. " +
+      "NOT for: local file operations, software documentation. " +
+      "Query must describe the API capability in English.",
     parameters: QverisDiscoverSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -656,7 +662,7 @@ export function createQverisTools(options?: {
     label: "QVeris Invoke",
     name: "qveris_invoke",
     description:
-      "Invoke a discovered third-party tool with provided parameters. " +
+      "Invoke a discovered third-party API/service with provided parameters. " +
       "tool_id is required; discovery_id should come from qveris_discover or qveris_inspect. " +
       "Pass parameters to the tool through params_to_tool as a JSON string.",
     parameters: QverisInvokeSchema,
@@ -778,7 +784,7 @@ export function createQverisTools(options?: {
     name: "qveris_inspect",
     description:
       "Inspect known QVeris tools by their IDs without a full discovery. " +
-      "Use when you already have a tool_id from a previous qveris_discover or session context and want to verify availability, recover discovery_id when known, and get current parameter schemas. " +
+      "Use when you already have a tool_id from a previous qveris_discover or session context and want to verify availability, recover discovery_id when known, and get current parameter schemas before reusing the tool. " +
       "Returns tool details including params, sample_parameters, stats, and discovery_id when the session knows it.",
     parameters: QverisInspectSchema,
     execute: async (_toolCallId, args) => {

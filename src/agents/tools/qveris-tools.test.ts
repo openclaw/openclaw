@@ -197,8 +197,32 @@ describe("createQverisTools", () => {
     const tools = createQverisTools({ config: makeConfig() });
     const discover = tools.find((t) => t.name === "qveris_discover");
     expect(discover?.description).toContain("NOT for");
-    expect(discover?.description).toContain("local operations");
+    expect(discover?.description).toContain("local file operations");
     expect(discover?.description).toContain("documentation");
+    expect(discover?.description).toContain("historical sequence data");
+    expect(discover?.description).toContain("web extraction/crawling");
+  });
+
+  it("qveris_invoke schema preserves legacy search_id alias", () => {
+    const tools = createQverisTools({ config: makeConfig() });
+    const invoke = tools.find((t) => t.name === "qveris_invoke");
+    const schema = invoke?.parameters as { properties?: Record<string, unknown> } | undefined;
+
+    expect(schema?.properties?.discovery_id).toBeDefined();
+    expect(schema?.properties?.search_id).toBeDefined();
+  });
+
+  it("qveris_discover query schema includes bilingual rewrite guidance", () => {
+    const tools = createQverisTools({ config: makeConfig() });
+    const discover = tools.find((t) => t.name === "qveris_discover");
+    const schema = discover?.parameters as {
+      properties?: Record<string, { description?: string }>;
+    };
+
+    const queryDescription = schema.properties?.query?.description ?? "";
+    // Schema description should contain bilingual guidance (concise)
+    expect(queryDescription).toContain("腾讯最新股价");
+    expect(queryDescription).toContain("stock quote real-time API");
   });
 
   it("qveris_inspect executes and returns tool details", async () => {
