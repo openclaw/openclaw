@@ -150,4 +150,37 @@ describe("refreshGatewayHealthSnapshot", () => {
     // Only one call; no pending snapshot.
     expect(mockGetHealthSnapshot).toHaveBeenCalledTimes(1);
   });
+
+  it("returns the follow-up result (not stale) when runtimeSnapshot is provided during flight", async () => {
+    const snap1 = makeRuntimeSnapshot(false);
+    const snap2 = makeRuntimeSnapshot(true);
+
+    const staleResult = makeHealthSummary({ ts: 1 });
+    const freshResult = makeHealthSummary({ ts: 2 });
+
+    let resolveFirst!: (v: HealthSummary) => void;
+    const firstDone = new Promise<HealthSummary>((r) => {
+      resolveFirst = r;
+    });
+
+    mockGetHealthSnapshot
+      .mockImplementationOnce(() => firstDone)
+      .mockResolvedValueOnce(freshResult);
+
+    // Start first refresh (in-flight).
+    const p1 = refreshGatewayHealthSnapshot({ runtimeSnapshot: snap1 });
+
+    // Second call arrives with a fresher snapshot while first is in-flight.
+    const p2 = refreshGatewayHealthSnapshot({ runtimeSnapshot: snap2 });
+
+    // Complete the first (stale) refresh.
+    resolveFirst(staleResult);
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    // First caller gets the stale result (it started the refresh).
+    expect(r1.ts).toBe(1);
+    // Second caller must get the fresh follow-up result, not the stale one.
+    expect(r2.ts).toBe(2);
+  });
 });

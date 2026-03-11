@@ -115,6 +115,18 @@ export async function refreshGatewayHealthSnapshot(opts?: {
         void refreshGatewayHealthSnapshot({ probe: opts?.probe });
       }
     });
+  } else if (opts?.runtimeSnapshot !== undefined) {
+    // Caller provided fresh runtime data that the in-flight refresh won't include.
+    // Wait for the current refresh to complete (its finally block will kick off a
+    // follow-up using pendingRuntimeSnapshot), then return the follow-up result so
+    // the caller receives a snapshot that includes the latest runtime state.
+    await healthRefresh;
+    // After the finally block runs, healthRefresh is either the follow-up promise
+    // (if pendingRuntimeSnapshot was set) or null.
+    if (healthRefresh) {
+      return healthRefresh;
+    }
+    return healthCache!;
   }
   return healthRefresh;
 }
