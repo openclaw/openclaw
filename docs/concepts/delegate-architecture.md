@@ -139,6 +139,8 @@ https://www.googleapis.com/auth/calendar           # Tier 2
 
 The service account impersonates the delegate user (not the principal), preserving the "on behalf of" model.
 
+> **Security warning**: domain-wide delegation allows the service account to impersonate **any user in the entire domain**. Restrict the scopes to the minimum required, and limit the service account's client ID to only the scopes listed above in the Admin Console (Security > API controls > Domain-wide delegation). A leaked service account key with broad scopes grants full access to every mailbox and calendar in the organization.
+
 ### 3. Bind the delegate to channels
 
 Route inbound messages to the delegate agent using [Multi-Agent Routing](/concepts/multi-agent) bindings:
@@ -208,7 +210,7 @@ Use per-agent tool policy (v2026.1.6+) to enforce boundaries at the Gateway leve
   workspace: "~/.openclaw/workspace-delegate",
   tools: {
     allow: ["read", "exec", "message", "cron"],
-    deny: ["write", "edit", "apply_patch", "browser"],
+    deny: ["write", "edit", "apply_patch", "browser", "canvas"],
   },
 }
 ```
