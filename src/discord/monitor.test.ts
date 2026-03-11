@@ -1277,6 +1277,40 @@ describe("discord DM reaction handling", () => {
     expect(dedupeKey).toBe("discord:reaction:cmd:added:msg-replay-1:123:✅:accept");
   });
 
+  it("clears triage command dedupe key on remove even when own-mode message fetch fails", async () => {
+    clearSystemEventDedupeKeySpy.mockClear();
+
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      emojiName: "✅",
+      userId: "123",
+      messageId: "msg-remove-fetch-fail",
+      guild: { name: "Test Guild" },
+      messageFetch: vi.fn(async () => {
+        throw new Error("fetch failed");
+      }),
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionRemoveListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "own",
+            users: ["123"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(clearSystemEventDedupeKeySpy).toHaveBeenCalledOnce();
+    const [sessionKey, dedupeKey] = clearSystemEventDedupeKeySpy.mock.calls[0] as [string, string];
+    expect(sessionKey).toBe("discord:acc-1:dm:user-1");
+    expect(dedupeKey).toBe("discord:reaction:cmd:added:msg-remove-fetch-fail:123:✅:accept");
+  });
+
   it("does not emit triage command intents for non-bot-authored messages in allowlist mode", async () => {
     enqueueSystemEventSpy.mockClear();
 

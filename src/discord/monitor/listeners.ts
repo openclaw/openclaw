@@ -591,6 +591,27 @@ async function handleDiscordReactionEvent(
         canEmitReactionCommand({ channelConfig: params.channelConfig, mode: params.mode })
       );
     };
+    const clearReactionCommandDedupeForRemove = (params: {
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+      mode?: "off" | "own" | "all" | "allowlist";
+    }) => {
+      if (action !== "removed") {
+        return;
+      }
+      if (
+        !shouldAttemptReactionCommand({ channelConfig: params.channelConfig, mode: params.mode })
+      ) {
+        return;
+      }
+      const route = resolveReactionRoute(parentId);
+      const { contextKey } = resolveReactionBase();
+      emitReactionCommand({
+        route,
+        contextKey,
+        channelConfig: params.channelConfig,
+        mode: params.mode,
+      });
+    };
     const emitReactionCommand = (params: {
       route: ReturnType<typeof resolveAgentRoute>;
       contextKey: string;
@@ -749,21 +770,27 @@ async function handleDiscordReactionEvent(
       }
 
       const messageAuthorId = message?.author?.id ?? undefined;
+      const threadChannelConfig = resolveThreadChannelConfig();
+      clearReactionCommandDedupeForRemove({
+        channelConfig: threadChannelConfig,
+        mode: reactionMode,
+      });
       if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
         return;
       }
 
-      const threadChannelConfig = resolveThreadChannelConfig();
       const route = resolveReactionRoute(parentId);
       const { contextKey } = resolveReactionBase();
       emitReactionWithAuthor(message, route, contextKey);
-      emitReactionCommand({
-        route,
-        contextKey,
-        channelConfig: threadChannelConfig,
-        messageAuthorId,
-        mode: reactionMode,
-      });
+      if (action === "added") {
+        emitReactionCommand({
+          route,
+          contextKey,
+          channelConfig: threadChannelConfig,
+          messageAuthorId,
+          mode: reactionMode,
+        });
+      }
       return;
     }
 
@@ -823,6 +850,7 @@ async function handleDiscordReactionEvent(
     // For "own" mode, we need to fetch the message to check the author
     const message = await loadReactionMessage();
     const messageAuthorId = message?.author?.id ?? undefined;
+    clearReactionCommandDedupeForRemove({ channelConfig, mode: reactionMode });
     if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
       return;
     }
@@ -830,7 +858,15 @@ async function handleDiscordReactionEvent(
     const route = resolveReactionRoute(parentId);
     const { contextKey } = resolveReactionBase();
     emitReactionWithAuthor(message, route, contextKey);
-    emitReactionCommand({ route, contextKey, channelConfig, messageAuthorId, mode: reactionMode });
+    if (action === "added") {
+      emitReactionCommand({
+        route,
+        contextKey,
+        channelConfig,
+        messageAuthorId,
+        mode: reactionMode,
+      });
+    }
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
