@@ -44,6 +44,9 @@ actor TalkModeRuntime {
     private var recognitionGeneration: Int = 0
     private var rmsTask: Task<Void, Never>?
     private let rmsMeter = RMSMeter()
+    private var useExecuTorch = false
+    private var etBridge: ExecuTorchSTTBridge { ExecuTorchSTTBridge.shared }
+    private var etTranscriptTask: Task<Void, Never>?
 
     private var captureTask: Task<Void, Never>?
     private var silenceTask: Task<Void, Never>?
@@ -129,6 +132,17 @@ actor TalkModeRuntime {
             return
         }
         await self.reloadConfig()
+        self.useExecuTorch = await MainActor.run { AppStateStore.shared.talkSttBackend == .executorch }
+        if self.useExecuTorch {
+            self.logger.info("talk STT backend: ExecuTorch Voxtral")
+            do {
+                try await self.etBridge.loadModel()
+            } catch {
+                self.logger.error("ExecuTorch model load failed: \(error.localizedDescription, privacy: .public)")
+                self.useExecuTorch = false
+                self.logger.info("talk STT backend: falling back to Apple Speech")
+            }
+        }
         guard self.isCurrent(gen) else { return }
         if self.isPaused {
             self.phase = .idle
@@ -159,6 +173,9 @@ actor TalkModeRuntime {
         self.lastSpeechEnergyAt = nil
         self.phase = .idle
         await self.stopRecognition()
+        if self.useExecuTorch {
+            await self.etBridge.shutdown()
+        }
         await MainActor.run {
             TalkModeController.shared.updateLevel(0)
             TalkModeController.shared.updatePhase(.idle)
@@ -179,6 +196,11 @@ actor TalkModeRuntime {
         await self.stopRecognition()
         self.recognitionGeneration &+= 1
         let generation = self.recognitionGeneration
+
+        if self.useExecuTorch {
+            await self.startExecuTorchRecognition(generation: generation)
+            return
+        }
 
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
@@ -237,6 +259,41 @@ actor TalkModeRuntime {
         }
     }
 
+    // MARK: - ExecuTorch Recognition
+
+    private func startExecuTorchRecognition(generation: Int) async {
+        do {
+            try await self.etBridge.startListening { [weak self, generation] token, isFinal in
+                guard let self else { return }
+                Task {
+                    await self.handleExecuTorchToken(token, isFinal: isFinal, generation: generation)
+                }
+            }
+        } catch {
+            self.logger.error("ExecuTorch listen failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func handleExecuTorchToken(_ token: String, isFinal: Bool, generation: Int) async {
+        guard generation == self.recognitionGeneration else { return }
+        guard !self.isPaused else { return }
+
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if self.phase == .speaking, self.interruptOnSpeech {
+            await self.stopSpeaking(reason: .speech)
+            self.lastTranscript = ""
+            self.lastHeard = nil
+            await self.startListening()
+            return
+        }
+
+        guard self.phase == .listening else { return }
+        self.lastTranscript += trimmed
+        self.lastHeard = Date()
+    }
+
     private func stopRecognition() async {
         self.recognitionGeneration &+= 1
         self.recognitionTask?.cancel()
@@ -249,6 +306,11 @@ actor TalkModeRuntime {
         self.recognizer = nil
         self.rmsTask?.cancel()
         self.rmsTask = nil
+        self.etTranscriptTask?.cancel()
+        self.etTranscriptTask = nil
+        if self.useExecuTorch {
+            await self.etBridge.stopListening()
+        }
     }
 
     private func startRMSTicker(meter: RMSMeter) {

@@ -145,6 +145,14 @@ final class AppState {
         }
     }
 
+    var talkSttBackend: TalkSttBackend {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.talkSttBackend.rawValue, forKey: talkSttBackendKey)
+            }
+        }
+    }
+
     /// Gateway-provided UI accent color (hex). Optional; clients provide a default.
     var seamColorHex: String?
 
@@ -276,6 +284,8 @@ final class AppState {
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
+        let sttRaw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? TalkSttBackend.appleSpeech.rawValue
+        self.talkSttBackend = TalkSttBackend(rawValue: sttRaw) ?? .appleSpeech
         self.seamColorHex = nil
         if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
             self.heartbeatsEnabled = storedHeartbeats
@@ -755,6 +765,7 @@ extension AppState {
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
+        state.talkSttBackend = .appleSpeech
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
