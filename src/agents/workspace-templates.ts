@@ -4,7 +4,7 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { pathExists } from "../utils.js";
 
 /**
- * Compute fallback template directories relative to the current module.
+ * Compute fallback template directory candidates relative to a module URL.
  *
  * In the source tree the module lives at `src/agents/workspace-templates.ts`,
  * so `../../docs/reference/templates` resolves correctly to the repo root.
@@ -15,11 +15,13 @@ import { pathExists } from "../utils.js";
  * both `../../` (source) and `../` (bundled dist) as fallback candidates
  * to handle either layout.
  */
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const FALLBACK_TEMPLATE_DIRS = [
-  path.resolve(MODULE_DIR, "../../docs/reference/templates"), // source layout (src/agents/)
-  path.resolve(MODULE_DIR, "../docs/reference/templates"), // bundled layout (dist/)
-];
+function computeFallbackTemplateDirs(moduleUrl: string): string[] {
+  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  return [
+    path.resolve(moduleDir, "../../docs/reference/templates"), // source layout (src/agents/)
+    path.resolve(moduleDir, "../docs/reference/templates"), // bundled layout (dist/)
+  ];
+}
 
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
@@ -42,11 +44,12 @@ export async function resolveWorkspaceTemplateDir(opts?: {
     const cwd = opts?.cwd ?? process.cwd();
 
     const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
+    const fallbackDirs = computeFallbackTemplateDirs(moduleUrl);
     const candidates = [
       // Preferred: resolved package root (most reliable)
       packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
       // Fallback: relative to module file (handles both source and bundled layouts)
-      ...FALLBACK_TEMPLATE_DIRS,
+      ...fallbackDirs,
       // Last resort: relative to cwd (only useful if running from repo checkout)
       cwd ? path.resolve(cwd, "docs", "reference", "templates") : null,
     ].filter(Boolean) as string[];
@@ -60,7 +63,7 @@ export async function resolveWorkspaceTemplateDir(opts?: {
 
     // No candidate exists — return the package-root-based path (or first
     // fallback) so the downstream error message shows a meaningful path.
-    cachedTemplateDir = candidates[0] ?? FALLBACK_TEMPLATE_DIRS[0];
+    cachedTemplateDir = candidates[0] ?? fallbackDirs[0];
     return cachedTemplateDir;
   })();
 
