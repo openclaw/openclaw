@@ -165,6 +165,41 @@ describe("pruneContextMessages", () => {
     );
   });
 
+  it("replaces image-only tool results with placeholders even when text trimming is not needed", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "image", data: "img", mimeType: "image/png" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "[image removed during context pruning]" },
+    ]);
+  });
+
   it("hard-clears image-containing tool results once ratios require clearing", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
