@@ -1,0 +1,41 @@
+{
+  "name": "@openfinclaw/openfinclaw",
+  "version": "0.0.3",
+  "description": "OpenFinClaw - Financial tools for OpenClaw: strategy builder, remote backtest",
+  "keywords": [
+    "backtest",
+    "crypto",
+    "financial",
+    "openclaw",
+    "openfinclaw",
+    "strategy",
+    "trading"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cryptoSUN2049/openFinclaw.git",
+    "directory": "extensions/openfinclaw"
+  },
+  "files": [
+    "skills",
+    "src",
+    "*.ts",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

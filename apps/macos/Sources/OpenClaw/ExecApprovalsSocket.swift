@@ -5,7 +5,7 @@ import Foundation
 import OpenClawKit
 import OSLog
 
-struct ExecApprovalPromptRequest: Codable, Sendable {
+struct ExecApprovalPromptRequest: Codable {
     var command: String
     var cwd: String?
     var host: String?

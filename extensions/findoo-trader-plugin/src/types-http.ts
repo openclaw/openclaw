@@ -79,11 +79,6 @@ export type StrategyRegistryLike = {
     name: string;
     level: string;
     status?: string;
-    definition?: {
-      markets?: string[];
-      symbols?: string[];
-      timeframes?: string[];
-    };
     lastBacktest?: {
       totalReturn: number;
       sharpe: number;
@@ -116,6 +111,32 @@ export type FundManagerLike = {
   getState: () => {
     allocations: Array<{ strategyId: string; capitalUsd: number; weightPct: number }>;
     totalCapital: number;
+  };
+};
+
+export type BacktestEngineLike = {
+  run: (
+    definition: Record<string, unknown>,
+    ohlcv: Array<{
+      timestamp: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }>,
+    config?: Record<string, unknown>,
+  ) => {
+    totalReturn: number;
+    sharpe: number;
+    sortino: number;
+    maxDrawdown: number;
+    winRate: number;
+    profitFactor: number;
+    totalTrades: number;
+    finalEquity: number;
+    initialCapital: number;
+    strategyId: string;
   };
 };
 
@@ -160,10 +181,7 @@ export type AlertEngineLike = {
 
 // ── Runtime services accessor ──
 
-export type RuntimeServices = {
-  services?: Map<string, unknown>;
-  system?: { enqueueSystemEvent?: (...args: unknown[]) => void };
-};
+export type RuntimeServices = { services?: Map<string, unknown> };
 
 // ── HTTP helper functions ──
 

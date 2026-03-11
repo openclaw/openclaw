@@ -12,6 +12,7 @@ import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
+import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import {
   isPluginHookName,
@@ -335,6 +336,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const match = params.match ?? "exact";
+    const overlappingRoute = findOverlappingPluginHttpRoute(registry.httpRoutes, {
+      path: normalizedPath,
+      match,
+    });
+    if (overlappingRoute && overlappingRoute.auth !== params.auth) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          `http route overlap rejected: ${normalizedPath} (${match}, ${params.auth}) ` +
+          `overlaps ${overlappingRoute.path} (${overlappingRoute.match}, ${overlappingRoute.auth}) ` +
+          `owned by ${describeHttpRouteOwner(overlappingRoute)}`,
+      });
+      return;
+    }
     const existingIndex = registry.httpRoutes.findIndex(
       (entry) => entry.path === normalizedPath && entry.match === match,
     );

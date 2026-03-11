@@ -3,7 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+import {
+  isPackageProvenControlUiRootSync,
+  resolveControlUiRootSync,
+} from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
@@ -39,6 +42,7 @@ export type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
+  | { kind: "bundled"; path: string }
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
@@ -236,7 +240,10 @@ function serveResolvedIndexHtml(
 ) {
   if (opts?.injectAuthToken) {
     // Escape for safe embedding in a JS string literal inside an inline <script>.
-    const safeToken = opts.injectAuthToken.replace(/[\\'"<>&]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const safeToken = opts.injectAuthToken.replace(
+      /[\\'"<>&]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
     const snippet = [
       "<script>",
       "try{",
@@ -273,6 +280,7 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
+  rejectHardlinks: boolean,
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -280,6 +288,7 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    rejectHardlinks,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
@@ -407,7 +416,7 @@ export function handleControlUiHttpRequest(
   }
 
   const root =
-    rootState?.kind === "resolved"
+    rootState?.kind === "resolved" || rootState?.kind === "bundled"
       ? rootState.path
       : resolveControlUiRootSync({
           moduleUrl: import.meta.url,
@@ -463,7 +472,16 @@ export function handleControlUiHttpRequest(
   // served index.html so the Control UI can auto-connect without manual entry.
   const injectAuthToken = resolveInjectableAuthToken(opts?.config);
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  const isBundledRoot =
+    rootState?.kind === "bundled" ||
+    (rootState === undefined &&
+      isPackageProvenControlUiRootSync(root, {
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      }));
+  const rejectHardlinks = !isBundledRoot;
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -492,7 +510,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {

@@ -1,12 +1,36 @@
 {
   "recommended": [
     {
+      "id": "fin-strategy-builder",
+      "description": "Strategy builder — FEP v1.1 strategy packages, validation, L1/L2 routing; use with fin-backtest-remote for remote backtest"
+    },
+    {
+      "id": "fin-market-data",
+      "description": "Real-time prices, charts, and market data"
+    },
+    {
+      "id": "fin-portfolio",
+      "description": "Portfolio tracking and P&L analysis"
+    },
+    {
+      "id": "fin-trading",
+      "description": "Order execution with safety confirmations"
+    },
+    {
       "id": "fin-dca-strategy",
       "description": "Dollar-cost averaging plan builder"
     },
     {
       "id": "fin-tax-report",
       "description": "Tax reporting and capital gains calculation"
+    },
+    {
+      "id": "fin-alerts",
+      "description": "Price and portfolio alert monitoring"
+    },
+    {
+      "id": "fin-expert",
+      "description": "Deep financial analysis and research"
     },
     {
       "id": "fin-risk-manager",
@@ -44,6 +68,5 @@
       "id": "fin-trade-review",
       "description": "Trade review and learning — error book, success patterns, experience insights"
     }
-  ],
-  "note": "These skills require findoo-trader-plugin + findoo-datahub-plugin extensions. Legacy fin-market-data/fin-portfolio/fin-trading skills have been replaced."
+  ]
 }
