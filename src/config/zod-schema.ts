@@ -651,6 +651,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        access: z
+          .object({
+            adminUsers: z.array(z.string()).optional(),
+            roles: z.record(z.string(), z.enum(["admin", "user", "guest"])).optional(),
+            defaultRole: z.enum(["admin", "user", "guest"]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
