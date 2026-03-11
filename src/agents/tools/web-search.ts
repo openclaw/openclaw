@@ -1082,9 +1082,20 @@ function isDirectBraveSearchLangToken(value: string | undefined): boolean {
   if (!trimmed || trimmed.length > MAX_BRAVE_LANG_TAG_LENGTH) {
     return false;
   }
+
   const lowered = trimmed.toLowerCase();
   const aliased = BRAVE_SEARCH_LANG_ALIASES[lowered] ?? lowered;
-  return BRAVE_SEARCH_LANG_CODES.has(aliased);
+  if (BRAVE_SEARCH_LANG_CODES.has(aliased)) {
+    return true;
+  }
+
+  // Accept canonical Chinese alias forms for swap recovery (`zh`, `zh-CN`,
+  // `zh-Hant-HK`, etc.) while still rejecting underscore formats like `zh_CN`.
+  if (/^zh(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/.test(lowered)) {
+    return normalizeBraveSearchLang(lowered) !== undefined;
+  }
+
+  return false;
 }
 
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
@@ -1114,8 +1125,8 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
   let uiLangCandidate = rawUiLang;
 
   // Recover common LLM mix-up: locale in search_lang + short code in ui_lang.
-  // Only swap when ui_lang already looks like a direct Brave search_lang token.
-  // This avoids silently accepting invalid ui_lang locale forms like `zh_CN`.
+  // Only swap when ui_lang already looks like a Brave search_lang token
+  // (including canonical Chinese aliases like `zh`/`zh-CN`, but not `zh_CN`).
   if (
     normalizeBraveUiLang(rawSearchLang) &&
     normalizeBraveSearchLang(rawUiLang) &&

@@ -133,6 +133,14 @@ describe("web_search brave language param normalization", () => {
       search_lang: "en",
       ui_lang: "en-US",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "en-US", ui_lang: "zh" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: "en-US",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "en-US", ui_lang: "zh-CN" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: "en-US",
+    });
   });
 
   it("normalizes Chinese locale variants to Brave-supported search_lang values", () => {
