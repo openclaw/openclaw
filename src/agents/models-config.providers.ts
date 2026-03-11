@@ -73,6 +73,163 @@ export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
+const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
+const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
+const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
+const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
+const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
+// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+const MINIMAX_API_COST = {
+  input: 15,
+  output: 60,
+  cacheRead: 2,
+  cacheWrite: 10,
+};
+
+const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
+export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
+const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
+const XIAOMI_DEFAULT_MAX_TOKENS = 8192;
+const XIAOMI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
+const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
+const MOONSHOT_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+// Amazon Nova 1P API (direct API, not Bedrock)
+const AMAZON_NOVA_BASE_URL = "https://api.nova.amazon.com/v1";
+export const AMAZON_NOVA_DEFAULT_MODEL_ID = "nova-2-lite-v1";
+const AMAZON_NOVA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const AMAZON_NOVA_HEADERS = { "Accept-Encoding": "identity" } as const;
+
+const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
+const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
+const QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW = 128000;
+const QWEN_PORTAL_DEFAULT_MAX_TOKENS = 8192;
+const QWEN_PORTAL_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
+const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
+const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
+const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
+const OLLAMA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
+export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
+const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
+const QIANFAN_DEFAULT_MAX_TOKENS = 32768;
+const QIANFAN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+interface OllamaModel {
+  name: string;
+  modified_at: string;
+  size: number;
+  digest: string;
+  details?: {
+    family?: string;
+    parameter_size?: string;
+  };
+}
+
+interface OllamaTagsResponse {
+  models: OllamaModel[];
+}
+
+/**
+ * Derive the Ollama native API base URL from a configured base URL.
+ *
+ * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
+ * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
+ * The native Ollama API lives at the root (e.g. `/api/tags`), so we
+ * strip the `/v1` suffix when present.
+ */
+export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
+  if (!configuredBaseUrl) {
+    return OLLAMA_API_BASE_URL;
+  }
+  // Strip trailing slash, then strip /v1 suffix if present
+  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
+  return trimmed.replace(/\/v1$/i, "");
+}
+
+async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
+  // Skip Ollama discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    const apiBase = resolveOllamaApiBase(baseUrl);
+    const response = await fetch(`${apiBase}/api/tags`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover Ollama models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as OllamaTagsResponse;
+    if (!data.models || data.models.length === 0) {
+      console.warn("No Ollama models found on local instance");
+      return [];
+    }
+    return data.models.map((model) => {
+      const modelId = model.name;
+      const isReasoning =
+        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+      return {
+        id: modelId,
+        name: modelId,
+        reasoning: isReasoning,
+        input: ["text"],
+        cost: OLLAMA_DEFAULT_COST,
+        contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+        // Disable streaming by default for Ollama to avoid SDK issue #1205
+        // See: https://github.com/badlogic/pi-mono/issues/1205
+        params: {
+          streaming: false,
+        },
+      };
+    });
+  } catch (error) {
+    console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
@@ -503,6 +660,213 @@ function mergeImplicitProviderSet(
   }
 }
 
+function buildMinimaxProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_API_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: MINIMAX_DEFAULT_VISION_MODEL_ID,
+        name: "MiniMax VL 01",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function buildMinimaxPortalProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function buildMoonshotProvider(): ProviderConfig {
+  return {
+    baseUrl: MOONSHOT_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: MOONSHOT_DEFAULT_MODEL_ID,
+        name: "Kimi K2.5",
+        reasoning: false,
+        input: ["text"],
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+export function buildAmazonNovaProvider(): ProviderConfig {
+  return {
+    baseUrl: AMAZON_NOVA_BASE_URL,
+    api: "openai-completions",
+    headers: AMAZON_NOVA_HEADERS,
+    models: [
+      {
+        id: "nova-2-lite-v1",
+        name: "Amazon Nova 2 Lite",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: AMAZON_NOVA_DEFAULT_COST,
+        contextWindow: 1000000,
+        maxTokens: 65535,
+        compat: {
+          supportsReasoningEffort: true,
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens",
+        },
+      },
+      {
+        id: "nova-2-pro-v1",
+        name: "Amazon Nova 2 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: AMAZON_NOVA_DEFAULT_COST,
+        contextWindow: 1000000,
+        maxTokens: 65535,
+        compat: {
+          supportsReasoningEffort: true,
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens",
+        },
+      },
+    ],
+  };
+}
+
+function buildQwenPortalProvider(): ProviderConfig {
+  return {
+    baseUrl: QWEN_PORTAL_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "coder-model",
+        name: "Qwen Coder",
+        reasoning: false,
+        input: ["text"],
+        cost: QWEN_PORTAL_DEFAULT_COST,
+        contextWindow: QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QWEN_PORTAL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "vision-model",
+        name: "Qwen Vision",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: QWEN_PORTAL_DEFAULT_COST,
+        contextWindow: QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QWEN_PORTAL_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function buildSyntheticProvider(): ProviderConfig {
+  return {
+    baseUrl: SYNTHETIC_BASE_URL,
+    api: "anthropic-messages",
+    models: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
+  };
+}
+
+export function buildXiaomiProvider(): ProviderConfig {
+  return {
+    baseUrl: XIAOMI_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: XIAOMI_DEFAULT_MODEL_ID,
+        name: "Xiaomi MiMo V2 Flash",
+        reasoning: false,
+        input: ["text"],
+        cost: XIAOMI_DEFAULT_COST,
+        contextWindow: XIAOMI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: XIAOMI_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+async function buildVeniceProvider(): Promise<ProviderConfig> {
+  const models = await discoverVeniceModels();
+  return {
+    baseUrl: VENICE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
+  const models = await discoverOllamaModels(configuredBaseUrl);
+  return {
+    baseUrl: configuredBaseUrl ?? OLLAMA_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+function buildTogetherProvider(): ProviderConfig {
+  return {
+    baseUrl: TOGETHER_BASE_URL,
+    api: "openai-completions",
+    models: TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition),
+  };
+}
+
+export function buildQianfanProvider(): ProviderConfig {
+  return {
+    baseUrl: QIANFAN_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: QIANFAN_DEFAULT_MODEL_ID,
+        name: "DEEPSEEK V3.2",
+        reasoning: true,
+        input: ["text"],
+        cost: QIANFAN_DEFAULT_COST,
+        contextWindow: QIANFAN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QIANFAN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "ernie-5.0-thinking-preview",
+        name: "ERNIE-5.0-Thinking-Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: QIANFAN_DEFAULT_COST,
+        contextWindow: 119000,
+        maxTokens: 64000,
+      },
+    ],
+  };
+}
+
 const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
   withApiKey("moonshot", async ({ apiKey }) => ({ ...buildMoonshotProvider(), apiKey })),
@@ -527,6 +891,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildKilocodeProviderWithDiscovery()),
     apiKey,
   })),
+  withApiKey("amazon-nova", async ({ apiKey }) => ({ ...buildAmazonNovaProvider(), apiKey })),
 ];
 
 const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [

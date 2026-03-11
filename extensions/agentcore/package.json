@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/agentcore",
+  "version": "2026.3.10",
+  "description": "OpenClaw ACP runtime backend via AWS Bedrock AgentCore",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.0.0",
+    "@aws-sdk/client-ssm": "^3.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

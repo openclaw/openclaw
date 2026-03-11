@@ -1,0 +1,9 @@
+{
+  "id": "nova",
+  "channels": ["nova"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

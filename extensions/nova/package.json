@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/nova",
+  "version": "2026.2.1",
+  "description": "OpenClaw Nova channel plugin (nova.amazon.com)",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "nova",
+      "label": "Nova",
+      "selectionLabel": "Nova (WebSocket)",
+      "docsPath": "/channels/nova",
+      "docsLabel": "nova",
+      "blurb": "nova.amazon.com via WebSocket.",
+      "order": 80
+    },
+    "install": {
+      "npmSpec": "@openclaw/nova",
+      "localPath": "extensions/nova",
+      "defaultChoice": "local"
+    }
+  }
+}

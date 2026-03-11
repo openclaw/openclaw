@@ -43,6 +43,7 @@ export type AuthChoice =
   | "minimax-portal"
   | "opencode-zen"
   | "opencode-go"
+  | "amazon-nova-api-key"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
@@ -84,6 +85,7 @@ export type AuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "amazon-nova"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -149,6 +151,7 @@ export type OnboardOptions = {
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
+  novaApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

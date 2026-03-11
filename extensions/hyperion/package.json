@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/hyperion",
+  "version": "2026.3.10",
+  "description": "Hyperion multi-tenant runtime for Nova Personal Assistant Platform",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/client-kms": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

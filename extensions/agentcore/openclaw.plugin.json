@@ -1,0 +1,48 @@
+{
+  "id": "agentcore",
+  "name": "AgentCore Runtime",
+  "description": "ACP runtime backend powered by AWS Bedrock AgentCore. Replaces embedded Pi Agent with per-tenant Firecracker microVMs.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ssmPrefix": {
+        "type": "string",
+        "description": "SSM parameter path prefix (e.g. /hyperion/beta/agentcore)"
+      },
+      "region": {
+        "type": "string",
+        "description": "AWS region for AgentCore API calls"
+      },
+      "endpoint": {
+        "type": "string",
+        "description": "AgentCore endpoint override (for local testing)"
+      },
+      "invokeTimeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "description": "Timeout for agent invocations in milliseconds"
+      }
+    }
+  },
+  "uiHints": {
+    "ssmPrefix": {
+      "label": "SSM Parameter Prefix",
+      "help": "SSM path prefix for AgentCore config (e.g. /hyperion/beta/agentcore). Runtime ARNs, memory config, and default model are read from sub-parameters."
+    },
+    "region": {
+      "label": "AWS Region",
+      "help": "AWS region for AgentCore. Defaults to AWS_REGION env var or us-west-2."
+    },
+    "endpoint": {
+      "label": "Endpoint Override",
+      "help": "Custom AgentCore endpoint for local development.",
+      "advanced": true
+    },
+    "invokeTimeoutMs": {
+      "label": "Invoke Timeout (ms)",
+      "help": "Maximum time to wait for an agent invocation (default: 300000 = 5 minutes).",
+      "advanced": true
+    }
+  }
+}

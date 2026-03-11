@@ -1,0 +1,43 @@
+// Hyperion Assistant Service — OC Gateway base config.
+// Loaded via OC_GATEWAY_CONFIG secret in ECS container.
+// Per-tenant config (model, tools, personality) is loaded from DynamoDB at runtime
+// by the Hyperion plugin; this file only defines platform-level gateway settings.
+{
+  // Gateway binds to 0.0.0.0 on port 18789 (overridden by CMD in ECS task def).
+  gateway: {
+    mode: "local",
+    port: 18789,
+    bind: "lan",
+    auth: {
+      // ALB handles TLS termination; no gateway-level auth needed.
+      // WAF rate-limiting + ALB security group restrict access.
+      mode: "none",
+    },
+    // ALB is a trusted reverse proxy — trust x-forwarded-for for client IP.
+    trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+  },
+
+  // ACP runtime — route agent turns to AgentCore (registered by agentcore extension).
+  acp: {
+    enabled: true,
+    backend: "agentcore",
+  },
+
+  // Extensions loaded at startup (built into the container image via OPENCLAW_EXTENSIONS).
+  plugins: {
+    enabled: true,
+  },
+
+  // Logging — structured JSON for CloudWatch ingestion.
+  logging: {
+    format: "json",
+  },
+
+  // Disable features not needed in headless server mode.
+  update: {
+    checkOnStart: false,
+  },
+  discovery: {
+    mdns: { mode: "off" },
+  },
+}

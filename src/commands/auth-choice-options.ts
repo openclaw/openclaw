@@ -10,6 +10,7 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -130,6 +131,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Alibaba Cloud Model Studio",
     hint: "Coding Plan API key (CN / Global)",
     choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
+  },
+  {
+    value: "amazon-nova",
+    label: "Nova",
+    hint: "nova.amazon.com",
+    choices: ["amazon-nova-api-key"],
   },
   {
     value: "copilot",

@@ -1,0 +1,24 @@
+{
+  "id": "hyperion",
+  "name": "Hyperion Multi-Tenant Runtime",
+  "description": "Multi-tenant DynamoDB integration for the Nova Personal Assistant Platform. Provides per-tenant config loading, channel identity resolution, credential encryption, and pairing.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "stage": {
+        "type": "string",
+        "enum": ["beta", "gamma", "prod"],
+        "description": "Deployment stage (derives table names and KMS key alias)"
+      },
+      "region": {
+        "type": "string",
+        "description": "AWS region for DynamoDB and KMS"
+      },
+      "dynamoEndpoint": {
+        "type": "string",
+        "description": "DynamoDB endpoint override (for local development)"
+      }
+    }
+  }
+}

@@ -43,6 +43,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "opencode-go": "opencode-go",
   "xai-api-key": "xai",
   "litellm-api-key": "litellm",
+  "amazon-nova-api-key": "amazon-nova",
   "qwen-portal": "qwen-portal",
   "volcengine-api-key": "volcengine",
   "byteplus-api-key": "byteplus",
