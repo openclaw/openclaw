@@ -5,10 +5,10 @@ read_when:
 summary: OpenClaw 的 VPS 托管中心（Oracle/Fly/Hetzner/GCP/exe.dev）
 title: VPS 托管
 x-i18n:
-  generated_at: "2026-02-03T10:12:57Z"
-  model: claude-opus-4-5
+  generated_at: "2026-03-11T01:10:00Z"
+  model: claude-opus-4-6
   provider: pi
-  source_hash: 7749b479b333aa5541e7ad8b0ff84e9f8f6bd10d7188285121975cb893acc037
+  source_hash: c25ec2492890da400d6011e0d25664ef0103af6c448c1ceb7a3fa33764895c20
   source_path: vps.md
   workflow: 15
 ---
@@ -133,8 +133,8 @@ Environment=https_proxy=http://proxy.example.com:3127
 Environment=NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
 
 # 可选：绕过内部主机的代理
-Environment=no_proxy=127.0.0.1,localhost,.internal.example.com,10.0.0.0/8
-Environment=NO_PROXY=127.0.0.1,localhost,.internal.example.com,10.0.0.0/8
+Environment=no_proxy=127.0.0.1,localhost,.internal.example.com
+Environment=NO_PROXY=127.0.0.1,localhost,.internal.example.com
 ```
 
 编辑后，重新加载并重启：
@@ -149,16 +149,19 @@ sudo systemctl restart openclaw
 如果配置后 LLM 请求仍然失败：
 
 1. **验证代理连通性**，使用 curl：
+
    ```bash
    curl -v --proxy http://proxy.example.com:3127 https://api.anthropic.com
    ```
 
 2. **检查进程环境变量**（验证变量是否加载）：
+
    ```bash
-   cat /proc/$(pgrep -f openclaw)/environ | tr '\0' '\n' | grep -i proxy
+   cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
    ```
 
 3. **直接测试 Node.js fetch** 以隔离 SSL 问题：
+
    ```bash
    node -e "const {EnvHttpProxyAgent, fetch} = require('undici'); \
      fetch('https://api.anthropic.com', {dispatcher: new EnvHttpProxyAgent()}) \

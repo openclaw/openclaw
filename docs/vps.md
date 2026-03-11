@@ -141,8 +141,8 @@ Environment=https_proxy=http://proxy.example.com:3127
 Environment=NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
 
 # Optional: bypass proxy for internal hosts
-Environment=no_proxy=127.0.0.1,localhost,.internal.example.com,10.0.0.0/8
-Environment=NO_PROXY=127.0.0.1,localhost,.internal.example.com,10.0.0.0/8
+Environment=no_proxy=127.0.0.1,localhost,.internal.example.com
+Environment=NO_PROXY=127.0.0.1,localhost,.internal.example.com
 ```
 
 After editing, reload and restart:
@@ -157,16 +157,19 @@ sudo systemctl restart openclaw
 If LLM requests still fail after configuration:
 
 1. **Verify proxy connectivity** with curl:
+
    ```bash
    curl -v --proxy http://proxy.example.com:3127 https://api.anthropic.com
    ```
 
 2. **Check process environment** (verify vars are loaded):
+
    ```bash
-   cat /proc/$(pgrep -f openclaw)/environ | tr '\0' '\n' | grep -i proxy
+   cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
    ```
 
 3. **Test Node.js fetch directly** to isolate SSL issues:
+
    ```bash
    node -e "const {EnvHttpProxyAgent, fetch} = require('undici'); \
      fetch('https://api.anthropic.com', {dispatcher: new EnvHttpProxyAgent()}) \
