@@ -48,6 +48,7 @@ extension CronSettings {
             self.editorError = nil
             self.showEditor = true
         }
+        .disabled(!job.payload.supportsMacEditor)
         Divider()
         Button("Delete…", role: .destructive) {
             self.confirmDelete = job
@@ -86,6 +87,7 @@ extension CronSettings {
                     self.editorError = nil
                     self.showEditor = true
                 }
+                .disabled(!job.payload.supportsMacEditor)
                 .buttonStyle(.bordered)
             }
         }
@@ -238,6 +240,29 @@ extension CronSettings {
                                 }
                             }
                         }
+                    }
+                }
+            case let .backupCreate(output, includeWorkspace, onlyConfig, verify):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Backup archive job")
+                        .font(.callout)
+                    if let output, !output.isEmpty {
+                        Text(output)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    HStack(spacing: 8) {
+                        if includeWorkspace == false {
+                            StatusPill(text: "no workspace", tint: .secondary)
+                        }
+                        if onlyConfig == true {
+                            StatusPill(text: "config only", tint: .secondary)
+                        }
+                        if verify == true {
+                            StatusPill(text: "verify", tint: .secondary)
+                        }
+                        StatusPill(text: "edit in CLI", tint: .secondary)
                     }
                 }
             }

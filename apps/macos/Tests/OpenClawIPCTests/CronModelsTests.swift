@@ -72,6 +72,17 @@ struct CronModelsTests {
         #expect(decoded == payload)
     }
 
+    @Test func `payload backup create encodes and decodes`() throws {
+        let payload = CronPayload.backupCreate(
+            output: "~/Backups/daily/",
+            includeWorkspace: false,
+            onlyConfig: true,
+            verify: true)
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(CronPayload.self, from: data)
+        #expect(decoded == payload)
+    }
+
     @Test func `job encodes and decodes delete after run`() throws {
         let job = CronJob(
             id: "job-1",
@@ -174,6 +185,48 @@ struct CronModelsTests {
 
         #expect(jobs.count == 1)
         #expect(jobs.first?.id == "good")
+    }
+
+    @Test func `decode cron list response includes backup create jobs`() throws {
+        let json = """
+        {
+          "jobs": [
+            {
+              "id": "backup",
+              "name": "Scheduled backup",
+              "enabled": true,
+              "createdAtMs": 1,
+              "updatedAtMs": 2,
+              "schedule": { "kind": "every", "everyMs": 86400000 },
+              "sessionTarget": "main",
+              "wakeMode": "now",
+              "payload": {
+                "kind": "backupCreate",
+                "output": "~/Backups/",
+                "includeWorkspace": false,
+                "onlyConfig": false,
+                "verify": true
+              },
+              "state": {}
+            }
+          ],
+          "total": 1,
+          "offset": 0,
+          "limit": 50,
+          "hasMore": false,
+          "nextOffset": null
+        }
+        """
+
+        let jobs = try GatewayConnection.decodeCronListResponse(Data(json.utf8))
+
+        #expect(jobs.count == 1)
+        #expect(jobs.first?.id == "backup")
+        #expect(jobs.first?.payload == .backupCreate(
+            output: "~/Backups/",
+            includeWorkspace: false,
+            onlyConfig: false,
+            verify: true))
     }
 
     @Test func `decode cron runs response skips malformed entries`() throws {

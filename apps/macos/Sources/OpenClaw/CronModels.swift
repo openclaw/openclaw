@@ -131,15 +131,31 @@ enum CronPayload: Codable, Equatable {
         channel: String?,
         to: String?,
         bestEffortDeliver: Bool?)
+    case backupCreate(
+        output: String?,
+        includeWorkspace: Bool?,
+        onlyConfig: Bool?,
+        verify: Bool?)
 
     enum CodingKeys: String, CodingKey {
         case kind, text, message, thinking, timeoutSeconds, deliver, channel, provider, to, bestEffortDeliver
+        case output, includeWorkspace, onlyConfig, verify
     }
 
     var kind: String {
         switch self {
         case .systemEvent: "systemEvent"
         case .agentTurn: "agentTurn"
+        case .backupCreate: "backupCreate"
+        }
+    }
+
+    var supportsMacEditor: Bool {
+        switch self {
+        case .systemEvent, .agentTurn:
+            return true
+        case .backupCreate:
+            return false
         }
     }
 
@@ -159,6 +175,12 @@ enum CronPayload: Codable, Equatable {
                     ?? container.decodeIfPresent(String.self, forKey: .provider),
                 to: container.decodeIfPresent(String.self, forKey: .to),
                 bestEffortDeliver: container.decodeIfPresent(Bool.self, forKey: .bestEffortDeliver))
+        case "backupCreate":
+            self = .backupCreate(
+                output: container.decodeIfPresent(String.self, forKey: .output),
+                includeWorkspace: container.decodeIfPresent(Bool.self, forKey: .includeWorkspace),
+                onlyConfig: container.decodeIfPresent(Bool.self, forKey: .onlyConfig),
+                verify: container.decodeIfPresent(Bool.self, forKey: .verify))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -181,6 +203,11 @@ enum CronPayload: Codable, Equatable {
             try container.encodeIfPresent(channel, forKey: .channel)
             try container.encodeIfPresent(to, forKey: .to)
             try container.encodeIfPresent(bestEffortDeliver, forKey: .bestEffortDeliver)
+        case let .backupCreate(output, includeWorkspace, onlyConfig, verify):
+            try container.encodeIfPresent(output, forKey: .output)
+            try container.encodeIfPresent(includeWorkspace, forKey: .includeWorkspace)
+            try container.encodeIfPresent(onlyConfig, forKey: .onlyConfig)
+            try container.encodeIfPresent(verify, forKey: .verify)
         }
     }
 }

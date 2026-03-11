@@ -43,6 +43,8 @@ extension CronJobEditor {
             self.agentMessage = message
             self.thinking = thinking ?? ""
             self.timeoutSeconds = timeoutSeconds.map(String.init) ?? ""
+        case .backupCreate:
+            self.error = "Backup schedules are currently read-only in macOS UI. Use openclaw CLI to edit."
         }
 
         if let delivery = job.delivery {
