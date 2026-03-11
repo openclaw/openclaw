@@ -102,6 +102,172 @@ afterEach(() => {
 });
 
 describe("loadGatewayPlugins", () => {
+  test("invokeAgent uses deterministic session key and extracts text blocks", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("invoke-agent"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent") {
+        opts.respond(true, { runId: "run-1" });
+        return;
+      }
+      opts.respond(true, {});
+    });
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent.wait") {
+        opts.respond(true, { status: "ok" });
+        return;
+      }
+      opts.respond(true, {});
+    });
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "sessions.get") {
+        opts.respond(true, {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: "Hello" },
+                { type: "tool_use", name: "noop" },
+                { type: "text", text: "world" },
+              ],
+            },
+          ],
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    const result = await runtime.invokeAgent?.({
+      agentId: "kiki",
+      messages: [{ role: "user", content: "say hi" }],
+      idempotencyKey: "idem-123",
+    });
+
+    expect(result?.success).toBe(true);
+    expect(result?.content).toBe("Hello\nworld");
+    expect(result?.replyTag).toEqual({ hasReplyTag: false, replyToCurrent: false });
+    expect(result?.sessionKey).toBe("agent:kiki:plugin-invoke:idem-123");
+
+    const agentCall = handleGatewayRequest.mock.calls[0]?.[0] as
+      | { req?: { params?: { sessionKey?: string } } }
+      | undefined;
+    const agentParams = agentCall?.req?.params;
+    expect(agentParams?.sessionKey).toBe("agent:kiki:plugin-invoke:idem-123");
+  });
+
+  test("invokeAgent strips reply tags and returns reply-tag metadata", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("invoke-agent-reply-tag"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent") {
+        opts.respond(true, { runId: "run-1" });
+        return;
+      }
+      opts.respond(true, {});
+    });
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent.wait") {
+        opts.respond(true, { status: "ok" });
+        return;
+      }
+      opts.respond(true, {});
+    });
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "sessions.get") {
+        opts.respond(true, {
+          messages: [
+            {
+              role: "assistant",
+              content: "On it [[reply_to:msg-42]]",
+            },
+          ],
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    const result = await runtime.invokeAgent?.({
+      agentId: "kiki",
+      prompt: "say yes",
+      idempotencyKey: "idem-rt",
+    });
+
+    expect(result?.success).toBe(true);
+    expect(result?.content).toBe("On it");
+    expect(result?.replyTag).toEqual({
+      hasReplyTag: true,
+      replyToId: "msg-42",
+      replyToCurrent: false,
+    });
+  });
+
+  test("invokeAgentStream emits content deltas from assistant text", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("invoke-agent-stream"));
+
+    let sessionsGetCount = 0;
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent") {
+        opts.respond(true, { runId: "run-stream" });
+        return;
+      }
+      if (opts.req.method === "sessions.get") {
+        sessionsGetCount += 1;
+        if (sessionsGetCount === 1) {
+          opts.respond(true, {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "hello" }],
+              },
+            ],
+          });
+          return;
+        }
+        opts.respond(true, {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+            },
+          ],
+        });
+        return;
+      }
+      opts.respond(true, { status: "ok" });
+    });
+
+    const stream = await runtime.invokeAgentStream?.({
+      agentId: "kiki",
+      messages: [{ role: "user", content: "say hello" }],
+      idempotencyKey: "idem-stream",
+      timeoutSeconds: 3,
+    });
+    const reader = stream?.getReader();
+    expect(reader).toBeTruthy();
+    const decoder = new TextDecoder();
+    let output = "";
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        output += decoder.decode(value, { stream: true });
+      }
+    }
+
+    expect(output).toContain('"content":"hello"');
+    expect(output).toContain('"finish_reason":"stop"');
+  });
+
   test("logs plugin errors with details", async () => {
     const { loadGatewayPlugins } = await importServerPluginsModule();
     const diagnostics: PluginDiagnostic[] = [

@@ -1,0 +1,30 @@
+{
+  "id": "airi",
+  "name": "AIRI Channel",
+  "description": "OpenAI-compatible channel for AIRI voice assistant (native plugin)",
+  "version": "2.0.0",
+  "entry": "index.js",
+  "pluginType": "channel",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "token": {
+        "type": "string",
+        "description": "Bearer token for AIRI authentication"
+      },
+      "defaultAgent": {
+        "type": "string",
+        "description": "Default agent ID"
+      },
+      "allowedAgents": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of allowed agent IDs"
+      },
+      "systemPrompt": {
+        "type": "string",
+        "description": "Custom system prompt for AIRI context"
+      }
+    }
+  }
+}

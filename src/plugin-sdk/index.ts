@@ -103,6 +103,9 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  AgentMessage,
+  PluginAgentInvokeOptions,
+  PluginAgentInvokeResult,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,
@@ -630,6 +633,7 @@ export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js
 export { extractOriginalFilename } from "../media/store.js";
 export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
+export * from "./smart-reset-memory.js";
 
 // Channel: Discord
 export {
@@ -800,12 +804,6 @@ export type {
 } from "../context-engine/types.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
-
-// Model authentication types for plugins.
-// Plugins should use runtime.modelAuth (which strips unsafe overrides like
-// agentDir/store) rather than importing raw helpers directly.
-export { requireApiKey } from "../agents/model-auth.js";
-export type { ResolvedProviderAuth } from "../agents/model-auth.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
