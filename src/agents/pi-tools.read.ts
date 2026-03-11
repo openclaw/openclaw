@@ -353,6 +353,8 @@ async function normalizeReadImageResult(
 }
 
 const workspaceMutationLocks = new Map<string, Promise<void>>();
+const WORKSPACE_MUTATION_LOCK_TIMEOUT_MS = 120_000;
+const WORKSPACE_MUTATION_LOCK_TTL_MS = 60_000;
 
 export function wrapToolMutationLock(
   tool: AnyAgentTool,
@@ -386,9 +388,17 @@ export function wrapToolMutationLock(
 
       await previous;
       try {
-        return await withWorkspaceLock(lockKey, { kind: "file" }, async () => {
-          return await tool.execute(toolCallId, params, signal, onUpdate);
-        });
+        return await withWorkspaceLock(
+          lockKey,
+          {
+            kind: "file",
+            timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
+            ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+          },
+          async () => {
+            return await tool.execute(toolCallId, params, signal, onUpdate);
+          },
+        );
       } finally {
         release?.();
         if (workspaceMutationLocks.get(lockKey) === current) {
