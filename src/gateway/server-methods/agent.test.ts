@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
+  getAgentRunTraceTimeline: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
@@ -55,6 +56,10 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+}));
+
+vi.mock("../../agents/agent-run-trace.js", () => ({
+  getAgentRunTraceTimeline: mocks.getAgentRunTraceTimeline,
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -266,7 +271,91 @@ async function invokeAgentIdentityGet(
   return respond;
 }
 
+async function invokeAgentTimeline(
+  params: { runId: string },
+  options?: {
+    respond?: ReturnType<typeof vi.fn>;
+    reqId?: string;
+    context?: GatewayRequestContext;
+  },
+) {
+  const respond = options?.respond ?? vi.fn();
+  await agentHandlers["agent.timeline"]({
+    params,
+    respond: respond as never,
+    context: options?.context ?? makeContext(),
+    req: {
+      type: "req",
+      id: options?.reqId ?? "agent-timeline-test-req",
+      method: "agent.timeline",
+    },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 describe("gateway agent handler", () => {
+  it("returns found=false when no trace timeline exists", async () => {
+    mocks.getAgentRunTraceTimeline.mockReturnValue(undefined);
+
+    const respond = await invokeAgentTimeline({ runId: "run-missing" });
+
+    expect(respond).toHaveBeenCalledWith(true, { runId: "run-missing", found: false });
+  });
+
+  it("returns the stored trace timeline for a run", async () => {
+    mocks.getAgentRunTraceTimeline.mockReturnValue({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      attemptCount: 2,
+      totalCostUsd: 0.002,
+      spans: [
+        {
+          spanId: "plan-1",
+          stepId: "step-1",
+          stepIndex: 1,
+          attempt: 1,
+          stage: "plan",
+          status: "ok",
+          startedAt: 100,
+          endedAt: 150,
+          durationMs: 50,
+        },
+      ],
+    });
+
+    const respond = await invokeAgentTimeline({ runId: "run-1" });
+
+    expect(mocks.getAgentRunTraceTimeline).toHaveBeenCalledWith("run-1");
+    expect(respond).toHaveBeenCalledWith(true, {
+      runId: "run-1",
+      found: true,
+      sessionKey: "agent:main:main",
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      attemptCount: 2,
+      totalCostUsd: 0.002,
+      spans: [
+        {
+          spanId: "plan-1",
+          stepId: "step-1",
+          stepIndex: 1,
+          attempt: 1,
+          stage: "plan",
+          status: "ok",
+          startedAt: 100,
+          endedAt: 150,
+          durationMs: 50,
+        },
+      ],
+    });
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",

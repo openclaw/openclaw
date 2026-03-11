@@ -3,6 +3,8 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { recordAgentRunTraceModelOutput, startAgentRunTraceModelTurn } from "./agent-run-trace.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -17,6 +19,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -71,6 +74,14 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  startAgentRunTraceModelTurn({
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    attempt: ctx.params.attemptNumber ?? 1,
+    provider:
+      typeof (msg as { provider?: unknown }).provider === "string" ? msg.provider : undefined,
+    model: typeof (msg as { model?: unknown }).model === "string" ? msg.model : undefined,
+  });
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -264,6 +275,34 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  const assistantProvider =
+    typeof (assistantMessage as { provider?: unknown }).provider === "string"
+      ? assistantMessage.provider
+      : undefined;
+  const assistantModel =
+    typeof (assistantMessage as { model?: unknown }).model === "string"
+      ? assistantMessage.model
+      : undefined;
+  const usage = normalizeUsage((assistantMessage as { usage?: UsageLike }).usage);
+  const costUsd = estimateUsageCost({
+    usage,
+    cost: resolveModelCostConfig({
+      provider: assistantProvider,
+      model: assistantModel,
+      config: ctx.params.config,
+    }),
+  });
+  recordAgentRunTraceModelOutput({
+    runId: ctx.params.runId,
+    usage: usage ?? undefined,
+    costUsd,
+    stopReason:
+      typeof (assistantMessage as { stopReason?: unknown }).stopReason === "string"
+        ? assistantMessage.stopReason
+        : undefined,
+    provider: assistantProvider,
+    model: assistantModel,
+  });
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }

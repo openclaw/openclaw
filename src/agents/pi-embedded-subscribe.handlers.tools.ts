@@ -6,6 +6,7 @@ import {
 } from "../infra/exec-approval-reply.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { finishAgentRunTraceTool, startAgentRunTraceTool } from "./agent-run-trace.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
@@ -336,6 +337,13 @@ export async function handleToolExecutionStart(
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+  startAgentRunTraceTool({
+    runId,
+    sessionKey: ctx.params.sessionKey,
+    attempt: ctx.params.attemptNumber ?? 1,
+    toolName,
+    toolCallId,
+  });
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
   emitAgentEvent({
@@ -517,6 +525,17 @@ export async function handleToolExecutionEnd(
   if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
     ctx.state.successfulCronAdds += 1;
   }
+
+  finishAgentRunTraceTool({
+    runId,
+    sessionKey: ctx.params.sessionKey,
+    attempt: ctx.params.attemptNumber ?? 1,
+    toolCallId,
+    toolName,
+    status: isToolError ? "error" : "ok",
+    failureReason: isToolError ? "tool_error" : undefined,
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+  });
 
   emitAgentEvent({
     runId: ctx.params.runId,
