@@ -24,10 +24,6 @@ ARG HTTP_PROXY=""
 ARG http_proxy=""
 ARG HTTPS_PROXY=""
 ARG https_proxy=""
-ENV HTTP_PROXY="${HTTP_PROXY}"
-ENV http_proxy="${http_proxy}"
-ENV HTTPS_PROXY="${HTTPS_PROXY}"
-ENV https_proxy="${https_proxy}"
 
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
@@ -54,6 +50,12 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
+# Import proxy args if set
+ENV HTTP_PROXY="${HTTP_PROXY}"
+ENV http_proxy="${http_proxy}"
+ENV HTTPS_PROXY="${HTTPS_PROXY}"
+ENV https_proxy="${https_proxy}"
+
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
@@ -71,7 +73,7 @@ COPY --from=ext-deps /out/ ./extensions/
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
 COPY . .
 
