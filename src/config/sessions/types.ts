@@ -80,6 +80,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Heartbeat task state (task name -> last run timestamp ms). */
+  heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
