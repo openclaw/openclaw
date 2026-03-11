@@ -354,7 +354,6 @@ export class AcpSessionManager {
           agentId: agent,
           details: {
             mode: input.mode,
-            backend: result === "success" ? backend : undefined,
           },
           result,
           error,
