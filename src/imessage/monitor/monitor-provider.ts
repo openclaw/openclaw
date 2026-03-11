@@ -461,8 +461,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
     // Populate reply context from chat.db when imsg does not provide it (issue #42266).
+    // Only when running locally: with SSH-wrapper cliPath, imsg (and --db) run on the remote
+    // Mac, so a local lookup would read the wrong or missing chat.db.
     if (
       dbPath &&
+      !remoteHost &&
       typeof message.id === "number" &&
       message.reply_to_id == null &&
       message.reply_to_text == null
