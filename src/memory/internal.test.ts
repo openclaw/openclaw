@@ -131,6 +131,35 @@ describe("listMemoryFiles", () => {
     const memoryMatches = files.filter((file) => file.endsWith("MEMORY.md"));
     expect(memoryMatches).toHaveLength(1);
   });
+
+  it("dedupes paths referring to the same inode on case-insensitive filesystems", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+
+    // On case-insensitive filesystems (macOS), both MEMORY.md and memory.md
+    // refer to the same physical file (same inode).  The dedup should detect
+    // this via dev:ino identity even though realpath returns different strings.
+    const upperPath = path.join(tmpDir, "MEMORY.md");
+    const lowerPath = path.join(tmpDir, "memory.md");
+
+    let isSamePath = false;
+    try {
+      const upperStat = await fs.stat(upperPath);
+      const lowerStat = await fs.stat(lowerPath);
+      isSamePath = upperStat.ino === lowerStat.ino && upperStat.dev === lowerStat.dev;
+    } catch {
+      // If lowerPath stat fails, the FS is case-sensitive; skip the assertion.
+    }
+
+    if (isSamePath) {
+      // Both paths point to the same file; listMemoryFiles should deduplicate.
+      const files = await listMemoryFiles(tmpDir);
+      const memoryFiles = files.filter(
+        (f) => f.endsWith("MEMORY.md") || f.endsWith("memory.md"),
+      );
+      expect(memoryFiles).toHaveLength(1);
+    }
+  });
 });
 
 describe("buildFileEntry", () => {
