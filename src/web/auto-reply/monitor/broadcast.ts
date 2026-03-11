@@ -3,7 +3,6 @@ import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildAgentSessionKey, deriveLastRoutePolicy } from "../../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
   normalizeMainKey,
 } from "../../../routing/session-key.js";
@@ -19,6 +18,7 @@ function buildBroadcastRouteKeys(params: {
   peerId: string;
   agentId: string;
 }) {
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const sessionKey = buildAgentSessionKey({
     agentId: params.agentId,
     channel: "whatsapp",
@@ -29,11 +29,11 @@ function buildBroadcastRouteKeys(params: {
     },
     dmScope: params.cfg.session?.dmScope,
     identityLinks: params.cfg.session?.identityLinks,
-    mainKey: normalizeMainKey(params.cfg.session?.mainKey),
+    mainKey,
   });
   const mainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
-    mainKey: normalizeMainKey(params.cfg.session?.mainKey),
+    mainKey,
   });
 
   return {
