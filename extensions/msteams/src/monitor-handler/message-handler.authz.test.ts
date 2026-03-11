@@ -112,6 +112,45 @@ describe("msteams monitor handler authz", () => {
     );
   });
 
+  it("does not persist DM conversation references when dmPolicy is disabled", async () => {
+    const { conversationStore, deps, upsertPairingRequest } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "disabled",
+          allowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "dm-disabled-1",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "blocked-id",
+          aadObjectId: "blocked-aad",
+          name: "Blocked User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:dm-disabled-thread-id",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const { conversationStore, deps, readAllowFromStore } = createDeps({
       channels: {

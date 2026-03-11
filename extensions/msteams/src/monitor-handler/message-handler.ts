@@ -228,9 +228,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     };
 
-    // Persist first-DM conversation reference before pairing/allowlist early returns
+    // Persist first-DM conversation reference before pairing early return
     // so pairing approval notifications can be delivered immediately.
-    if (isDirectMessage) {
+    if (isDirectMessage && access.decision === "pairing") {
       persistConversationRef();
     }
 
