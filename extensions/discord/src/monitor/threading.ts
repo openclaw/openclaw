@@ -475,6 +475,7 @@ async function maybeRenameDiscordAutoThread(params: {
   agentId: string;
 }): Promise<void> {
   try {
+    const fallbackName = sanitizeDiscordThreadName("", params.fallbackId);
     const generated = await generateThreadTitle({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -486,7 +487,7 @@ async function maybeRenameDiscordAutoThread(params: {
       return;
     }
     const nextName = sanitizeDiscordThreadName(generated, params.fallbackId);
-    if (!nextName || nextName === params.currentName) {
+    if (!nextName || nextName === params.currentName || nextName === fallbackName) {
       return;
     }
     await params.client.rest.patch(Routes.channel(params.threadId), {
