@@ -140,6 +140,22 @@ This is useful when you want every message on a channel to route through an ACP 
 
 When a specific peer binding and a catch-all binding both match, the specific peer binding takes priority.
 
+### Quick start: route all Feishu/QQ messages through ACP
+
+Add this to your `openclaw.json` to make all Feishu and QQ conversations use your paid agent CLI (Claude Code, Codex, etc.) instead of the built-in PI agent:
+
+```json5
+{
+  acp: { enabled: true, backend: "acpx", defaultAgent: "claude" },
+  bindings: [
+    { type: "acp", agentId: "main", match: { channel: "feishu", accountId: "*" } },
+    { type: "acp", agentId: "main", match: { channel: "qqbot", accountId: "*" } },
+  ],
+}
+```
+
+Replace `"claude"` with `"codex"` or another ACP agent id to use a different harness. The `accountId: "*"` wildcard matches all bot accounts on that channel.
+
 ### Runtime defaults per agent
 
 Use `agents.list[].runtime` to define ACP defaults once per agent:

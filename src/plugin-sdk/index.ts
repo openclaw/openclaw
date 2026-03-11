@@ -850,3 +850,9 @@ export {
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
+
+// ACP persistent binding route helpers (for channel plugins that support ACP bindings)
+export {
+  resolveConfiguredAcpRoute,
+  ensureConfiguredAcpRouteReady,
+} from "../acp/persistent-bindings.route.js";
