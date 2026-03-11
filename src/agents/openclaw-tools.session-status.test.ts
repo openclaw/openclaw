@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -85,8 +86,20 @@ function resetSessionStore(store: Record<string, unknown>) {
   loadSessionStoreMock.mockReturnValue(store);
 }
 
-function getSessionStatusTool(agentSessionKey = "main") {
-  const tool = createOpenClawTools({ agentSessionKey }).find(
+function buildBaseConfig(): OpenClawConfig {
+  return {
+    session: { mainKey: "main", scope: "per-sender" },
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {},
+      },
+    },
+  };
+}
+
+function getSessionStatusTool(agentSessionKey = "main", config?: OpenClawConfig) {
+  const tool = createOpenClawTools({ agentSessionKey, config }).find(
     (candidate) => candidate.name === "session_status",
   );
   expect(tool).toBeDefined();
@@ -173,6 +186,45 @@ describe("session_status tool", () => {
 
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
       "Agent-to-agent status is disabled",
+    );
+  });
+
+  it("reports per-agent outbound deny for cross-agent session_status", async () => {
+    resetSessionStore({
+      "agent:other:main": {
+        sessionId: "s2",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:main", {
+      ...buildBaseConfig(),
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "other"],
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {},
+        },
+        list: [
+          {
+            id: "main",
+            tools: {
+              agentToAgent: {
+                allow: [],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    await expect(tool.execute("call5b", { sessionKey: "agent:other:main" })).rejects.toThrow(
+      "Agent-to-agent session status denied by agents.list[].tools.agentToAgent.allow for the requester agent.",
     );
   });
 

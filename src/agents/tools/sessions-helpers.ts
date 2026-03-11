@@ -1,4 +1,7 @@
 export type {
+  AgentToAgentAction,
+  AgentToAgentDecision,
+  AgentToAgentDenyReason,
   AgentToAgentPolicy,
   SessionAccessAction,
   SessionAccessResult,
@@ -7,6 +10,7 @@ export type {
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  formatAgentToAgentAccessError,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
