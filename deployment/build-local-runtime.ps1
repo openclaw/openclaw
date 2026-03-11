@@ -138,26 +138,13 @@ Write-Host "[build] staging runtime into deployment\bin\runtime..."
 if (Test-Path $RuntimeDir) {
   Remove-DirectoryRobust -PathToRemove $RuntimeDir
 }
-New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
 
-Copy-Item -Path (Join-Path $RepoRoot "openclaw.mjs") -Destination (Join-Path $RuntimeDir "openclaw.mjs") -Force
-Copy-Item -Path (Join-Path $RepoRoot "dist") -Destination (Join-Path $RuntimeDir "dist") -Recurse -Force
-Copy-Item -Path (Join-Path $RepoRoot "package.json") -Destination (Join-Path $RuntimeDir "package.json") -Force
-$RuntimeDocsReferenceDir = Join-Path $RuntimeDir "docs\reference"
-New-Item -ItemType Directory -Path $RuntimeDocsReferenceDir -Force | Out-Null
-Copy-Item -Path (Join-Path $RepoRoot "docs\reference\templates") -Destination (Join-Path $RuntimeDocsReferenceDir "templates") -Recurse -Force
-
-$PnpmLock = Join-Path $RepoRoot "pnpm-lock.yaml"
-if (Test-Path $PnpmLock) {
-  Copy-Item -Path $PnpmLock -Destination (Join-Path $RuntimeDir "pnpm-lock.yaml") -Force
-}
-
-Write-Host "[build] bundling runtime dependencies into deployment\bin\runtime\node_modules..."
-Push-Location $RuntimeDir
+Write-Host "[build] deploying portable runtime (hoisted, no symlinks)..."
+Push-Location $RepoRoot
 try {
-  & pnpm install --prod --frozen-lockfile --ignore-workspace --config.link-workspace-packages=false --config.prefer-workspace-packages=false --config.inject-workspace-packages=false --config.package-import-method=copy
+  & pnpm --filter openclaw deploy --prod --legacy --config.node-linker=hoisted --config.link-workspace-packages=false --config.prefer-workspace-packages=false --config.inject-workspace-packages=false $RuntimeDir
   if ($LASTEXITCODE -ne 0) {
-    throw "pnpm install (runtime) failed with exit code $LASTEXITCODE"
+    throw "pnpm deploy (runtime) failed with exit code $LASTEXITCODE"
   }
 } finally {
   Pop-Location
