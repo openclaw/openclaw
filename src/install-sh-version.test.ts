@@ -73,10 +73,10 @@ describe("install.sh version resolution", () => {
   it.runIf(process.platform !== "win32")(
     "extracts the semantic version from decorated CLI output",
     () => {
-      const fixture = withFakeCli("OpenClaw 2026.3.9 (abcdef0)");
+      const fixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
       tempRoots.push(fixture.root);
 
-      expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("2026.3.9");
+      expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("2026.3.10");
     },
   );
 
@@ -93,7 +93,7 @@ describe("install.sh version resolution", () => {
   it.runIf(process.platform !== "win32")(
     "does not source version helpers from cwd when installer runs via stdin",
     () => {
-      const fixture = withFakeCli("OpenClaw 2026.3.9 (abcdef0)");
+      const fixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
       tempRoots.push(fixture.root);
 
       const hostileCwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-stdin-"));
@@ -115,7 +115,7 @@ extract_openclaw_semver() {
         "utf-8",
       );
 
-      expect(resolveVersionFromInstallerViaStdin(fixture.cliPath, hostileCwd)).toBe("2026.3.9");
+      expect(resolveVersionFromInstallerViaStdin(fixture.cliPath, hostileCwd)).toBe("2026.3.10");
     },
   );
 });
