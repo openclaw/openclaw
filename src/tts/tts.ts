@@ -383,6 +383,8 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     autoHint,
     `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
     "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    "Use <notts>...</notts> to mark content visible in chat but NOT spoken (code, tables, technical details).",
+    "Use <tts>...</tts> to provide spoken-only alternative text (not shown in chat). Combine both: <notts>table</notts><tts>summary of table</tts>.",
   ]
     .filter(Boolean)
     .join("\n");
