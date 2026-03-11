@@ -477,6 +477,56 @@ Hooks can have custom configuration:
 }
 ```
 
+### Agent-Scoped Internal Hook Policy
+
+You can further restrict internal hooks per agent without changing the global handler protocol:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "events": ["command:new", "message:received"],
+      "entries": {
+        "command-logger": { "enabled": true }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "hooks": {
+        "events": ["command:new"]
+      }
+    },
+    "list": [
+      {
+        "id": "work",
+        "hooks": {
+          "enabled": false,
+          "entries": {
+            "command-logger": { "enabled": false }
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+Effective policy is resolved in this order for the runtime agent id:
+
+- `hooks.internal`
+- `agents.defaults.hooks`
+- `agents.list[].hooks`
+
+Agent-scoped policy fields:
+
+- `enabled`: disable all internal hooks for that agent when `false`
+- `events`: allowlist of registration event keys such as `command:new` or `message`
+- `entries.<hookName>.enabled`: disable one discovered hook without changing others
+
+If these fields are omitted, behavior stays the same as before.
+
 ### Extra Directories
 
 Load hooks from additional directories:

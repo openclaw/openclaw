@@ -16,12 +16,12 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 const log = createSubsystemLogger("agent-scope");
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
+export { resolveAgentIdFromSessionKey };
+
 function stripNullBytes(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\0/g, "");
 }
-
-export { resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
@@ -34,6 +34,7 @@ type ResolvedAgentConfig = {
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
   heartbeat?: AgentEntry["heartbeat"];
+  hooks?: AgentEntry["hooks"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
@@ -136,6 +137,7 @@ export function resolveAgentConfig(
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
     heartbeat: entry.heartbeat,
+    hooks: entry.hooks,
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,

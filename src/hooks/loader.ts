@@ -113,7 +113,7 @@ export async function loadInternalHooks(
         }
 
         for (const event of events) {
-          registerInternalHook(event, handler);
+          registerInternalHook(event, handler, { hookName: entry.hook.name });
         }
 
         log.info(

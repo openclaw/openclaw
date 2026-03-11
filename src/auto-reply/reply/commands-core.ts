@@ -66,7 +66,7 @@ export async function emitResetCommandHooks(params: {
     workspaceDir: params.workspaceDir,
     cfg: params.cfg, // Pass config for LLM slug generation
   });
-  await triggerInternalHook(hookEvent);
+  await triggerInternalHook(hookEvent, { config: params.cfg });
   params.command.resetHookTriggered = true;
 
   // Send hook messages immediately if present
