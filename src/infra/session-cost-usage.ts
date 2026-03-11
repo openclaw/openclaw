@@ -6,6 +6,7 @@ import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   parseSessionArchiveTimestamp,
@@ -480,6 +481,7 @@ export async function discoverAllSessions(params?: {
     if (!sessionId) {
       continue;
     }
+    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(entry.name);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -517,7 +519,15 @@ export async function discoverAllSessions(params?: {
     }
 
     const existing = discovered.get(sessionId);
-    if (!existing || stats.mtimeMs >= existing.mtime) {
+    const existingIsPrimary = existing
+      ? isPrimarySessionTranscriptFileName(path.basename(existing.sessionFile))
+      : false;
+    const shouldReplace =
+      !existing ||
+      (isPrimaryTranscript && !existingIsPrimary) ||
+      (isPrimaryTranscript === existingIsPrimary && stats.mtimeMs >= existing.mtime);
+
+    if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
         sessionFile: filePath,

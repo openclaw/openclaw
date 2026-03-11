@@ -375,6 +375,47 @@ describe("session cost usage", () => {
     });
   });
 
+  it("prefers the active transcript over archives during discovery dedupe", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-active-preferred-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activePath = path.join(sessionsDir, "sess-live.jsonl");
+    const archivePath = path.join(sessionsDir, "sess-live.jsonl.deleted.2026-02-12T12-00-00.000Z");
+
+    await fs.writeFile(
+      activePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "active transcript" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      archivePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:05:00.000Z",
+        message: { role: "user", content: "archive transcript" },
+      }),
+      "utf-8",
+    );
+
+    const older = Date.UTC(2026, 1, 12, 10, 0, 0) / 1000;
+    const newer = Date.UTC(2026, 1, 12, 12, 0, 0) / 1000;
+    await fs.utimes(activePath, older, older);
+    await fs.utimes(archivePath, newer, newer);
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("sess-live");
+      expect(sessions[0]?.sessionFile).toBe(activePath);
+      expect(sessions[0]?.firstUserMessage).toBe("active transcript");
+    });
+  });
+
   it("falls back to archived reset transcripts for per-session detail queries", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-archive-fallback-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
