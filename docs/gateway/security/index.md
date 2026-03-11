@@ -747,8 +747,10 @@ Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
 Note: `gateway.remote.token` / `.password` are client credential sources. They
 do **not** protect local WS access by themselves.
-Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*`
+Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*`
 is unset.
+If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via
+SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
