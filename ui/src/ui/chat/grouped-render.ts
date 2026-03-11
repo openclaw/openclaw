@@ -11,7 +11,11 @@ import {
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import {
+  isSubagentAnnounceToolMessage,
+  isToolResultMessage,
+  normalizeRoleForGrouping,
+} from "./message-normalizer.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
@@ -122,7 +126,9 @@ export function renderMessageGroup(
       ? (userLabel ?? "You")
       : normalizedRole === "assistant"
         ? assistantName
-        : normalizedRole;
+        : normalizedRole === "tool"
+          ? "Tool Output"
+          : normalizedRole;
   const roleClass =
     normalizedRole === "user" ? "user" : normalizedRole === "assistant" ? "assistant" : "other";
   const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
@@ -235,6 +241,7 @@ function renderGroupedMessage(
     role.toLowerCase() === "tool_result" ||
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
+  const isSubagentToolMessage = isSubagentAnnounceToolMessage(message);
 
   const toolCards = extractToolCards(message);
   const hasToolCards = toolCards.length > 0;
@@ -258,7 +265,11 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
+  if (
+    hasToolCards &&
+    (isToolResult || isSubagentToolMessage) &&
+    (!markdown || isSubagentToolMessage)
+  ) {
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 

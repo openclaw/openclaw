@@ -4,7 +4,7 @@ import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./message-normalizer.ts";
+import { isSubagentAnnounceToolMessage, isToolResultMessage } from "./message-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
@@ -43,6 +43,11 @@ export function extractToolCards(message: unknown): ToolCard[] {
       "tool";
     const text = extractTextCached(message) ?? undefined;
     cards.push({ kind: "result", name, text });
+  }
+
+  if (isSubagentAnnounceToolMessage(message) && !cards.some((card) => card.kind === "result")) {
+    const text = extractTextCached(message) ?? undefined;
+    cards.push({ kind: "result", name: "subagents", text });
   }
 
   return cards;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  isSubagentAnnounceToolMessage,
   normalizeMessage,
   normalizeRoleForGrouping,
   isToolResultMessage,
@@ -121,6 +122,20 @@ describe("message-normalizer", () => {
 
       expect(result.senderLabel).toBe("Iris");
     });
+
+    it("normalizes subagent announce injections as tool messages", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "Subagent findings",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+        },
+      });
+
+      expect(result.role).toBe("tool");
+      expect(result.content).toEqual([{ type: "text", text: "Subagent findings" }]);
+    });
   });
 
   describe("normalizeRoleForGrouping", () => {
@@ -185,6 +200,32 @@ describe("message-normalizer", () => {
     it("returns false for non-string role", () => {
       expect(isToolResultMessage({ role: 123 })).toBe(false);
       expect(isToolResultMessage({ role: null })).toBe(false);
+    });
+  });
+
+  describe("isSubagentAnnounceToolMessage", () => {
+    it("detects inter-session subagent announce payloads", () => {
+      expect(
+        isSubagentAnnounceToolMessage({
+          role: "user",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+          },
+        }),
+      ).toBe(true);
+    });
+
+    it("ignores unrelated provenance payloads", () => {
+      expect(
+        isSubagentAnnounceToolMessage({
+          role: "user",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+      ).toBe(false);
     });
   });
 });

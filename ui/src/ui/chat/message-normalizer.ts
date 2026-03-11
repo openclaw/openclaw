@@ -5,6 +5,18 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
+export function isSubagentAnnounceToolMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const provenance = (message as { inputProvenance?: unknown }).inputProvenance;
+  if (!provenance || typeof provenance !== "object") {
+    return false;
+  }
+  const record = provenance as { kind?: unknown; sourceTool?: unknown };
+  return record.kind === "inter_session" && record.sourceTool === "subagent_announce";
+}
+
 /**
  * Normalize a raw message object into a consistent structure.
  */
@@ -30,6 +42,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";
+  } else if (isSubagentAnnounceToolMessage(message)) {
+    role = "tool";
   }
 
   // Extract content
