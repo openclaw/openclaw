@@ -892,6 +892,29 @@ describe("telegramMessageActions", () => {
     expect(handleTelegramAction).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid snake_case delete message_id instead of falling back to topic deletion", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+          message_id: "oops",
+          topicId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/messageId must be a valid number for action=delete/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
   it("rejects topic-delete when threadId/topicId is missing", async () => {
     const cfg = telegramCfg();
     const handleAction = telegramMessageActions.handleAction;
