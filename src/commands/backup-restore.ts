@@ -600,28 +600,37 @@ async function buildCoveredWorkspaceRewrites(params: {
 function resolveWorkspaceRewritePathFromTargets(params: {
   sourcePath: string;
   workspaceTargets: Map<string, WorkspaceRestoreTarget>;
+  sourceAliases?: string[];
 }): string | undefined {
   const normalizedSourcePath = path.resolve(params.sourcePath);
-  const directTarget = params.workspaceTargets.get(normalizedSourcePath);
-  if (directTarget) {
-    return path.resolve(directTarget.rewritePath);
+  const sourceAliases = params.sourceAliases ?? [normalizedSourcePath];
+
+  // Try direct lookup for each alias of the source path.
+  for (const sourceAlias of sourceAliases) {
+    const directTarget = params.workspaceTargets.get(sourceAlias);
+    if (directTarget) {
+      return path.resolve(directTarget.rewritePath);
+    }
   }
 
+  // Nested fallback: check if any source alias is within a workspace target.
   let bestMatch: { sourcePath: string; rewritePath: string } | undefined;
   for (const [workspaceSourcePath, target] of params.workspaceTargets) {
-    if (!isPathWithin(normalizedSourcePath, workspaceSourcePath)) {
-      continue;
-    }
-    const relative = path.relative(workspaceSourcePath, normalizedSourcePath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      continue;
-    }
+    for (const sourceAlias of sourceAliases) {
+      if (!isPathWithin(sourceAlias, workspaceSourcePath)) {
+        continue;
+      }
+      const relative = path.relative(workspaceSourcePath, sourceAlias);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
 
-    if (!bestMatch || workspaceSourcePath.length > bestMatch.sourcePath.length) {
-      bestMatch = {
-        sourcePath: workspaceSourcePath,
-        rewritePath: path.resolve(target.rewritePath, relative),
-      };
+      if (!bestMatch || workspaceSourcePath.length > bestMatch.sourcePath.length) {
+        bestMatch = {
+          sourcePath: workspaceSourcePath,
+          rewritePath: path.resolve(target.rewritePath, relative),
+        };
+      }
     }
   }
 
@@ -634,17 +643,23 @@ async function buildWorkspaceRewritesFromTargets(params: {
 }): Promise<Map<string, string>> {
   const rewrites = new Map<string, string>();
   for (const workspaceDir of params.manifestWorkspaceDirs ?? []) {
+    // Build all known aliases (resolved + canonical + /private aliasing) so
+    // the lookup succeeds even when manifest workspace paths differ from the
+    // canonical workspace asset source paths stored in workspaceTargets.
+    const resolvedDir = path.resolve(workspaceDir);
+    const canonicalDir = await canonicalizePath(resolvedDir);
+    const sourceAliases = [
+      ...new Set([...buildPathAliases(resolvedDir), ...buildPathAliases(canonicalDir)]),
+    ];
     const rewritePath = resolveWorkspaceRewritePathFromTargets({
       sourcePath: workspaceDir,
       workspaceTargets: params.workspaceTargets,
+      sourceAliases,
     });
     if (!rewritePath) {
       continue;
     }
-    for (const alias of buildPathAliases(workspaceDir)) {
-      rewrites.set(alias, rewritePath);
-    }
-    for (const alias of buildPathAliases(await canonicalizePath(path.resolve(workspaceDir)))) {
+    for (const alias of sourceAliases) {
       rewrites.set(alias, rewritePath);
     }
   }

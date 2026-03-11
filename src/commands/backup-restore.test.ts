@@ -472,6 +472,85 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("rewrites covered nested workspace paths when parent is accessed via symlink", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const externalRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-nested-symlink-external-"),
+    );
+    const realWorkspaceRoot = path.join(externalRoot, "workspace-real");
+    // Config references the symlink path; backup canonicalizes to the real path.
+    const symlinkWorkspaceRoot = path.join(sourceHome.home, "workspace-link");
+    const symlinkNestedWorkspace = path.join(symlinkWorkspaceRoot, "agent-nested");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-nested-symlink-"),
+    );
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.mkdir(path.join(sourceStateDir, "credentials"), { recursive: true });
+      await fs.mkdir(path.join(realWorkspaceRoot, "agent-nested"), { recursive: true });
+      await fs.symlink(realWorkspaceRoot, symlinkWorkspaceRoot);
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: symlinkWorkspaceRoot,
+            },
+            list: [
+              {
+                id: "nested",
+                workspace: symlinkNestedWorkspace,
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials", "oauth.json"), "{}", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(realWorkspaceRoot, "SOUL.md"), "# root\n", "utf8");
+      await fs.writeFile(
+        path.join(realWorkspaceRoot, "agent-nested", "NESTED.md"),
+        "# nested\n",
+        "utf8",
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome(
+        "openclaw-backup-restore-covered-nested-symlink-home-",
+      );
+      setActiveHome(targetHome);
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+      });
+
+      const restoredSnapshot = await readConfigFileSnapshot();
+      expect(restoredSnapshot.valid).toBe(true);
+      // Both the parent workspace and the covered nested child must be rewritten.
+      expect(restoredSnapshot.config?.agents?.defaults?.workspace).toBeDefined();
+      expect(restoredSnapshot.config?.agents?.list?.[0]?.workspace).toBeDefined();
+      // The nested workspace must point to a subdirectory of the parent workspace.
+      const restoredParent = restoredSnapshot.config?.agents?.defaults?.workspace ?? "";
+      const restoredNested = restoredSnapshot.config?.agents?.list?.[0]?.workspace ?? "";
+      expect(restoredNested).toBe(path.join(restoredParent, "agent-nested"));
+      expect(restored.updatedConfigWorkspacePaths).toBe(2);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+      await fs.rm(externalRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rewrites covered config workspace paths when backup stateDir is a symlink alias", async () => {
     const sourceHomeDir = sourceHome.home;
     const sourceStateLinkDir = path.join(sourceHomeDir, "state-link");
