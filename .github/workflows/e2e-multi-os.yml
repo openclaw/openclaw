@@ -1,0 +1,51 @@
+# E2E Multi-OS — Phase 1: CLI smoke across Ubuntu, Windows, macOS
+# Roadmap: docs/experiments/plans/e2e-multi-os-ci-roadmap.md
+
+name: E2E Multi-OS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'Phase to run'
+        required: false
+        default: 'smoke'
+        type: choice
+        options:
+          - smoke
+          - e2e
+          - docker
+
+jobs:
+  e2e-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Build
+        run: pnpm build
+
+      - name: CLI smoke
+        run: |
+          pnpm exec openclaw --version
+          pnpm exec openclaw doctor

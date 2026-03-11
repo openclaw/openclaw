@@ -141,6 +141,14 @@
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
 
+## E2E Multi-OS CI (long-horizon)
+
+When working on cross-platform E2E testing or fixing E2E workflow failures:
+
+1. Read `docs/experiments/plans/e2e-multi-os-ci-roadmap.md` for phased plan, best practices, and self-iteration loop.
+2. Follow the self-iteration loop: fetch failure logs → analyze → fix → re-trigger → verify; repeat until all target OS jobs pass.
+3. Update the roadmap Changelog when making progress.
+
 ## Commit & Pull Request Guidelines
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
