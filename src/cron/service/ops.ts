@@ -661,7 +661,7 @@ export async function enqueueRun(
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      const result = await run(state, id, mode);
+      const result = await run(state, id, mode, callerContext);
       if (result.ok && "ran" in result && !result.ran) {
         state.deps.log.info(
           { jobId: id, runId, reason: result.reason },
