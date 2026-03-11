@@ -388,6 +388,55 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("mirrors buffered final answers even when the follow-up final payload cannot send as-is", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>Reasoning</think>Visible answer" },
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver({ text: "" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies
+      .mockResolvedValueOnce({ delivered: false })
+      .mockResolvedValueOnce({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Reasoning:\n_Reasoning_" })],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Visible answer" })],
+      }),
+    );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "s1",
+      text: "Visible answer",
+      mediaUrls: undefined,
+    });
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(

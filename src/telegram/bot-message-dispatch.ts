@@ -699,7 +699,6 @@ export const dispatchTelegramMessage = async ({
           if (info.kind === "final") {
             await answerLane.stream?.stop();
             await reasoningLane.stream?.stop();
-            reasoningStepState.resetForNextStep();
           }
           const canSendAsIs =
             hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
@@ -709,6 +708,11 @@ export const dispatchTelegramMessage = async ({
               if (flushedAnswer) {
                 mirroredTranscriptPayloads.push(flushedAnswer);
                 deliveredFinalPayload = true;
+              } else {
+                reasoningStepState.resetForNextStep();
+              }
+              if (deliveredFinalPayload) {
+                await mirrorDeliveredTranscriptPayloads(mirroredTranscriptPayloads);
               }
             }
             return;
@@ -722,6 +726,8 @@ export const dispatchTelegramMessage = async ({
             if (flushedAnswer) {
               mirroredTranscriptPayloads.push(flushedAnswer);
               deliveredFinalPayload = true;
+            } else {
+              reasoningStepState.resetForNextStep();
             }
             if (deliveredFinalPayload) {
               await mirrorDeliveredTranscriptPayloads(mirroredTranscriptPayloads);
