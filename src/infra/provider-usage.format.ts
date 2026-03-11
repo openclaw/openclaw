@@ -71,16 +71,16 @@ export function formatUsageSummaryLine(
   opts?: { now?: number; maxProviders?: number },
 ): string | null {
   const providers = summary.providers
-    .filter((entry) => !entry.error && (entry.windows.length > 0 || entry.plan))
+    .filter((entry) => !entry.error && (entry.windows.length > 0 || entry.balance))
     .slice(0, opts?.maxProviders ?? summary.providers.length);
   if (providers.length === 0) {
     return null;
   }
 
   const parts = providers.map((entry) => {
-    // Plan-only providers (e.g. credit-balance APIs with no quota windows)
+    // Balance-only providers (credit-balance APIs with no quota windows)
     if (entry.windows.length === 0) {
-      return `${entry.displayName} ${entry.plan}`;
+      return `${entry.displayName} ${entry.balance}`;
     }
     const window = entry.windows.reduce((best, next) =>
       next.usedPercent > best.usedPercent ? next : best,
@@ -97,15 +97,16 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
 
   const lines: string[] = ["Usage:"];
   for (const entry of summary.providers) {
-    const planSuffix = entry.plan ? ` (${entry.plan})` : "";
+    const metaParts = [entry.plan, entry.balance].filter(Boolean);
+    const planSuffix = metaParts.length > 0 ? ` (${metaParts.join(" · ")})` : "";
     if (entry.error) {
       lines.push(`  ${entry.displayName}${planSuffix}: ${entry.error}`);
       continue;
     }
     if (entry.windows.length === 0) {
-      // If the plan field carries the data (e.g. credit balance), it's already
-      // shown via planSuffix — don't append ": no data" in that case.
-      const suffix = entry.plan ? "" : ": no data";
+      // Preserve "no data" unless the snapshot explicitly carries a credit
+      // balance — plan alone is tier metadata and does not confirm usage data.
+      const suffix = entry.balance ? "" : ": no data";
       lines.push(`  ${entry.displayName}${planSuffix}${suffix}`);
       continue;
     }

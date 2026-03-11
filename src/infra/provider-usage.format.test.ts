@@ -112,7 +112,7 @@ describe("provider-usage.format", () => {
     ).toBeNull();
   });
 
-  it("includes plan-only providers in summary line and omits errored ones", () => {
+  it("includes balance-only providers in summary line and omits errored ones", () => {
     const summary: UsageSummary = {
       updatedAt: now,
       providers: [
@@ -120,13 +120,13 @@ describe("provider-usage.format", () => {
           provider: "zai",
           displayName: "Kilo",
           windows: [],
-          plan: "$5.00",
+          balance: "$5.00",
         },
         {
           provider: "anthropic",
           displayName: "Claude",
           windows: [],
-          plan: "$0.00",
+          plan: "business",
           error: "Depleted",
         },
         {
@@ -137,7 +137,7 @@ describe("provider-usage.format", () => {
       ],
     };
 
-    // Kilo appears with its plan label; errored Claude is excluded; windowless+planless Xiaomi is excluded
+    // Kilo appears with its balance; errored Claude is excluded; windowless+balanceless Xiaomi is excluded
     expect(formatUsageSummaryLine(summary, { now })).toBe("📊 Usage: Kilo $5.00");
   });
 
@@ -160,19 +160,21 @@ describe("provider-usage.format", () => {
           provider: "xiaomi",
           displayName: "Xiaomi",
           windows: [],
+          // plan without balance: tier metadata only — still signals "no data"
+          plan: "business",
         },
         {
           provider: "zai",
           displayName: "Kilo",
           windows: [],
-          plan: "$5.00",
+          balance: "$5.00",
         },
       ],
     };
     expect(formatUsageReportLines(summary)).toEqual([
       "Usage:",
       "  Codex (Plus): Token expired",
-      "  Xiaomi: no data",
+      "  Xiaomi (business): no data",
       "  Kilo ($5.00)",
     ]);
   });

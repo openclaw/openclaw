@@ -9,6 +9,10 @@ export type ProviderUsageSnapshot = {
   displayName: string;
   windows: UsageWindow[];
   plan?: string;
+  /** Credit-balance string (e.g. "$5.00"). When set, the snapshot carries
+   *  usage data even if windows is empty; format functions use this to
+   *  suppress the "no data" marker and include the provider in summaries. */
+  balance?: string;
   error?: string;
 };
 
