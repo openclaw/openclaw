@@ -44,6 +44,23 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("gateway.remote.enabled", () => {
+  it("accepts gateway.remote.enabled as a boolean config flag", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        remote: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.gateway?.remote?.enabled).toBe(false);
+    }
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });

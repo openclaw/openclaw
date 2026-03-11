@@ -170,10 +170,12 @@ export function createGatewayCredentialPlan(params: {
     defaults,
     path: "gateway.remote.password",
   });
+  const remoteEnabled = remote?.enabled !== false;
+  const effectiveRemoteTokenConfigured = remoteEnabled && remoteToken.configured;
 
   const localTokenCanWin =
     authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
-  const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
+  const tokenCanWin = Boolean(envToken || localToken.configured || effectiveRemoteTokenConfigured);
   const passwordCanWin =
     authMode === "password" ||
     (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
@@ -184,7 +186,6 @@ export function createGatewayCredentialPlan(params: {
       (authMode === undefined && !(envPassword || localPassword.configured)));
 
   const remoteMode = gateway?.mode === "remote";
-  const remoteEnabled = remote?.enabled !== false;
   const remoteUrlConfigured = Boolean(trimToUndefined(remote?.url));
   const tailscaleRemoteExposure =
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";

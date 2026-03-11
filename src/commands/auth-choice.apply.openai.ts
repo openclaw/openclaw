@@ -39,13 +39,33 @@ async function resolveOpenAICodexWriteCredentials(
     return callbackCreds;
   }
 
+  const callbackAccountId =
+    typeof callbackCreds.accountId === "string" && callbackCreds.accountId.trim().length > 0
+      ? callbackCreds.accountId.trim()
+      : undefined;
+  const cliAccountId =
+    typeof codexCliCreds.accountId === "string" && codexCliCreds.accountId.trim().length > 0
+      ? codexCliCreds.accountId.trim()
+      : undefined;
+  const sameTokens =
+    codexCliCreds.access === callbackCreds.access &&
+    codexCliCreds.refresh === callbackCreds.refresh;
+  const sameAccount = Boolean(
+    callbackAccountId && cliAccountId && callbackAccountId === cliAccountId,
+  );
+  const cliLooksNewer = codexCliCreds.expires > callbackCreds.expires;
+
+  if (!sameTokens && !(sameAccount && cliLooksNewer)) {
+    return callbackCreds;
+  }
+
   const shouldSyncCliAuth = await params.prompter.confirm({
     message: [
       `OpenClaw auth store not found: ${shortenHomePath(authStorePath)}`,
       `OpenAI Codex OAuth was found in ${shortenHomePath(resolveCodexCliAuthPath())}`,
       "Sync auth.json credentials into this agent now?",
     ].join("\n"),
-    initialValue: true,
+    initialValue: false,
   });
   if (!shouldSyncCliAuth) {
     return callbackCreds;
@@ -55,7 +75,13 @@ async function resolveOpenAICodexWriteCredentials(
     `Syncing OpenAI Codex OAuth from ${shortenHomePath(resolveCodexCliAuthPath())}`,
     "Auth sync",
   );
-  return codexCliCreds;
+  return {
+    ...callbackCreds,
+    access: codexCliCreds.access,
+    refresh: codexCliCreds.refresh,
+    expires: codexCliCreds.expires,
+    ...(cliAccountId ? { accountId: cliAccountId } : {}),
+  };
 }
 
 export async function applyAuthChoiceOpenAI(
