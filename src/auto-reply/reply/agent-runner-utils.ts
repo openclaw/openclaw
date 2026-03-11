@@ -22,7 +22,7 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const currentMessageId = resolveCurrentReplyReferenceId(sessionCtx);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
@@ -75,6 +75,17 @@ export function buildThreadingToolContext(params: {
     currentChannelProvider: provider!, // guaranteed non-null since dock exists
     currentMessageId: context.currentMessageId ?? currentMessageId,
   };
+}
+
+export function resolveCurrentReplyReferenceId(
+  sessionCtx: Pick<TemplateContext, "CurrentMessageId" | "MessageSidFull" | "MessageSid">,
+): string | undefined {
+  const currentMessageIdRaw = sessionCtx.CurrentMessageId;
+  const currentMessageId =
+    typeof currentMessageIdRaw === "number"
+      ? String(currentMessageIdRaw)
+      : currentMessageIdRaw?.trim() || undefined;
+  return currentMessageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
 }
 
 export const isBunFetchSocketError = (message?: string) =>

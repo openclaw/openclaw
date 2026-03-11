@@ -88,6 +88,23 @@ const createMSTeamsOutbound = (): ChannelOutboundAdapter => ({
   },
 });
 
+const createGoogleChatOutbound = (): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  sendText: async ({ to, text }) => ({
+    channel: "googlechat",
+    messageId: "g1",
+    chatId: to,
+    text,
+  }),
+  sendMedia: async ({ to, text, mediaUrl }) => ({
+    channel: "googlechat",
+    messageId: "g1",
+    chatId: to,
+    text,
+    mediaUrl,
+  }),
+});
+
 const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): ChannelPlugin => ({
   id: "msteams",
   meta: {
@@ -98,6 +115,23 @@ const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): Chan
     blurb: "Bot Framework; enterprise support.",
   },
   capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => ({}),
+  },
+  outbound: params.outbound,
+});
+
+const createGoogleChatPlugin = (params: { outbound: ChannelOutboundAdapter }): ChannelPlugin => ({
+  id: "googlechat",
+  meta: {
+    id: "googlechat",
+    label: "Google Chat",
+    selectionLabel: "Google Chat",
+    docsPath: "/channels/googlechat",
+    blurb: "Workspace chat",
+  },
+  capabilities: { chatTypes: ["direct", "group", "thread"] },
   config: {
     listAccountIds: () => [],
     resolveAccount: () => ({}),
@@ -253,6 +287,71 @@ describe("routeReply", () => {
       "telegram:123",
       "hi",
       expect.objectContaining({ messageThreadId: 42 }),
+    );
+  });
+
+  it("does not forward implicit Google Chat threadId as an explicit thread target", async () => {
+    setActivePluginRegistry(
+      createRegistry([
+        ...defaultRegistry.channels,
+        {
+          pluginId: "googlechat",
+          plugin: createGoogleChatPlugin({
+            outbound: createGoogleChatOutbound(),
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "googlechat",
+      to: "spaces/AAA",
+      threadId: "spaces/AAA/threads/thread-1",
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "googlechat",
+        replyToId: null,
+        threadId: null,
+      }),
+    );
+  });
+
+  it("preserves payload-level Google Chat reply references without passing threadId", async () => {
+    setActivePluginRegistry(
+      createRegistry([
+        ...defaultRegistry.channels,
+        {
+          pluginId: "googlechat",
+          plugin: createGoogleChatPlugin({
+            outbound: createGoogleChatOutbound(),
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: {
+        text: "hi",
+        replyToId: "spaces/AAA/threads/thread-2",
+      },
+      channel: "googlechat",
+      to: "spaces/AAA",
+      threadId: "spaces/AAA/threads/thread-2",
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "googlechat",
+        replyToId: "spaces/AAA/threads/thread-2",
+        threadId: null,
+      }),
     );
   });
 
