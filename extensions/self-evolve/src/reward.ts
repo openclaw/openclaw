@@ -137,7 +137,7 @@ function formatUnavailableReason(error: unknown): string {
   }
   const base = error.name || "Error";
   const message = error.message?.trim() || "no-message";
-  const asRecord = error as Record<string, unknown>;
+  const asRecord = error as unknown as { status?: unknown; code?: unknown };
   const status = typeof asRecord.status === "number" ? ` status=${String(asRecord.status)}` : "";
   const code =
     typeof asRecord.code === "string" || typeof asRecord.code === "number"
