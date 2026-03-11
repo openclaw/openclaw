@@ -63,26 +63,27 @@ Release behavior:
 - Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
 - Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
 - The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- Version input `2026.3.9-beta.1` becomes:
+- Root `package.json.version` is the only version source for iOS.
+- A root version like `2026.3.9-beta.1` becomes:
   - `CFBundleShortVersionString = 2026.3.9`
   - `CFBundleVersion = next TestFlight build number for 2026.3.9`
 
 Archive without upload:
 
 ```bash
-pnpm ios:beta:archive -- --version 2026.3.9-beta.1
+pnpm ios:beta:archive
 ```
 
 Archive and upload to TestFlight:
 
 ```bash
-pnpm ios:beta -- --version 2026.3.9-beta.1
+pnpm ios:beta
 ```
 
 If you need to force a specific build number:
 
 ```bash
-pnpm ios:beta -- --version 2026.3.9-beta.1 --build-number 7
+pnpm ios:beta -- --build-number 7
 ```
 
 ## APNs Expectations For Local/Manual Builds

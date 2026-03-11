@@ -63,25 +63,26 @@ fastlane ios auth_check
 Archive locally without upload:
 
 ```bash
-pnpm ios:beta:archive -- --version 2026.3.9-beta.1
+pnpm ios:beta:archive
 ```
 
 Upload to TestFlight:
 
 ```bash
-pnpm ios:beta -- --version 2026.3.9-beta.1
+pnpm ios:beta
 ```
 
 Direct Fastlane entry point:
 
 ```bash
 cd apps/ios
-IOS_BETA_VERSION=2026.3.9-beta.1 fastlane ios beta
+fastlane ios beta
 ```
 
 Versioning rules:
 
-- Input release version uses CalVer beta format: `YYYY.M.D-beta.N`
+- Root `package.json.version` is the single source of truth for iOS
+- Use `YYYY.M.D` for stable versions and `YYYY.M.D-beta.N` for beta versions
 - Fastlane stamps `CFBundleShortVersionString` to `YYYY.M.D`
 - Fastlane resolves `CFBundleVersion` as the next integer TestFlight build number for that short version
 - The beta flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving

@@ -1,5 +1,6 @@
 require "shellwords"
 require "open3"
+require "json"
 
 default_platform(:ios)
 
@@ -94,18 +95,28 @@ def ios_root
   File.expand_path("..", __dir__)
 end
 
-def normalize_beta_version(raw_value)
+def normalize_release_version(raw_value)
   version = raw_value.to_s.strip.sub(/\Av/, "")
-  UI.user_error!("Missing IOS_BETA_VERSION. Example: IOS_BETA_VERSION=2026.3.9-beta.1 fastlane ios beta") unless env_present?(version)
+  UI.user_error!("Missing root package.json version.") unless env_present?(version)
   unless version.match?(/\A\d+\.\d+\.\d+(?:[.-]?beta[.-]\d+)?\z/i)
-    UI.user_error!("Invalid IOS_BETA_VERSION '#{raw_value}'. Expected 2026.3.9 or 2026.3.9-beta.1.")
+    UI.user_error!("Invalid package.json version '#{raw_value}'. Expected 2026.3.9 or 2026.3.9-beta.1.")
   end
 
   version
 end
 
-def short_beta_version(version)
-  normalize_beta_version(version).sub(/([.-]?beta[.-]\d+)\z/i, "")
+def read_root_package_version
+  package_json_path = File.join(repo_root, "package.json")
+  UI.user_error!("Missing package.json at #{package_json_path}.") unless File.exist?(package_json_path)
+
+  parsed = JSON.parse(File.read(package_json_path))
+  normalize_release_version(parsed["version"])
+rescue JSON::ParserError => e
+  UI.user_error!("Invalid package.json at #{package_json_path}: #{e.message}")
+end
+
+def short_release_version(version)
+  normalize_release_version(version).sub(/([.-]?beta[.-]\d+)\z/i, "")
 end
 
 def shell_join(parts)
@@ -120,7 +131,7 @@ def resolve_beta_build_number(api_key:, version:)
     return explicit
   end
 
-  short_version = short_beta_version(version)
+  short_version = short_release_version(version)
   latest_build = latest_testflight_build_number(
     api_key: api_key,
     app_identifier: BETA_APP_IDENTIFIER,
@@ -135,7 +146,7 @@ end
 def prepare_beta_release!(version:, build_number:)
   script_path = File.join(repo_root, "scripts", "ios-beta-prepare.sh")
   UI.message("Preparing iOS beta release #{version} (build #{build_number}).")
-  sh(shell_join(["bash", script_path, "--version", version, "--build-number", build_number]))
+  sh(shell_join(["bash", script_path, "--build-number", build_number]))
 
   beta_xcconfig = File.join(ios_root, "build", "BetaRelease.xcconfig")
   UI.user_error!("Missing beta xcconfig at #{beta_xcconfig}.") unless File.exist?(beta_xcconfig)
@@ -226,7 +237,7 @@ platform :ios do
 
   private_lane :prepare_beta_context do
     api_key = asc_api_key
-    version = normalize_beta_version(ENV["IOS_BETA_VERSION"])
+    version = read_root_package_version
     build_number = resolve_beta_build_number(api_key: api_key, version: version)
     beta_xcconfig = prepare_beta_release!(version: version, build_number: build_number)
 
@@ -234,7 +245,7 @@ platform :ios do
       api_key: api_key,
       beta_xcconfig: beta_xcconfig,
       build_number: build_number,
-      short_version: short_beta_version(version),
+      short_version: short_release_version(version),
       version: version
     }
   end

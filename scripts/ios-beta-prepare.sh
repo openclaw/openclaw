@@ -4,10 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-beta-prepare.sh --version 2026.3.9-beta.1 --build-number 7 [--team-id TEAMID]
+  scripts/ios-beta-prepare.sh --build-number 7 [--team-id TEAMID]
 
 Prepares local beta-release inputs without touching local signing overrides:
-- stamps apps/ios/project.yml with the short version + build number
+- reads package.json.version and writes apps/ios/build/Version.xcconfig
 - writes apps/ios/build/BetaRelease.xcconfig with canonical bundle IDs
 - regenerates apps/ios/OpenClaw.xcodeproj via xcodegen
 EOF
@@ -17,19 +17,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="${ROOT_DIR}/apps/ios"
 BETA_XCCONFIG="${IOS_DIR}/build/BetaRelease.xcconfig"
 TEAM_HELPER="${ROOT_DIR}/scripts/ios-team-id.sh"
+VERSION_HELPER="${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
 
-VERSION=""
 BUILD_NUMBER=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
+PACKAGE_VERSION="$(cd "${ROOT_DIR}" && node -p "require('./package.json').version" 2>/dev/null || true)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --)
       shift
-      ;;
-    --version)
-      VERSION="${2:-}"
-      shift 2
       ;;
     --build-number)
       BUILD_NUMBER="${2:-}"
@@ -51,8 +48,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${VERSION}" || -z "${BUILD_NUMBER}" ]]; then
-  echo "Missing required --version or --build-number." >&2
+if [[ -z "${BUILD_NUMBER}" ]]; then
+  echo "Missing required --build-number." >&2
   usage
   exit 1
 fi
@@ -64,10 +61,7 @@ fi
 mkdir -p "${IOS_DIR}/build"
 
 (
-  cd "${ROOT_DIR}"
-  node --import tsx scripts/ios-sync-version.ts \
-    --version "${VERSION}" \
-    --build-number "${BUILD_NUMBER}"
+  bash "${VERSION_HELPER}" --build-number "${BUILD_NUMBER}"
 )
 
 cat >"${BETA_XCCONFIG}" <<EOF
@@ -90,5 +84,5 @@ EOF
   xcodegen generate
 )
 
-echo "Prepared iOS beta release: version=${VERSION} build=${BUILD_NUMBER} team=${TEAM_ID}"
+echo "Prepared iOS beta release: version=${PACKAGE_VERSION} build=${BUILD_NUMBER} team=${TEAM_ID}"
 echo "XCODE_XCCONFIG_FILE=${BETA_XCCONFIG}"

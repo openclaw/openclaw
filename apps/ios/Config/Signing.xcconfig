@@ -1,4 +1,6 @@
 // Shared iOS signing defaults for local development + CI.
+#include "Version.xcconfig"
+
 OPENCLAW_IOS_DEFAULT_TEAM = Y5PE65HELJ
 OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)
 OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
