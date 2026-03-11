@@ -1398,17 +1398,6 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
 
   return [...new Set(citations)];
 }
-
-function buildKimiToolResultContent(data: KimiSearchResponse): string {
-  return JSON.stringify({
-    search_results: (data.search_results ?? []).map((entry) => ({
-      title: entry.title ?? "",
-      url: entry.url ?? "",
-      content: entry.content ?? "",
-    })),
-  });
-}
-
 async function runKimiSearch(params: {
   query: string;
   apiKey: string;
