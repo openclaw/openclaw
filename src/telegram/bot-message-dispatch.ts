@@ -565,9 +565,12 @@ export const dispatchTelegramMessage = async ({
                 deliveryState.markDelivered();
                 if (result.firstMessageId != null) {
                   toolSummaryMessageId = result.firstMessageId;
+                } else {
+                  // Cannot track the message to edit later; reset accumulation
+                  // to avoid re-sending the same lines in the next delivery.
+                  toolSummaryLines.length = 0;
                 }
               }
-              return;
             }
             try {
               await editMessageTelegram(chatId, toolSummaryMessageId, aggregated, {
