@@ -46,22 +46,27 @@ const findooDatahubPlugin = {
     // --- DataHub client ---
     if (!config.datahubApiKey) {
       api.log?.(
-        "warn",
-        "findoo-datahub-plugin: no API key configured. Set DATAHUB_API_KEY env var or plugins.findoo-datahub-plugin.datahubApiKey in config. Using built-in dev key.",
+        "error",
+        "findoo-datahub-plugin: API key is required. Set DATAHUB_API_KEY env var or configure in Control UI → Plugins → Findoo DataHub.",
       );
     }
 
-    const client = new DataHubClient(
-      config.datahubApiUrl,
-      config.datahubUsername,
-      config.datahubApiKey ?? "98ffa5c5-1ec6-4735-8e0c-715a5eca1a8d",
-      config.requestTimeoutMs,
-    );
+    const client = config.datahubApiKey
+      ? new DataHubClient(
+          config.datahubApiUrl,
+          config.datahubUsername,
+          config.datahubApiKey,
+          config.requestTimeoutMs,
+        )
+      : null;
 
     // --- Local cache + regime detector ---
     const dbPath = api.resolvePath("state/findoo-ohlcv-cache.sqlite");
     const cache = new OHLCVCache(dbPath);
     const regimeDetector = new RegimeDetector();
+
+    const NO_KEY_ERROR =
+      "DataHub API key not configured. Set DATAHUB_API_KEY env var or configure in Control UI → Plugins → Findoo DataHub.";
 
     // --- Data provider service (exposed to other extensions) ---
     const dataProvider = {
@@ -72,6 +77,8 @@ const findooDatahubPlugin = {
         since?: number;
         limit?: number;
       }) {
+        if (!client) throw new Error(NO_KEY_ERROR);
+
         // Check cache first
         const range = cache.getRange(params.symbol, params.market, params.timeframe);
         if (range && params.since != null && params.limit != null) {
@@ -92,6 +99,7 @@ const findooDatahubPlugin = {
       },
 
       async getTicker(symbol: string, market: MarketType) {
+        if (!client) throw new Error(NO_KEY_ERROR);
         return client.getTicker(symbol, market);
       },
 
@@ -233,6 +241,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "price/historical");
             const qp = buildParams(params);
             const results = await client.equity(endpoint, qp);
@@ -283,6 +292,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "price/historical");
             const qp = buildParams(params);
             const results = await client.index(endpoint, qp);
@@ -351,6 +361,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "cpi");
             const qp = buildParams(params);
             // Route currency/* and fixedincome/* endpoints to their categories
@@ -416,6 +427,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "futures/historical");
             const qp = buildParams(params);
             const results = await client.derivatives(endpoint, qp);
@@ -483,6 +495,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "coin/market");
             const qp = buildParams(params);
             // Endpoint-specific param mapping for crypto APIs
@@ -570,6 +583,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "market/top_list");
             const qp = buildParams(params);
             // Auto-alias: trade_date→date for endpoints that use 'date' param
@@ -618,6 +632,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const path = String(params.path ?? "").trim();
             if (!path) throw new Error("path is required");
             const qp = (params.params ?? {}) as Record<string, string>;
@@ -766,6 +781,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const indicator = String(params.indicator ?? "sma");
             const qp: Record<string, string> = {};
             if (params.symbol) qp.symbol = String(params.symbol);
@@ -830,6 +846,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "info");
             const qp = buildParams(params);
             const results = await client.etf(endpoint, qp);
@@ -871,6 +888,7 @@ const findooDatahubPlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
+            if (!client) return json({ error: NO_KEY_ERROR });
             const endpoint = String(params.endpoint ?? "price/historical");
             const qp = buildParams(params);
             // Route news/* to the generic query path
@@ -902,7 +920,7 @@ const findooDatahubPlugin = {
         parameters: Type.Object({}),
         async execute() {
           return json({
-            datahub: config.datahubApiUrl,
+            connected: !!client,
             markets: dataProvider.getSupportedMarkets(),
             categories: [
               "equity",

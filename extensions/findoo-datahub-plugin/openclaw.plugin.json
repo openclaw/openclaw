@@ -10,7 +10,7 @@
     "properties": {
       "datahubApiKey": {
         "type": "string",
-        "description": "DataHub API key. Leave empty to use built-in dev key.",
+        "description": "DataHub API key (required).",
         "sensitive": true
       }
     }
@@ -18,7 +18,7 @@
   "uiHints": {
     "datahubApiKey": {
       "label": "API Key",
-      "help": "DataHub API 密钥。留空则使用内置 dev key。",
+      "help": "DataHub API 密钥（必填）。",
       "sensitive": true,
       "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     }
