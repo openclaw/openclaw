@@ -54,6 +54,7 @@ public final class OpenClawChatViewModel {
     private var nextModelSelectionRequestID: UInt64 = 0
     private var latestModelSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestModelSelectionIDsBySession: [String: String] = [:]
+    private var lastSuccessfulModelSelectionIDsBySession: [String: String] = [:]
     private var inFlightModelPatchCountsBySession: [String: Int] = [:]
     private var modelPatchWaitersBySession: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var nextThinkingSelectionRequestID: UInt64 = 0
@@ -532,6 +533,7 @@ public final class OpenClawChatViewModel {
 
         let sessionKey = self.sessionKey
         let previous = self.modelSelectionID
+        let previousRequestID = self.latestModelSelectionRequestIDsBySession[sessionKey]
         self.nextModelSelectionRequestID &+= 1
         let requestID = self.nextModelSelectionRequestID
         let nextModelRef = self.modelRef(forSelectionID: next)
@@ -547,19 +549,21 @@ public final class OpenClawChatViewModel {
                 sessionKey: sessionKey,
                 model: nextModelRef)
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
-                let latestSelectionID = self.latestModelSelectionIDsBySession[sessionKey] ?? next
-                let latest = self.modelRef(forSelectionID: latestSelectionID)
-                guard latest != nextModelRef else {
-                    self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
-                    return
-                }
-                try? await self.transport.setSessionModel(sessionKey: sessionKey, model: latest)
+                self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: false)
                 return
             }
-            self.updateCurrentSessionModel(nextModelRef, sessionKey: sessionKey)
+            self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: true)
         } catch {
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else { return }
             self.latestModelSelectionIDsBySession[sessionKey] = previous
+            if let previousRequestID {
+                self.latestModelSelectionRequestIDsBySession[sessionKey] = previousRequestID
+            } else {
+                self.latestModelSelectionRequestIDsBySession.removeValue(forKey: sessionKey)
+            }
+            if self.lastSuccessfulModelSelectionIDsBySession[sessionKey] == previous {
+                self.applySuccessfulModelSelection(previous, sessionKey: sessionKey, syncSelection: sessionKey == self.sessionKey)
+            }
             guard sessionKey == self.sessionKey else { return }
             self.modelSelectionID = previous
             self.errorText = error.localizedDescription
@@ -609,17 +613,22 @@ public final class OpenClawChatViewModel {
             inputTokens: nil,
             outputTokens: nil,
             totalTokens: nil,
+            modelProvider: nil,
             model: nil,
             contextTokens: nil)
     }
 
     private func syncSelectedModel() {
-        let explicitModelID = self.sessions.first(where: { $0.key == self.sessionKey })?.model
-            .flatMap(self.normalizedModelSelectionID)
+        let currentSession = self.sessions.first(where: { $0.key == self.sessionKey })
+        let explicitModelID = self.normalizedModelSelectionID(
+            currentSession?.model,
+            provider: currentSession?.modelProvider)
         if let explicitModelID {
+            self.lastSuccessfulModelSelectionIDsBySession[self.sessionKey] = explicitModelID
             self.modelSelectionID = explicitModelID
             return
         }
+        self.lastSuccessfulModelSelectionIDsBySession[self.sessionKey] = Self.defaultModelSelectionID
         self.modelSelectionID = Self.defaultModelSelectionID
     }
 
@@ -629,10 +638,20 @@ public final class OpenClawChatViewModel {
         return trimmed
     }
 
-    private func normalizedModelSelectionID(_ modelID: String?) -> String? {
+    private func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
         guard let modelID else { return nil }
         let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        if let provider = Self.normalizedProvider(provider) {
+            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
+            if let match = self.modelChoices.first(where: {
+                $0.selectionID == providerQualified ||
+                    ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
+            }) {
+                return match.selectionID
+            }
+            return providerQualified
+        }
         if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
             return trimmed
         }
@@ -656,7 +675,46 @@ public final class OpenClawChatViewModel {
             modelID
     }
 
-    private func updateCurrentSessionModel(_ modelID: String?, sessionKey: String) {
+    private func applySuccessfulModelSelection(_ selectionID: String, sessionKey: String, syncSelection: Bool) {
+        self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = selectionID
+        let resolved = self.resolvedSessionModelIdentity(forSelectionID: selectionID)
+        self.updateCurrentSessionModel(
+            modelID: resolved.modelID,
+            modelProvider: resolved.modelProvider,
+            sessionKey: sessionKey,
+            syncSelection: syncSelection)
+    }
+
+    private func resolvedSessionModelIdentity(forSelectionID selectionID: String) -> (modelID: String?, modelProvider: String?) {
+        guard let modelRef = self.modelRef(forSelectionID: selectionID) else {
+            return (nil, nil)
+        }
+        if let choice = self.modelChoices.first(where: { $0.selectionID == modelRef }) {
+            return (choice.modelID, Self.normalizedProvider(choice.provider))
+        }
+        return (modelRef, nil)
+    }
+
+    private static func normalizedProvider(_ provider: String?) -> String? {
+        let trimmed = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    private static func providerQualifiedModelSelectionID(modelID: String, provider: String) -> String {
+        let providerPrefix = "\(provider)/"
+        if modelID.hasPrefix(providerPrefix) {
+            return modelID
+        }
+        return "\(provider)/\(modelID)"
+    }
+
+    private func updateCurrentSessionModel(
+        modelID: String?,
+        modelProvider: String?,
+        sessionKey: String,
+        syncSelection: Bool)
+    {
         if let index = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
             let current = self.sessions[index]
             self.sessions[index] = OpenClawChatSessionEntry(
@@ -676,6 +734,7 @@ public final class OpenClawChatViewModel {
                 inputTokens: current.inputTokens,
                 outputTokens: current.outputTokens,
                 totalTokens: current.totalTokens,
+                modelProvider: modelProvider,
                 model: modelID,
                 contextTokens: current.contextTokens)
         } else {
@@ -698,10 +757,13 @@ public final class OpenClawChatViewModel {
                     inputTokens: placeholder.inputTokens,
                     outputTokens: placeholder.outputTokens,
                     totalTokens: placeholder.totalTokens,
+                    modelProvider: modelProvider,
                     model: modelID,
                     contextTokens: placeholder.contextTokens))
         }
-        self.syncSelectedModel()
+        if syncSelection {
+            self.syncSelectedModel()
+        }
     }
 
     private func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
