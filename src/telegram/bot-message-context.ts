@@ -253,9 +253,14 @@ export const buildTelegramMessageContext = async ({
   // freshCfg via resolveTelegramConversationRoute, so the explicitness check
   // must read from the same source to avoid divergence at runtime.
   const dmScopeExplicit = freshCfg.session?.dmScope != null;
+  const isExplicitRouteBinding =
+    route.matchedBy !== "default" ||
+    configuredBinding != null ||
+    Boolean(configuredBindingSessionKey?.trim());
   if (
     !isGroup &&
     !isNamedAccountFallback &&
+    !isExplicitRouteBinding &&
     !dmScopeExplicit &&
     baseSessionKey === route.mainSessionKey
   ) {

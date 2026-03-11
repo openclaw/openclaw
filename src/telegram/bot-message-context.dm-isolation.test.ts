@@ -69,6 +69,72 @@ describe("Telegram DM session isolation (#41165)", () => {
     expect(sessionKey).toBe("agent:main:main");
   });
 
+  it("does not rewrite explicit DM peer bindings that intentionally target main", async () => {
+    const cfg = {
+      ...baseTelegramMessageContextConfig,
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            peer: { kind: "direct", id: "7463849194" },
+          },
+        },
+      ],
+    } as const;
+    setRuntimeConfigSnapshot(cfg as never);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 7463849194, type: "private" },
+        from: { id: 7463849194, first_name: "Alice" },
+        text: "hello",
+      },
+      cfg,
+    });
+
+    expect(ctx).toBeTruthy();
+    if (!ctx) {
+      return;
+    }
+
+    expect(ctx.route.matchedBy).toBe("binding.peer");
+    expect(ctx.ctxPayload.SessionKey).toBe("agent:main:main");
+  });
+
+  it("does not rewrite explicit account bindings that intentionally target main", async () => {
+    const cfg = {
+      ...baseTelegramMessageContextConfig,
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            account: "default",
+          },
+        },
+      ],
+    } as const;
+    setRuntimeConfigSnapshot(cfg as never);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 7463849194, type: "private" },
+        from: { id: 7463849194, first_name: "Alice" },
+        text: "hello",
+      },
+      cfg,
+    });
+
+    expect(ctx).toBeTruthy();
+    if (!ctx) {
+      return;
+    }
+
+    expect(ctx.route.matchedBy).toBe("binding.account");
+    expect(ctx.ctxPayload.SessionKey).toBe("agent:main:main");
+  });
+
   it("preserves per-peer isolation when dmScope is per-peer", async () => {
     setRuntimeConfigSnapshot({
       ...baseTelegramMessageContextConfig,
@@ -94,9 +160,7 @@ describe("Telegram DM session isolation (#41165)", () => {
 
     const sessionKey = ctx.ctxPayload.SessionKey;
     expect(sessionKey).not.toBe("agent:main:main");
-    // per-peer: already isolated by routing, guard does not override
-    expect(sessionKey).toContain("direct");
-    expect(sessionKey).toContain("7463849194");
+    expect(sessionKey).toBe("agent:main:direct:7463849194");
   });
 
   it("preserves per-channel-peer isolation when dmScope is per-channel-peer", async () => {
