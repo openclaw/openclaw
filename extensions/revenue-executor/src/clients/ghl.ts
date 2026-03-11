@@ -49,7 +49,9 @@ async function requestJson(params: {
 }
 
 export function createGhlClient(env: Env = process.env): GhlClient {
-  const baseUrl = trimTrailingSlash(requireEnv(env, "OPENCLAW_REVENUE_GHL_BASE_URL"));
+  const baseUrl = trimTrailingSlash(
+    env.OPENCLAW_REVENUE_GHL_BASE_URL?.trim() || "https://services.leadconnectorhq.com",
+  );
   const apiKey = requireEnv(env, "OPENCLAW_REVENUE_GHL_API_KEY");
 
   const searchPath = env.OPENCLAW_REVENUE_GHL_CONTACT_SEARCH_PATH?.trim() || "/contacts/search";
