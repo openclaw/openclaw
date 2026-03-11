@@ -28,14 +28,24 @@ export function logGatewayStartup(params: {
 
   const authMode = resolveModelAuthMode(agentProvider, params.cfg);
   if (authMode === "unknown") {
-    const warning = [
-      `No auth configured for provider "${agentProvider}".`,
-      `The agent model ${modelRef} will fail until credentials are added.`,
-      `Fix: ${formatCliCommand(`openclaw auth login ${agentProvider}`)}`,
-      `or set the appropriate API key environment variable,`,
-      `or switch models: ${formatCliCommand("openclaw models set <provider/model>")}.`,
-    ].join(" ");
-    params.log.warn(warning);
+    // Skip warning for local providers (e.g., ollama) that use synthetic auth
+    // via baseUrl config rather than explicit API keys.
+    const providerConfig = params.cfg?.models?.providers?.[agentProvider];
+    const isLocalProvider = Boolean(
+      providerConfig?.baseUrl?.trim() ||
+      providerConfig?.api?.trim() ||
+      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0),
+    );
+    if (!isLocalProvider) {
+      const warning = [
+        `No auth configured for provider "${agentProvider}".`,
+        `The agent model ${modelRef} will fail until credentials are added.`,
+        `Fix: ${formatCliCommand(`openclaw models auth login --provider ${agentProvider}`)}`,
+        `or set the appropriate API key environment variable,`,
+        `or switch models: ${formatCliCommand("openclaw models set <provider/model>")}.`,
+      ].join(" ");
+      params.log.warn(warning);
+    }
   }
   const scheme = params.tlsEnabled ? "wss" : "ws";
   const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
