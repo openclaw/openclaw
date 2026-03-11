@@ -71,4 +71,12 @@ describe("tool mutation helpers", () => {
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);
     expect(isLikelyMutatingToolName("browser")).toBe(false);
   });
+
+  it("treats compound gateway actions with read-only leaf verbs as non-mutating", () => {
+    expect(isMutatingToolCall("gateway", { action: "config.schema.lookup" })).toBe(false);
+    expect(isMutatingToolCall("gateway", { action: "config.get" })).toBe(false);
+    expect(isMutatingToolCall("gateway", { action: "agents.files.list" })).toBe(false);
+    expect(isMutatingToolCall("gateway", { action: "config.set" })).toBe(true);
+    expect(isMutatingToolCall("gateway", {})).toBe(true);
+  });
 });

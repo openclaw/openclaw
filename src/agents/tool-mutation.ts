@@ -29,6 +29,7 @@ const READ_ONLY_ACTIONS = new Set([
   "inspect",
   "check",
   "probe",
+  "lookup",
 ]);
 
 const PROCESS_MUTATING_ACTIONS = new Set(["write", "send_keys", "submit", "paste", "kill"]);
@@ -120,7 +121,12 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return typeof record?.model === "string" && record.model.trim().length > 0;
     default: {
       if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
-        return action == null || !READ_ONLY_ACTIONS.has(action);
+        if (action == null) return true;
+        if (READ_ONLY_ACTIONS.has(action)) return false;
+        // Support compound action names like "config.schema.lookup" where the
+        // leaf verb indicates a read-only operation.
+        const leaf = action.split(".").pop();
+        return !leaf || !READ_ONLY_ACTIONS.has(leaf);
       }
       if (normalized === "nodes") {
         return action == null || action !== "list";
