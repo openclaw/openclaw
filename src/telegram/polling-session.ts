@@ -15,6 +15,7 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+const POLL_STOP_GRACE_MS = 15_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -176,6 +177,11 @@ export class TelegramPollingSession {
     const fetchAbortController = this.#activeFetchAbort;
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
+    let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceCycleResolve: (() => void) | undefined;
+    const forceCyclePromise = new Promise<void>((resolve) => {
+      forceCycleResolve = resolve;
+    });
     const stopRunner = () => {
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
@@ -209,12 +215,24 @@ export class TelegramPollingSession {
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
         );
         void stopRunner();
+        void stopBot();
+        if (!forceCycleTimer) {
+          forceCycleTimer = setTimeout(() => {
+            if (this.opts.abortSignal?.aborted) {
+              return;
+            }
+            this.opts.log(
+              `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
+            );
+            forceCycleResolve?.();
+          }, POLL_STOP_GRACE_MS);
+        }
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
-      await runner.task();
+      await Promise.race([runner.task(), forceCyclePromise]);
       if (this.opts.abortSignal?.aborted) {
         return "exit";
       }
@@ -249,9 +267,18 @@ export class TelegramPollingSession {
       return shouldRestart ? "continue" : "exit";
     } finally {
       clearInterval(watchdog);
+      if (forceCycleTimer) {
+        clearTimeout(forceCycleTimer);
+      }
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await stopRunner();
-      await stopBot();
+      await Promise.race([
+        stopRunner(),
+        new Promise<void>((resolve) => setTimeout(resolve, POLL_STOP_GRACE_MS)),
+      ]);
+      await Promise.race([
+        stopBot(),
+        new Promise<void>((resolve) => setTimeout(resolve, POLL_STOP_GRACE_MS)),
+      ]);
       this.#activeRunner = undefined;
       if (this.#activeFetchAbort === fetchAbortController) {
         this.#activeFetchAbort = undefined;
