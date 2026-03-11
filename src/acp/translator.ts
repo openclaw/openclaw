@@ -633,14 +633,25 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       return;
     }
+    // Capture runId before cancelActiveRun clears session.activeRunId.
+    const activeRunId = session.activeRunId;
+
     this.sessionStore.cancelActiveRun(params.sessionId);
+    const pending = this.pendingPrompts.get(params.sessionId);
+    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
+    if (!scopedRunId) {
+      return;
+    }
+
     try {
-      await this.gateway.request("chat.abort", { sessionKey: session.sessionKey });
+      await this.gateway.request("chat.abort", {
+        sessionKey: session.sessionKey,
+        runId: scopedRunId,
+      });
     } catch (err) {
       this.log(`cancel error: ${String(err)}`);
     }
 
-    const pending = this.pendingPrompts.get(params.sessionId);
     if (pending) {
       this.pendingPrompts.delete(params.sessionId);
       pending.resolve({ stopReason: "cancelled" });
@@ -672,6 +683,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     const stream = payload.stream as string | undefined;
+    const runId = payload.runId as string | undefined;
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
     if (!stream || !data || !sessionKey) {
@@ -688,7 +700,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey);
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
@@ -774,11 +786,8 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey);
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
-      return;
-    }
-    if (runId && pending.idempotencyKey !== runId) {
       return;
     }
 
@@ -853,11 +862,15 @@ export class AcpGatewayAgent implements Agent {
     pending.resolve({ stopReason });
   }
 
-  private findPendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
+  private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey === sessionKey) {
-        return pending;
+      if (pending.sessionKey !== sessionKey) {
+        continue;
       }
+      if (runId && pending.idempotencyKey !== runId) {
+        continue;
+      }
+      return pending;
     }
     return undefined;
   }

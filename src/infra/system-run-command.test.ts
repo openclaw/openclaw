@@ -106,6 +106,10 @@ describe("system run command helpers", () => {
       rawCommand: "echo hi",
     });
     expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.previewText).toBe("echo hi");
   });
 
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for positional-argv carrier wrappers", () => {
@@ -121,6 +125,10 @@ describe("system run command helpers", () => {
       rawCommand: "echo hi",
     });
     expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.previewText).toBe("echo hi");
   });
 
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for env assignment prelude", () => {
@@ -142,6 +150,7 @@ describe("system run command helpers", () => {
     }
     expect(res.shellCommand).toBe("echo hi");
     expect(res.cmdText).toBe(raw);
+    expect(res.previewText).toBe(null);
   });
 
   test("validateSystemRunCommandConsistency rejects cmd.exe /c trailing-arg smuggling", () => {
@@ -180,6 +189,7 @@ describe("system run command helpers", () => {
     expect(res.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"]);
     expect(res.shellCommand).toBe("echo SAFE&&whoami");
     expect(res.cmdText).toBe("echo SAFE&&whoami");
+    expect(res.previewText).toBe("echo SAFE&&whoami");
   });
 
   test("resolveSystemRunCommand binds cmdText to full argv for shell-wrapper positional-argv carriers", () => {
@@ -192,6 +202,7 @@ describe("system run command helpers", () => {
     }
     expect(res.shellCommand).toBe('$0 "$1"');
     expect(res.cmdText).toBe('/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker');
+    expect(res.previewText).toBe(null);
   });
 
   test("resolveSystemRunCommand binds cmdText to full argv when env prelude modifies shell wrapper", () => {
@@ -204,5 +215,32 @@ describe("system run command helpers", () => {
     }
     expect(res.shellCommand).toBe("echo hi");
     expect(res.cmdText).toBe('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"');
+    expect(res.previewText).toBe(null);
+  });
+
+  test("resolveSystemRunCommand keeps wrapper preview separate from approval text", () => {
+    const res = resolveSystemRunCommand({
+      command: ["./env", "sh", "-c", "jq --version"],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.cmdText).toBe("jq --version");
+    expect(res.previewText).toBe("jq --version");
+  });
+
+  test("resolveSystemRunCommand accepts canonical full argv text for wrapper approvals", () => {
+    const res = resolveSystemRunCommand({
+      command: ["./env", "sh", "-c", "jq --version"],
+      rawCommand: './env sh -c "jq --version"',
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.cmdText).toBe('./env sh -c "jq --version"');
+    expect(res.previewText).toBe("jq --version");
+    expect(res.shellCommand).toBe("jq --version");
   });
 });

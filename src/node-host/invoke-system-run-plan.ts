@@ -650,9 +650,11 @@ export function buildSystemRunApprovalPlan(params: {
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
   }
-  const rawCommand = hardening.argvChanged
-    ? formatExecCommand(hardening.argv) || null
-    : command.cmdText.trim() || null;
+  const rawCommand = formatExecCommand(hardening.argv) || null;
+  const commandPreview =
+    command.previewText?.trim() && command.previewText.trim() !== rawCommand
+      ? command.previewText.trim()
+      : null;
   const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
     argv: hardening.argv,
     cwd: hardening.cwd,
@@ -666,10 +668,11 @@ export function buildSystemRunApprovalPlan(params: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
       rawCommand,
+      commandPreview,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
       mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
     },
-    cmdText: rawCommand ?? formatExecCommand(hardening.argv),
+    cmdText: commandPreview ?? rawCommand ?? formatExecCommand(hardening.argv),
   };
 }
