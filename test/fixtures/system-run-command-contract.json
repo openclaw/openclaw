@@ -54,6 +54,15 @@
       }
     },
     {
+      "name": "env wrapper accepts canonical full argv raw command",
+      "command": ["/usr/bin/env", "bash", "-lc", "echo hi"],
+      "rawCommand": "/usr/bin/env bash -lc \"echo hi\"",
+      "expected": {
+        "valid": true,
+        "displayCommand": "/usr/bin/env bash -lc \"echo hi\""
+      }
+    },
+    {
       "name": "env assignment prelude requires full argv display binding",
       "command": ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
       "rawCommand": "echo hi",
