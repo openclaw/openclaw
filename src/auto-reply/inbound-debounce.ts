@@ -105,7 +105,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.min(maxRetryDelayMs, Math.max(buffer.debounceMs, Math.trunc(delay)));
   };
 
-  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>): Promise<boolean> => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
@@ -114,11 +114,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       if (buffer.items.length > 0) {
         scheduleFlush(key, buffer);
       }
-      return;
+      return false;
     }
     if (buffer.items.length === 0) {
       buffers.delete(key);
-      return;
+      return true;
     }
     const items = buffer.items.splice(0);
     buffer.flushing = true;
@@ -150,21 +150,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         ),
         droppedItems,
       );
-      return;
+      return true;
     }
     if (flushFailed || buffer.items.length > 0) {
       scheduleFlush(key, buffer, flushFailed ? "retry" : "debounce");
-      return;
+      return false;
     }
     buffers.delete(key);
+    return true;
   };
 
-  const flushKey = async (key: string) => {
+  const flushKeyInternal = async (key: string) => {
     const buffer = buffers.get(key);
     if (!buffer) {
-      return;
+      return true;
     }
-    await flushBuffer(key, buffer);
+    return flushBuffer(key, buffer);
   };
 
   const scheduleFlush = (
@@ -189,7 +190,15 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
     if (!canDebounce || !key) {
       if (key && buffers.has(key)) {
-        await flushKey(key);
+        const fullyFlushed = await flushKeyInternal(key);
+        const pending = buffers.get(key);
+        if (!fullyFlushed && pending) {
+          // Preserve ordering by appending non-debounced items behind unresolved buffered work.
+          pending.items.push(item);
+          trimBufferToLimit(key, pending);
+          scheduleFlush(key, pending, pending.consecutiveFailures > 0 ? "retry" : "debounce");
+          return;
+        }
       }
       try {
         await params.onFlush([item]);
@@ -219,5 +228,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return {
+    enqueue,
+    flushKey: async (key: string) => {
+      await flushKeyInternal(key);
+    },
+  };
 }

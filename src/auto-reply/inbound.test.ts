@@ -494,6 +494,50 @@ describe("createInboundDebouncer", () => {
       vi.useRealTimers();
     }
   });
+
+  it("preserves order when a non-debounced item arrives after a retryable flush failure", async () => {
+    vi.useFakeTimers();
+    try {
+      let remainingFailures = 2;
+      const delivered: Array<string[]> = [];
+      const errors: unknown[] = [];
+
+      const debouncer = createInboundDebouncer<{
+        key: string;
+        id: string;
+        debounce: boolean;
+      }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        shouldDebounce: (item) => item.debounce,
+        onFlush: async (items) => {
+          if (remainingFailures > 0) {
+            remainingFailures -= 1;
+            throw new Error("temporary lock contention");
+          }
+          delivered.push(items.map((entry) => entry.id));
+        },
+        onError: (err) => {
+          errors.push(err);
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+      await vi.advanceTimersByTimeAsync(10); // First flush fails.
+      expect(errors).toHaveLength(1);
+      expect(delivered).toEqual([]);
+
+      // A non-debounced follow-up should not bypass older buffered work.
+      await debouncer.enqueue({ key: "a", id: "2", debounce: false });
+      expect(delivered).toEqual([]);
+      expect(errors).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(delivered).toEqual([["1", "2"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
