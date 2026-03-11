@@ -8,6 +8,17 @@ import {
   resolveOperatorReceiptTemplate,
 } from "./worker-status.js";
 
+const SUPPORTED_2TONY_TASK_TYPES = new Set([
+  "build",
+  "generate-docs",
+  "git-status",
+  "lint",
+  "prisma-validate",
+  "security-scan",
+  "test",
+  "validate-k8s",
+]);
+
 type DispatchResult =
   | {
       attempted: false;
@@ -68,12 +79,114 @@ function readJsonLikeMessage(response: Response): Promise<string> {
     .catch(() => `${response.status} ${response.statusText}`);
 }
 
+function normalizeIdentifier(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readStringField(record: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function hasArrayField(record: Record<string, unknown>, ...keys: string[]): boolean {
+  return keys.some((key) => Array.isArray(record[key]) && record[key].length > 0);
+}
+
+function hasRecordField(record: Record<string, unknown>, ...keys: string[]): boolean {
+  return keys.some((key) => {
+    const value = record[key];
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  });
+}
+
+function resolveExplicit2TonyTaskType(inputs: Record<string, unknown>): string | null {
+  return readStringField(
+    inputs,
+    "worker_task_type",
+    "workerTaskType",
+    "task_type",
+    "taskType",
+    "2tony_task_type",
+    "two_tony_task_type",
+  );
+}
+
+function infer2TonyTaskTypeFromInputs(inputs: Record<string, unknown>): string | null {
+  if (readStringField(inputs, "manifest", "yaml")) {
+    return "validate-k8s";
+  }
+  if (readStringField(inputs, "schema")) {
+    return "prisma-validate";
+  }
+  if (hasArrayField(inputs, "tests")) {
+    return "test";
+  }
+  if (readStringField(inputs, "source", "code")) {
+    return "build";
+  }
+  if (readStringField(inputs, "template")) {
+    return "generate-docs";
+  }
+  if (hasRecordField(inputs, "files", "dependencies")) {
+    return "security-scan";
+  }
+  if (
+    readStringField(inputs, "branch") ||
+    hasArrayField(inputs, "modified", "staged", "untracked") ||
+    typeof inputs.aheadBy === "number" ||
+    typeof inputs.behindBy === "number"
+  ) {
+    return "git-status";
+  }
+  return null;
+}
+
+function resolve2TonyTaskType(task: OperatorTaskRecord): string {
+  const inputs = asRecord(task.envelope.inputs) ?? {};
+  const explicitType = resolveExplicit2TonyTaskType(inputs);
+  if (explicitType) {
+    const normalizedExplicitType = normalizeIdentifier(explicitType);
+    if (!SUPPORTED_2TONY_TASK_TYPES.has(normalizedExplicitType)) {
+      throw new Error(
+        `unsupported 2Tony task type override "${explicitType}" (supported: ${Array.from(SUPPORTED_2TONY_TASK_TYPES).join(", ")})`,
+      );
+    }
+    return normalizedExplicitType;
+  }
+
+  const capability = normalizeIdentifier(task.envelope.target.capability);
+  if (SUPPORTED_2TONY_TASK_TYPES.has(capability)) {
+    return capability;
+  }
+
+  const inferredType = infer2TonyTaskTypeFromInputs(inputs);
+  if (inferredType) {
+    return inferredType;
+  }
+
+  throw new Error(
+    `2Tony task type could not be inferred for capability "${task.envelope.target.capability}". Set inputs.worker_task_type to one of ${Array.from(SUPPORTED_2TONY_TASK_TYPES).join(", ")} or provide compatible inputs (source/code, tests, manifest/yaml, schema, template, files/dependencies, git status fields).`,
+  );
+}
+
 function build2TonyPayload(task: OperatorTaskRecord) {
   const team = getResolvedOperatorTaskTeam(task.envelope);
+  const taskType = resolve2TonyTaskType(task);
   return {
     taskId: task.envelope.task_id,
     runId: task.receipt.run_id,
-    type: task.envelope.target.capability,
+    type: taskType,
     timeoutMs: task.envelope.timeout_s * 1000,
     priority: mapTierToPriority(task.envelope.tier),
     callbackUrl: resolveReceiptUrl(task.envelope.task_id),
@@ -85,12 +198,15 @@ function build2TonyPayload(task: OperatorTaskRecord) {
       requester: task.envelope.requester,
       target: task.envelope.target,
       execution: task.envelope.execution,
+      requestedCapability: task.envelope.target.capability,
+      workerTaskType: taskType,
     },
     metadata: {
       operatorTaskId: task.envelope.task_id,
       operatorRunId: task.receipt.run_id,
       requesterId: task.envelope.requester.id,
       capability: task.envelope.target.capability,
+      workerTaskType: taskType,
       teamId: task.envelope.target.team_id ?? null,
       teamLead: team?.lead ?? null,
       alias: task.envelope.target.alias ?? null,

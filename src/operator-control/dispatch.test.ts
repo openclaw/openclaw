@@ -44,6 +44,9 @@ describe("operator task dispatch", () => {
             target: { capability: "backend", alias: "raekwon" },
             objective: "Dispatch to 2Tony",
             tier: "STANDARD",
+            inputs: {
+              worker_task_type: "git-status",
+            },
             acceptance_criteria: ["queued in worker"],
             timeout_s: 900,
           }),
@@ -61,6 +64,15 @@ describe("operator task dispatch", () => {
       expect((init.headers as Record<string, string>).authorization).toBe(
         "Bearer top-secret-2tony",
       );
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
+      ).toMatchObject({
+        type: "git-status",
+        metadata: {
+          capability: "backend",
+          workerTaskType: "git-status",
+        },
+      });
       const task = getOperatorTask("task-dispatch-1");
       expect(task?.receipt.state).toBe("queued");
       expect(task?.receipt.owner).toBe("2tony");
@@ -127,6 +139,9 @@ describe("operator task dispatch", () => {
             target: { capability: "backend", alias: "raekwon" },
             objective: "Dispatch to 2Tony without auth",
             tier: "STANDARD",
+            inputs: {
+              worker_task_type: "git-status",
+            },
             acceptance_criteria: ["queued in worker"],
             timeout_s: 900,
           }),
@@ -134,6 +149,89 @@ describe("operator task dispatch", () => {
 
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    });
+  });
+
+  it("infers a concrete 2Tony task type from operator inputs", async () => {
+    await withStateDirEnv("operator-dispatch-2tony-infer-", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 202,
+        statusText: "Accepted",
+        json: async () => ({
+          taskId: "task-dispatch-infer",
+          status: "accepted",
+          runId: "task-run-dispatch-infer",
+        }),
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_2TONY_URL: "http://2tony.internal:3009",
+        },
+        async () =>
+          await submitOperatorTaskAndDispatch({
+            task_id: "task-dispatch-infer",
+            idempotency_key: "task-dispatch-infer",
+            requester: { id: "tonya", kind: "operator" },
+            target: { capability: "infrastructure", alias: "ghostface" },
+            objective: "Validate manifest",
+            tier: "STANDARD",
+            inputs: {
+              manifest: "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n",
+            },
+            acceptance_criteria: ["worker receives validate-k8s payload"],
+            timeout_s: 900,
+          }),
+      );
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
+      ).toMatchObject({
+        type: "validate-k8s",
+        metadata: {
+          capability: "infrastructure",
+          workerTaskType: "validate-k8s",
+        },
+      });
+    });
+  });
+
+  it("blocks unmappable execution-fleet capabilities before 2Tony dead-letters them", async () => {
+    await withStateDirEnv("operator-dispatch-2tony-unmappable-", async () => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_2TONY_URL: "http://2tony.internal:3009",
+        },
+        async () =>
+          await submitOperatorTaskAndDispatch({
+            task_id: "task-dispatch-unmappable",
+            idempotency_key: "task-dispatch-unmappable",
+            requester: { id: "tonya", kind: "operator" },
+            target: { capability: "backend", alias: "raekwon" },
+            objective: "Backend task without concrete worker hints",
+            tier: "STANDARD",
+            acceptance_criteria: ["task blocks early"],
+            timeout_s: 900,
+          }),
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.dispatch).toMatchObject({
+        attempted: true,
+        accepted: false,
+        endpoint: "http://2tony.internal:3009/task",
+        statusCode: 0,
+      });
+      expect(result.dispatch.message).toContain("could not be inferred");
+      const task = getOperatorTask("task-dispatch-unmappable");
+      expect(task?.receipt.state).toBe("blocked");
+      expect(task?.receipt.failure_code).toBe("dispatch-failed");
     });
   });
 
