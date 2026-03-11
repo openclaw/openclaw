@@ -594,6 +594,30 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content).toEqual([]);
     expect(msg.stopReason).toBe("stop");
   });
+
+  it("ignores non-array message content in malformed provider payloads", () => {
+    const response = {
+      ...makeResponseObject("resp_8"),
+      output: [
+        {
+          type: "message",
+          id: "item_bad",
+          role: "assistant",
+          content: { type: "output_text", text: "bad shape" },
+        },
+        {
+          type: "message",
+          id: "item_ok",
+          role: "assistant",
+          content: [{ type: "output_text", text: "good text" }],
+        },
+      ],
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.content).toEqual([{ type: "text", text: "good text" }]);
+    expect(msg.stopReason).toBe("stop");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

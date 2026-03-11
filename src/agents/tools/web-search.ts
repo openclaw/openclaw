@@ -391,9 +391,11 @@ function extractGrokContent(data: GrokSearchResponse): {
   annotationCitations: string[];
 } {
   // xAI Responses API format: find the message output with text content
-  for (const output of data.output ?? []) {
+  const outputs = Array.isArray(data.output) ? data.output : [];
+  for (const output of outputs) {
     if (output.type === "message") {
-      for (const block of output.content ?? []) {
+      const contentBlocks = Array.isArray(output.content) ? output.content : [];
+      for (const block of contentBlocks) {
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = (block.annotations ?? [])
             .filter((a) => a.type === "url_citation" && typeof a.url === "string")

@@ -304,6 +304,23 @@ describe("web_search grok response parsing", () => {
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
   });
+
+  it("ignores non-array message content and keeps scanning output items", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "message",
+          content: { type: "output_text", text: "bad shape" },
+        },
+        {
+          type: "output_text",
+          text: "direct fallback text",
+        },
+      ],
+    } as Parameters<typeof extractGrokContent>[0]);
+    expect(result.text).toBe("direct fallback text");
+    expect(result.annotationCitations).toEqual([]);
+  });
 });
 
 describe("web_search kimi config resolution", () => {
