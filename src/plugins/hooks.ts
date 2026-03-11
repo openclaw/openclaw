@@ -5,7 +5,7 @@
  * error handling, priority ordering, and async support.
  */
 
-import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import { joinPresentTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -17,6 +17,7 @@ import type {
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
+  PluginHookPromptAction,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
@@ -127,6 +128,45 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
 
+  const mergePromptActionLists = (
+    left: PluginHookBeforePromptBuildResult["actions"],
+    right: PluginHookBeforePromptBuildResult["actions"],
+  ): PluginHookBeforePromptBuildResult["actions"] => {
+    const leftActions = Array.isArray(left) ? left : [];
+    const rightActions = Array.isArray(right) ? right : [];
+    if (leftActions.length === 0) {
+      return rightActions.length > 0 ? rightActions : undefined;
+    }
+    if (rightActions.length === 0) {
+      return leftActions;
+    }
+    return [...leftActions, ...rightActions];
+  };
+
+  const mergeOptionalPromptText = (
+    left: PluginHookBeforePromptBuildResult["systemPrompt"],
+    right: PluginHookBeforePromptBuildResult["systemPrompt"],
+  ): string | undefined => joinPresentTextSegments([left, right]);
+
+  const normalizePromptBuildActionsForMerge = (
+    result: PluginHookBeforePromptBuildResult | undefined,
+  ): PluginHookPromptAction[] | undefined => {
+    if (!result) {
+      return undefined;
+    }
+
+    const actions = Array.isArray(result.actions) ? result.actions : [];
+    if (actions.length > 0) {
+      return actions;
+    }
+
+    if (typeof result.prependContext === "string" && result.prependContext.trim()) {
+      return [{ kind: "prependContext", text: result.prependContext }];
+    }
+
+    return undefined;
+  };
+
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
     next: PluginHookBeforeModelResolveResult,
@@ -140,19 +180,20 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
-    systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext: concatOptionalTextSegments({
-      left: acc?.prependContext,
-      right: next.prependContext,
-    }),
-    prependSystemContext: concatOptionalTextSegments({
-      left: acc?.prependSystemContext,
-      right: next.prependSystemContext,
-    }),
-    appendSystemContext: concatOptionalTextSegments({
-      left: acc?.appendSystemContext,
-      right: next.appendSystemContext,
-    }),
+    actions: mergePromptActionLists(
+      normalizePromptBuildActionsForMerge(acc),
+      normalizePromptBuildActionsForMerge(next),
+    ),
+    systemPrompt: mergeOptionalPromptText(acc?.systemPrompt, next.systemPrompt),
+    prependContext: mergeOptionalPromptText(acc?.prependContext, next.prependContext),
+    prependSystemContext: mergeOptionalPromptText(
+      acc?.prependSystemContext,
+      next.prependSystemContext,
+    ),
+    appendSystemContext: mergeOptionalPromptText(
+      acc?.appendSystemContext,
+      next.appendSystemContext,
+    ),
   });
 
   const mergeSubagentSpawningResult = (

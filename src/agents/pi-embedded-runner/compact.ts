@@ -1,12 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  estimateTokens,
-  SessionManager,
-} from "@mariozechner/pi-coding-agent";
+import { createAgentSession, estimateTokens, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -71,6 +66,7 @@ import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
 } from "./compaction-safety-timeout.js";
+import { createEmbeddedResourceLoader } from "./embedded-resource-loader.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -615,18 +611,13 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
       });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
-      }
+      const resourceLoader = await createEmbeddedResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        extensionFactories,
+        systemPrompt: systemPromptOverride(),
+      });
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,

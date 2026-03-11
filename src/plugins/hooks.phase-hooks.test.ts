@@ -50,7 +50,7 @@ describe("phase hooks merger", () => {
     expect(result?.providerOverride).toBe("ollama");
   });
 
-  it("before_prompt_build concatenates prependContext and preserves systemPrompt precedence", async () => {
+  it("before_prompt_build concatenates prependContext and preserves systemPrompt ordering", async () => {
     addTypedHook(
       registry,
       "before_prompt_build",
@@ -71,6 +71,16 @@ describe("phase hooks merger", () => {
 
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
+  });
+
+  it("before_prompt_build concatenates systemPrompt in hook order", async () => {
+    addTypedHook(registry, "before_prompt_build", "high", () => ({ systemPrompt: "system A" }), 10);
+    addTypedHook(registry, "before_prompt_build", "low", () => ({ systemPrompt: "system B" }), 1);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.systemPrompt).toBe("system A\n\nsystem B");
   });
 
   it("before_prompt_build concatenates prependSystemContext and appendSystemContext", async () => {
@@ -100,5 +110,107 @@ describe("phase hooks merger", () => {
 
     expect(result?.prependSystemContext).toBe("prepend A\n\nprepend B");
     expect(result?.appendSystemContext).toBe("append A\n\nappend B");
+  });
+
+  it("before_prompt_build concatenates actions in hook order", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () => ({
+        actions: [{ kind: "prependContext", text: "context A" }],
+      }),
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "low",
+      () => ({
+        actions: [{ kind: "appendSystemPrompt", text: "system B" }],
+      }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.actions).toEqual([
+      { kind: "prependContext", text: "context A" },
+      { kind: "appendSystemPrompt", text: "system B" },
+    ]);
+  });
+
+  it("before_prompt_build preserves legacy prependContext across mixed hook styles", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () => ({
+        actions: [{ kind: "appendSystemPrompt", text: "system A" }],
+      }),
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "low",
+      () => ({ prependContext: "context B" }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.actions).toEqual([
+      { kind: "appendSystemPrompt", text: "system A" },
+      { kind: "prependContext", text: "context B" },
+    ]);
+  });
+
+  it("before_prompt_build ignores malformed non-array actions during merge", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () =>
+        ({
+          actions: { kind: "prependContext", text: "bad shape" },
+        }) as unknown as PluginHookBeforePromptBuildResult,
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "low",
+      () => ({
+        actions: [{ kind: "appendSystemPrompt", text: "system B" }],
+      }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.actions).toEqual([{ kind: "appendSystemPrompt", text: "system B" }]);
+  });
+
+  it("before_prompt_build ignores non-string systemPrompt values during merge", async () => {
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "high",
+      () =>
+        ({
+          systemPrompt: { bad: true },
+        }) as unknown as PluginHookBeforePromptBuildResult,
+      10,
+    );
+    addTypedHook(registry, "before_prompt_build", "low", () => ({ systemPrompt: "system B" }), 1);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.systemPrompt).toBe("system B");
   });
 });
