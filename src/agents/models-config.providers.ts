@@ -671,7 +671,7 @@ async function resolveOllamaImplicitProvider(
   }
 
   const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
-    quiet: !hasExplicitOllamaConfig,
+    quiet: !ollamaKey && !hasExplicitOllamaConfig,
   });
   if (ollamaProvider.models.length === 0 && !ollamaKey && !explicitOllama?.apiKey) {
     return undefined;
