@@ -4,6 +4,11 @@ vi.mock("../../auto-reply/tokens.js", () => ({
   SILENT_REPLY_TOKEN: "QUIET_TOKEN",
 }));
 
+const textToSpeechMock = vi.hoisted(() => vi.fn());
+vi.mock("../../tts/tts.js", () => ({
+  textToSpeech: textToSpeechMock,
+}));
+
 const { createTtsTool } = await import("./tts-tool.js");
 
 describe("createTtsTool", () => {
@@ -12,5 +17,40 @@ describe("createTtsTool", () => {
 
     expect(tool.description).toContain("QUIET_TOKEN");
     expect(tool.description).not.toContain("NO_REPLY");
+  });
+
+  it("returns metadata only in deliveryMode=return", async () => {
+    textToSpeechMock.mockResolvedValueOnce({
+      success: true,
+      audioPath: "/tmp/openclaw/tts-test/voice.mp3",
+      provider: "openai",
+      voiceCompatible: false,
+    });
+    const tool = createTtsTool();
+
+    const result = await tool.execute("call-1", {
+      text: "hello",
+      deliveryMode: "return",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    expect((result.content[0] as { text: string }).text).not.toContain("MEDIA:");
+    expect(result.details).toMatchObject({
+      ok: true,
+      deliveryMode: "return",
+      audioPath: "/tmp/openclaw/tts-test/voice.mp3",
+      sent: false,
+    });
+  });
+
+  it("returns validation error for invalid deliveryMode", async () => {
+    const tool = createTtsTool();
+    const result = await tool.execute("call-2", {
+      text: "hello",
+      deliveryMode: "invalid-mode",
+    });
+
+    expect((result.details as { error?: { code?: string } }).error?.code).toBe("VALIDATION_ERROR");
+    expect((result.content[0] as { text: string }).text).toContain("deliveryMode must be one of");
   });
 });
