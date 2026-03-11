@@ -21,8 +21,8 @@ import type {
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "../runtime/types.js";
-import type { IAuditLogger } from "./audit/audit.types.js";
 import { createNullAuditLogger } from "./audit/audit-logger.null.js";
+import type { IAuditLogger } from "./audit/audit.types.js";
 
 export type AcpSessionResolution =
   | {

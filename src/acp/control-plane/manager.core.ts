@@ -24,6 +24,10 @@ import type {
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "../runtime/types.js";
+import { createNullAuditLogger } from "./audit/audit-logger.null.js";
+import type { IAuditLogger } from "./audit/audit.types.js";
+import { extractAgentId } from "./audit/audit.utils.js";
+import { AUDIT_EVENT_TYPES } from "./audit/index.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,
@@ -71,10 +75,6 @@ import {
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
-import { AUDIT_EVENT_TYPES } from "./audit/index.js";
-import type { IAuditLogger } from "./audit/audit.types.js";
-import { createNullAuditLogger } from "./audit/audit-logger.null.js";
-import { extractAgentId } from "./audit/audit.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
@@ -246,7 +246,9 @@ export class AcpSessionManager {
       let backend: string;
 
       try {
-        const backendObj = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
+        const backendObj = this.deps.requireRuntimeBackend(
+          input.backendId || input.cfg.acp?.backend,
+        );
         runtime = backendObj.runtime;
         const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
         const requestedCwd = initialRuntimeOptions.cwd;
