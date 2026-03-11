@@ -138,6 +138,7 @@ Docs: https://docs.openclaw.ai
 - Docs/Changelog: correct the contributor credit for the bundled Control UI global-install fix to @LarytheLord. (#40420) Thanks @velvet-shark.
 - Telegram/media downloads: time out only stalled body reads so polling recovers from hung file downloads without aborting slow downloads that are still streaming data. (#40098) thanks @tysoncung.
 - Docker/runtime image: prune dev dependencies, strip build-only dist metadata for smaller Docker images. (#40307) Thanks @vincentkoc.
+- Subagents/sandboxing: restrict leaf subagents to their own spawned runs and remove leaf `subagents` control access so sandboxed leaf workers can no longer steer sibling sessions. Thanks @tdjackey.
 - Gateway/restart timeout recovery: exit non-zero when restart-triggered shutdown drains time out so launchd/systemd restart the gateway instead of treating the failed restart as a clean stop. Landed from contributor PR #40380 by @dsantoreis. Thanks @dsantoreis.
 - Gateway/config restart guard: validate config before service start/restart and keep post-SIGUSR1 startup failures from crashing the gateway process, reducing invalid-config restart loops and macOS permission loss. Landed from contributor PR #38699 by @lml2468. Thanks @lml2468.
 - Gateway/launchd respawn detection: treat `XPC_SERVICE_NAME` as a launchd supervision hint so macOS restarts exit cleanly under launchd instead of attempting detached self-respawn. Landed from contributor PR #20555 by @dimat. Thanks @dimat.
