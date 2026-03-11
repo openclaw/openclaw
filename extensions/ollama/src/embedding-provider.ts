@@ -47,6 +47,55 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+const OLLAMA_EMBED_BATCH_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const capped = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
+  const workers = Math.min(capped, items.length);
+  const out = Array.from({ length: items.length }, () => undefined as R | undefined);
+  let index = 0;
+  let firstError: unknown = null;
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (true) {
+        if (firstError !== null) {
+          return;
+        }
+        const current = index;
+        index += 1;
+        if (current >= items.length) {
+          return;
+        }
+        try {
+          out[current] = await mapper(items[current], current);
+        } catch (error) {
+          if (firstError === null) {
+            firstError = error;
+          }
+          throw error;
+        }
+      }
+    }),
+  );
+  if (firstError !== null) {
+    throw firstError;
+  }
+  const finalized: R[] = [];
+  for (const value of out) {
+    if (value === undefined) {
+      throw new Error("Ollama embedding batch mapping did not fill all results");
+    }
+    finalized.push(value);
+  }
+  return finalized;
+}
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
@@ -187,7 +236,7 @@ export async function createOllamaEmbeddingProvider(
     model: client.model,
     embedQuery: embedOne,
     embedBatch: async (texts) => {
-      return await Promise.all(texts.map(embedOne));
+      return await mapWithConcurrency(texts, OLLAMA_EMBED_BATCH_CONCURRENCY, embedOne);
     },
   };
 
