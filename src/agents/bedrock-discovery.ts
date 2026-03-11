@@ -1,7 +1,9 @@
 import {
   BedrockClient,
   ListFoundationModelsCommand,
+  ListInferenceProfilesCommand,
   type ListFoundationModelsCommandOutput,
+  type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,6 +21,9 @@ const DEFAULT_COST = {
 };
 
 type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
+type BedrockInferenceProfileSummary = NonNullable<
+  ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
+>[number];
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -124,6 +129,23 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   return true;
 }
 
+function shouldIncludeInferenceProfile(
+  summary: BedrockInferenceProfileSummary,
+  foundationSummary: BedrockModelSummary | undefined,
+  filter: string[],
+): boolean {
+  if (!summary.inferenceProfileId?.trim()) {
+    return false;
+  }
+  if (summary.status !== "ACTIVE") {
+    return false;
+  }
+  if (!foundationSummary) {
+    return false;
+  }
+  return shouldIncludeSummary(foundationSummary, filter);
+}
+
 function toModelDefinition(
   summary: BedrockModelSummary,
   defaults: { contextWindow: number; maxTokens: number },
@@ -137,6 +159,55 @@ function toModelDefinition(
     cost: DEFAULT_COST,
     contextWindow: defaults.contextWindow,
     maxTokens: defaults.maxTokens,
+  };
+}
+
+function extractModelIdFromArn(modelArn?: string): string | null {
+  const trimmed = modelArn?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const foundationIndex = trimmed.indexOf(":foundation-model/");
+  if (foundationIndex >= 0) {
+    return trimmed.slice(foundationIndex + ":foundation-model/".length).trim() || null;
+  }
+  const promptRouterIndex = trimmed.indexOf(":inference-profile/");
+  if (promptRouterIndex >= 0) {
+    return trimmed.slice(promptRouterIndex + ":inference-profile/".length).trim() || null;
+  }
+  const slash = trimmed.lastIndexOf("/");
+  return slash >= 0 ? trimmed.slice(slash + 1).trim() || null : trimmed;
+}
+
+async function listInferenceProfiles(
+  client: BedrockClient,
+): Promise<BedrockInferenceProfileSummary[]> {
+  const summaries: BedrockInferenceProfileSummary[] = [];
+  let nextToken: string | undefined;
+  do {
+    const response = await client.send(
+      new ListInferenceProfilesCommand(nextToken ? { nextToken } : {}),
+    );
+    summaries.push(...(response.inferenceProfileSummaries ?? []));
+    nextToken = response.nextToken;
+  } while (nextToken);
+  return summaries;
+}
+
+function toInferenceProfileDefinition(params: {
+  profile: BedrockInferenceProfileSummary;
+  foundationSummary: BedrockModelSummary;
+  defaults: { contextWindow: number; maxTokens: number };
+}): ModelDefinitionConfig {
+  const id = params.profile.inferenceProfileId?.trim() ?? "";
+  return {
+    id,
+    name: params.profile.inferenceProfileName?.trim() || id,
+    reasoning: inferReasoningSupport(params.foundationSummary),
+    input: mapInputModalities(params.foundationSummary),
+    cost: DEFAULT_COST,
+    contextWindow: params.defaults.contextWindow,
+    maxTokens: params.defaults.maxTokens,
   };
 }
 
@@ -181,9 +252,49 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new ListFoundationModelsCommand({}));
+    const [foundationResponse, inferenceProfiles] = await Promise.all([
+      client.send(new ListFoundationModelsCommand({})),
+      listInferenceProfiles(client),
+    ]);
+    const foundationSummaries = (foundationResponse.modelSummaries ?? []).filter((summary) =>
+      shouldIncludeSummary(summary, providerFilter),
+    );
+    const foundationById = new Map(
+      foundationSummaries
+        .map((summary) => [summary.modelId?.trim() ?? "", summary] as const)
+        .filter(([id]) => id.length > 0),
+    );
     const discovered: ModelDefinitionConfig[] = [];
-    for (const summary of response.modelSummaries ?? []) {
+    const coveredFoundationIds = new Set<string>();
+
+    for (const profile of inferenceProfiles) {
+      const foundationSummary = profile.models
+        ?.map((entry) => foundationById.get(extractModelIdFromArn(entry.modelArn) ?? ""))
+        .find((summary): summary is BedrockModelSummary => Boolean(summary));
+      if (!shouldIncludeInferenceProfile(profile, foundationSummary, providerFilter)) {
+        continue;
+      }
+      const foundationId = foundationSummary.modelId?.trim();
+      if (foundationId) {
+        coveredFoundationIds.add(foundationId);
+      }
+      discovered.push(
+        toInferenceProfileDefinition({
+          profile,
+          foundationSummary,
+          defaults: {
+            contextWindow: defaultContextWindow,
+            maxTokens: defaultMaxTokens,
+          },
+        }),
+      );
+    }
+
+    for (const summary of foundationSummaries) {
+      const foundationId = summary.modelId?.trim();
+      if (foundationId && coveredFoundationIds.has(foundationId)) {
+        continue;
+      }
       if (!shouldIncludeSummary(summary, providerFilter)) {
         continue;
       }
