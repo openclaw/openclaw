@@ -283,6 +283,62 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
+  it("synthesizes a local auth marker for IPv6 loopback (::1)", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "my-ipv6",
+      cfg: {
+        models: {
+          providers: {
+            "my-ipv6": {
+              baseUrl: "http://[::1]:8080/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "llama3",
+                  name: "Llama 3",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+  });
+
+  it("synthesizes a local auth marker for 0.0.0.0", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "my-wildcard",
+      cfg: {
+        models: {
+          providers: {
+            "my-wildcard": {
+              baseUrl: "http://0.0.0.0:11434/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "qwen",
+                  name: "Qwen",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+  });
+
   it("does not synthesize auth for remote custom providers without apiKey", async () => {
     await expect(
       resolveApiKeyForProvider({
