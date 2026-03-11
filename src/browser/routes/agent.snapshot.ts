@@ -304,25 +304,47 @@ export function registerBrowserAgentSnapshotRoutes(
         });
       }
 
-      const snap = shouldUsePlaywrightForAriaSnapshot({
-        profile: profileCtx.profile,
-        wsUrl: tab.wsUrl,
-      })
-        ? (() => {
-            // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
-            // Also covers cases where wsUrl is missing/unusable.
-            return requirePwAi(res, "aria snapshot").then(async (pw) => {
-              if (!pw) {
-                return null;
-              }
-              return await pw.snapshotAriaViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                limit: plan.limit,
+      const snap =
+        profileCtx.profile.driver === "extension" || !tab.wsUrl
+          ? (() => {
+              // Extension relay can block Playwright CDP attachment APIs used by AX snapshots.
+              // In that case, degrade gracefully to a relay-safe AI/role snapshot instead of failing.
+              return requirePwAi(res, "aria snapshot").then(async (pw) => {
+                if (!pw) {
+                  return null;
+                }
+                try {
+                  return await pw.snapshotAriaViaPlaywright({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    limit: plan.limit,
+                  });
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : JSON.stringify(err);
+                  const isCdpAttachBlocked =
+                    msg.includes("Target.attachToBrowserTarget") &&
+                    msg.includes("newCDPSession") &&
+                    msg.includes("Not allowed");
+                  if (!isCdpAttachBlocked) {
+                    throw err;
+                  }
+                  const roleSnap = await pw.snapshotRoleViaPlaywright({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    refsMode: "aria",
+                  });
+                  return {
+                    nodes: roleSnap.snapshot
+                      .split("\n")
+                      .map((line: string) => line.trim())
+                      .filter(Boolean)
+                      .slice(0, plan.limit)
+                      .map((name: string) => ({ role: "text", name })),
+                  };
+                }
               });
-            });
-          })()
-        : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit });
+            })()
+          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit });
 
       const resolved = await Promise.resolve(snap);
       if (!resolved) {

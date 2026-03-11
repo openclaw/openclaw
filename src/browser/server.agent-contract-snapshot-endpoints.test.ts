@@ -1,5 +1,5 @@
 import { fetch as realFetch } from "undici";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 import {
   installAgentContractHooks,
@@ -64,7 +64,7 @@ describe("browser control server", () => {
         'browserContext.newCDPSession: Protocol error (Target.attachToBrowserTarget): {"code":-32000,"message":"Not allowed"}',
       ),
     );
-    const roleFallback = vi.fn(async () => ({
+    pwMocks.snapshotRoleViaPlaywright.mockImplementationOnce(async () => ({
       snapshot: '- button "制作图片" [ref=e1]\n- textbox "为 Gemini 输入提示" [ref=e2]',
       refs: {
         e1: { role: "button", name: "制作图片" },
@@ -72,7 +72,6 @@ describe("browser control server", () => {
       },
       stats: { lines: 2, chars: 10, refs: 2, interactive: 2 },
     }));
-    pwMocks.snapshotRoleViaPlaywright = roleFallback;
 
     const response = (await realFetch(
       `${base}/snapshot?profile=chrome&format=aria&targetId=abcd1234`,
@@ -89,7 +88,7 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       limit: undefined,
     });
-    expect(roleFallback).toHaveBeenCalledWith({
+    expect(pwMocks.snapshotRoleViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/),
       targetId: "abcd1234",
       refsMode: "aria",
