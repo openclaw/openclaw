@@ -131,9 +131,9 @@ async function runOnboardingAndReadConfig(
 async function expectWrittenConfigValid(configPath: string): Promise<void> {
   const cfg = await readJsonFile<Record<string, unknown>>(configPath);
   const validated = validateConfigObject(cfg);
-  const details = validated.ok
-    ? "expected config validation to succeed"
-    : validated.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("\n");
+  const details =
+    validated.issues?.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("\n") ??
+    "";
   expect(validated.ok, details).toBe(true);
 }
 
