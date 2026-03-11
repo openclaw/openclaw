@@ -54,6 +54,26 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
   });
 
+  it("enables strict tool call id sanitization for openai-responses API", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "lanproxy",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("enables strict tool call id sanitization for openai-codex-responses API", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai-codex",
+      modelId: "codex-mini",
+      modelApi: "openai-codex-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "moonshot",
