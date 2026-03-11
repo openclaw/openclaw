@@ -439,6 +439,18 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes billing errors even when text matches context overflow patterns", () => {
+    const samples = [
+      "402 Payment Required: request token limit exceeded for this billing plan",
+      "insufficient credits: request size exceeds your current plan limits",
+      "Your credit balance is too low. Maximum request token limit exceeded.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
 });
 
 describe("isTransientHttpError", () => {
