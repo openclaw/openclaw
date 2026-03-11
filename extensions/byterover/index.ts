@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/byterover";
 import type { BrvProcessConfig } from "./brv-process.js";
 import { ByteRoverContextEngine } from "./context-engine.js";
 

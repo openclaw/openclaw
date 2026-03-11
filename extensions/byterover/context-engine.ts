@@ -5,7 +5,7 @@ import type {
   CompactResult,
   IngestResult,
   PluginLogger,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/byterover";
 import { brvCurate, brvQuery, type BrvProcessConfig } from "./brv-process.js";
 import { stripUserMetadata, extractSenderInfo, stripAssistantTags } from "./message-utils.js";
 
@@ -71,11 +71,17 @@ export class ByteRoverContextEngine implements ContextEngine {
     }
 
     // Serialize messages into a text block for brv curate
-    const context = serializeMessagesForCurate(newMessages);
-    if (!context.trim()) {
+    const serialized = serializeMessagesForCurate(newMessages);
+    if (!serialized.trim()) {
       this.logger.debug?.("afterTurn skipped (empty serialized context)");
       return;
     }
+
+    const context =
+      `The following is a conversation between a user and an AI assistant (OpenClaw).\n` +
+      `Curate only information with lasting value: facts, decisions, technical details, preferences, or notable outcomes.\n` +
+      `Skip trivial messages such as greetings, acknowledgments ("ok", "thanks", "sure", "got it"), one-word replies, anything with no substantive content, or automated session-start messages (e.g. "/new", "/reset" and their system-generated continuations).\n\n` +
+      `Conversation:\n${serialized}`;
 
     this.logger.info(
       `afterTurn curating ${newMessages.length} new messages (${context.length} chars)`,
@@ -112,6 +118,16 @@ export class ByteRoverContextEngine implements ContextEngine {
       : extractLatestUserQuery(params.messages);
     if (!query) {
       this.logger.debug?.("assemble skipped brv query (no user message found)");
+      return {
+        messages: params.messages as AssembleResult["messages"],
+        estimatedTokens: 0,
+      };
+    }
+
+    // Skip trivially short queries (e.g. "ok", "hi", "yes") — not worth a brv spawn.
+    // Applied after metadata stripping so inflated raw prompts don't bypass this.
+    if (query.length < 5) {
+      this.logger.debug?.(`assemble skipped brv query (query too short: "${query}")`);
       return {
         messages: params.messages as AssembleResult["messages"],
         estimatedTokens: 0,

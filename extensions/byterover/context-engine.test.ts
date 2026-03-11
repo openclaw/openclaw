@@ -1,4 +1,4 @@
-import type { PluginLogger } from "openclaw/plugin-sdk";
+import type { PluginLogger } from "openclaw/plugin-sdk/byterover";
 import { describe, it, expect, vi } from "vitest";
 import { ByteRoverContextEngine } from "./context-engine.js";
 import {
@@ -82,6 +82,41 @@ describe("ByteRoverContextEngine", () => {
     expect(result.messages).toBe(messages);
     expect(result.estimatedTokens).toBe(0);
     expect(result.systemPromptAddition).toBeUndefined();
+  });
+
+  it("assemble skips brv query for trivially short prompts", async () => {
+    const logger = makeLogger();
+    const engine = new ByteRoverContextEngine({}, logger);
+    const messages = [{ role: "user", content: "ok" }] as unknown[];
+    const result = await engine.assemble({
+      sessionId: "s1",
+      messages,
+      prompt: "ok",
+    });
+    expect(result.messages).toBe(messages);
+    expect(result.estimatedTokens).toBe(0);
+    expect(result.systemPromptAddition).toBeUndefined();
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("query too short"));
+  });
+
+  it("assemble skips brv query for short prompts after metadata stripping", async () => {
+    const logger = makeLogger();
+    const engine = new ByteRoverContextEngine({}, logger);
+    const messages = [] as unknown[];
+    const prompt = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alice"}',
+      "```",
+      "hi",
+    ].join("\n");
+    const result = await engine.assemble({
+      sessionId: "s1",
+      messages,
+      prompt,
+    });
+    expect(result.systemPromptAddition).toBeUndefined();
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("query too short"));
   });
 });
 
