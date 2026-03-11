@@ -49,6 +49,18 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
   return isAbortSignal(fifth);
 }
 
+function throwIfExecutionAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  if (typeof signal.throwIfAborted === "function") {
+    signal.throwIfAborted();
+  }
+  const error = new Error("This operation was aborted.");
+  error.name = "AbortError";
+  throw error;
+}
+
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
@@ -146,6 +158,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        throwIfExecutionAborted(signal);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
@@ -159,7 +172,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
+          throwIfExecutionAborted(signal);
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          throwIfExecutionAborted(signal);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
@@ -208,7 +223,8 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
+        const { toolCallId, params, signal } = splitToolExecuteArgs(args);
+        throwIfExecutionAborted(signal);
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,
@@ -218,12 +234,14 @@ export function toClientToolDefinitions(
         if (outcome.blocked) {
           throw new Error(outcome.reason);
         }
+        throwIfExecutionAborted(signal);
         const adjustedParams = outcome.params;
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
         // Notify handler that a client tool was called
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);
         }
+        throwIfExecutionAborted(signal);
         // Return a pending result - the client will execute this tool
         return jsonResult({
           status: "pending",
