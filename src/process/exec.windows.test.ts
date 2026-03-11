@@ -53,13 +53,14 @@ type ExecCall = [
 function expectCmdWrappedInvocation(params: {
   captured: SpawnCall | ExecCall | undefined;
   expectedComSpec: string;
+  expectedCommandLine: string;
 }) {
   if (!params.captured) {
     throw new Error("expected command wrapper to be called");
   }
   expect(params.captured[0]).toBe(params.expectedComSpec);
   expect(params.captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-  expect(params.captured[1][3]).toContain("pnpm.cmd --version");
+  expect(params.captured[1][3]).toContain(params.expectedCommandLine);
   expect(params.captured[2].windowsVerbatimArguments).toBe(true);
 }
 
@@ -82,7 +83,33 @@ describe("windows command wrapper behavior", () => {
       const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
-      expectCmdWrappedInvocation({ captured, expectedComSpec });
+      expectCmdWrappedInvocation({
+        captured,
+        expectedComSpec,
+        expectedCommandLine: "pnpm.cmd --version",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("wraps codex.cmd via cmd.exe in runCommandWithTimeout", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["codex", "login"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      expectCmdWrappedInvocation({
+        captured,
+        expectedComSpec,
+        expectedCommandLine: "codex.cmd login",
+      });
     } finally {
       platformSpy.mockRestore();
     }
@@ -106,7 +133,11 @@ describe("windows command wrapper behavior", () => {
     try {
       await runExec("pnpm", ["--version"], 1000);
       const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
-      expectCmdWrappedInvocation({ captured, expectedComSpec });
+      expectCmdWrappedInvocation({
+        captured,
+        expectedComSpec,
+        expectedCommandLine: "pnpm.cmd --version",
+      });
     } finally {
       platformSpy.mockRestore();
     }

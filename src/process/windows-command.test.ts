@@ -16,10 +16,20 @@ describe("resolveWindowsCommandShim", () => {
     expect(
       resolveWindowsCommandShim({
         command: "pnpm",
-        cmdCommands: ["pnpm", "yarn"],
+        cmdCommands: ["pnpm", "yarn", "codex"],
         platform: "win32",
       }),
     ).toBe("pnpm.cmd");
+  });
+
+  it("appends .cmd for codex on Windows", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "codex",
+        cmdCommands: ["codex"],
+        platform: "win32",
+      }),
+    ).toBe("codex.cmd");
   });
 
   it("keeps explicit extensions on Windows", () => {

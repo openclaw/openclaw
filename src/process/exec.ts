@@ -7,7 +7,7 @@ import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
-import { resolveWindowsCommandShim } from "./windows-command.js";
+import { resolveWindowsCommandShim, WINDOWS_CMD_SHIM_COMMANDS } from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,13 +73,14 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 
 /**
  * Resolves a command for Windows compatibility.
- * On Windows, non-.exe commands (like pnpm, yarn) are resolved to .cmd; npm/npx
- * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
+ * On Windows, npm-style shims (like pnpm, yarn, codex) are resolved to .cmd;
+ * npm/npx are handled by resolveNpmArgvForWindows to avoid spawn EINVAL
+ * (no direct .cmd spawn).
  */
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["pnpm", "yarn"],
+    cmdCommands: WINDOWS_CMD_SHIM_COMMANDS,
   });
 }
 
