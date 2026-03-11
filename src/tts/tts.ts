@@ -700,7 +700,7 @@ export async function textToSpeech(params: {
           model: openaiModelOverride ?? config.openai.model,
           voice: openaiVoiceOverride ?? config.openai.voice,
           speed: config.openai.speed,
-          instructions: config.openai.instructions,
+          instructions: openaiInstructionsOverride ?? config.openai.instructions,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
