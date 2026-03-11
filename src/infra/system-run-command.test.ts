@@ -3,6 +3,7 @@ import {
   extractShellCommandFromArgv,
   formatExecCommand,
   resolveSystemRunCommand,
+  resolveSystemRunCommandRequest,
   validateSystemRunCommandConsistency,
 } from "./system-run-command.js";
 
@@ -89,8 +90,8 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.shellCommand).toBe(null);
-    expect(res.cmdText).toBe("echo hi");
+    expect(res.shellPayload).toBe(null);
+    expect(res.commandText).toBe("echo hi");
   });
 
   test("validateSystemRunCommandConsistency rejects mismatched rawCommand vs direct argv", () => {
@@ -104,6 +105,7 @@ describe("system run command helpers", () => {
     const res = validateSystemRunCommandConsistency({
       argv: ["/bin/sh", "-lc", "echo hi"],
       rawCommand: "echo hi",
+      allowLegacyShellText: true,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -123,6 +125,7 @@ describe("system run command helpers", () => {
     const res = validateSystemRunCommandConsistency({
       argv: ["/usr/bin/env", "bash", "-lc", "echo hi"],
       rawCommand: "echo hi",
+      allowLegacyShellText: true,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -148,8 +151,8 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.shellCommand).toBe("echo hi");
-    expect(res.cmdText).toBe(raw);
+    expect(res.shellPayload).toBe("echo hi");
+    expect(res.commandText).toBe(raw);
     expect(res.previewText).toBe(null);
   });
 
@@ -177,8 +180,8 @@ describe("system run command helpers", () => {
     expect(res.details?.code).toBe("MISSING_COMMAND");
   });
 
-  test("resolveSystemRunCommand returns normalized argv and cmdText", () => {
-    const res = resolveSystemRunCommand({
+  test("resolveSystemRunCommandRequest accepts legacy shell payloads but returns canonical command text", () => {
+    const res = resolveSystemRunCommandRequest({
       command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
       rawCommand: "echo SAFE&&whoami",
     });
@@ -187,12 +190,12 @@ describe("system run command helpers", () => {
       throw new Error("unreachable");
     }
     expect(res.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"]);
-    expect(res.shellCommand).toBe("echo SAFE&&whoami");
-    expect(res.cmdText).toBe("echo SAFE&&whoami");
+    expect(res.shellPayload).toBe("echo SAFE&&whoami");
+    expect(res.commandText).toBe("cmd.exe /d /s /c echo SAFE&&whoami");
     expect(res.previewText).toBe("echo SAFE&&whoami");
   });
 
-  test("resolveSystemRunCommand binds cmdText to full argv for shell-wrapper positional-argv carriers", () => {
+  test("resolveSystemRunCommand binds commandText to full argv for shell-wrapper positional-argv carriers", () => {
     const res = resolveSystemRunCommand({
       command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
     });
@@ -200,12 +203,12 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.shellCommand).toBe('$0 "$1"');
-    expect(res.cmdText).toBe('/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker');
+    expect(res.shellPayload).toBe('$0 "$1"');
+    expect(res.commandText).toBe('/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker');
     expect(res.previewText).toBe(null);
   });
 
-  test("resolveSystemRunCommand binds cmdText to full argv when env prelude modifies shell wrapper", () => {
+  test("resolveSystemRunCommand binds commandText to full argv when env prelude modifies shell wrapper", () => {
     const res = resolveSystemRunCommand({
       command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
     });
@@ -213,12 +216,12 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.shellCommand).toBe("echo hi");
-    expect(res.cmdText).toBe('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"');
+    expect(res.shellPayload).toBe("echo hi");
+    expect(res.commandText).toBe('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"');
     expect(res.previewText).toBe(null);
   });
 
-  test("resolveSystemRunCommand keeps wrapper preview separate from approval text", () => {
+  test("resolveSystemRunCommand keeps wrapper preview separate from canonical command text", () => {
     const res = resolveSystemRunCommand({
       command: ["./env", "sh", "-c", "jq --version"],
     });
@@ -226,7 +229,7 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.cmdText).toBe("jq --version");
+    expect(res.commandText).toBe('./env sh -c "jq --version"');
     expect(res.previewText).toBe("jq --version");
   });
 
@@ -239,8 +242,20 @@ describe("system run command helpers", () => {
     if (!res.ok) {
       throw new Error("unreachable");
     }
-    expect(res.cmdText).toBe('./env sh -c "jq --version"');
+    expect(res.commandText).toBe('./env sh -c "jq --version"');
     expect(res.previewText).toBe("jq --version");
-    expect(res.shellCommand).toBe("jq --version");
+    expect(res.shellPayload).toBe("jq --version");
+  });
+
+  test("resolveSystemRunCommand rejects legacy shell payload text in strict mode", () => {
+    const res = resolveSystemRunCommand({
+      command: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: "echo hi",
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.message).toContain("rawCommand does not match command");
   });
 });
