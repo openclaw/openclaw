@@ -986,82 +986,31 @@ describe("agentCommand", () => {
   });
 });
 
-describe("resolveFallbackRetryPrompt", () => {
-  const { resolveFallbackRetryPrompt } = _testInternals;
-
-  it("returns original body when not a fallback retry", () => {
-    expect(resolveFallbackRetryPrompt({ body: "hello", isFallbackRetry: false })).toBe("hello");
-  });
-
-  it("preserves original body on fallback retry regardless of failure reason", () => {
-    const reasons = ["rate_limit", "timeout", "format", "auth", "unknown", undefined] as const;
-    for (const reason of reasons) {
-      expect(
-        resolveFallbackRetryPrompt({
-          body: "original prompt",
-          isFallbackRetry: true,
-          previousFailureReason: reason,
-        }),
-      ).toBe("original prompt");
-    }
-  });
-});
-
 describe("resolveRetryImages", () => {
   const { resolveRetryImages } = _testInternals;
   const fakeImages = [{ type: "image" as const, data: "abc", mimeType: "image/png" }];
 
   it("preserves images when not a fallback retry", () => {
-    expect(resolveRetryImages({ images: fakeImages, isFallbackRetry: false })).toBe(fakeImages);
+    expect(resolveRetryImages(fakeImages, false)).toBe(fakeImages);
   });
 
   it("strips images on format failure reason", () => {
-    expect(
-      resolveRetryImages({
-        images: fakeImages,
-        isFallbackRetry: true,
-        previousFailureReason: "format",
-      }),
-    ).toBeUndefined();
+    expect(resolveRetryImages(fakeImages, true, "format")).toBeUndefined();
   });
 
   it("preserves images on rate_limit failure reason", () => {
-    expect(
-      resolveRetryImages({
-        images: fakeImages,
-        isFallbackRetry: true,
-        previousFailureReason: "rate_limit",
-      }),
-    ).toBe(fakeImages);
+    expect(resolveRetryImages(fakeImages, true, "rate_limit")).toBe(fakeImages);
   });
 
   it("preserves images on timeout failure reason", () => {
-    expect(
-      resolveRetryImages({
-        images: fakeImages,
-        isFallbackRetry: true,
-        previousFailureReason: "timeout",
-      }),
-    ).toBe(fakeImages);
+    expect(resolveRetryImages(fakeImages, true, "timeout")).toBe(fakeImages);
   });
 
   it("preserves images on auth failure reason", () => {
-    expect(
-      resolveRetryImages({
-        images: fakeImages,
-        isFallbackRetry: true,
-        previousFailureReason: "auth",
-      }),
-    ).toBe(fakeImages);
+    expect(resolveRetryImages(fakeImages, true, "auth")).toBe(fakeImages);
   });
 
   it("preserves images when previousFailureReason is undefined", () => {
-    expect(
-      resolveRetryImages({
-        images: fakeImages,
-        isFallbackRetry: true,
-        previousFailureReason: undefined,
-      }),
-    ).toBe(fakeImages);
+    expect(resolveRetryImages(fakeImages, true, undefined)).toBe(fakeImages);
   });
 });
