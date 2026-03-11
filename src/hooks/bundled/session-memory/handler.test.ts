@@ -276,6 +276,7 @@ describe("session-memory hook", () => {
       sessionEntry: {
         sessionId: "new-session",
       },
+      resetReason: "automatic",
     });
 
     await handler(event);
@@ -288,6 +289,7 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Yesterday's context");
     expect(memoryContent).toContain("assistant: Recovered during automatic rollover");
     expect(memoryContent).toContain("- **Session ID**: stale-session");
+    expect(memoryContent).toContain("- **Source**: automatic");
   });
 
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
