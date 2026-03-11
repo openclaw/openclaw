@@ -1,6 +1,6 @@
 ## Summary
 
-Implement END-7 and collect the required MVP evidence.
+UX Reviewer. Re-run the app locally, validate the flow independently, and collect your own evidence.
 
 ## Upstream
 
@@ -22,9 +22,9 @@ Implement END-7 and collect the required MVP evidence.
 
 ## Validation
 
-- Startup: `if [ ! -d node_modules ]; then pnpm install --frozen-lockfile; fi; pnpm ui:dev --host 127.0.0.1 --port 41566`
-- Healthcheck: http://127.0.0.1:41566/pilot/
-- 1. open => http://127.0.0.1:41566/pilot/
+- Startup: `if [ ! -d node_modules ]; then pnpm install --frozen-lockfile; fi; pnpm ui:dev --host 127.0.0.1 --port 42480`
+- Healthcheck: http://127.0.0.1:42480/pilot/
+- 1. open => http://127.0.0.1:42480/pilot/
 - 2. wait_load
 - 3. assert_text [data-testid='pilot-home-title'] => Pilot Home
 - 4. assert_text [data-testid='pilot-dashboard-card-source-health-title'] => Source pack health
@@ -41,29 +41,24 @@ Implement END-7 and collect the required MVP evidence.
 
 ### before.png
 
-![before.png](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/before.png)
-[Open before.png](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/before.png)
+![before.png](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/before.png)
+[Open before.png](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/before.png)
 
 ### after.png
 
-![after.png](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/after.png)
-[Open after.png](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/after.png)
+![after.png](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/after.png)
+[Open after.png](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/after.png)
 
 ### annotated.png
 
-![annotated.png](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/annotated.png)
-[Open annotated.png](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/annotated.png)
-
-### walkthrough.gif
-
-![walkthrough.gif](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/walkthrough.gif)
-[Open walkthrough.gif](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/walkthrough.gif)
+![annotated.png](https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/annotated.png)
+[Open annotated.png](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/annotated.png)
 
 ### walkthrough.webm
 
-<video src="https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/walkthrough.webm" controls muted playsinline width="960"></video>
-[Open walkthrough.webm](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/walkthrough.webm)
+<video src="https://raw.githubusercontent.com/openclaw/openclaw/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/walkthrough.webm" controls muted playsinline width="960"></video>
+[Open walkthrough.webm](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/walkthrough.webm)
 
 ### review.md
 
-[Open review.md](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/builder/review.md)
+[Open review.md](https://github.com/openclaw/openclaw/blob/codex%2Fend-7-pilot-shell-and-parcel-intake-on-clean-main/operator-harness/evidence/END-7/ux/review.md)
