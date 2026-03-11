@@ -258,7 +258,7 @@ function resolveFeishuGroupSession(params: {
       ? true                                                                                                                                                                                                                                                              
       : configValue === 'disabled'                                                                                                                                                                                                                                        
         ? false                                                                                                                                                                                                                                                           
-        : threadReply
+        : threadReply;
 
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
