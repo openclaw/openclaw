@@ -30,7 +30,17 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
-    if (supervisor === "launchd" || supervisor === "schtasks") {
+    // On macOS launchd, do NOT call `launchctl kickstart -k` here.
+    // The run-loop has already closed the server and released the lock;
+    // calling kickstart -k sends SIGKILL to this process, which races
+    // with the graceful exit and can leave the port in TIME_WAIT.
+    // Instead, let the caller exit cleanly and rely on KeepAlive to
+    // relaunch the process. This avoids launchd's crash-loop throttling
+    // (which silently unloads the service after rapid successive exits).
+    //
+    // For schtasks (Windows), triggerOpenClawRestart is still needed
+    // because schtasks does not have a KeepAlive equivalent.
+    if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
         return {

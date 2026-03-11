@@ -67,6 +67,14 @@ export async function runGatewayLoop(params: {
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      // On supervised restarts (launchd/systemd), add a brief delay before
+      // exiting to prevent the supervisor from interpreting rapid successive
+      // SIGUSR1 restarts as a crash loop. macOS launchd in particular will
+      // silently unload the service after rapid exits, even with KeepAlive.
+      // See: https://github.com/openclaw/openclaw/issues/14161
+      if (respawn.mode === "supervised") {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
       exitProcess(0);
       return;
     }

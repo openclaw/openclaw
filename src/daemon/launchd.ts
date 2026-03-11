@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
@@ -334,30 +336,60 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 
 const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
 const RESTART_PID_WAIT_INTERVAL_MS = 200;
-
-async function sleepMs(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-async function waitForPidExit(pid: number): Promise<void> {
-  if (!Number.isFinite(pid) || pid <= 1) {
-    return;
-  }
-  const deadline = Date.now() + RESTART_PID_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH" || code === "EPERM") {
-        return;
-      }
-      return;
-    }
-    await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
-  }
+function buildDetachedLaunchAgentRestartScript(params: {
+  domain: string;
+  label: string;
+  plistPath: string;
+  previousPid?: number;
+}): string {
+  const target = `${params.domain}/${params.label}`;
+  const previousPidBlock =
+    typeof params.previousPid === "number" && params.previousPid > 1
+      ? `
+i=0
+while [ "$i" -lt ${Math.ceil(RESTART_PID_WAIT_TIMEOUT_MS / RESTART_PID_WAIT_INTERVAL_MS)} ]; do
+  kill -0 ${params.previousPid} 2>/dev/null || break
+  i=$((i + 1))
+  sleep ${RESTART_PID_WAIT_INTERVAL_MS / 1000}
+done
+`
+      : "";
+  return `#!/bin/sh
+sleep 1
+launchctl enable ${shellQuote(target)} >/dev/null 2>&1 || true
+launchctl bootout ${shellQuote(target)} >/dev/null 2>&1 || true${previousPidBlock}
+launchctl bootstrap ${shellQuote(params.domain)} ${shellQuote(params.plistPath)} >/dev/null 2>&1 || exit 1
+launchctl kickstart -k ${shellQuote(target)} >/dev/null 2>&1 || exit 1
+rm -f "$0"
+`;
+}
+
+async function scheduleDetachedLaunchAgentRestart(params: {
+  env: GatewayServiceEnv;
+  label: string;
+  plistPath: string;
+  previousPid?: number;
+}): Promise<void> {
+  const domain = resolveGuiDomain();
+  const tmpDir = path.join(os.tmpdir(), "openclaw");
+  await fs.mkdir(tmpDir, { recursive: true });
+  const scriptPath = path.join(tmpDir, `openclaw-launchd-restart-${Date.now()}-${process.pid}.sh`);
+  const script = buildDetachedLaunchAgentRestartScript({
+    domain,
+    label: params.label,
+    plistPath: params.plistPath,
+    previousPid: params.previousPid,
+  });
+  await fs.writeFile(scriptPath, script, { encoding: "utf8", mode: 0o755 });
+  spawn("/bin/sh", [scriptPath], {
+    detached: true,
+    stdio: "ignore",
+    env: params.env,
+  }).unref();
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
@@ -457,36 +489,12 @@ export async function restartLaunchAgent({
     runtime.code === 0
       ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
       : undefined;
-
-  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
-    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
-  }
-  if (typeof previousPid === "number") {
-    await waitForPidExit(previousPid);
-  }
-
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  if (boot.code !== 0) {
-    const detail = (boot.stderr || boot.stdout).trim();
-    if (isUnsupportedGuiDomain(detail)) {
-      throw new Error(
-        [
-          `launchctl bootstrap failed: ${detail}`,
-          `LaunchAgent restart requires a logged-in macOS GUI session for this user (${domain}).`,
-          "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
-          "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway restart`.",
-          "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
-        ].join("\n"),
-      );
-    }
-    throw new Error(`launchctl bootstrap failed: ${detail}`);
-  }
-
-  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
-  if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
-  }
+  await scheduleDetachedLaunchAgentRestart({
+    env: serviceEnv,
+    label,
+    plistPath,
+    previousPid,
+  });
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
   } catch (err: unknown) {
