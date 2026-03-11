@@ -649,7 +649,6 @@ export async function openaiTTS(params: {
   model: string;
   voice: string;
   speed?: number;
-  instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm";
   instructions?: string;
   timeoutMs: number;
