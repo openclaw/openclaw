@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
+import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import {
   createGeminiEmbeddingProvider,
   type GeminiEmbeddingClient,
@@ -17,15 +18,6 @@ import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./emb
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
-
-function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
-  const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
-  const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude < 1e-10) {
-    return sanitized;
-  }
-  return sanitized.map((value) => value / magnitude);
-}
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
