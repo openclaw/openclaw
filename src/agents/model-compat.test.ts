@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isModernModelRef } from "./live-model-filter.js";
 import { normalizeModelCompat } from "./model-compat.js";
 import { resolveForwardCompatModel } from "./model-forward-compat.js";
@@ -391,6 +392,76 @@ describe("resolveForwardCompatModel", () => {
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
     });
     const model = resolveForwardCompatModel("openai", "claude-opus-4-6", registry);
+    expect(model).toBeUndefined();
+  });
+
+  it("resolves xai grok-4.1-fast via template fallback", () => {
+    // Create xAI template model
+    const xaiTemplate = {
+      id: "grok-4-1-fast",
+      name: "Grok 4.1 Fast",
+      provider: "xai",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.x.ai/v1",
+      input: ["text"] as const,
+      reasoning: true,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131_072,
+      maxTokens: 32_768,
+    };
+    const registry = createRegistry({
+      "xai/grok-4-1-fast": xaiTemplate as Model<Api>,
+    });
+    const model = resolveForwardCompatModel("xai", "grok-4.1-fast", registry);
+    expectResolvedForwardCompat(model, { provider: "xai", id: "grok-4.1-fast" });
+    expect(model?.api).toBe("openai-completions");
+    expect(model?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(model?.reasoning).toBe(true);
+  });
+
+  it("resolves xai grok-4 family models without templates using defaults", () => {
+    const registry = createRegistry({});
+
+    // Test various grok-4 variants
+    const model1 = resolveForwardCompatModel("xai", "grok-4-1-fast-reasoning-latest", registry);
+    expectResolvedForwardCompat(model1, { provider: "xai", id: "grok-4-1-fast-reasoning-latest" });
+    expect(model1?.api).toBe("openai-completions");
+    expect(model1?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(model1?.reasoning).toBe(true);
+    expect(model1?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(model1?.maxTokens).toBe(DEFAULT_CONTEXT_TOKENS);
+
+    const model2 = resolveForwardCompatModel(
+      "xai",
+      "grok-4.20-experimental-beta-0304-reasoning",
+      registry,
+    );
+    expectResolvedForwardCompat(model2, {
+      provider: "xai",
+      id: "grok-4.20-experimental-beta-0304-reasoning",
+    });
+    expect(model2?.api).toBe("openai-completions");
+    expect(model2?.baseUrl).toBe("https://api.x.ai/v1");
+  });
+
+  it("does not resolve xai models for other providers", () => {
+    // Create xAI template model
+    const xaiTemplate = {
+      id: "grok-4-1-fast",
+      name: "Grok 4.1 Fast",
+      provider: "xai",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.x.ai/v1",
+      input: ["text"] as const,
+      reasoning: true,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131_072,
+      maxTokens: 32_768,
+    };
+    const registry = createRegistry({
+      "xai/grok-4-1-fast": xaiTemplate as Model<Api>,
+    });
+    const model = resolveForwardCompatModel("openai", "grok-4-1-fast", registry);
     expect(model).toBeUndefined();
   });
 });
