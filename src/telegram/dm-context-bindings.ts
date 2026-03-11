@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { logVerbose } from "../globals.js";
 import { resolveStateDir } from "../config/paths.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -36,10 +37,19 @@ function loadStore(stateDir: string): StoreShape {
     const raw = fs.readFileSync(storePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<StoreShape>;
     if (parsed?.version !== STORE_VERSION || !parsed.bindings) {
+      logVerbose(
+        `telegram dm context bindings: store version mismatch or invalid shape at ${storePath} (resetting)`,
+      );
       return { version: STORE_VERSION, bindings: {} };
     }
     return { version: STORE_VERSION, bindings: parsed.bindings };
-  } catch {
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      logVerbose(
+        `telegram dm context bindings: failed to load ${storePath} (${String(err)}) (resetting)`,
+      );
+    }
     return { version: STORE_VERSION, bindings: {} };
   }
 }
@@ -48,6 +58,18 @@ async function saveStore(stateDir: string, store: StoreShape) {
   const storePath = resolveStorePath(stateDir);
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   await writeJsonAtomic(storePath, store);
+}
+
+let storeWriteQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueStoreWrite<T>(op: () => Promise<T>): Promise<T> {
+  const next = storeWriteQueue.then(op, op);
+  // Ensure queue continues even if op rejects.
+  storeWriteQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
 }
 
 export function buildTelegramForumConversationId(chatId: string, topicId: number): string {
@@ -91,35 +113,39 @@ export async function setTelegramDmContextBinding(params: {
   chatId: string;
   topicId: number;
 }): Promise<TelegramDmContextBinding> {
-  const stateDir = resolveStateDir();
-  const store = loadStore(stateDir);
-  const now = Date.now();
-  const binding: TelegramDmContextBinding = {
-    accountId: normalizeAccountId(params.accountId),
-    dmChatId: params.dmChatId,
-    chatId: params.chatId,
-    topicId: params.topicId,
-    conversationId: buildTelegramForumConversationId(params.chatId, params.topicId),
-    updatedAtMs: now,
-  };
-  store.bindings[resolveBindingKey(params.accountId, params.dmChatId)] = binding;
-  await saveStore(stateDir, store);
-  return binding;
+  return enqueueStoreWrite(async () => {
+    const stateDir = resolveStateDir();
+    const store = loadStore(stateDir);
+    const now = Date.now();
+    const binding: TelegramDmContextBinding = {
+      accountId: normalizeAccountId(params.accountId),
+      dmChatId: params.dmChatId,
+      chatId: params.chatId,
+      topicId: params.topicId,
+      conversationId: buildTelegramForumConversationId(params.chatId, params.topicId),
+      updatedAtMs: now,
+    };
+    store.bindings[resolveBindingKey(params.accountId, params.dmChatId)] = binding;
+    await saveStore(stateDir, store);
+    return binding;
+  });
 }
 
 export async function clearTelegramDmContextBinding(params: {
   accountId: string;
   dmChatId: string;
 }): Promise<boolean> {
-  const stateDir = resolveStateDir();
-  const store = loadStore(stateDir);
-  const key = resolveBindingKey(params.accountId, params.dmChatId);
-  const existed = Boolean(store.bindings[key]);
-  if (existed) {
-    delete store.bindings[key];
-    await saveStore(stateDir, store);
-  }
-  return existed;
+  return enqueueStoreWrite(async () => {
+    const stateDir = resolveStateDir();
+    const store = loadStore(stateDir);
+    const key = resolveBindingKey(params.accountId, params.dmChatId);
+    const existed = Boolean(store.bindings[key]);
+    if (existed) {
+      delete store.bindings[key];
+      await saveStore(stateDir, store);
+    }
+    return existed;
+  });
 }
 
 export const __testing = {

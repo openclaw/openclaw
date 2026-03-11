@@ -27,27 +27,38 @@ describe("telegram dm context bindings", () => {
 
   it("sets/gets/clears binding", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "oc-telegram-dmctx-"));
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmp;
-    const accountId = "default";
-    const dmChatId = "123";
 
-    expect(getTelegramDmContextBinding({ accountId, dmChatId })).toBeUndefined();
+    try {
+      const accountId = "default";
+      const dmChatId = "123";
 
-    const binding = await setTelegramDmContextBinding({
-      accountId,
-      dmChatId,
-      chatId: "-100987",
-      topicId: 42,
-    });
+      expect(getTelegramDmContextBinding({ accountId, dmChatId })).toBeUndefined();
 
-    expect(binding.conversationId).toBe(buildTelegramForumConversationId("-100987", 42));
-    expect(getTelegramDmContextBinding({ accountId, dmChatId })?.topicId).toBe(42);
+      const binding = await setTelegramDmContextBinding({
+        accountId,
+        dmChatId,
+        chatId: "-100987",
+        topicId: 42,
+      });
 
-    const storePath = __testing.resolveStorePath(tmp);
-    expect(fs.existsSync(storePath)).toBe(true);
+      expect(binding.conversationId).toBe(buildTelegramForumConversationId("-100987", 42));
+      expect(getTelegramDmContextBinding({ accountId, dmChatId })?.topicId).toBe(42);
 
-    const cleared = await clearTelegramDmContextBinding({ accountId, dmChatId });
-    expect(cleared).toBe(true);
-    expect(getTelegramDmContextBinding({ accountId, dmChatId })).toBeUndefined();
+      const storePath = __testing.resolveStorePath(tmp);
+      expect(fs.existsSync(storePath)).toBe(true);
+
+      const cleared = await clearTelegramDmContextBinding({ accountId, dmChatId });
+      expect(cleared).toBe(true);
+      expect(getTelegramDmContextBinding({ accountId, dmChatId })).toBeUndefined();
+    } finally {
+      if (prevStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
