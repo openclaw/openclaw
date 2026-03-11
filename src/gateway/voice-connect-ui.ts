@@ -4,7 +4,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { respondPlainText, respondNotFound, isReadHttpMethod } from "./control-ui-http-utils.js";
 import { classifyVoiceConnectUiRequest } from "./voice-connect-ui-routing.js";
 import { normalizeVoiceConnectBasePath } from "./voice-connect-ui-shared.js";
@@ -70,7 +69,6 @@ function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   if (ext === ".html") {
     res.setHeader("Cache-Control", "no-cache");
   } else {
-    // Cache-bust by hashed filenames.
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   }
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -90,7 +88,9 @@ function respondAssetsUnavailable(res: ServerResponse, root?: string) {
 
 function resolveRootFromConfig(cfg?: OpenClawConfig): string | null {
   const root = cfg?.gateway?.voiceConnectUi?.root;
-  if (!root) return null;
+  if (!root) {
+    return null;
+  }
   return String(root);
 }
 
@@ -100,13 +100,19 @@ export function handleVoiceConnectUiHttpRequest(
   opts: { basePath?: string; config?: OpenClawConfig },
 ): boolean {
   const urlRaw = req.url;
-  if (!urlRaw) return false;
-  if (!isReadHttpMethod(req.method)) return false;
+  if (!urlRaw) {
+    return false;
+  }
+  if (!isReadHttpMethod(req.method)) {
+    return false;
+  }
 
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeVoiceConnectBasePath(opts.basePath);
   const classified = classifyVoiceConnectUiRequest({ url, basePath });
-  if (classified.kind === "none") return false;
+  if (classified.kind === "none") {
+    return false;
+  }
   if (classified.kind === "redirect") {
     res.statusCode = 302;
     res.setHeader("Location", classified.location);
@@ -131,7 +137,6 @@ export function handleVoiceConnectUiHttpRequest(
   const candidate = rel || "index.html";
   const ext = path.extname(candidate).toLowerCase();
 
-  // Prevent traversal.
   const filePath = path.join(rootReal, candidate);
   if (!isWithinDir(rootReal, filePath)) {
     respondNotFound(res);
@@ -145,32 +150,41 @@ export function handleVoiceConnectUiHttpRequest(
   }
 
   // Choose index.html fallback for non-existing routes.
-  const finalPath = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
-    ? filePath
-    : path.join(rootReal, "index.html");
+  const finalPath =
+    fs.existsSync(filePath) && fs.statSync(filePath).isFile()
+      ? filePath
+      : path.join(rootReal, "index.html");
 
-  try {
-    const fd = openVerifiedFileSync(finalPath);
-    try {
-      const boundaryFd = openBoundaryFileSync(rootReal, finalPath, fd);
-      try {
-        setStaticFileHeaders(res, finalPath);
-        if (req.method === "HEAD") {
-          res.statusCode = 200;
-          res.end();
-          return true;
-        }
-        res.statusCode = 200;
-        res.end(fs.readFileSync(boundaryFd));
-        return true;
-      } finally {
-        fs.closeSync(boundaryFd);
-      }
-    } finally {
-      fs.closeSync(fd);
+  const opened = openBoundaryFileSync({
+    absolutePath: finalPath,
+    rootPath: rootReal,
+    rootRealPath: rootReal,
+    boundaryLabel: "voice connect ui root",
+    skipLexicalRootCheck: true,
+    // Dist folder is generated; hardlink rejection is OK but not required.
+    rejectHardlinks: false,
+  });
+
+  if (!opened.ok) {
+    if (opened.reason === "io") {
+      respondNotFound(res);
+      return true;
     }
-  } catch {
     respondNotFound(res);
     return true;
+  }
+
+  try {
+    setStaticFileHeaders(res, opened.path);
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.end();
+      return true;
+    }
+    res.statusCode = 200;
+    res.end(fs.readFileSync(opened.fd));
+    return true;
+  } finally {
+    fs.closeSync(opened.fd);
   }
 }
