@@ -121,8 +121,12 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return typeof record?.model === "string" && record.model.trim().length > 0;
     default: {
       if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
-        if (action == null) return true;
-        if (READ_ONLY_ACTIONS.has(action)) return false;
+        if (action == null) {
+          return true;
+        }
+        if (READ_ONLY_ACTIONS.has(action)) {
+          return false;
+        }
         // Support compound action names like "config.schema.lookup" where the
         // leaf verb indicates a read-only operation.
         const leaf = action.split(".").pop();

@@ -78,5 +78,8 @@ describe("tool mutation helpers", () => {
     expect(isMutatingToolCall("gateway", { action: "agents.files.list" })).toBe(false);
     expect(isMutatingToolCall("gateway", { action: "config.set" })).toBe(true);
     expect(isMutatingToolCall("gateway", {})).toBe(true);
+    // Same branch covers cron and canvas
+    expect(isMutatingToolCall("cron", { action: "jobs.list" })).toBe(false);
+    expect(isMutatingToolCall("canvas", { action: "nodes.get" })).toBe(false);
   });
 });
