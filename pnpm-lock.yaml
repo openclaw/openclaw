@@ -15,7 +15,7 @@ overrides:
   qs: 6.14.2
   node-domexception: npm:@nolyfill/domexception@^1.0.28
   '@sinclair/typebox': 0.34.48
-  tar: 7.5.10
+  tar: 7.5.11
   tough-cookie: 4.1.3
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
@@ -172,8 +172,8 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
       tar:
-        specifier: 7.5.10
-        version: 7.5.10
+        specifier: 7.5.11
+        version: 7.5.11
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -1236,8 +1236,8 @@ packages:
     peerDependencies:
       hono: 4.12.5
 
-  '@huggingface/jinja@0.5.5':
-    resolution: {integrity: sha512-xRlzazC+QZwr6z4ixEqYHo9fgwhTZ3xNSdljlKfUFGZSdlvt166DljRELFUfFytlYOYvo3vTisA/AFOuOAzFQQ==}
+  '@huggingface/jinja@0.5.6':
+    resolution: {integrity: sha512-MyMWyLnjqo+KRJYSH7oWNbsOn5onuIvfXYPcc0WOGxU0eHUV7oAYUoQTl2BMdu7ml+ea/bu11UM+EshbeHwtIA==}
     engines: {node: '>=18'}
 
   '@img/colour@1.0.0':
@@ -5925,8 +5925,8 @@ packages:
     peerDependencies:
       signal-polyfill: ^0.2.0
 
-  simple-git@3.32.3:
-    resolution: {integrity: sha512-56a5oxFdWlsGygOXHWrG+xjj5w9ZIt2uQbzqiIGdR/6i5iococ7WQ/bNPzWxCJdEUGUCmyMH0t9zMpRJTaKxmw==}
+  simple-git@3.33.0:
+    resolution: {integrity: sha512-D4V/tGC2sjsoNhoMybKyGoE+v8A60hRawKQ1iFRA1zwuDgGZCBJ4ByOzZ5J8joBbi4Oam0qiPH+GhzmSBwbJng==}
 
   simple-yenc@1.0.4:
     resolution: {integrity: sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw==}
@@ -6121,8 +6121,8 @@ packages:
   tar-stream@3.1.7:
     resolution: {integrity: sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ==}
 
-  tar@7.5.10:
-    resolution: {integrity: sha512-8mOPs1//5q/rlkNSPcCegA6hiHJYDmSLEI8aMH/CdSQJNWztHC9WHNam5zdQlfpTwB9Xp7IBEsHfV5LKMJGVAw==}
+  tar@7.5.11:
+    resolution: {integrity: sha512-ChjMH33/KetonMTAtpYdgUFr0tbz69Fp2v7zWxQfYZX4g5ZN2nOBXm1R2xyA+lMIKrLKIoKAwFj93jE/avX9cQ==}
     engines: {node: '>=18'}
 
   text-decoder@1.2.7:
@@ -7642,7 +7642,7 @@ snapshots:
       npmlog: 5.0.1
       rimraf: 3.0.2
       semver: 7.7.4
-      tar: 7.5.10
+      tar: 7.5.11
     transitivePeerDependencies:
       - encoding
       - supports-color
@@ -7824,7 +7824,7 @@ snapshots:
       hono: 4.12.5
     optional: true
 
-  '@huggingface/jinja@0.5.5': {}
+  '@huggingface/jinja@0.5.6': {}
 
   '@img/colour@1.0.0': {}
 
@@ -10720,7 +10720,7 @@ snapshots:
       node-api-headers: 1.8.0
       rc: 1.2.8
       semver: 7.7.4
-      tar: 7.5.10
+      tar: 7.5.11
       url-join: 4.0.1
       which: 6.0.1
       yargs: 17.7.2
@@ -12144,7 +12144,7 @@ snapshots:
 
   node-llama-cpp@3.16.2(typescript@5.9.3):
     dependencies:
-      '@huggingface/jinja': 0.5.5
+      '@huggingface/jinja': 0.5.6
       async-retry: 1.3.3
       bytes: 3.1.2
       chalk: 5.6.2
@@ -12166,7 +12166,7 @@ snapshots:
       pretty-ms: 9.3.0
       proper-lockfile: 4.1.2
       semver: 7.7.4
-      simple-git: 3.32.3
+      simple-git: 3.33.0
       slice-ansi: 8.0.0
       stdout-update: 4.0.1
       strip-ansi: 7.2.0
@@ -12360,7 +12360,7 @@ snapshots:
       qrcode-terminal: 0.12.0
       sharp: 0.34.5
       sqlite-vec: 0.1.7-alpha.2
-      tar: 7.5.10
+      tar: 7.5.11
       tslog: 4.10.2
       undici: 7.22.0
       ws: 8.19.0
@@ -13171,7 +13171,7 @@ snapshots:
     dependencies:
       signal-polyfill: 0.2.2
 
-  simple-git@3.32.3:
+  simple-git@3.33.0:
     dependencies:
       '@kwsites/file-exists': 1.1.1
       '@kwsites/promise-deferred': 1.1.1
@@ -13388,7 +13388,7 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tar@7.5.10:
+  tar@7.5.11:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
