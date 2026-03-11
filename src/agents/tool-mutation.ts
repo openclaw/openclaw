@@ -127,10 +127,14 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         if (READ_ONLY_ACTIONS.has(action)) {
           return false;
         }
-        // Support compound action names like "config.schema.lookup" where the
-        // leaf verb indicates a read-only operation.
-        const leaf = action.split(".").pop();
-        return !leaf || !READ_ONLY_ACTIONS.has(leaf);
+        // Gateway uses compound dotted action names (e.g. "config.schema.lookup")
+        // where the leaf verb indicates a read-only operation. Cron and canvas
+        // only use flat action enums, so skip the leaf check for them.
+        if (normalized === "gateway") {
+          const leaf = action.split(".").pop();
+          return !leaf || !READ_ONLY_ACTIONS.has(leaf);
+        }
+        return true;
       }
       if (normalized === "nodes") {
         return action == null || action !== "list";

@@ -78,8 +78,13 @@ describe("tool mutation helpers", () => {
     expect(isMutatingToolCall("gateway", { action: "agents.files.list" })).toBe(false);
     expect(isMutatingToolCall("gateway", { action: "config.set" })).toBe(true);
     expect(isMutatingToolCall("gateway", {})).toBe(true);
-    // Same branch covers cron and canvas
-    expect(isMutatingToolCall("cron", { action: "jobs.list" })).toBe(false);
-    expect(isMutatingToolCall("canvas", { action: "nodes.get" })).toBe(false);
+  });
+
+  it("does not apply dotted-leaf fallback to cron and canvas (flat action enums)", () => {
+    // cron and canvas only accept flat action names, so dotted strings
+    // should stay classified as mutating (fail-closed).
+    expect(isMutatingToolCall("cron", { action: "list" })).toBe(false);
+    expect(isMutatingToolCall("cron", { action: "jobs.list" })).toBe(true);
+    expect(isMutatingToolCall("canvas", { action: "nodes.get" })).toBe(true);
   });
 });
