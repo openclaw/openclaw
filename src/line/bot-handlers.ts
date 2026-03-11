@@ -8,7 +8,15 @@ import type {
   PostbackEvent,
 } from "@line/bot-sdk";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
+import {
+  clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -16,18 +24,21 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
+import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
+import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   firstDefined,
   isSenderAllowed,
   normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
+  type NormalizedAllowFrom,
 } from "./bot-access.js";
 import {
   getLineSourceInfo,
@@ -36,6 +47,7 @@ import {
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 
@@ -64,6 +76,8 @@ export interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
   replayCache?: LineWebhookReplayCache;
+  groupHistories?: Map<string, HistoryEntry[]>;
+  historyLimit?: number;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -212,14 +226,10 @@ function resolveLineGroupConfig(params: {
   groupId?: string;
   roomId?: string;
 }): LineGroupConfig | undefined {
-  const groups = params.config.groups ?? {};
-  if (params.groupId) {
-    return groups[params.groupId] ?? groups[`group:${params.groupId}`] ?? groups["*"];
-  }
-  if (params.roomId) {
-    return groups[params.roomId] ?? groups[`room:${params.roomId}`] ?? groups["*"];
-  }
-  return groups["*"];
+  return resolveLineGroupConfigEntry(params.config.groups, {
+    groupId: params.groupId,
+    roomId: params.roomId,
+  });
 }
 
 async function sendLinePairingReply(params: {
@@ -228,15 +238,6 @@ async function sendLinePairingReply(params: {
   context: LineHandlerContext;
 }): Promise<void> {
   const { senderId, replyToken, context } = params;
-  const { code, created } = await upsertChannelPairingRequest({
-    channel: "line",
-    id: senderId,
-    accountId: context.account.accountId,
-  });
-  if (!created) {
-    return;
-  }
-  logVerbose(`line pairing request sender=${senderId}`);
   const idLabel = (() => {
     try {
       return resolvePairingIdLabel("line");
@@ -244,30 +245,42 @@ async function sendLinePairingReply(params: {
       return "lineUserId";
     }
   })();
-  const text = buildPairingReply({
+  await issuePairingChallenge({
     channel: "line",
-    idLine: `Your ${idLabel}: ${senderId}`,
-    code,
-  });
-  try {
-    if (replyToken) {
-      await replyMessageLine(replyToken, [{ type: "text", text }], {
+    senderId,
+    senderIdLine: `Your ${idLabel}: ${senderId}`,
+    upsertPairingRequest: async ({ id, meta }) =>
+      await upsertChannelPairingRequest({
+        channel: "line",
+        id,
         accountId: context.account.accountId,
-        channelAccessToken: context.account.channelAccessToken,
-      });
-      return;
-    }
-  } catch (err) {
-    logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-  }
-  try {
-    await pushMessageLine(`line:${senderId}`, text, {
-      accountId: context.account.accountId,
-      channelAccessToken: context.account.channelAccessToken,
-    });
-  } catch (err) {
-    logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
-  }
+        meta,
+      }),
+    onCreated: () => {
+      logVerbose(`line pairing request sender=${senderId}`);
+    },
+    sendPairingReply: async (text) => {
+      if (replyToken) {
+        try {
+          await replyMessageLine(replyToken, [{ type: "text", text }], {
+            accountId: context.account.accountId,
+            channelAccessToken: context.account.channelAccessToken,
+          });
+          return;
+        } catch (err) {
+          logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+        }
+      }
+      try {
+        await pushMessageLine(`line:${senderId}`, text, {
+          accountId: context.account.accountId,
+          channelAccessToken: context.account.channelAccessToken,
+        });
+      } catch (err) {
+        logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+      }
+    },
+  });
 }
 
 async function shouldProcessLineEvent(
@@ -332,35 +345,43 @@ async function shouldProcessLineEvent(
         return denied;
       }
     }
-    if (groupPolicy === "disabled") {
+    const senderGroupAccess = evaluateMatchedGroupAccessForPolicy({
+      groupPolicy,
+      requireMatchInput: true,
+      hasMatchInput: Boolean(senderId),
+      allowlistConfigured: effectiveGroupAllow.entries.length > 0,
+      allowlistMatched:
+        Boolean(senderId) &&
+        isSenderAllowed({
+          allow: effectiveGroupAllow,
+          senderId,
+        }),
+    });
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
       logVerbose("Blocked line group message (groupPolicy: disabled)");
       return denied;
     }
-    if (groupPolicy === "allowlist") {
-      if (!senderId) {
-        logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
-        return denied;
-      }
-      if (!effectiveGroupAllow.hasEntries) {
-        logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return denied;
-      }
-      if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
-        logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
-        return denied;
-      }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "missing_match_input") {
+      logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
+      return denied;
     }
-    const allowForCommands = effectiveGroupAllow;
-    const senderAllowedForCommands = isSenderAllowed({ allow: allowForCommands, senderId });
-    const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-    const rawText = resolveEventRawText(event);
-    const commandGate = resolveControlCommandGate({
-      useAccessGroups,
-      authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommand(rawText, cfg),
-    });
-    return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
+      logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
+      return denied;
+    }
+    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "not_allowlisted") {
+      logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
+      return denied;
+    }
+    return {
+      allowed: true,
+      commandAuthorized: resolveLineCommandAuthorized({
+        cfg,
+        event,
+        senderId,
+        allow: effectiveGroupAllow,
+      }),
+    };
   }
 
   if (dmPolicy === "disabled") {
@@ -386,17 +407,43 @@ async function shouldProcessLineEvent(
     return denied;
   }
 
-  const allowForCommands = effectiveDmAllow;
-  const senderAllowedForCommands = isSenderAllowed({ allow: allowForCommands, senderId });
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const rawText = resolveEventRawText(event);
-  const commandGate = resolveControlCommandGate({
-    useAccessGroups,
-    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
-    allowTextCommands: true,
-    hasControlCommand: hasControlCommand(rawText, cfg),
-  });
-  return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
+  return {
+    allowed: true,
+    commandAuthorized: resolveLineCommandAuthorized({
+      cfg,
+      event,
+      senderId,
+      allow: effectiveDmAllow,
+    }),
+  };
+}
+
+/** Extract the mentionees array from a LINE text message (SDK types omit it).
+ * LINE webhook payloads include `mention.mentionees` on text messages with
+ * `isSelf: true` for the bot and `type: "all"` for @All mentions.
+ * The `@line/bot-sdk` types don't expose these fields, so we use a type assertion.
+ */
+function getLineMentionees(
+  message: MessageEvent["message"],
+): Array<{ type?: string; isSelf?: boolean }> {
+  if (message.type !== "text") {
+    return [];
+  }
+  const mentionees = (
+    message as Record<string, unknown> & {
+      mention?: { mentionees?: Array<{ type?: string; isSelf?: boolean }> };
+    }
+  ).mention?.mentionees;
+  return Array.isArray(mentionees) ? mentionees : [];
+}
+
+function isLineBotMentioned(message: MessageEvent["message"]): boolean {
+  return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
+}
+
+/** True when *any* @mention exists (bot or other users). */
+function hasAnyLineMention(message: MessageEvent["message"]): boolean {
+  return getLineMentionees(message).length > 0;
 }
 
 function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
@@ -413,6 +460,27 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   return "";
 }
 
+function resolveLineCommandAuthorized(params: {
+  cfg: OpenClawConfig;
+  event: MessageEvent | PostbackEvent;
+  senderId?: string;
+  allow: NormalizedAllowFrom;
+}): boolean {
+  const senderAllowedForCommands = isSenderAllowed({
+    allow: params.allow,
+    senderId: params.senderId,
+  });
+  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const rawText = resolveEventRawText(params.event);
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [{ configured: params.allow.hasEntries, allowed: senderAllowedForCommands }],
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommand(rawText, params.cfg),
+  });
+  return commandGate.commandAuthorized;
+}
+
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
@@ -420,6 +488,62 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const decision = await shouldProcessLineEvent(event, context);
   if (!decision.allowed) {
     return;
+  }
+
+  // Mention gating: skip group messages that don't @mention the bot when required.
+  // Default requireMention to true (consistent with all other channels) unless
+  // the group config explicitly sets it to false.
+  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  if (isGroup) {
+    const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
+    const requireMention = groupConfig?.requireMention !== false;
+    const rawText = message.type === "text" ? message.text : "";
+    const peerId = groupId ?? roomId ?? event.source.userId ?? "unknown";
+    const { agentId } = resolveAgentRoute({
+      cfg,
+      channel: "line",
+      accountId: account.accountId,
+      peer: { kind: "group", id: peerId },
+    });
+    const mentionRegexes = buildMentionRegexes(cfg, agentId);
+    const wasMentionedByNative = isLineBotMentioned(message);
+    const wasMentionedByPattern =
+      message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
+    const wasMentioned = wasMentionedByNative || wasMentionedByPattern;
+    const mentionGate = resolveMentionGatingWithBypass({
+      isGroup: true,
+      requireMention,
+      // Only text messages carry mention metadata; non-text (image/video/etc.)
+      // cannot be gated on mentions, so we let them through.
+      canDetectMention: message.type === "text",
+      wasMentioned,
+      hasAnyMention: hasAnyLineMention(message),
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommand(rawText, cfg),
+      commandAuthorized: decision.commandAuthorized,
+    });
+    if (mentionGate.shouldSkip) {
+      logVerbose(`line: skipping group message (requireMention, not mentioned)`);
+      // Store as pending history so the agent has context when later mentioned.
+      const historyKey = groupId ?? roomId;
+      const senderId =
+        event.source.type === "group" || event.source.type === "room"
+          ? (event.source.userId ?? "unknown")
+          : "unknown";
+      if (historyKey && context.groupHistories) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: context.groupHistories,
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+          entry: {
+            sender: `user:${senderId}`,
+            body: rawText || `<${message.type}>`,
+            timestamp: event.timestamp,
+          },
+        });
+      }
+      return;
+    }
   }
 
   // Download media if applicable
@@ -449,6 +573,8 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     cfg,
     account,
     commandAuthorized: decision.commandAuthorized,
+    groupHistories: context.groupHistories,
+    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   });
 
   if (!messageContext) {
@@ -457,6 +583,19 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   await processMessage(messageContext);
+
+  // Clear pending history after a handled group turn so stale skipped messages
+  // don't replay on subsequent mentions ("since last reply" semantics).
+  if (isGroup && context.groupHistories) {
+    const historyKey = groupId ?? roomId;
+    if (historyKey && context.groupHistories.has(historyKey)) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: context.groupHistories,
+        historyKey,
+        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+      });
+    }
+  }
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {

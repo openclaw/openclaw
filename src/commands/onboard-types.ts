@@ -41,6 +41,7 @@ export type AuthChoice =
   | "minimax-api-lightning"
   | "minimax-portal"
   | "opencode-zen"
+  | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
@@ -49,6 +50,8 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-api-key-cn"
+  | "modelstudio-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -66,7 +69,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
-  | "opencode-zen"
+  | "opencode"
   | "minimax"
   | "synthetic"
   | "venice"
@@ -75,6 +78,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "modelstudio"
   | "xai"
   | "volcengine"
   | "byteplus"
@@ -87,7 +91,7 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
-export type SecretInputMode = "plaintext" | "ref";
+export type SecretInputMode = "plaintext" | "ref"; // pragma: allowlist secret
 
 export type OnboardOptions = {
   mode?: OnboardMode;
@@ -131,10 +135,13 @@ export type OnboardOptions = {
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
+  opencodeGoApiKey?: string;
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioApiKeyCn?: string;
+  modelstudioApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;
@@ -144,6 +151,7 @@ export type OnboardOptions = {
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
   gatewayToken?: string;
+  gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;
@@ -153,6 +161,7 @@ export type OnboardOptions = {
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
+  skipSearch?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;
   nodeManager?: NodeManagerChoice;

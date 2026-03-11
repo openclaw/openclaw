@@ -21,17 +21,7 @@ import {
 } from "./onboard-auth.models.js";
 
 const emptyCfg: OpenClawConfig = {};
-const KILOCODE_MODEL_IDS = [
-  "anthropic/claude-opus-4.6",
-  "z-ai/glm-5:free",
-  "minimax/minimax-m2.5:free",
-  "anthropic/claude-sonnet-4.5",
-  "openai/gpt-5.2",
-  "google/gemini-3-pro-preview",
-  "google/gemini-3-flash-preview",
-  "x-ai/grok-code-fast-1",
-  "moonshotai/kimi-k2.5",
-];
+const KILOCODE_MODEL_IDS = ["kilo/auto"];
 
 describe("Kilo Gateway provider config", () => {
   describe("constants", () => {
@@ -40,11 +30,11 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/anthropic/claude-opus-4.6");
+      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo/auto");
     });
 
-    it("KILOCODE_DEFAULT_MODEL_ID is anthropic/claude-opus-4.6", () => {
-      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("anthropic/claude-opus-4.6");
+    it("KILOCODE_DEFAULT_MODEL_ID is kilo/auto", () => {
+      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo/auto");
     });
   });
 
@@ -52,7 +42,7 @@ describe("Kilo Gateway provider config", () => {
     it("returns correct model shape", () => {
       const model = buildKilocodeModelDefinition();
       expect(model.id).toBe(KILOCODE_DEFAULT_MODEL_ID);
-      expect(model.name).toBe("Claude Opus 4.6");
+      expect(model.name).toBe("Kilo Auto");
       expect(model.reasoning).toBe(true);
       expect(model.input).toEqual(["text", "image"]);
       expect(model.contextWindow).toBe(KILOCODE_DEFAULT_CONTEXT_WINDOW);
@@ -160,7 +150,7 @@ describe("Kilo Gateway provider config", () => {
   describe("env var resolution", () => {
     it("resolves KILOCODE_API_KEY from env", () => {
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "test-kilo-key";
+      process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
 
       try {
         const result = resolveEnvApiKey("kilocode");
@@ -187,7 +177,7 @@ describe("Kilo Gateway provider config", () => {
     it("resolves the kilocode api key via resolveApiKeyForProvider", async () => {
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "kilo-provider-test-key";
+      process.env.KILOCODE_API_KEY = "kilo-provider-test-key"; // pragma: allowlist secret
 
       try {
         const auth = await resolveApiKeyForProvider({
