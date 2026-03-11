@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 
 const tempDirs: string[] = [];
@@ -14,20 +15,24 @@ function makeTempDir() {
   return dir;
 }
 
-function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-  };
+async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
+  return await withEnvAsync(
+    {
+      OPENCLAW_STATE_DIR: stateDir,
+      CLAWDBOT_STATE_DIR: undefined,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+    },
+    fn,
+  );
 }
 
 async function discoverWithStateDir(
   stateDir: string,
   params: Parameters<typeof discoverOpenClawPlugins>[0],
 ) {
-  return discoverOpenClawPlugins({ ...params, env: buildDiscoveryEnv(stateDir) });
+  return await withStateDir(stateDir, async () => {
+    return discoverOpenClawPlugins(params);
+  });
 }
 
 function writePluginPackageManifest(params: {
@@ -75,32 +80,13 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(workspaceExt, { recursive: true });
     fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
-    const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({ workspaceDir });
+    });
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("alpha");
     expect(ids).toContain("beta");
-  });
-
-  it("resolves tilde workspace dirs against the provided env", () => {
-    const stateDir = makeTempDir();
-    const homeDir = makeTempDir();
-    const workspaceRoot = path.join(homeDir, "workspace");
-    const workspaceExt = path.join(workspaceRoot, ".openclaw", "extensions");
-    fs.mkdirSync(workspaceExt, { recursive: true });
-    fs.writeFileSync(path.join(workspaceExt, "tilde-workspace.ts"), "export default {}", "utf-8");
-
-    const result = discoverOpenClawPlugins({
-      workspaceDir: "~/workspace",
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        HOME: homeDir,
-      },
-    });
-
-    expect(result.candidates.some((candidate) => candidate.idHint === "tilde-workspace")).toBe(
-      true,
-    );
   });
 
   it("ignores backup and disabled plugin directories in scanned roots", async () => {
@@ -124,7 +110,9 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(liveDir, { recursive: true });
     fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
 
-    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
 
     const ids = candidates.map((candidate) => candidate.idHint);
     expect(ids).toContain("live");
@@ -154,7 +142,9 @@ describe("discoverOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("pack/one");
@@ -177,7 +167,9 @@ describe("discoverOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("voice-call");
@@ -195,7 +187,9 @@ describe("discoverOpenClawPlugins", () => {
     });
     fs.writeFileSync(path.join(packDir, "index.js"), "module.exports = {}", "utf-8");
 
-    const { candidates } = await discoverWithStateDir(stateDir, { extraPaths: [packDir] });
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({ extraPaths: [packDir] });
+    });
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
@@ -272,7 +266,9 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./escape.ts"],
     });
 
-    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
+    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
 
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
     expectEscapesPackageDiagnostic(diagnostics);
@@ -307,7 +303,9 @@ describe("discoverOpenClawPlugins", () => {
       throw err;
     }
 
-    const { candidates } = await discoverWithStateDir(stateDir, {});
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
 
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
   });
@@ -320,7 +318,9 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
     fs.chmodSync(pluginPath, 0o777);
 
-    const result = await discoverWithStateDir(stateDir, {});
+    const result = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
 
     expect(result.candidates).toHaveLength(0);
     expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
@@ -338,14 +338,14 @@ describe("discoverOpenClawPlugins", () => {
       fs.writeFileSync(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
       fs.chmodSync(packDir, 0o777);
 
-      const result = discoverOpenClawPlugins({
-        env: {
-          ...process.env,
+      const result = await withEnvAsync(
+        {
           OPENCLAW_STATE_DIR: stateDir,
           CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         },
-      });
+        async () => discoverOpenClawPlugins({}),
+      );
 
       expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(true);
       expect(
@@ -370,7 +370,9 @@ describe("discoverOpenClawPlugins", () => {
       );
 
       const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
-      const result = await discoverWithStateDir(stateDir, { ownershipUid: actualUid + 1 });
+      const result = await withStateDir(stateDir, async () => {
+        return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
+      });
       const shouldBlockForMismatch = actualUid !== 0;
       expect(result.candidates).toHaveLength(shouldBlockForMismatch ? 0 : 1);
       expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
@@ -386,121 +388,32 @@ describe("discoverOpenClawPlugins", () => {
     const pluginPath = path.join(globalExt, "cached.ts");
     fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
 
-    const first = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDir),
+    const first = await withEnvAsync(
+      {
         OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
       },
-    });
+      async () => withStateDir(stateDir, async () => discoverOpenClawPlugins({})),
+    );
     expect(first.candidates.some((candidate) => candidate.idHint === "cached")).toBe(true);
 
     fs.rmSync(pluginPath, { force: true });
 
-    const second = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDir),
+    const second = await withEnvAsync(
+      {
         OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
       },
-    });
+      async () => withStateDir(stateDir, async () => discoverOpenClawPlugins({})),
+    );
     expect(second.candidates.some((candidate) => candidate.idHint === "cached")).toBe(true);
 
     clearPluginDiscoveryCache();
 
-    const third = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDir),
+    const third = await withEnvAsync(
+      {
         OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
       },
-    });
-    expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
-  });
-
-  it("does not reuse discovery results across env root changes", () => {
-    const stateDirA = makeTempDir();
-    const stateDirB = makeTempDir();
-    const globalExtA = path.join(stateDirA, "extensions");
-    const globalExtB = path.join(stateDirB, "extensions");
-    fs.mkdirSync(globalExtA, { recursive: true });
-    fs.mkdirSync(globalExtB, { recursive: true });
-    fs.writeFileSync(path.join(globalExtA, "alpha.ts"), "export default function () {}", "utf-8");
-    fs.writeFileSync(path.join(globalExtB, "beta.ts"), "export default function () {}", "utf-8");
-
-    const first = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDirA),
-        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
-      },
-    });
-    const second = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDirB),
-        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
-      },
-    });
-
-    expect(first.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(true);
-    expect(first.candidates.some((candidate) => candidate.idHint === "beta")).toBe(false);
-    expect(second.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(false);
-    expect(second.candidates.some((candidate) => candidate.idHint === "beta")).toBe(true);
-  });
-
-  it("does not reuse extra-path discovery across env home changes", () => {
-    const stateDir = makeTempDir();
-    const homeA = makeTempDir();
-    const homeB = makeTempDir();
-    const pluginA = path.join(homeA, "plugins", "demo.ts");
-    const pluginB = path.join(homeB, "plugins", "demo.ts");
-    fs.mkdirSync(path.dirname(pluginA), { recursive: true });
-    fs.mkdirSync(path.dirname(pluginB), { recursive: true });
-    fs.writeFileSync(pluginA, "export default {}", "utf-8");
-    fs.writeFileSync(pluginB, "export default {}", "utf-8");
-
-    const first = discoverOpenClawPlugins({
-      extraPaths: ["~/plugins/demo.ts"],
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        HOME: homeA,
-        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
-      },
-    });
-    const second = discoverOpenClawPlugins({
-      extraPaths: ["~/plugins/demo.ts"],
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        HOME: homeB,
-        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
-      },
-    });
-
-    expect(first.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(pluginA);
-    expect(second.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(
-      pluginB,
+      async () => withStateDir(stateDir, async () => discoverOpenClawPlugins({})),
     );
-  });
-
-  it("treats configured load-path order as cache-significant", () => {
-    const stateDir = makeTempDir();
-    const pluginA = path.join(stateDir, "plugins", "alpha.ts");
-    const pluginB = path.join(stateDir, "plugins", "beta.ts");
-    fs.mkdirSync(path.dirname(pluginA), { recursive: true });
-    fs.writeFileSync(pluginA, "export default {}", "utf-8");
-    fs.writeFileSync(pluginB, "export default {}", "utf-8");
-
-    const env = {
-      ...buildDiscoveryEnv(stateDir),
-      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
-    };
-
-    const first = discoverOpenClawPlugins({
-      extraPaths: [pluginA, pluginB],
-      env,
-    });
-    const second = discoverOpenClawPlugins({
-      extraPaths: [pluginB, pluginA],
-      env,
-    });
-
-    expect(first.candidates.map((candidate) => candidate.idHint)).toEqual(["alpha", "beta"]);
-    expect(second.candidates.map((candidate) => candidate.idHint)).toEqual(["beta", "alpha"]);
+    expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
   });
 });

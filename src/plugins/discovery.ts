@@ -153,7 +153,7 @@ function checkPathStatAndPermissions(params: {
       continue;
     }
     seen.add(normalized);
-    const stat = safeStatSync(targetPath);
+    let stat = safeStatSync(targetPath);
     if (!stat) {
       return {
         reason: "path_stat_failed",
@@ -162,7 +162,28 @@ function checkPathStatAndPermissions(params: {
         targetPath,
       };
     }
-    const modeBits = stat.mode & 0o777;
+    let modeBits = stat.mode & 0o777;
+    if ((modeBits & 0o002) !== 0 && params.origin === "bundled") {
+      // npm/global installs can create package-managed extension dirs without
+      // directory entries in the tarball, which may widen them to 0777.
+      // Tighten bundled dirs in place before applying the normal safety gate.
+      try {
+        fs.chmodSync(targetPath, modeBits & ~0o022);
+        const repairedStat = safeStatSync(targetPath);
+        if (!repairedStat) {
+          return {
+            reason: "path_stat_failed",
+            sourcePath: params.source,
+            rootPath: params.rootDir,
+            targetPath,
+          };
+        }
+        stat = repairedStat;
+        modeBits = repairedStat.mode & 0o777;
+      } catch {
+        // Fall through to the normal block path below when repair is not possible.
+      }
+    }
     if ((modeBits & 0o002) !== 0) {
       return {
         reason: "path_world_writable",
