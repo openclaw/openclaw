@@ -21,6 +21,7 @@ chown -R node:node /home/node/.openclaw
 # Configure browser settings for container environment
 # These must be set via config (env vars are not read by the gateway browser launcher)
 su - node -c "openclaw config set browser.headless false"
+su - node -c "openclaw config set gateway.port 18789"
 if [ "$OPENCLAW_BROWSER_NO_SANDBOX" = "1" ]; then
   su - node -c "openclaw config set browser.noSandbox true"
 fi
