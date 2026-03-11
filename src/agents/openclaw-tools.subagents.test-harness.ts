@@ -5,11 +5,6 @@ export type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["lo
 
 export const callGatewayMock: MockFn = vi.fn();
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: () => undefined,
-  getOAuthProviders: () => [],
-}));
-
 const defaultConfig: LoadedConfig = {
   session: {
     mainKey: "main",
