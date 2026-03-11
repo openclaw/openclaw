@@ -10,6 +10,19 @@ import {
   normalizeMimeType,
 } from "./mime.js";
 
+// Build a minimal MPEG-4 ftyp box with the specified major brand.
+// Structure: [size:4][ftyp:4][major_brand:4][minor_version:4][compatible_brands:N]
+function makeMp4FtypBox(majorBrand: string): Buffer {
+  const size = 20; // minimum ftyp box with one compatible brand
+  const buf = Buffer.alloc(size);
+  buf.writeUInt32BE(size, 0); // box size
+  buf.write("ftyp", 4, 4, "ascii"); // box type
+  buf.write(majorBrand, 8, 4, "ascii"); // major brand
+  buf.writeUInt32BE(0, 12); // minor version
+  buf.write("isom", 16, 4, "ascii"); // compatible brand
+  return buf;
+}
+
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
   const zip = new JSZip();
   zip.file(
@@ -67,6 +80,22 @@ describe("mime detection", () => {
       filePath: "/tmp/a2ui.bundle.js",
     });
     expect(mime).toBe("text/javascript");
+  });
+
+  it.each([
+    // file-type already handles uppercase M4A correctly (returns audio/x-m4a)
+    { brand: "M4A ", expected: "audio/x-m4a", description: "M4A audio" },
+    // file-type misclassifies lowercase m4a as video/mp4; our fix corrects to audio/mp4
+    { brand: "m4a ", expected: "audio/mp4", description: "M4A audio (lowercase)" },
+    { brand: "M4B ", expected: "audio/mp4", description: "M4B audiobook" },
+    { brand: "F4A ", expected: "audio/mp4", description: "F4A Flash audio" },
+    { brand: "mp41", expected: "video/mp4", description: "MP4v1 video" },
+    { brand: "isom", expected: "video/mp4", description: "ISO Base Media" },
+    { brand: "avc1", expected: "video/mp4", description: "AVC video" },
+  ] as const)("classifies $description by ftyp major brand", async ({ brand, expected }) => {
+    const buf = makeMp4FtypBox(brand);
+    const mime = await detectMime({ buffer: buf });
+    expect(mime).toBe(expected);
   });
 });
 
