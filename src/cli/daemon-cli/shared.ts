@@ -91,6 +91,29 @@ const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_NIX_MODE",
 ];
 
+/** Env keys that must not appear in status output (credentials / headers). */
+export const SENSITIVE_DAEMON_ENV_KEYS = new Set([
+  "OPENCLAW_NODE_HEADERS",
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+  "CF_ACCESS_CLIENT_SECRET",
+  "CLAWDBOT_GATEWAY_TOKEN",
+  "CLAWDBOT_GATEWAY_PASSWORD",
+]);
+
+export function redactSensitiveDaemonEnv(
+  env: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!env) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    out[key] = SENSITIVE_DAEMON_ENV_KEYS.has(key) ? "[redacted]" : value;
+  }
+  return out;
+}
+
 export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
   if (!env) {
     return {};
