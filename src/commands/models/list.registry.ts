@@ -4,7 +4,7 @@ import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
-  getCustomProviderApiKey,
+  hasUsableCustomProviderApiKey,
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
@@ -35,7 +35,7 @@ const hasAuthForProvider = (
   if (resolveEnvApiKey(provider)) {
     return true;
   }
-  if (getCustomProviderApiKey(cfg, provider)) {
+  if (hasUsableCustomProviderApiKey(cfg, provider)) {
     return true;
   }
   return false;

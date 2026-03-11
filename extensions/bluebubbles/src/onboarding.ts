@@ -6,6 +6,7 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
+  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
   normalizeAccountId,
