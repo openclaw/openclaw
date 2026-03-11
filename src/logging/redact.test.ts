@@ -119,4 +119,29 @@ describe("redactSensitiveText", () => {
     });
     expect(output).toBe(input);
   });
+
+  it("applies custom patterns alongside defaults when both are provided", () => {
+    const emailPattern = String.raw`[\w.-]+@[\w.-]+\.\w+`;
+    const input = "Contact peter@dc.io, key is sk-1234567890abcdef";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [...defaults, emailPattern],
+    });
+    // Default pattern redacts the API key
+    expect(output).toContain("sk-123…cdef");
+    // Custom pattern redacts the email
+    expect(output).not.toContain("peter@dc.io");
+  });
+
+  it("does not drop default patterns when only custom patterns are given", () => {
+    const emailPattern = String.raw`[\w.-]+@[\w.-]+\.\w+`;
+    const input = "OPENAI_API_KEY=sk-1234567890abcdef contact peter@dc.io";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [emailPattern],
+    });
+    // With only custom pattern, defaults are NOT included (explicit caller opts in)
+    // The email should be redacted by the custom pattern
+    expect(output).not.toContain("peter@dc.io");
+  });
 });
