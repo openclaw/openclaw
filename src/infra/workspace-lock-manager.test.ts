@@ -191,6 +191,62 @@ describe("workspace lock manager", () => {
     await lock.release();
   });
 
+  it("does not reclaim a lock solely because expiresAt elapsed when owner pid is alive", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "still-owned.txt");
+    const lockPath = await expectedLockPath(target, "file");
+
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        token: "live-owner",
+        pid: process.pid,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+        targetPath: target,
+        kind: "file",
+      }),
+      "utf8",
+    );
+
+    await expect(
+      acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 10,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+  });
+
+  it("cleans up lock artifact when initial payload write fails", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "write-failure.txt");
+    const lockPath = await expectedLockPath(target, "file");
+
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await originalOpen(filePath, flags as string, mode as number | undefined);
+      return {
+        ...handle,
+        writeFile: vi.fn().mockRejectedValue(new Error("ENOSPC")),
+      } as unknown as Awaited<ReturnType<typeof fs.open>>;
+    });
+
+    await expect(
+      acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 1_000,
+      }),
+    ).rejects.toThrow(/ENOSPC/);
+
+    await expect(fs.stat(lockPath)).rejects.toThrow();
+    openSpy.mockRestore();
+  });
+
   it("backs off when stale lock deletion fails", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "busy.txt");

@@ -30,11 +30,13 @@ type HeldLock = {
   count: number;
   lockPath: string;
   token: string;
+  ttlMs: number;
 };
 
 export type WorkspaceLockHandle = {
   lockPath: string;
   release: () => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
 const HELD_WORKSPACE_LOCKS_KEY = Symbol.for("openclaw.workspaceLockManager.heldLocks");
@@ -105,14 +107,16 @@ async function readPayload(lockPath: string): Promise<LockPayload | null> {
 
 async function isStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
   const payload = await readPayload(lockPath);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
-    return true;
-  }
-  if (payload && isTimestampExpired(payload.expiresAt)) {
-    return true;
-  }
-  if (payload && !Number.isFinite(Date.parse(payload.createdAt))) {
-    return true;
+  if (payload) {
+    if (!Number.isFinite(Date.parse(payload.createdAt))) {
+      return true;
+    }
+    if (payload.pid) {
+      return !isPidAlive(payload.pid);
+    }
+    if (isTimestampExpired(payload.expiresAt)) {
+      return true;
+    }
   }
 
   try {
@@ -120,6 +124,35 @@ async function isStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
     return Date.now() - stat.mtimeMs > ttlMs;
   } catch {
     return true;
+  }
+}
+
+async function refreshLock(mapKey: string): Promise<void> {
+  const held = HELD_WORKSPACE_LOCKS.get(mapKey);
+  if (!held) {
+    return;
+  }
+
+  const payload = await readPayload(held.lockPath);
+  if (!payload || payload.token !== held.token) {
+    return;
+  }
+
+  const now = Date.now();
+  const nextPayload: LockPayload = {
+    ...payload,
+    expiresAt: new Date(now + held.ttlMs).toISOString(),
+  };
+
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(held.lockPath, "r+");
+    await handle.truncate(0);
+    await handle.writeFile(JSON.stringify(nextPayload), "utf8");
+  } catch {
+    // Preserve exclusivity on transient write errors; do not delete lock here.
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -162,6 +195,7 @@ export async function acquireWorkspaceLock(
     return {
       lockPath,
       release: () => releaseLock(mapKey),
+      refresh: () => refreshLock(mapKey),
     };
   }
 
@@ -182,12 +216,21 @@ export async function acquireWorkspaceLock(
         targetPath: normalizedTarget,
         kind,
       };
-      await handle.writeFile(JSON.stringify(payload), "utf8");
+
+      try {
+        await handle.writeFile(JSON.stringify(payload), "utf8");
+      } catch (writeErr) {
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw writeErr;
+      }
+
       await handle.close();
-      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, lockPath, token: payload.token });
+      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, lockPath, token: payload.token, ttlMs });
       return {
         lockPath,
         release: () => releaseLock(mapKey),
+        refresh: () => refreshLock(mapKey),
       };
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -221,9 +264,17 @@ export async function withWorkspaceLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const lock = await acquireWorkspaceLock(targetPath, options);
+  const ttlMs = Math.max(1, options.ttlMs ?? DEFAULT_TTL_MS);
+  const refreshEveryMs = Math.max(100, Math.floor(ttlMs / 2));
+  const timer = setInterval(() => {
+    void lock.refresh().catch(() => undefined);
+  }, refreshEveryMs);
+  timer.unref?.();
+
   try {
     return await fn();
   } finally {
+    clearInterval(timer);
     await lock.release();
   }
 }
