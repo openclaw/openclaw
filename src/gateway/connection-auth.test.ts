@@ -416,4 +416,74 @@ describe("resolveGatewayConnectionAuth", () => {
       }),
     ).toThrow("gateway.auth.password");
   });
+
+  it("fails closed when local token SecretRef is unresolved and remote token fallback exists", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
+        },
+        remote: {
+          token: "remote-token",
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    await expect(
+      resolveGatewayConnectionAuth({
+        config,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).rejects.toThrow("gateway.auth.token");
+    expect(() =>
+      resolveGatewayConnectionAuthFromConfig({
+        cfg: config,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrow("gateway.auth.token");
+  });
+
+  it("fails closed when local password SecretRef is unresolved and remote password fallback exists", async () => {
+    const config = cfg({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
+        },
+        remote: {
+          password: "remote-password", // pragma: allowlist secret
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    await expect(
+      resolveGatewayConnectionAuth({
+        config,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).rejects.toThrow("gateway.auth.password");
+    expect(() =>
+      resolveGatewayConnectionAuthFromConfig({
+        cfg: config,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrow("gateway.auth.password");
+  });
 });
