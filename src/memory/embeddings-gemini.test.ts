@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import {
-  buildFileDataPart,
-  buildGeminiParts,
+  buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,
-  buildInlineDataPart,
   createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   GEMINI_EMBEDDING_2_MODELS,
   isGeminiEmbedding2Model,
   resolveGeminiOutputDimensionality,
-  type GeminiPart,
 } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -61,40 +58,6 @@ function mockResolvedProviderKey(apiKey = "test-key") {
   });
 }
 
-// ---------- Helper function tests ----------
-
-describe("buildGeminiParts", () => {
-  it("wraps a string into a single text part", () => {
-    expect(buildGeminiParts("hello")).toEqual([{ text: "hello" }]);
-  });
-
-  it("passes through an existing parts array", () => {
-    const parts: GeminiPart[] = [
-      { text: "hello" },
-      { inlineData: { mimeType: "image/png", data: "base64data" } },
-    ];
-    expect(buildGeminiParts(parts)).toBe(parts);
-  });
-});
-
-describe("buildInlineDataPart", () => {
-  it("produces the correct shape", () => {
-    const part = buildInlineDataPart("image/jpeg", "abc123");
-    expect(part).toEqual({
-      inlineData: { mimeType: "image/jpeg", data: "abc123" },
-    });
-  });
-});
-
-describe("buildFileDataPart", () => {
-  it("produces the correct shape", () => {
-    const part = buildFileDataPart("application/pdf", "gs://bucket/file.pdf");
-    expect(part).toEqual({
-      fileData: { mimeType: "application/pdf", fileUri: "gs://bucket/file.pdf" },
-    });
-  });
-});
-
 describe("buildGeminiTextEmbeddingRequest", () => {
   it("builds a text embedding request with optional model and dimensions", () => {
     expect(
@@ -107,6 +70,35 @@ describe("buildGeminiTextEmbeddingRequest", () => {
     ).toEqual({
       model: "models/gemini-embedding-2-preview",
       content: { parts: [{ text: "hello" }] },
+      taskType: "RETRIEVAL_DOCUMENT",
+      outputDimensionality: 1536,
+    });
+  });
+});
+
+describe("buildGeminiEmbeddingRequest", () => {
+  it("builds a multimodal request from structured input parts", () => {
+    expect(
+      buildGeminiEmbeddingRequest({
+        input: {
+          text: "Image file: diagram.png",
+          parts: [
+            { type: "text", text: "Image file: diagram.png" },
+            { type: "inline-data", mimeType: "image/png", data: "abc123" },
+          ],
+        },
+        taskType: "RETRIEVAL_DOCUMENT",
+        modelPath: "models/gemini-embedding-2-preview",
+        outputDimensionality: 1536,
+      }),
+    ).toEqual({
+      model: "models/gemini-embedding-2-preview",
+      content: {
+        parts: [
+          { text: "Image file: diagram.png" },
+          { inlineData: { mimeType: "image/png", data: "abc123" } },
+        ],
+      },
       taskType: "RETRIEVAL_DOCUMENT",
       outputDimensionality: 1536,
     });
@@ -319,6 +311,21 @@ describe("gemini-embedding-2-preview provider", () => {
     expect(body.outputDimensionality).toBe(768);
   });
 
+  it("sanitizes and normalizes embedQuery responses", async () => {
+    const fetchMock = createGeminiFetchMock([3, 4, Number.NaN]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test")).resolves.toEqual([0.6, 0.8, 0]);
+  });
+
   it("uses custom outputDimensionality for each embedBatch request", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
     vi.stubGlobal("fetch", fetchMock);
@@ -338,6 +345,88 @@ describe("gemini-embedding-2-preview provider", () => {
     expect(body.requests).toEqual([
       expect.objectContaining({ outputDimensionality: 768 }),
       expect.objectContaining({ outputDimensionality: 768 }),
+    ]);
+  });
+
+  it("sanitizes and normalizes structured batch responses", async () => {
+    const fetchMock = createGeminiBatchFetchMock(1, [0, Number.POSITIVE_INFINITY, 5]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    await expect(
+      provider.embedBatchInputs?.([
+        {
+          text: "Image file: diagram.png",
+          parts: [
+            { type: "text", text: "Image file: diagram.png" },
+            { type: "inline-data", mimeType: "image/png", data: "img" },
+          ],
+        },
+      ]),
+    ).resolves.toEqual([[0, 0, 1]]);
+  });
+
+  it("supports multimodal embedBatchInputs requests", async () => {
+    const fetchMock = createGeminiBatchFetchMock(2);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    expect(provider.embedBatchInputs).toBeDefined();
+    await provider.embedBatchInputs?.([
+      {
+        text: "Image file: diagram.png",
+        parts: [
+          { type: "text", text: "Image file: diagram.png" },
+          { type: "inline-data", mimeType: "image/png", data: "img" },
+        ],
+      },
+      {
+        text: "Audio file: note.wav",
+        parts: [
+          { type: "text", text: "Audio file: note.wav" },
+          { type: "inline-data", mimeType: "audio/wav", data: "aud" },
+        ],
+      },
+    ]);
+
+    const body = parseFetchBody(fetchMock);
+    expect(body.requests).toEqual([
+      {
+        model: "models/gemini-embedding-2-preview",
+        content: {
+          parts: [
+            { text: "Image file: diagram.png" },
+            { inlineData: { mimeType: "image/png", data: "img" } },
+          ],
+        },
+        taskType: "RETRIEVAL_DOCUMENT",
+        outputDimensionality: 3072,
+      },
+      {
+        model: "models/gemini-embedding-2-preview",
+        content: {
+          parts: [
+            { text: "Audio file: note.wav" },
+            { inlineData: { mimeType: "audio/wav", data: "aud" } },
+          ],
+        },
+        taskType: "RETRIEVAL_DOCUMENT",
+        outputDimensionality: 3072,
+      },
     ]);
   });
 
