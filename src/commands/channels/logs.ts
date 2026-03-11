@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { LOG_PREFIX, LOG_SUFFIX } from "../../logging/logger.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -39,6 +41,43 @@ function matchesChannel(line: NonNullable<LogLine>, channel: string) {
     return true;
   }
   return false;
+}
+
+/**
+ * Find the active log file to read.
+ * First tries today's log file, then falls back to the most recently modified log file.
+ */
+async function findActiveLogFile(): Promise<string> {
+  const configuredFile = getResolvedLoggerSettings().file;
+  const logDir = path.dirname(configuredFile);
+
+  try {
+    await fs.access(configuredFile);
+    return configuredFile;
+  } catch {
+    // Today's log doesn't exist, find the most recently modified log file
+    // Use the configured log directory, not DEFAULT_LOG_DIR
+    const entries = await fs.readdir(logDir).catch(() => []);
+    const logFiles = entries
+      .filter((name) => name.startsWith(`${LOG_PREFIX}-`) && name.endsWith(LOG_SUFFIX));
+    // Don't slice before sorting - we need to check all files to find the newest
+
+    if (logFiles.length === 0) {
+      return configuredFile; // Fallback to default
+    }
+
+    // Sort by modification time, newest first
+    const filesWithMtime = await Promise.all(
+      logFiles.map(async (name) => {
+        const filePath = path.join(logDir, name);
+        const stat = await fs.stat(filePath).catch(() => null);
+        return { name, mtime: stat?.mtime?.getTime() ?? 0 };
+      }),
+    );
+    filesWithMtime.sort((a, b) => b.mtime - a.mtime);
+
+    return path.join(logDir, filesWithMtime[0].name);
+  }
 }
 
 async function readTailLines(file: string, limit: number): Promise<string[]> {
@@ -84,7 +123,7 @@ export async function channelsLogsCommand(
       ? Math.floor(limitRaw)
       : DEFAULT_LIMIT;
 
-  const file = getResolvedLoggerSettings().file;
+  const file = await findActiveLogFile();
   const rawLines = await readTailLines(file, limit * 4);
   const parsed = rawLines
     .map(parseLogLine)
