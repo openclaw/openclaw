@@ -15,6 +15,8 @@ import {
 const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
+const MAX_BRAVE_LANG_TAG_LENGTH = 64;
+const MAX_CHINESE_SEARCH_LANG_SUBTAG_SEPARATORS = 4;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
@@ -1015,6 +1017,10 @@ function resolveSearchCount(value: unknown, fallback: number): number {
 function canonicalizeChineseSearchLang(value: string): string {
   const lowered = value.toLowerCase();
 
+  if (lowered.length > MAX_BRAVE_LANG_TAG_LENGTH) {
+    return lowered;
+  }
+
   if (lowered === "zh") {
     return "zh-hans";
   }
@@ -1026,6 +1032,16 @@ function canonicalizeChineseSearchLang(value: string): string {
   }
 
   const normalized = lowered.replace(/_/g, "-");
+  let separators = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] === "-") {
+      separators += 1;
+      if (separators > MAX_CHINESE_SEARCH_LANG_SUBTAG_SEPARATORS) {
+        return lowered;
+      }
+    }
+  }
+
   const parts = normalized.split("-");
   if (parts.includes("hant")) {
     return "zh-hant";
@@ -1046,7 +1062,7 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
     return undefined;
   }
   const trimmed = value.trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.length > MAX_BRAVE_LANG_TAG_LENGTH) {
     return undefined;
   }
 
