@@ -96,6 +96,8 @@ describe("msteams monitor handler authz", () => {
     } as unknown as Parameters<typeof handler>[0]);
 
     expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "msteams",
+      accountId: "default",
       id: "blocked-aad",
       meta: { name: "Blocked User" },
     });
