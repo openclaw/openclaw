@@ -62,6 +62,7 @@ export function registerBackupCommand(program: Command) {
           output: opts.output as string | undefined,
           json: Boolean(opts.json),
           dryRun: Boolean(opts.dryRun),
+          verify: true,
           onlyConfig: Boolean(opts.onlyConfig),
           includeWorkspace: opts.includeWorkspace as boolean,
         });

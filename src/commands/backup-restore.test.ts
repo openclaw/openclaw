@@ -348,6 +348,79 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("rewrites covered config workspace paths when backup stateDir is a symlink alias", async () => {
+    const sourceHomeDir = sourceHome.home;
+    const sourceStateLinkDir = path.join(sourceHomeDir, "state-link");
+    const externalRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-config-alias-root-"),
+    );
+    const sourceStateDir = path.join(externalRoot, "state-real");
+    const sourceWorkspace = path.join(externalRoot, "workspace-source");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-config-alias-"),
+    );
+
+    try {
+      await fs.mkdir(path.join(sourceStateDir, "credentials"), { recursive: true });
+      await fs.mkdir(sourceWorkspace, { recursive: true });
+      await fs.symlink(sourceStateDir, sourceStateLinkDir);
+
+      process.env.HOME = sourceHomeDir;
+      process.env.USERPROFILE = sourceHomeDir;
+      process.env.OPENCLAW_STATE_DIR = sourceStateLinkDir;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_OAUTH_DIR;
+      clearConfigCache();
+
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: sourceWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials", "oauth.json"), "{}", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(sourceWorkspace, "SOUL.md"), "# soul\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome(
+        "openclaw-backup-restore-covered-config-alias-target-",
+      );
+      setActiveHome(targetHome);
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+      });
+
+      const targetWorkspace = path.join(targetHome, "workspace-source");
+      expect(await fs.readFile(path.join(targetWorkspace, "SOUL.md"), "utf8")).toBe("# soul\n");
+      const restoredConfig = await fs.readFile(
+        path.join(targetHome, ".openclaw", "openclaw.json"),
+        "utf8",
+      );
+      expect(restoredConfig).toContain(targetWorkspace);
+      expect(restoredConfig).not.toContain(sourceWorkspace);
+      expect(restored.updatedConfigWorkspacePaths).toBe(1);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+      await fs.rm(externalRoot, { recursive: true, force: true });
+    }
+  });
+
   it("restores legacy covered config and credentials from manifest paths", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(

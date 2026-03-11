@@ -252,23 +252,30 @@ function buildCoveredAssetArchivePath(params: {
 function resolvePathRelativeToStateDir(params: {
   targetPath: string;
   stateDir: string | undefined;
+  stateCanonicalDir?: string | undefined;
 }): string | undefined {
-  if (!params.stateDir) {
+  const stateRoots = [params.stateDir, params.stateCanonicalDir].filter(
+    (candidate): candidate is string =>
+      typeof candidate === "string" && candidate.trim().length > 0,
+  );
+  if (stateRoots.length === 0) {
     return undefined;
   }
 
-  const stateAliases = buildPathAliases(path.resolve(params.stateDir));
   const targetAliases = buildPathAliases(path.resolve(params.targetPath));
-  for (const stateAlias of stateAliases) {
-    for (const targetAlias of targetAliases) {
-      if (!isPathWithin(targetAlias, stateAlias)) {
-        continue;
+  for (const stateRoot of stateRoots) {
+    const stateAliases = buildPathAliases(path.resolve(stateRoot));
+    for (const stateAlias of stateAliases) {
+      for (const targetAlias of targetAliases) {
+        if (!isPathWithin(targetAlias, stateAlias)) {
+          continue;
+        }
+        const relative = path.relative(stateAlias, targetAlias);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+          continue;
+        }
+        return toArchiveSubpath(relative);
       }
-      const relative = path.relative(stateAlias, targetAlias);
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-        continue;
-      }
-      return toArchiveSubpath(relative);
     }
   }
   return undefined;
@@ -320,6 +327,7 @@ function buildCoveredAssetManifestEntries(params: {
     const coveredRelativePath = resolvePathRelativeToStateDir({
       targetPath: coveredSourcePath,
       stateDir: manifest.paths?.stateDir,
+      stateCanonicalDir: stateAsset?.sourcePath,
     });
     const activeRelativePath = resolvePathRelativeToStateDir({
       targetPath: activeTargetPath,
@@ -638,6 +646,7 @@ async function buildRestoreItems(params: {
       ? (resolvePathRelativeToStateDir({
           targetPath: coveredConfigSourcePath,
           stateDir: manifest.paths?.stateDir,
+          stateCanonicalDir: stateAsset?.sourcePath,
         }) ?? null)
       : null;
   return {

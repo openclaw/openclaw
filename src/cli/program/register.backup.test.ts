@@ -68,6 +68,7 @@ describe("registerBackupCommand", () => {
         output: "/tmp/backups",
         json: true,
         dryRun: true,
+        verify: true,
         onlyConfig: false,
         includeWorkspace: true,
       }),
@@ -92,6 +93,7 @@ describe("registerBackupCommand", () => {
       runtime,
       expect.objectContaining({
         dryRun: false,
+        verify: true,
       }),
     );
   });
