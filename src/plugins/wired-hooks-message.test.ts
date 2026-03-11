@@ -72,3 +72,27 @@ describe("message_sent hook runner", () => {
     );
   });
 });
+
+describe("channel_deleted hook runner", () => {
+  it("runChannelDeleted invokes registered hooks", async () => {
+    const handler = vi.fn();
+    const registry = createMockPluginRegistry([{ hookName: "channel_deleted", handler }]);
+    const runner = createHookRunner(registry);
+
+    await runner.runChannelDeleted(
+      {
+        conversationId: "19:deleted@thread.tacv2",
+        metadata: { provider: "msteams", channelId: "19:deleted@thread.tacv2" },
+      },
+      { channelId: "msteams", conversationId: "19:deleted@thread.tacv2" },
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      {
+        conversationId: "19:deleted@thread.tacv2",
+        metadata: { provider: "msteams", channelId: "19:deleted@thread.tacv2" },
+      },
+      { channelId: "msteams", conversationId: "19:deleted@thread.tacv2" },
+    );
+  });
+});

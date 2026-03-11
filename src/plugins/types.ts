@@ -329,6 +329,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "message_received"
+  | "channel_deleted"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -355,6 +356,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "message_received",
+  "channel_deleted",
   "message_sending",
   "message_sent",
   "before_tool_call",
@@ -566,6 +568,13 @@ export type PluginHookMessageContext = {
 export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+};
+
+// channel_deleted hook
+export type PluginHookChannelDeletedEvent = {
+  conversationId?: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
 };
@@ -820,6 +829,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  channel_deleted: (
+    event: PluginHookChannelDeletedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
   message_sending: (

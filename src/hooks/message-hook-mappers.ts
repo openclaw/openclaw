@@ -31,8 +31,15 @@ export type CanonicalInboundMessageHookContext = {
   provider?: string;
   surface?: string;
   threadId?: string | number;
+  replyToId?: string;
+  rootMessageId?: string;
   mediaPath?: string;
+  mediaPaths?: string[];
   mediaType?: string;
+  mediaTypes?: string[];
+  chatType?: string;
+  nativeChannelId?: string;
+  providerMetadata?: Record<string, unknown>;
   originatingChannel?: string;
   originatingTo?: string;
   guildId?: string;
@@ -100,8 +107,15 @@ export function deriveInboundMessageHookContext(
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
+    replyToId: ctx.ReplyToId,
+    rootMessageId: ctx.RootMessageId,
     mediaPath: ctx.MediaPath,
+    mediaPaths: ctx.MediaPaths,
     mediaType: ctx.MediaType,
+    mediaTypes: ctx.MediaTypes,
+    chatType: ctx.ChatType,
+    nativeChannelId: ctx.NativeChannelId,
+    providerMetadata: ctx.ProviderMetadata,
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
@@ -159,6 +173,15 @@ export function toPluginMessageReceivedEvent(
       provider: canonical.provider,
       surface: canonical.surface,
       threadId: canonical.threadId,
+      replyToId: canonical.replyToId,
+      rootMessageId: canonical.rootMessageId,
+      chatType: canonical.chatType,
+      nativeChannelId: canonical.nativeChannelId,
+      mediaPath: canonical.mediaPath,
+      mediaPaths: canonical.mediaPaths,
+      mediaType: canonical.mediaType,
+      mediaTypes: canonical.mediaTypes,
+      providerMetadata: canonical.providerMetadata,
       originatingChannel: canonical.originatingChannel,
       originatingTo: canonical.originatingTo,
       messageId: canonical.messageId,

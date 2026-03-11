@@ -166,7 +166,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
     const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
-    const teamId = activity.channelData?.team?.id;
+    const teamRuntimeId = activity.channelData?.team?.id;
+    const graphTeamId = activity.channelData?.team?.aadGroupId;
+    const teamId = graphTeamId ?? teamRuntimeId;
     const teamName = activity.channelData?.team?.name;
     const channelName = activity.channelData?.channel?.name;
     const channelGate = resolveMSTeamsRouteConfig({
@@ -523,8 +525,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Provider: "msteams" as const,
       Surface: "msteams" as const,
       MessageSid: activity.id,
+      ReplyToId: activity.replyToId ?? undefined,
       Timestamp: timestamp?.getTime() ?? Date.now(),
       WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      NativeChannelId: activity.channelData?.channel?.id ?? undefined,
+      ProviderMetadata: {
+        conversationType,
+        tenantId: conversation?.tenantId,
+        teamId,
+        teamRuntimeId,
+        teamName,
+        channelId: activity.channelData?.channel?.id,
+      },
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
