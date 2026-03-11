@@ -100,6 +100,20 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
+export function isGatewayAgentDeliveryConfirmed(response: unknown): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+
+  const candidate = response as {
+    result?: {
+      delivery?: unknown;
+    };
+  };
+
+  return Boolean(candidate.result?.delivery);
+}
+
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\berrorcode=unavailable\b/i,
   /\bstatus\s*[:=]\s*"?unavailable\b/i,
@@ -785,7 +799,7 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
-    await runAnnounceDeliveryWithRetry({
+    const response = await runAnnounceDeliveryWithRetry({
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
         : "direct announce agent call",
@@ -815,6 +829,21 @@ async function sendSubagentAnnounceDirectly(params: {
           timeoutMs: announceTimeoutMs,
         }),
     });
+
+    if (!shouldDeliverExternally) {
+      return {
+        delivered: true,
+        path: "direct",
+      };
+    }
+
+    if (!isGatewayAgentDeliveryConfirmed(response)) {
+      return {
+        delivered: false,
+        path: "direct",
+        error: "external delivery was not confirmed",
+      };
+    }
 
     return {
       delivered: true,
