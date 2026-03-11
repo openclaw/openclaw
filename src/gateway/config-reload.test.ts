@@ -83,6 +83,20 @@ describe("diffConfigPaths", () => {
     expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
   });
 
+  it("reports nested agent identity changes at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "coding", apps: ["terminal"] }],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.id");
+  });
+
   it("reports added agent list object fields at index-level paths", () => {
     const prev = {
       agents: {
@@ -267,6 +281,12 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["agents.list.0.apps"]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("agents.list.0.apps");
+  });
+
+  it("requires gateway restart for per-agent identity changes that affect Agent Apps selection", () => {
+    const plan = buildGatewayReloadPlan(["agents.list.0.id"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.id");
   });
 
   it("requires gateway restart for diffed per-agent Agent Apps selection changes", () => {

@@ -36,6 +36,7 @@ type ReloadAction =
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "apps", kind: "restart" },
   { prefix: "agents.defaults.apps", kind: "restart" },
+  { prefix: "agents.list.*.id", kind: "restart" },
   { prefix: "agents.list.*.apps", kind: "restart" },
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
