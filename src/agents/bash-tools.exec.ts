@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
@@ -146,6 +147,64 @@ async function validateScriptFileForShellBleed(params: {
       );
     }
   }
+}
+
+const BROAD_FIND_TIMEOUT_SEC = 20;
+const BROAD_FIND_GUARD_RE = /^\s*find\s+(?:"([^"]+)"|'([^']+)'|([^\s|&;]+))/;
+const BROAD_FIND_ESCAPE_HATCH_RE = /\s-(?:prune|xdev|mount)\b/;
+
+function resolveFindRootToken(rootToken: string, homeDir: string): string {
+  if (rootToken === "~") {
+    return homeDir;
+  }
+  if (rootToken.startsWith("~/")) {
+    return path.resolve(homeDir, rootToken.slice(2));
+  }
+  if (rootToken === "$HOME") {
+    return homeDir;
+  }
+  if (rootToken.startsWith("$HOME/")) {
+    return path.resolve(homeDir, rootToken.slice("$HOME/".length));
+  }
+  return path.resolve(rootToken);
+}
+
+export function maybeCapBroadFindTimeoutSec(params: {
+  command: string;
+  workdir: string;
+  explicitTimeoutSec: number | null;
+}): { timeoutSec: number | null; warning?: string } {
+  if (params.explicitTimeoutSec !== null) {
+    return { timeoutSec: null };
+  }
+  if (BROAD_FIND_ESCAPE_HATCH_RE.test(params.command)) {
+    return { timeoutSec: null };
+  }
+  const match = params.command.match(BROAD_FIND_GUARD_RE);
+  const rootToken = match?.[1] ?? match?.[2] ?? match?.[3];
+  if (!rootToken) {
+    return { timeoutSec: null };
+  }
+  const homeDir = path.resolve(os.homedir());
+  const resolvedRoot = resolveFindRootToken(rootToken, homeDir);
+  const resolvedWorkdir = path.resolve(params.workdir);
+  if (
+    resolvedRoot === resolvedWorkdir ||
+    resolvedRoot.startsWith(`${resolvedWorkdir}${path.sep}`)
+  ) {
+    return { timeoutSec: null };
+  }
+  const filesystemRoot = path.parse(homeDir).root;
+  const isBroadRoot = resolvedRoot === homeDir || resolvedRoot === filesystemRoot;
+  if (!isBroadRoot) {
+    return { timeoutSec: null };
+  }
+  return {
+    timeoutSec: BROAD_FIND_TIMEOUT_SEC,
+    warning:
+      "Warning: broad find scans over $HOME or / without pruning are capped at 20s. " +
+      "Narrow the base path, scope to the workspace, or pass an explicit timeout if the long scan is intentional.",
+  };
 }
 
 export function createExecTool(
@@ -457,11 +516,19 @@ export function createExecTool(
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const broadFindTimeout = maybeCapBroadFindTimeoutSec({
+        command: params.command,
+        workdir,
+        explicitTimeoutSec,
+      });
+      if (broadFindTimeout.warning) {
+        warnings.push(broadFindTimeout.warning);
+      }
       const backgroundTimeoutBypass =
         allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
-      const effectiveTimeout = backgroundTimeoutBypass
-        ? null
-        : (explicitTimeoutSec ?? defaultTimeoutSec);
+      const effectiveTimeout =
+        broadFindTimeout.timeoutSec ??
+        (backgroundTimeoutBypass ? null : (explicitTimeoutSec ?? defaultTimeoutSec));
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
