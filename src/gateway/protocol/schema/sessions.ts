@@ -65,6 +65,8 @@ export const SessionsPatchParamsSchema = Type.Object(
       ]),
     ),
     elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    // Workspace override for sub-agent sessions (per-agent workspace).
+    workspace: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

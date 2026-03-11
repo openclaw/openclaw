@@ -192,6 +192,24 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("workspace" in patch) {
+    const raw = patch.workspace;
+    if (raw === null) {
+      if (existing?.workspace) {
+        return invalid("workspace cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const trimmed = String(raw).trim();
+      if (!trimmed) {
+        return invalid("invalid workspace: empty");
+      }
+      if (existing?.workspace && existing.workspace !== trimmed) {
+        return invalid("workspace cannot be changed once set");
+      }
+      next.workspace = trimmed;
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {

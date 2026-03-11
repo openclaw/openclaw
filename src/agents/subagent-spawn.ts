@@ -423,6 +423,7 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
+    workspace: targetAgentConfig?.workspace,
   });
   if (spawnDepthPatchError) {
     return {

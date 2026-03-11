@@ -67,6 +67,7 @@ export function resolveMirroredTranscriptText(params: {
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  cwd?: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
@@ -77,7 +78,7 @@ async function ensureSessionHeader(params: {
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
-    cwd: process.cwd(),
+    cwd: params.cwd ?? process.cwd(),
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
@@ -177,7 +178,11 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  await ensureSessionHeader({
+    sessionFile,
+    sessionId: entry.sessionId,
+    cwd: entry.workspace,
+  });
 
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
