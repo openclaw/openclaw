@@ -51,7 +51,8 @@ const ERROR_PATTERNS = {
     /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",
-    /insufficient\b.*\bbalance/i,
+    "insufficient balance",
+    "insufficient usd or diem balance",
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
