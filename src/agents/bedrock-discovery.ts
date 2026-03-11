@@ -271,7 +271,10 @@ export async function discoverBedrockModels(params: {
       const foundationSummary = profile.models
         ?.map((entry) => foundationById.get(extractModelIdFromArn(entry.modelArn) ?? ""))
         .find((summary): summary is BedrockModelSummary => Boolean(summary));
-      if (!shouldIncludeInferenceProfile(profile, foundationSummary, providerFilter)) {
+      if (
+        !shouldIncludeInferenceProfile(profile, foundationSummary, providerFilter) ||
+        !foundationSummary
+      ) {
         continue;
       }
       const foundationId = foundationSummary.modelId?.trim();
