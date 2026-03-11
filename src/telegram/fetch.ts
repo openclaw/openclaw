@@ -13,6 +13,7 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let appliedGlobalDispatcher: unknown = null;
 const log = createSubsystemLogger("telegram/network");
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
@@ -79,18 +80,22 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     const existingGlobalDispatcher = getGlobalDispatcher();
+    const ownsExistingDispatcher =
+      appliedGlobalDispatcher !== null && existingGlobalDispatcher === appliedGlobalDispatcher;
     const shouldPreserveExistingProxy =
-      isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
+      isProxyLikeDispatcher(existingGlobalDispatcher) &&
+      !hasProxyEnvConfigured() &&
+      !ownsExistingDispatcher;
     if (!shouldPreserveExistingProxy) {
       try {
-        setGlobalDispatcher(
-          new EnvHttpProxyAgent({
-            connect: {
-              autoSelectFamily: autoSelectDecision.value,
-              autoSelectFamilyAttemptTimeout: 300,
-            },
-          }),
-        );
+        const dispatcher = new EnvHttpProxyAgent({
+          connect: {
+            autoSelectFamily: autoSelectDecision.value,
+            autoSelectFamilyAttemptTimeout: 300,
+          },
+        });
+        setGlobalDispatcher(dispatcher);
+        appliedGlobalDispatcher = dispatcher;
         appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
         log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
       } catch {
@@ -205,4 +210,5 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
+  appliedGlobalDispatcher = null;
 }

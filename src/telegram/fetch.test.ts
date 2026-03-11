@@ -54,6 +54,15 @@ function resolveTelegramFetchOrThrow() {
   return resolved;
 }
 
+function clearProxyEnvForTest() {
+  vi.stubEnv("HTTP_PROXY", "");
+  vi.stubEnv("HTTPS_PROXY", "");
+  vi.stubEnv("ALL_PROXY", "");
+  vi.stubEnv("http_proxy", "");
+  vi.stubEnv("https_proxy", "");
+  vi.stubEnv("all_proxy", "");
+}
+
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
@@ -178,6 +187,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("keeps an existing proxy-like global dispatcher", async () => {
+    clearProxyEnvForTest();
     getGlobalDispatcherState.value = {
       constructor: { name: "ProxyAgent" },
     };
@@ -234,6 +244,32 @@ describe("resolveTelegramFetch", () => {
       cause: Object.assign(new Error("aggregate"), {
         errors: [timeoutErr, unreachableErr],
       }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
+  });
+
+  it("updates an OpenClaw-managed proxy-like dispatcher during ipv4 fallback", async () => {
+    setGlobalDispatcher.mockImplementation((dispatcher: unknown) => {
+      getGlobalDispatcherState.value = dispatcher;
+    });
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
     });
     const fetchMock = vi
       .fn()
