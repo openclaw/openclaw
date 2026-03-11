@@ -55,6 +55,9 @@ export type AppViewState = {
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatHasMore: boolean;
+  chatOldestCursor: string | null;
+  chatLoadingMore: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStreamSegments: Array<{ text: string; ts: number }>;
