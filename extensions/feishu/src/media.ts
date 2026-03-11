@@ -219,21 +219,20 @@ export async function uploadImageFeishu(params: {
 }
 
 /**
- * Encode a filename for safe use in Feishu multipart/form-data uploads.
- * Non-ASCII characters (Chinese, em-dash, full-width brackets, etc.) cause
- * the upload to silently fail when passed raw through the SDK's form-data
- * serialization.  RFC 5987 percent-encoding keeps headers 7-bit clean while
- * Feishu's server decodes and preserves the original display name.
+ * Sanitize a filename for safe use in Feishu multipart/form-data uploads.
+ *
+ * Previous approach used encodeURIComponent() on non-ASCII filenames, assuming
+ * Feishu's server would decode them.  In practice, Feishu stores the encoded
+ * string verbatim, so Chinese filenames like "报表.xlsx" appeared as
+ * "%E6%8A%A5%E8%A1%A8.xlsx" to users.
+ *
+ * The Feishu SDK (v1.30+) and the underlying im.file.create API handle UTF-8
+ * filenames correctly in multipart form-data.  We only need to strip characters
+ * that are genuinely unsafe in Content-Disposition headers or filesystem paths:
+ * control characters (0x00-0x1F), path separators, and shell-special quotes.
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  const ASCII_ONLY = /^[\x20-\x7E]+$/;
-  if (ASCII_ONLY.test(fileName)) {
-    return fileName;
-  }
-  return encodeURIComponent(fileName)
-    .replace(/'/g, "%27")
-    .replace(/\(/g, "%28")
-    .replace(/\)/g, "%29");
+  return fileName.replace(/[\x00-\x1f\\/:*?"<>|]/g, "_");
 }
 
 /**
