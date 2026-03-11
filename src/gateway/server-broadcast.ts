@@ -67,7 +67,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       return;
     }
     const isTargeted = Boolean(targetConnIds);
-    const eventSeq = isTargeted ? undefined : ++seq;
+    // dropIfSlow events are intentionally lossy, so they must not advance the
+    // global sequence or clients will report false "event gap" errors.
+    const eventSeq = isTargeted || opts?.dropIfSlow ? undefined : ++seq;
     const frame = JSON.stringify({
       type: "event",
       event,

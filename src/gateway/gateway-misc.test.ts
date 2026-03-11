@@ -209,6 +209,48 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("does not assign seq numbers to dropIfSlow broadcasts", () => {
+    const fastSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: fastSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
+        connId: "c-fast",
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("agent", { state: "first" });
+    broadcast("presence", { presence: [] }, { dropIfSlow: true });
+    broadcast("agent", { state: "second" });
+
+    const first = JSON.parse(String(vi.mocked(fastSocket.send).mock.calls[0]?.[0])) as {
+      seq?: number;
+      event?: string;
+    };
+    const second = JSON.parse(String(vi.mocked(fastSocket.send).mock.calls[1]?.[0])) as {
+      seq?: number;
+      event?: string;
+    };
+    const third = JSON.parse(String(vi.mocked(fastSocket.send).mock.calls[2]?.[0])) as {
+      seq?: number;
+      event?: string;
+    };
+
+    expect(first.event).toBe("agent");
+    expect(first.seq).toBe(1);
+    expect(second.event).toBe("presence");
+    expect(second.seq).toBeUndefined();
+    expect(third.event).toBe("agent");
+    expect(third.seq).toBe(2);
+  });
 });
 
 describe("chat run registry", () => {

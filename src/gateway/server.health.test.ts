@@ -124,7 +124,7 @@ describe("gateway server health/presence", () => {
   });
 
   test(
-    "presence events carry seq + stateVersion",
+    "presence events carry stateVersion without consuming the reliable seq stream",
     { timeout: PRESENCE_EVENT_TIMEOUT_MS },
     async () => {
       const { ws } = await harness.openClient();
@@ -143,7 +143,7 @@ describe("gateway server health/presence", () => {
       );
 
       const evt = await presenceEventP;
-      expect(typeof evt.seq).toBe("number");
+      expect(evt.seq).toBeUndefined();
       expect(evt.stateVersion?.presence).toBeGreaterThan(0);
       const evtPayload = evt.payload as { presence?: unknown } | undefined;
       expect(Array.isArray(evtPayload?.presence)).toBe(true);
@@ -213,7 +213,7 @@ describe("gateway server health/presence", () => {
       for (const evt of events) {
         const evtPayload = evt.payload as { presence?: unknown[] } | undefined;
         expect(evtPayload?.presence?.length).toBeGreaterThan(0);
-        expect(typeof evt.seq).toBe("number");
+        expect(evt.seq).toBeUndefined();
       }
       for (const { ws } of clients) {
         ws.close();
