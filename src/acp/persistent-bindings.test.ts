@@ -564,6 +564,41 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
     expect(spec?.conversationId).toBe("ou_abc123");
     expect(spec?.agentId).toBe("claude");
   });
+
+  it("returns null for catch-all feishu binding reverse lookup (hash is one-way)", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "feishu",
+            accountId: "*",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    // Forward resolution works — catch-all matches any conversation.
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_xyz789",
+    });
+    expect(resolved?.spec.channel).toBe("feishu");
+
+    // Reverse lookup returns null because the session key hash is one-way
+    // and catch-all bindings have no peer.id to rebuild the hash from.
+    // Sessions created via catch-all rely on stored session meta for
+    // re-initialization (see resetAcpSessionInPlace).
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey: resolved?.record.targetSessionKey ?? "",
+    });
+    expect(spec).toBeNull();
+  });
 });
 
 describe("buildConfiguredAcpSessionKey", () => {

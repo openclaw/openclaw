@@ -147,6 +147,10 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
     if (accountMatchPriority === 0) {
       continue;
     }
+    // Reverse lookup requires a concrete conversationId to rebuild the session
+    // key hash. Catch-all bindings (no peer.id) cannot be matched here because
+    // the hash is one-way; those sessions rely on stored session meta instead
+    // (see resetAcpSessionInPlace).
     const targetConversationId = resolveBindingConversationId(binding);
     if (!targetConversationId) {
       continue;

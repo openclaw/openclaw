@@ -99,12 +99,46 @@ For non-ephemeral workflows, configure persistent ACP bindings in top-level `bin
 - `bindings[].match` identifies the target conversation:
   - Discord channel or thread: `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
   - Telegram forum topic: `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
+  - Feishu conversation: `match.channel="feishu"` + optional `match.peer.id="<openId>"`
+  - QQ bot conversation: `match.channel="qqbot"` + optional `match.peer.id="<senderId>"`
 - `bindings[].agentId` is the owning OpenClaw agent id.
 - Optional ACP overrides live under `bindings[].acp`:
   - `mode` (`persistent` or `oneshot`)
   - `label`
   - `cwd`
   - `backend`
+
+### Channel-wide catch-all bindings
+
+Feishu and QQ bot support catch-all ACP bindings where `match.peer` is omitted. When peer is omitted, the binding matches all conversations on that channel/account. Each conversation still gets its own isolated ACP session.
+
+This is useful when you want every message on a channel to route through an ACP harness agent (for example Claude Code or Codex) instead of the embedded PI agent.
+
+```json5
+{
+  bindings: [
+    // All Feishu conversations -> ACP with Claude Code
+    {
+      type: "acp",
+      agentId: "main",
+      match: { channel: "feishu", accountId: "*" },
+    },
+    // All QQ bot conversations -> ACP with Claude Code
+    {
+      type: "acp",
+      agentId: "main",
+      match: { channel: "qqbot", accountId: "*" },
+    },
+  ],
+  acp: {
+    enabled: true,
+    backend: "acpx",
+    defaultAgent: "claude",
+  },
+}
+```
+
+When a specific peer binding and a catch-all binding both match, the specific peer binding takes priority.
 
 ### Runtime defaults per agent
 
@@ -169,6 +203,18 @@ Example:
         peer: { kind: "group", id: "-1001234567890:topic:42" },
       },
       acp: { cwd: "/workspace/repo-b" },
+    },
+    // Feishu catch-all: all conversations on this account use ACP
+    {
+      type: "acp",
+      agentId: "claude",
+      match: { channel: "feishu", accountId: "*" },
+    },
+    // QQ catch-all
+    {
+      type: "acp",
+      agentId: "claude",
+      match: { channel: "qqbot", accountId: "*" },
     },
     {
       type: "route",
