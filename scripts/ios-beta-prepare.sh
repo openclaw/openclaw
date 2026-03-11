@@ -64,8 +64,14 @@ validate_push_relay_base_url() {
     exit 1
   fi
 
-  if [[ ! "${value}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~!&*+,;:@%/-]*)?$ ]]; then
+  if [[ ! "${value}" =~ ^https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?(/[A-Za-z0-9._~!&*+,;:@%/-]*)?$ ]]; then
     echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: expected https://host[:port][/path]." >&2
+    exit 1
+  fi
+
+  local port="${BASH_REMATCH[2]:-}"
+  if [[ -n "${port}" ]] && (( 10#${port} > 65535 )); then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: port must be between 1 and 65535." >&2
     exit 1
   fi
 }

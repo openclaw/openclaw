@@ -115,10 +115,6 @@ private struct PushRelayAppAttestProof {
     var assertion: String
     var clientDataHash: String
     var signedPayloadBase64: String
-
-    var includesAttestationObject: Bool {
-        self.attestationObject != nil
-    }
 }
 
 private final class PushRelayAppAttestService {
@@ -167,6 +163,10 @@ private final class PushRelayAppAttestService {
         let challengeData = Data(challenge.utf8)
         let clientDataHash = Data(SHA256.hash(data: challengeData))
         let attestation = try await service.attestKey(keyID, clientDataHash: clientDataHash)
+        // Apple treats App Attest key attestation as a one-time operation. Save the
+        // attested marker immediately so later receipt/network failures do not cause a
+        // permanently broken re-attestation loop on the same key.
+        _ = PushRelayRegistrationStore.saveAttestedKeyID(keyID)
         return attestation.base64EncodedString()
     }
 
@@ -285,9 +285,6 @@ final class PushRelayClient: @unchecked Sendable {
                 message: Self.decodeErrorMessage(data: data))
         }
         let decoded = try self.decode(PushRelayRegisterResponse.self, from: data)
-        if appAttest.includesAttestationObject {
-            _ = PushRelayRegistrationStore.saveAttestedKeyID(appAttest.keyId)
-        }
         return decoded
     }
 
