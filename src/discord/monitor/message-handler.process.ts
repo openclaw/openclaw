@@ -298,6 +298,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         agentId: route.agentId,
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
+        channelIsolation: cfg.session?.channelIsolation,
       });
     }
   }

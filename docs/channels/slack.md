@@ -255,17 +255,21 @@ Note: `replyToMode="off"` disables **all** reply threading in Slack, including e
 
 ### Shared session across channels (`session.channelIsolation`)
 
-By default, each non-DM channel or group gets its own session key (`agent:<id>:<channel>:<peerKind>:<peerId>`). Set `session.channelIsolation: false` to make all non-DM channels share the agent's main session instead.
+By default, each non-DM channel or group gets its own session key (`agent:<id>:<channel>:<peerKind>:<peerId>`). Set `session.channelIsolation` to `false` to make all non-DM channels share the agent's main session instead.
 
-```yaml
-session:
-  channelIsolation: false
+```json5
+{ session: { channelIsolation: false } }
 ```
 
 When disabled:
 
 - Non-DM peers (channels, groups) all resolve to the agent's main session key (`agent:<id>:main`).
 - DM scoping (`session.dmScope`) is unaffected — DMs still follow their own isolation rules.
+- Combine with `threadIsolation: false` for a fully unified session across all threads and channels.
+
+> **Note:** This is a global setting, not Slack-specific — it applies to all channels (Slack, Telegram, Discord, WhatsApp).
+
+> **Warning:** When channels share a session, `/new` or idle reset in any channel resets the session for all channels. Context from one channel is visible in others — be mindful of information leakage across channels.
 
 ## Media, chunking, and delivery
 

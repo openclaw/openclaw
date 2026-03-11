@@ -28,6 +28,7 @@ function buildBroadcastRouteKeys(params: {
     },
     dmScope: params.cfg.session?.dmScope,
     identityLinks: params.cfg.session?.identityLinks,
+    channelIsolation: params.cfg.session?.channelIsolation,
   });
   const mainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,

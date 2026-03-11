@@ -64,6 +64,7 @@ export function resolveTelegramConversationRoute(params: {
         peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
         dmScope: params.cfg.session?.dmScope,
         identityLinks: params.cfg.session?.identityLinks,
+        channelIsolation: params.cfg.session?.channelIsolation,
       }).toLowerCase(),
       mainSessionKey: buildAgentMainSessionKey({
         agentId: topicAgentId,
@@ -76,6 +77,7 @@ export function resolveTelegramConversationRoute(params: {
           peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
           dmScope: params.cfg.session?.dmScope,
           identityLinks: params.cfg.session?.identityLinks,
+          channelIsolation: params.cfg.session?.channelIsolation,
         }).toLowerCase(),
         mainSessionKey: buildAgentMainSessionKey({
           agentId: topicAgentId,
