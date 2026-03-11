@@ -555,6 +555,14 @@ async function handleDiscordReactionEvent(
         allowNameMatching: params.allowNameMatching,
       });
     };
+    const canForceReactionCommandWithoutAuthor = (options: {
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+      mode?: "off" | "own" | "all" | "allowlist";
+      messageAuthorId?: string;
+    }) => {
+      const mode = options.mode ?? guildInfo?.reactionNotifications ?? "own";
+      return mode === "own" && !options.messageAuthorId && canEmitReactionCommand(options);
+    };
     const resolveReactionCommand = () => {
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
       const reactionCommand =
@@ -618,6 +626,7 @@ async function handleDiscordReactionEvent(
       channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
       messageAuthorId?: string;
       mode?: "off" | "own" | "all" | "allowlist";
+      forceWhenAuthorUnknown?: boolean;
     }) => {
       const resolved = resolveReactionCommand();
       if (!resolved) {
@@ -633,7 +642,10 @@ async function handleDiscordReactionEvent(
       ) {
         return;
       }
-      if (!shouldEmitReactionCommandForMessageAuthor(params.messageAuthorId)) {
+      if (
+        !shouldEmitReactionCommandForMessageAuthor(params.messageAuthorId) &&
+        !params.forceWhenAuthorUnknown
+      ) {
         return;
       }
       enqueueSystemEvent(
@@ -775,13 +787,21 @@ async function handleDiscordReactionEvent(
         channelConfig: threadChannelConfig,
         mode: reactionMode,
       });
-      if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
+      const canNotify = shouldNotifyReaction({ mode: reactionMode, messageAuthorId });
+      const forceCommandWithoutAuthor = canForceReactionCommandWithoutAuthor({
+        channelConfig: threadChannelConfig,
+        mode: reactionMode,
+        messageAuthorId,
+      });
+      if (!canNotify && !forceCommandWithoutAuthor) {
         return;
       }
 
       const route = resolveReactionRoute(parentId);
       const { contextKey } = resolveReactionBase();
-      emitReactionWithAuthor(message, route, contextKey);
+      if (canNotify) {
+        emitReactionWithAuthor(message, route, contextKey);
+      }
       if (action === "added") {
         emitReactionCommand({
           route,
@@ -789,6 +809,7 @@ async function handleDiscordReactionEvent(
           channelConfig: threadChannelConfig,
           messageAuthorId,
           mode: reactionMode,
+          forceWhenAuthorUnknown: forceCommandWithoutAuthor,
         });
       }
       return;
@@ -851,13 +872,21 @@ async function handleDiscordReactionEvent(
     const message = await loadReactionMessage();
     const messageAuthorId = message?.author?.id ?? undefined;
     clearReactionCommandDedupeForRemove({ channelConfig, mode: reactionMode });
-    if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
+    const canNotify = shouldNotifyReaction({ mode: reactionMode, messageAuthorId });
+    const forceCommandWithoutAuthor = canForceReactionCommandWithoutAuthor({
+      channelConfig,
+      mode: reactionMode,
+      messageAuthorId,
+    });
+    if (!canNotify && !forceCommandWithoutAuthor) {
       return;
     }
 
     const route = resolveReactionRoute(parentId);
     const { contextKey } = resolveReactionBase();
-    emitReactionWithAuthor(message, route, contextKey);
+    if (canNotify) {
+      emitReactionWithAuthor(message, route, contextKey);
+    }
     if (action === "added") {
       emitReactionCommand({
         route,
@@ -865,6 +894,7 @@ async function handleDiscordReactionEvent(
         channelConfig,
         messageAuthorId,
         mode: reactionMode,
+        forceWhenAuthorUnknown: forceCommandWithoutAuthor,
       });
     }
   } catch (err) {

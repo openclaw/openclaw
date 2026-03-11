@@ -1209,6 +1209,43 @@ describe("discord DM reaction handling", () => {
     expect(text).not.toContain("Reaction command:");
   });
 
+  it("emits triage command even when own-mode message fetch fails", async () => {
+    enqueueSystemEventSpy.mockClear();
+    resolveAgentRouteMock.mockClear();
+
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      emojiName: "❌",
+      userId: "123",
+      messageId: "msg-own-fetch-fail",
+      guild: { name: "Test Guild" },
+      messageFetch: vi.fn(async () => {
+        throw new Error("fetch failed");
+      }),
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "own",
+            users: ["123"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
+
+    const commandCall = enqueueSystemEventSpy.mock.calls.find(([text]) =>
+      String(text).includes("Reaction command: reject (❌)"),
+    );
+    expect(commandCall).toBeDefined();
+  });
+
   it("adds a stable dedupe key to triage command intents", async () => {
     enqueueSystemEventSpy.mockClear();
     resolveAgentRouteMock.mockClear();
