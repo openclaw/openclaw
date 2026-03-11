@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildGroupChatContext } from "./groups.js";
 import type { TemplateContext } from "../templating.js";
+import { buildGroupChatContext } from "./groups.js";
 
 describe("buildGroupChatContext", () => {
   const baseCtx: TemplateContext = {
