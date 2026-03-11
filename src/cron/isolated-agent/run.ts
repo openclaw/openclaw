@@ -198,6 +198,16 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+function resolveCronEmbeddedAgentLane(lane?: string) {
+  const trimmed = lane?.trim();
+  // Cron jobs already execute inside the cron command lane. Reusing that same
+  // lane for the nested embedded-agent run deadlocks: the outer cron task holds
+  // the lane while the inner run waits to reacquire it.
+  if (!trimmed || trimmed === "cron") {
+    return CommandLane.Nested;
+  }
+  return trimmed;
+}
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
