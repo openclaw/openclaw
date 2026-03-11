@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/feishu";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -136,21 +137,14 @@ function resolveUserPath(p: string): string {
   return p;
 }
 
-const DEFAULT_ACCOUNT_ID = "default";
-
-function normalizeAccountId(value: string | undefined): string {
-  const trimmed = value?.trim().toLowerCase();
-  return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
-}
-
 function bindingMatchesAccount(bindingAccountId: string | undefined, accountId: string): boolean {
-  const normalizedBindingAccountId = bindingAccountId?.trim().toLowerCase();
-  if (!normalizedBindingAccountId) {
+  const trimmedBindingAccountId = bindingAccountId?.trim();
+  if (!trimmedBindingAccountId) {
     // Legacy bindings without accountId only match the default account.
     return accountId === DEFAULT_ACCOUNT_ID;
   }
-  if (normalizedBindingAccountId === "*") {
+  if (trimmedBindingAccountId === "*") {
     return true;
   }
-  return normalizedBindingAccountId === accountId;
+  return normalizeAccountId(trimmedBindingAccountId) === accountId;
 }

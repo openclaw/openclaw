@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it, vi } from "vitest";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
@@ -112,5 +115,53 @@ describe("maybeCreateDynamicAgent account-aware bindings", () => {
         },
       },
     ]);
+  });
+
+  it("creates a new agent and account-scoped binding when both are missing", async () => {
+    const writeConfigFile = vi.fn().mockResolvedValue(undefined);
+    const runtime = createRuntime(writeConfigFile);
+    const cfg: OpenClawConfig = { agents: { list: [] }, bindings: [] };
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-dynamic-agent-test-"));
+    const workspaceTemplate = path.join(tempRoot, "workspace-{agentId}");
+    const agentDirTemplate = path.join(tempRoot, "agents/{agentId}/agent");
+    const agentId = "feishu-ou_user_3";
+    const workspace = path.join(tempRoot, `workspace-${agentId}`);
+    const agentDir = path.join(tempRoot, "agents", agentId, "agent");
+
+    try {
+      const result = await maybeCreateDynamicAgent({
+        cfg,
+        runtime,
+        senderOpenId: "ou_user_3",
+        accountId: "  Router/Prod  ",
+        dynamicCfg: {
+          enabled: true,
+          workspaceTemplate,
+          agentDirTemplate,
+        },
+        log: () => {},
+      });
+
+      expect(result.created).toBe(true);
+      expect(result.agentId).toBe(agentId);
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(result.updatedCfg.agents?.list).toContainEqual({
+        id: agentId,
+        workspace,
+        agentDir,
+      });
+      expect(result.updatedCfg.bindings).toContainEqual({
+        agentId,
+        match: {
+          channel: "feishu",
+          accountId: "router-prod",
+          peer: { kind: "direct", id: "ou_user_3" },
+        },
+      });
+      await expect(fs.access(workspace)).resolves.toBeUndefined();
+      await expect(fs.access(agentDir)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
