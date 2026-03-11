@@ -227,6 +227,8 @@ class OpenClawGateway:
                                             class MockStatus:
                                                 async def edit_text(self, *a, **k): return True
                                             return MockStatus()
+                                        async def answer(self, text, *args, **kwargs):
+                                            logger.info("Polling Result (Answer)", result=text)
 
                                     mock_msg = MockMessage(task.get('prompt'), self.admin_id, self.bot)
                                     asyncio.create_task(self.handle_prompt(mock_msg))
