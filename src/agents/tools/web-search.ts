@@ -1608,6 +1608,7 @@ async function runMinimaxSearch(params: {
 }> {
   const endpoint = new URL(MINIMAX_SEARCH_PATH, resolveMinimaxApiHost());
   endpoint.searchParams.set("q", params.query);
+  endpoint.searchParams.set("count", String(params.count));
 
   return withTrustedWebSearchEndpoint(
     {
