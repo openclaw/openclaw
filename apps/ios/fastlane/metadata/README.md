@@ -6,7 +6,7 @@ This directory is used by `fastlane deliver` for App Store Connect text metadata
 
 ```bash
 cd apps/ios
-ASC_APP_ID=6760218713 \
+ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID \
 DELIVER_METADATA=1 fastlane ios metadata
 ```
 
