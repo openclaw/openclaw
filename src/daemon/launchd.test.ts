@@ -536,30 +536,31 @@ describe("waitForPidExitWithEscalation", () => {
   });
 
   it("does not send SIGKILL when process exits at the graceful deadline", async () => {
-    // Simulate process exiting during the last sleep before the deadline.
-    // The final isProcessAlive guard before SIGKILL must prevent sending SIGKILL.
-    let callCount = 0;
+    // The process must survive all ~75 phase-1 polls so the graceful loop exits
+    // on the deadline. Only the first phase-2 probe (the pre-SIGKILL guard)
+    // should see ESRCH. Using fake Date.now() to detect the phase boundary
+    // avoids hardcoding the poll count.
+    vi.useFakeTimers();
+    const gracefulDeadline = Date.now() + 15_000; // mirrors RESTART_GRACEFUL_WAIT_MS
     const killSpy = vi.spyOn(process, "kill").mockImplementation((_, signal) => {
       if (signal === 0) {
-        callCount++;
-        if (callCount >= 2) {
-          // Gone before SIGKILL is attempted.
+        if (Date.now() >= gracefulDeadline) {
+          // Phase 2 guard: process exited just as deadline hit — prevent SIGKILL.
           const err = new Error("no such process") as NodeJS.ErrnoException;
           err.code = "ESRCH";
           throw err;
         }
-        return true;
+        return true; // Phase 1: alive throughout the graceful window.
       }
       return true;
     });
 
-    vi.useFakeTimers();
     try {
       const waitPromise = waitForPidExitWithEscalation(7777);
-      // Advance past the graceful window so the loop exits.
+      // Advance past the full graceful window so the loop exits and the
+      // pre-SIGKILL guard fires.
       await vi.advanceTimersByTimeAsync(15_200);
       await waitPromise;
-      // SIGKILL must not have been sent because the final guard detected exit.
       expect(killSpy).not.toHaveBeenCalledWith(7777, "SIGKILL");
     } finally {
       vi.useRealTimers();
