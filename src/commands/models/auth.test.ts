@@ -235,8 +235,8 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
     });
     // Verify clearing happens before login attempt
-    const clearOrder = mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0]!;
-    const loginOrder = mocks.loginOpenAICodexOAuth.mock.invocationCallOrder[0]!;
+    const clearOrder = mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0];
+    const loginOrder = mocks.loginOpenAICodexOAuth.mock.invocationCallOrder[0];
     expect(clearOrder).toBeLessThan(loginOrder);
   });
 

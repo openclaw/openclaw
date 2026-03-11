@@ -92,6 +92,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: normalize abort-wrapped `429 RESOURCE_EXHAUSTED` provider failures before abort short-circuiting so wrapped Google/Vertex rate limits continue across configured fallback models, including the embedded runner prompt-error path. (#39820) Thanks @lupuletic.
 - Mattermost/thread routing: non-inbound reply paths (TUI/WebUI turns, tool-call callbacks, subagent responses) now correctly route to the originating Mattermost thread when `replyToMode: "all"` is active; also prevents stale `origin.threadId` metadata from resurrecting cleared thread routes. (#44283) thanks @teconomix
 - Gateway/websocket pairing bypass for disabled auth: skip device-pairing enforcement when `gateway.auth.mode=none` so Control UI connections behind reverse proxies no longer get stuck on `pairing required` (code 1008) despite auth being explicitly disabled. (#42931)
+- Auth/login lockout recovery: clear stale `auth_permanent` and `billing` disabled state for all profiles matching the target provider when `openclaw models auth login` is invoked, so users locked out by expired or revoked OAuth tokens can recover by re-authenticating instead of waiting for the cooldown timer to expire. (#43057)
 
 ## 2026.3.12
 
@@ -765,7 +766,6 @@ Docs: https://docs.openclaw.ai
 - Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
 - Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
 - Voice-call/OpenAI TTS config parity: add missing `speed`, `instructions`, and `baseUrl` fields to the OpenAI TTS config schema and gate `instructions` to supported models so voice-call overrides validate and route cleanly through core TTS. (#39226) Thanks @ademczuk.
-- Auth/login lockout recovery: clear stale `auth_permanent` and `billing` disabled state for all profiles matching the target provider when `openclaw models auth login` is invoked, so users locked out by expired or revoked OAuth tokens can recover by re-authenticating instead of waiting for the cooldown timer to expire. (#43057)
 
 ## 2026.3.2
 
