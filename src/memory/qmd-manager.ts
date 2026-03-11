@@ -2100,8 +2100,24 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): string[] {
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
-      return ["query", normalizedQuery, "--json", "-n", String(maxResults), "--min-score", String(minScore ?? 0)];
+      return [
+        "query",
+        normalizedQuery,
+        "--json",
+        "-n",
+        String(maxResults),
+        "--min-score",
+        String(minScore ?? 0),
+      ];
     }
-    return [command, normalizedQuery, "--json", "-n", String(maxResults), "--min-score", String(minScore ?? 0)];
+    return [
+      command,
+      normalizedQuery,
+      "--json",
+      "-n",
+      String(maxResults),
+      "--min-score",
+      String(minScore ?? 0),
+    ];
   }
 }
