@@ -209,6 +209,38 @@ describe("restartScheduledTask", () => {
     expect(taskQueryCount).toBe(terminalPolls + 1);
   });
 
+  it("throws when the task does not stop within the maximum wait time", async () => {
+    let taskQueryCount = 0;
+
+    execSchtasksMock.mockImplementation(async (argv: string[]) => {
+      if (argv.length === 1 && argv[0] === "/Query") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (argv[0] === "/End") {
+        return { code: 0, stdout: "SUCCESS", stderr: "" };
+      }
+      if (argv[0] === "/Query" && argv.includes("/TN")) {
+        taskQueryCount += 1;
+        return {
+          code: 0,
+          stdout: renderTaskQuery({ status: "Running", lastRunResult: "0x41301" }),
+          stderr: "",
+        };
+      }
+      throw new Error(`Unexpected schtasks call: ${argv.join(" ")}`);
+    });
+
+    const restart = restartScheduledTask({
+      env: { USERNAME: "tester" },
+      stdout: new PassThrough(),
+    });
+    const rejection = expect(restart).rejects.toThrow(/did not stop within/i);
+
+    await vi.runAllTimersAsync();
+    await rejection;
+    expect(taskQueryCount).toBe(41);
+  });
+
   it("still starts the task immediately when /End reports it was not running", async () => {
     const calls: string[][] = [];
 
