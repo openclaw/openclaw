@@ -121,8 +121,10 @@ describe("runCapability proxy fetch passthrough", () => {
   it("does not pass fetchFn when no proxy env vars are set", async () => {
     vi.stubEnv("HTTPS_PROXY", "");
     vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("ALL_PROXY", "");
     vi.stubEnv("https_proxy", "");
     vi.stubEnv("http_proxy", "");
+    vi.stubEnv("all_proxy", "");
 
     const seenFetchFn = await runAudioCapabilityWithFetchCapture({
       fixturePrefix: "openclaw-audio-no-proxy",

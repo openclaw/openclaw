@@ -482,7 +482,7 @@ export async function runProviderEntry(params: {
 
   // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
   // so provider HTTP calls are routed through the proxy when configured.
-  const fetchFn = resolveProxyFetchFromEnv();
+  const fetchFn = resolveProxyFetchFromEnv()?.fetch;
 
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
