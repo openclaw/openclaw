@@ -26,6 +26,15 @@ export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 export const INTER_SESSION_CHANNEL = "inter_session" as const;
 export type InterSessionChannel = typeof INTER_SESSION_CHANNEL;
 
+/**
+ * Channel IDs that are reserved for internal OpenClaw routing.
+ * No plugin may register a channel with these IDs — doing so would shadow
+ * a sentinel value and silently break cross-session message delivery.
+ * Checked in both plugin install (validatePluginId) and runtime channel
+ * registration (registerChannel) to cover all registration paths.
+ */
+export const RESERVED_CHANNEL_IDS = new Set([INTER_SESSION_CHANNEL, INTERNAL_MESSAGE_CHANNEL]);
+
 export function isInterSessionChannel(raw?: string | null): boolean {
   // Guard against collision with real deliverable plugin channels: a plugin
   // could theoretically register a channel named "inter_session", which must
