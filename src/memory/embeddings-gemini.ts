@@ -5,6 +5,7 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
@@ -222,7 +223,7 @@ export async function createGeminiEmbeddingProvider(
       apiKeys: client.apiKeys,
       execute: (apiKey) => fetchWithGeminiAuth(apiKey, embedUrl, body),
     });
-    return payload.embedding?.values ?? [];
+    return sanitizeAndNormalizeEmbedding(payload.embedding?.values ?? []);
   };
 
   const embedBatch = async (texts: string[]): Promise<number[][]> => {
@@ -244,7 +245,7 @@ export async function createGeminiEmbeddingProvider(
       execute: (apiKey) => fetchWithGeminiAuth(apiKey, batchUrl, batchBody),
     });
     const embeddings = Array.isArray(payload.embeddings) ? payload.embeddings : [];
-    return texts.map((_, index) => embeddings[index]?.values ?? []);
+    return texts.map((_, index) => sanitizeAndNormalizeEmbedding(embeddings[index]?.values ?? []));
   };
 
   return {
