@@ -461,6 +461,7 @@ export async function runOnboardingWizard(
       prompter,
       allowKeep: true,
       ignoreAllowlist: true,
+      includeSglang: true,
       includeVllm: true,
       preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
     });

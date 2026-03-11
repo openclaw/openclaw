@@ -44,7 +44,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "sglang",
     label: "SGLang",
-    hint: "Local/self-hosted OpenAI-compatible",
+    hint: "self-hosted server",
     choices: ["sglang"],
   },
   {
