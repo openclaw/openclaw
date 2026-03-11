@@ -72,7 +72,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
     return { config, seededOrigins: null, bind };
   }
 
-  const port = resolveGatewayPortWithDefault(config.gateway?.port, opts?.defaultPort);
+  const port = resolveGatewayPortWithDefault(opts?.defaultPort, config.gateway?.port);
   const seededOrigins = buildDefaultControlUiAllowedOrigins({
     port,
     bind,
