@@ -1,5 +1,10 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { authorizeConfigWrite } from "../../channels/plugins/config-writes.js";
+import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveExplicitConfigWriteTarget,
+} from "../../channels/plugins/config-writes.js";
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
@@ -28,7 +33,6 @@ import { resolveSignalAccount } from "../../signal/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -232,12 +236,22 @@ function resolveAccountTarget(
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
   if (isBlockedObjectKey(normalizedAccountId)) {
-    return { target: channel, pathPrefix: `channels.${channelId}`, accountId: DEFAULT_ACCOUNT_ID };
+    return {
+      target: channel,
+      pathPrefix: `channels.${channelId}`,
+      accountId: DEFAULT_ACCOUNT_ID,
+      writeTarget: resolveExplicitConfigWriteTarget({ channelId }),
+    };
   }
   const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
   const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
   if (!useAccount) {
-    return { target: channel, pathPrefix: `channels.${channelId}`, accountId: normalizedAccountId };
+    return {
+      target: channel,
+      pathPrefix: `channels.${channelId}`,
+      accountId: normalizedAccountId,
+      writeTarget: resolveExplicitConfigWriteTarget({ channelId }),
+    };
   }
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
   const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
@@ -251,6 +265,10 @@ function resolveAccountTarget(
     target: account,
     pathPrefix: `channels.${channelId}.accounts.${normalizedAccountId}`,
     accountId: normalizedAccountId,
+    writeTarget: resolveExplicitConfigWriteTarget({
+      channelId,
+      accountId: normalizedAccountId,
+    }),
   };
 }
 
@@ -586,28 +604,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const shouldTouchStore = parsed.target !== "config" && listPairingChannels().includes(channelId);
 
   if (shouldUpdateConfig) {
-    const writeAuth = authorizeConfigWrite({
-      cfg: params.cfg,
-      origin: { channelId, accountId: params.ctx.AccountId },
-      targets: [{ channelId, accountId }],
-      allowBypass:
-        isInternalMessageChannel(params.command.channel) &&
-        params.ctx.GatewayClientScopes?.includes("operator.admin") === true,
-    });
-    if (!writeAuth.allowed) {
-      const blocked = writeAuth.blockedScope?.scope;
-      const hint =
-        blocked?.channelId && blocked.accountId
-          ? `channels.${blocked.channelId}.accounts.${blocked.accountId}.configWrites=true`
-          : `channels.${blocked?.channelId ?? channelId}.configWrites=true`;
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ Config writes are disabled for ${blocked?.channelId ?? channelId}. Set ${hint} to enable.`,
-        },
-      };
-    }
-
     const allowlistPath = resolveChannelAllowFromPaths(channelId, scope);
     if (!allowlistPath) {
       return {
@@ -630,7 +626,26 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       target,
       pathPrefix,
       accountId: normalizedAccountId,
+      writeTarget,
     } = resolveAccountTarget(parsedConfig, channelId, accountId);
+    const writeAuth = authorizeConfigWrite({
+      cfg: params.cfg,
+      origin: { channelId, accountId: params.ctx.AccountId },
+      target: writeTarget,
+      allowBypass: canBypassConfigWritePolicy({
+        channel: params.command.channel,
+        gatewayClientScopes: params.ctx.GatewayClientScopes,
+      }),
+    });
+    if (!writeAuth.allowed) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: formatConfigWriteDeniedMessage({ result: writeAuth, fallbackChannelId: channelId }),
+        },
+      };
+    }
+
     const existing: string[] = [];
     const existingPaths =
       scope === "dm" && (channelId === "slack" || channelId === "discord")
