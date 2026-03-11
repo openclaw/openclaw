@@ -184,4 +184,45 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("backfills auth profile provider from profile id when omitted", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {},
+      },
+      auth: {
+        profiles: {
+          "qwen-portal:default": {
+            mode: "oauth",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.auth?.profiles?.["qwen-portal:default"]?.provider).toBe("qwen-portal");
+    }
+  });
+
+  it("preserves explicit auth profile providers over the profile id prefix", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {},
+      },
+      auth: {
+        profiles: {
+          "google:custom": {
+            provider: "anthropic",
+            mode: "api_key",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.auth?.profiles?.["google:custom"]?.provider).toBe("anthropic");
+    }
+  });
 });
