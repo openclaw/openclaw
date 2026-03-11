@@ -18,10 +18,25 @@ const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  // Preserve whitespace inside fenced code blocks (```lang ... ```)
+  // to avoid breaking YAML, code examples, and other indentation-sensitive content.
+  const codeBlockRegex = /(```[\s\S]*?```)/g;
+  const parts = text.split(codeBlockRegex);
+  
+  const normalized = parts.map((part, index) => {
+    // Even indices are outside code blocks, odd indices are inside code blocks
+    if (index % 2 === 1) {
+      // Inside code block - preserve whitespace exactly
+      return part;
+    }
+    // Outside code block - normalize whitespace
+    return part
+      .replace(/[ \t]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .trim();
+  });
+  
+  return normalized.join("").trim();
 }
 
 type StripInlineDirectiveTagsResult = {
