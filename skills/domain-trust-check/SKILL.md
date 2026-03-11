@@ -9,7 +9,6 @@ metadata:
         "emoji": "🛡️",
         "requires": { "env": ["OUTTAKE_API_KEY"], "bins": ["curl"] },
         "primaryEnv": "OUTTAKE_API_KEY",
-        "homepage": "https://outtake.ai",
       },
   }
 ---
