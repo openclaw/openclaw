@@ -85,24 +85,29 @@ export async function resolveTeamGroupId(token: string, conversationTeamId: stri
   const cached = teamIdToGroupIdCache.get(conversationTeamId);
   if (cached) return cached;
 
-  // List all teams and match by internalId
+  // List all teams (paginated) and match by internalId
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team')`;
-  const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const groups = await fetchGraphJson<GraphResponse<GraphGroup>>({ token, path });
-  for (const group of groups.value ?? []) {
-    if (!group.id) continue;
-    try {
-      const teamPath = `/teams/${encodeURIComponent(group.id)}?$select=id,internalId`;
-      const teamInfo = await fetchGraphJson<{ id?: string; internalId?: string }>({ token, path: teamPath });
-      if (teamInfo.internalId) {
-        teamIdToGroupIdCache.set(teamInfo.internalId, group.id);
-        if (teamInfo.internalId === conversationTeamId) {
-          return group.id;
+  let nextPath: string | null = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
+  while (nextPath) {
+    const page = await fetchGraphJson<GraphResponse<GraphGroup> & { "@odata.nextLink"?: string }>({ token, path: nextPath });
+    for (const group of page.value ?? []) {
+      if (!group.id) continue;
+      try {
+        const teamPath = `/teams/${encodeURIComponent(group.id)}?$select=id,internalId`;
+        const teamInfo = await fetchGraphJson<{ id?: string; internalId?: string }>({ token, path: teamPath });
+        if (teamInfo.internalId) {
+          teamIdToGroupIdCache.set(teamInfo.internalId, group.id);
+          if (teamInfo.internalId === conversationTeamId) {
+            return group.id;
+          }
         }
+      } catch {
+        // Skip teams we can't access
       }
-    } catch {
-      // Skip teams we can't access
     }
+    nextPath = page["@odata.nextLink"]
+      ? page["@odata.nextLink"].replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, "")
+      : null;
   }
   return null;
 }
