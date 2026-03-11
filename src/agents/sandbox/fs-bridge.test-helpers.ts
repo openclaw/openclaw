@@ -54,6 +54,10 @@ export function findCallsByScriptFragment(fragment: string) {
   );
 }
 
+export function findCallByDockerArg(position: number, value: string) {
+  return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerArg(args, position) === value);
+}
+
 export function dockerExecResult(stdout: string) {
   return {
     stdout: Buffer.from(stdout),
@@ -142,11 +146,13 @@ export async function expectMkdirpAllowsExistingDirectory(params?: {
 
     await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
 
-    const mkdirCall = findCallByScriptFragment('mkdir -p -- "$2"');
+    const mkdirCall = findCallByDockerArg(1, "mkdirp");
     expect(mkdirCall).toBeDefined();
-    const mkdirParent = mkdirCall ? getDockerArg(mkdirCall[0], 1) : "";
-    const mkdirBase = mkdirCall ? getDockerArg(mkdirCall[0], 2) : "";
-    expect(mkdirParent).toBe("/workspace/memory");
+    const mkdirRoot = mkdirCall ? getDockerArg(mkdirCall[0], 2) : "";
+    const mkdirParent = mkdirCall ? getDockerArg(mkdirCall[0], 3) : "";
+    const mkdirBase = mkdirCall ? getDockerArg(mkdirCall[0], 4) : "";
+    expect(mkdirRoot).toBe("/workspace");
+    expect(mkdirParent).toBe("memory");
     expect(mkdirBase).toBe("kemik");
   });
 }

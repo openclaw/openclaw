@@ -4,8 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
-  findCallByScriptFragment,
-  findCallsByScriptFragment,
+  findCallByDockerArg,
   getDockerArg,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -69,31 +68,28 @@ describe("sandbox fs bridge anchored ops", () => {
 
   const anchoredCases = [
     {
-      name: "mkdirp anchors parent + basename",
+      name: "mkdirp pins mount root + relative parent + basename",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.mkdirp({ filePath: "nested/leaf" }),
-      scriptFragment: 'mkdir -p -- "$2"',
-      expectedArgs: ["/workspace/nested", "leaf"],
-      forbiddenArgs: ["/workspace/nested/leaf"],
-      canonicalProbe: "/workspace/nested",
+      op: "mkdirp",
+      expectedArgs: ["/workspace", "nested", "leaf"],
+      forbiddenArgs: ["/workspace/nested/leaf", "/workspace/nested"],
     },
     {
-      name: "remove anchors parent + basename",
+      name: "remove pins mount root + relative parent + basename",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.remove({ filePath: "nested/file.txt" }),
-      scriptFragment: 'rm -f -- "$2"',
-      expectedArgs: ["/workspace/nested", "file.txt"],
-      forbiddenArgs: ["/workspace/nested/file.txt"],
-      canonicalProbe: "/workspace/nested",
+      op: "remove",
+      expectedArgs: ["/workspace", "nested", "file.txt", "0", "1"],
+      forbiddenArgs: ["/workspace/nested/file.txt", "/workspace/nested"],
     },
     {
-      name: "rename anchors both parents + basenames",
+      name: "rename pins both parents + basenames",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.rename({ from: "from.txt", to: "nested/to.txt" }),
-      scriptFragment: 'mv -- "$3" "$2/$4"',
-      expectedArgs: ["/workspace", "/workspace/nested", "from.txt", "to.txt"],
-      forbiddenArgs: ["/workspace/from.txt", "/workspace/nested/to.txt"],
-      canonicalProbe: "/workspace/nested",
+      op: "rename",
+      expectedArgs: ["/workspace", "", "from.txt", "/workspace", "nested", "to.txt"],
+      forbiddenArgs: ["/workspace/from.txt", "/workspace/nested/to.txt", "/workspace/nested"],
     },
   ] as const;
 
@@ -102,19 +98,14 @@ describe("sandbox fs bridge anchored ops", () => {
 
     await testCase.invoke(bridge);
 
-    const opCall = findCallByScriptFragment(testCase.scriptFragment);
+    const opCall = findCallByDockerArg(1, testCase.op);
     expect(opCall).toBeDefined();
     const args = opCall?.[0] ?? [];
     testCase.expectedArgs.forEach((value, index) => {
-      expect(getDockerArg(args, index + 1)).toBe(value);
+      expect(getDockerArg(args, index + 2)).toBe(value);
     });
     testCase.forbiddenArgs.forEach((value) => {
       expect(args).not.toContain(value);
     });
-
-    const canonicalCalls = findCallsByScriptFragment('readlink -f -- "$cursor"');
-    expect(
-      canonicalCalls.some(([callArgs]) => getDockerArg(callArgs, 1) === testCase.canonicalProbe),
-    ).toBe(true);
   });
 });
