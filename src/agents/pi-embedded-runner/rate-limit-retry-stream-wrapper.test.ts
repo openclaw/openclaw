@@ -4,7 +4,7 @@ import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock sleepWithAbort so tests don't wait real delays.
-const sleepWithAbortMock = vi.fn(async () => {});
+const sleepWithAbortMock = vi.fn(async (_ms: number, _signal?: AbortSignal) => {});
 vi.mock("../../infra/backoff.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/backoff.js")>();
   return {
