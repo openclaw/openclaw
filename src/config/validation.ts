@@ -16,6 +16,7 @@ import {
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
@@ -32,12 +33,489 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
+type IssueScore = {
+  rootTypeMismatch: number;
+  discriminatorMismatch: number;
+  unknown: number;
+  otherHard: number;
+  missingDiscriminator: number;
+  total: number;
+};
+
+type UnknownKeyIssue = {
+  path: string;
+  pathSegments: Array<string | number>;
+  keys: string[];
+};
+
+const MAX_UNKNOWN_KEY_STRIP_PASSES = 3;
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   return value as UnknownIssueRecord;
+}
+
+function toIssuePathSegments(issue: unknown): Array<string | number> {
+  const record = toIssueRecord(issue);
+  if (!Array.isArray(record?.path)) {
+    return [];
+  }
+  return record.path.filter((segment): segment is string | number => {
+    const segmentType = typeof segment;
+    return segmentType === "string" || segmentType === "number";
+  });
+}
+
+function toIssuePathLabel(issue: unknown): string {
+  return toIssuePathSegments(issue).join(".");
+}
+
+function pathStartsWith(path: Array<string | number>, prefix: Array<string | number>): boolean {
+  if (prefix.length > path.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (path[i] !== prefix[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function combineIssuePathSegments(
+  basePath: Array<string | number>,
+  issuePath: Array<string | number>,
+): Array<string | number> {
+  if (basePath.length === 0) {
+    return issuePath;
+  }
+  if (issuePath.length === 0) {
+    return basePath;
+  }
+  if (pathStartsWith(issuePath, basePath)) {
+    return issuePath;
+  }
+  return [...basePath, ...issuePath];
+}
+
+function toUnknownKeyIssue(
+  issue: unknown,
+  pathSegments: Array<string | number> = toIssuePathSegments(issue),
+): UnknownKeyIssue | null {
+  const record = toIssueRecord(issue);
+  if (record?.code !== "unrecognized_keys") {
+    return null;
+  }
+  if (!Array.isArray(record.keys)) {
+    return null;
+  }
+  const keys = record.keys.filter((entry): entry is string => typeof entry === "string");
+  if (keys.length === 0) {
+    return null;
+  }
+  return {
+    path: pathSegments.join("."),
+    pathSegments,
+    keys,
+  };
+}
+
+function collectUnknownKeyIssues(
+  issues: ReadonlyArray<unknown>,
+  rootRaw: unknown,
+): UnknownKeyIssue[] {
+  const collected: UnknownKeyIssue[] = [];
+  for (const issue of issues) {
+    collectUnknownKeyIssuesFromIssue(issue, collected, [], rootRaw);
+  }
+  return collected;
+}
+
+function collectUnknownKeyIssuesFromIssue(
+  issue: unknown,
+  collected: UnknownKeyIssue[],
+  basePathSegments: Array<string | number>,
+  rootRaw: unknown,
+): void {
+  const effectivePathSegments = combineIssuePathSegments(
+    basePathSegments,
+    toIssuePathSegments(issue),
+  );
+  const unknownKeyIssue = toUnknownKeyIssue(issue, effectivePathSegments);
+  if (unknownKeyIssue) {
+    collected.push(unknownKeyIssue);
+  }
+
+  const record = toIssueRecord(issue);
+  if (!record || record.code !== "invalid_union") {
+    return;
+  }
+
+  const nested = record.errors;
+  if (!Array.isArray(nested) || nested.length === 0) {
+    return;
+  }
+
+  // Evaluate only the most plausible union branch. Collecting unknown keys
+  // from every branch can strip fields that are valid in the intended branch
+  // (for example bindings[].acp when route/acp union branches both fail).
+  const scopeValue = resolveIssuePathValue(rootRaw, effectivePathSegments);
+  const selectedBranch = selectBestUnionIssueBranch(nested, scopeValue);
+  if (!selectedBranch) {
+    return;
+  }
+  for (const nestedIssue of selectedBranch) {
+    collectUnknownKeyIssuesFromIssue(nestedIssue, collected, effectivePathSegments, rootRaw);
+  }
+}
+
+function addIssueScore(left: IssueScore, right: IssueScore): IssueScore {
+  return {
+    rootTypeMismatch: left.rootTypeMismatch + right.rootTypeMismatch,
+    discriminatorMismatch: left.discriminatorMismatch + right.discriminatorMismatch,
+    unknown: left.unknown + right.unknown,
+    otherHard: left.otherHard + right.otherHard,
+    missingDiscriminator: left.missingDiscriminator + right.missingDiscriminator,
+    total: left.total + right.total,
+  };
+}
+
+function compareIssueScore(a: IssueScore, b: IssueScore): number {
+  if (a.rootTypeMismatch !== b.rootTypeMismatch) {
+    return a.rootTypeMismatch - b.rootTypeMismatch;
+  }
+  // Prefer preserving fields that are known to some union branch, even when
+  // another branch's discriminator happens to match. That keeps mixed known
+  // union config fail-closed instead of stripping cross-branch payloads.
+  if (a.unknown !== b.unknown) {
+    return a.unknown - b.unknown;
+  }
+  if (a.discriminatorMismatch !== b.discriminatorMismatch) {
+    return a.discriminatorMismatch - b.discriminatorMismatch;
+  }
+  if (a.otherHard !== b.otherHard) {
+    return a.otherHard - b.otherHard;
+  }
+  if (a.missingDiscriminator !== b.missingDiscriminator) {
+    return a.missingDiscriminator - b.missingDiscriminator;
+  }
+  return a.total - b.total;
+}
+
+function resolveIssuePathValue(root: unknown, pathSegments: Array<string | number>): unknown {
+  let current: unknown = root;
+  for (const segment of pathSegments) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) {
+        return undefined;
+      }
+      current = current[segment];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function isLiteralTypeIssue(record: UnknownIssueRecord | null): boolean {
+  if (!record || record.code !== "invalid_value") {
+    return false;
+  }
+  if (!Array.isArray(record.path) || record.path.length === 0) {
+    return false;
+  }
+  if (record.path.at(-1) !== "type") {
+    return false;
+  }
+  const values = record.values;
+  return (
+    Array.isArray(values) && values.length > 0 && values.every((entry) => typeof entry === "string")
+  );
+}
+
+function classifyLiteralTypeIssue(
+  record: UnknownIssueRecord | null,
+  scopeValue: unknown,
+): "mismatch" | "missing" | "other" {
+  if (!isLiteralTypeIssue(record) || !isRecord(scopeValue)) {
+    return "other";
+  }
+  const rawType = scopeValue.type;
+  if (typeof rawType === "string") {
+    const values = record?.values;
+    if (Array.isArray(values) && !values.includes(rawType)) {
+      return "mismatch";
+    }
+    return "other";
+  }
+  if (rawType == null) {
+    return "missing";
+  }
+  return "other";
+}
+
+function scoreIssueForUnknownKeyStripping(issue: unknown, scopeValue: unknown): IssueScore {
+  const record = toIssueRecord(issue);
+  const code = typeof record?.code === "string" ? record.code : "";
+  if (code === "unrecognized_keys") {
+    return {
+      rootTypeMismatch: 0,
+      discriminatorMismatch: 0,
+      unknown: 1,
+      otherHard: 0,
+      missingDiscriminator: 0,
+      total: 1,
+    };
+  }
+  if (code === "invalid_type" && Array.isArray(record?.path) && record.path.length === 0) {
+    return {
+      rootTypeMismatch: 1,
+      discriminatorMismatch: 0,
+      unknown: 0,
+      otherHard: 0,
+      missingDiscriminator: 0,
+      total: 1,
+    };
+  }
+  const typeIssueKind = classifyLiteralTypeIssue(record, scopeValue);
+  if (typeIssueKind === "mismatch") {
+    return {
+      rootTypeMismatch: 0,
+      discriminatorMismatch: 1,
+      unknown: 0,
+      otherHard: 0,
+      missingDiscriminator: 0,
+      total: 1,
+    };
+  }
+  if (typeIssueKind === "missing") {
+    return {
+      rootTypeMismatch: 0,
+      discriminatorMismatch: 0,
+      unknown: 0,
+      otherHard: 0,
+      missingDiscriminator: 1,
+      total: 1,
+    };
+  }
+  if (code === "invalid_union") {
+    const nested = record?.errors;
+    if (!Array.isArray(nested) || nested.length === 0) {
+      return {
+        rootTypeMismatch: 0,
+        discriminatorMismatch: 0,
+        unknown: 0,
+        otherHard: 1,
+        missingDiscriminator: 0,
+        total: 1,
+      };
+    }
+    const nestedScopeValue = resolveIssuePathValue(scopeValue, toIssuePathSegments(issue));
+    const selectedBranch = selectBestUnionIssueBranch(nested, nestedScopeValue);
+    if (!selectedBranch) {
+      return {
+        rootTypeMismatch: 0,
+        discriminatorMismatch: 0,
+        unknown: 0,
+        otherHard: 1,
+        missingDiscriminator: 0,
+        total: 1,
+      };
+    }
+    return scoreIssueListForUnknownKeyStripping(selectedBranch, nestedScopeValue);
+  }
+  return {
+    rootTypeMismatch: 0,
+    discriminatorMismatch: 0,
+    unknown: 0,
+    otherHard: 1,
+    missingDiscriminator: 0,
+    total: 1,
+  };
+}
+
+function scoreIssueListForUnknownKeyStripping(
+  issues: ReadonlyArray<unknown>,
+  scopeValue: unknown,
+): IssueScore {
+  let score: IssueScore = {
+    rootTypeMismatch: 0,
+    discriminatorMismatch: 0,
+    unknown: 0,
+    otherHard: 0,
+    missingDiscriminator: 0,
+    total: 0,
+  };
+  for (const issue of issues) {
+    score = addIssueScore(score, scoreIssueForUnknownKeyStripping(issue, scopeValue));
+  }
+  return score;
+}
+
+function selectBestUnionIssueBranch(
+  nested: unknown[],
+  scopeValue: unknown,
+): ReadonlyArray<unknown> | null {
+  let bestBranch: ReadonlyArray<unknown> | null = null;
+  let bestScore: IssueScore | null = null;
+  for (const branch of nested) {
+    if (!Array.isArray(branch) || branch.length === 0) {
+      continue;
+    }
+    const branchScore = scoreIssueListForUnknownKeyStripping(branch, scopeValue);
+    if (!bestScore || compareIssueScore(branchScore, bestScore) < 0) {
+      bestScore = branchScore;
+      bestBranch = branch;
+    }
+  }
+  return bestBranch;
+}
+
+function resolveIssuePathObject(
+  root: unknown,
+  pathSegments: Array<string | number>,
+): Record<string, unknown> | null {
+  let current: unknown = root;
+  for (const segment of pathSegments) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) {
+        return null;
+      }
+      current = current[segment];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return null;
+    }
+    current = current[segment];
+  }
+  return isRecord(current) ? current : null;
+}
+
+function formatUnknownKeysWarning(issue: UnknownKeyIssue): ConfigValidationIssue {
+  const keyList = issue.keys.map((key) => `"${sanitizeTerminalText(key)}"`).join(", ");
+  return {
+    path: issue.path,
+    message:
+      issue.keys.length === 1
+        ? `unknown config key ignored: ${keyList}`
+        : `unknown config keys ignored: ${keyList}`,
+  };
+}
+
+function stripUnknownKeysWithWarnings(raw: unknown): {
+  sanitizedRaw: unknown;
+  warnings: ConfigValidationIssue[];
+} {
+  let sanitizedRaw = raw;
+  let cloned = false;
+  const warnings: ConfigValidationIssue[] = [];
+  const warningKeys = new Set<string>();
+
+  for (let pass = 0; pass < MAX_UNKNOWN_KEY_STRIP_PASSES; pass += 1) {
+    const parsed = OpenClawSchema.safeParse(sanitizedRaw);
+    if (parsed.success) {
+      if (!cloned) {
+        return { sanitizedRaw: raw, warnings: [] };
+      }
+      return { sanitizedRaw, warnings };
+    }
+
+    const unknownKeyIssues = collectUnknownKeyIssues(parsed.error.issues, sanitizedRaw);
+    if (unknownKeyIssues.length === 0) {
+      if (!cloned) {
+        return { sanitizedRaw: raw, warnings: [] };
+      }
+      return { sanitizedRaw, warnings };
+    }
+
+    if (!cloned) {
+      sanitizedRaw = structuredClone(raw);
+      cloned = true;
+    }
+
+    let removedInPass = false;
+    for (const issue of unknownKeyIssues) {
+      const target = resolveIssuePathObject(sanitizedRaw, issue.pathSegments);
+      if (!target) {
+        continue;
+      }
+      let removedFromIssue = false;
+      for (const key of issue.keys) {
+        if (!Object.prototype.hasOwnProperty.call(target, key)) {
+          continue;
+        }
+        delete target[key];
+        removedFromIssue = true;
+      }
+      if (!removedFromIssue) {
+        continue;
+      }
+      removedInPass = true;
+      const warning = formatUnknownKeysWarning(issue);
+      const warningKey = `${warning.path}\u0000${warning.message}`;
+      if (warningKeys.has(warningKey)) {
+        continue;
+      }
+      warningKeys.add(warningKey);
+      warnings.push(warning);
+    }
+
+    if (!removedInPass) {
+      // If no reported key could be removed, fail closed with the current payload.
+      break;
+    }
+  }
+
+  return { sanitizedRaw, warnings };
+}
+
+function setOwnConfigProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+function mergeValidatedConfigWithUnknownRawKeys(validated: unknown, raw: unknown): unknown {
+  if (Array.isArray(validated)) {
+    if (!Array.isArray(raw)) {
+      return validated;
+    }
+    return validated.map((entry, index) =>
+      mergeValidatedConfigWithUnknownRawKeys(entry, raw[index]),
+    );
+  }
+
+  if (isRecord(validated)) {
+    if (!isRecord(raw)) {
+      return validated;
+    }
+    const merged: Record<string, unknown> = {};
+    for (const [key, rawValue] of Object.entries(raw)) {
+      if (Object.prototype.hasOwnProperty.call(validated, key)) {
+        continue;
+      }
+      setOwnConfigProperty(merged, key, rawValue);
+    }
+    for (const [key, validatedValue] of Object.entries(validated)) {
+      setOwnConfigProperty(
+        merged,
+        key,
+        mergeValidatedConfigWithUnknownRawKeys(validatedValue, raw[key]),
+      );
+    }
+    return merged;
+  }
+
+  return validated;
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -116,14 +594,7 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const path = Array.isArray(record?.path)
-    ? record.path
-        .filter((segment): segment is string | number => {
-          const segmentType = typeof segment;
-          return segmentType === "string" || segmentType === "number";
-        })
-        .join(".")
-    : "";
+  const path = toIssuePathLabel(issue);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
@@ -222,6 +693,13 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function getLegacyValidationIssues(raw: unknown): ConfigValidationIssue[] {
+  return findLegacyConfigIssues(raw).map((iss) => ({
+    path: iss.path,
+    message: iss.message,
+  }));
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -229,14 +707,11 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const legacyIssues = getLegacyValidationIssues(raw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
-      issues: legacyIssues.map((iss) => ({
-        path: iss.path,
-        message: iss.message,
-      })),
+      issues: legacyIssues,
     };
   }
   const validated = OpenClawSchema.safeParse(raw);
@@ -298,27 +773,58 @@ type ValidateConfigWithPluginsResult =
     };
 
 export function validateConfigObjectWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+  return validateConfigObjectWithPluginsInternal(raw, { preserveUnknownKeys: false });
+}
+
+export function validateConfigObjectWithPluginsInternal(
+  raw: unknown,
+  opts: { preserveUnknownKeys: boolean },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    preserveUnknownKeys: opts.preserveUnknownKeys,
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(raw: unknown): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    preserveUnknownKeys: true,
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean },
+  opts: { applyDefaults: boolean; preserveUnknownKeys: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  // Must run on the original payload. If we strip unknown keys first, legacy
+  // keys that are outside OpenClawSchema can be deleted before fail-closed
+  // migration checks run.
+  const legacyIssues = getLegacyValidationIssues(raw);
+  if (legacyIssues.length > 0) {
+    return {
+      ok: false,
+      issues: legacyIssues,
+      warnings: [],
+    };
+  }
+
+  const { sanitizedRaw, warnings: unknownKeyWarnings } = stripUnknownKeysWithWarnings(raw);
+  const base = opts.applyDefaults
+    ? validateConfigObject(sanitizedRaw)
+    : validateConfigObjectRaw(sanitizedRaw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    return { ok: false, issues: base.issues, warnings: unknownKeyWarnings };
   }
 
   const config = base.config;
+  const configForReturn = opts.preserveUnknownKeys
+    ? (mergeValidatedConfigWithUnknownRawKeys(config, raw) as OpenClawConfig)
+    : config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...unknownKeyWarnings];
   const hasExplicitPluginsConfig =
-    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+    isRecord(sanitizedRaw) && Object.prototype.hasOwnProperty.call(sanitizedRaw, "plugins");
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
@@ -458,7 +964,7 @@ function validateConfigObjectWithPluginsBase(
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
     }
-    return { ok: true, config, warnings };
+    return { ok: true, config: configForReturn, warnings };
   }
 
   const { registry } = ensureRegistry();
@@ -600,5 +1106,5 @@ function validateConfigObjectWithPluginsBase(
     return { ok: false, issues, warnings };
   }
 
-  return { ok: true, config, warnings };
+  return { ok: true, config: configForReturn, warnings };
 }

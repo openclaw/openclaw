@@ -142,6 +142,66 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves unknown future keys when writing config updates", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { port: 18789 },
+          futureFeature: {
+            enabled: true,
+            nested: { level: 2 },
+          },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...next.gateway,
+        auth: { mode: "token" },
+      };
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        gateway?: { auth?: { mode?: string } };
+        futureFeature?: unknown;
+      };
+      expect(persisted.gateway?.auth?.mode).toBe("token");
+      expect(persisted.futureFeature).toEqual({
+        enabled: true,
+        nested: { level: 2 },
+      });
+    });
+  });
+
+  it("sanitizes unknown key names in write-time warnings", async () => {
+    await withSuiteHome(async (home) => {
+      const warn = vi.fn();
+      const { io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { port: 18789 },
+          "bad\u001b[31mkey": true,
+        },
+        logger: {
+          warn,
+          error: vi.fn(),
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...next.gateway,
+        auth: { mode: "token" },
+      };
+      await io.writeConfigFile(next);
+
+      const warnedText = warn.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+      expect(warnedText).not.toContain("\u001b");
+      expect(warnedText).toContain('"badkey"');
+    });
+  });
+
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
       const io = createConfigIO({

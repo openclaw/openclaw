@@ -96,6 +96,27 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
+describe("legacy migrate unknown key preservation", () => {
+  it("preserves unknown top-level keys when writing migrated config", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          enabled: true,
+        },
+      },
+      futureFeature: {
+        enabled: true,
+      },
+    });
+
+    expect(res.config).not.toBeNull();
+    expect(res.config?.messages?.tts?.auto).toBe("always");
+    expect((res.config as { futureFeature?: { enabled?: boolean } } | null)?.futureFeature).toEqual(
+      { enabled: true },
+    );
+  });
+});
+
 describe("legacy migrate heartbeat config", () => {
   it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
     const res = migrateLegacyConfig({
