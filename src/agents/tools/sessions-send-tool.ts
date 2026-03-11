@@ -248,7 +248,7 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
-        channel: INTERNAL_MESSAGE_CHANNEL,
+        channel: opts?.agentChannel ?? INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: agentMessageContext,
         inputProvenance: {
