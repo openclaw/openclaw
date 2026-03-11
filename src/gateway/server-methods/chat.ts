@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -11,6 +12,8 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { extensionForMime } from "../../media/mime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -82,6 +85,32 @@ type AbortedPartialSnapshot = {
   text: string;
   abortOrigin: AbortOrigin;
 };
+
+type MaterializedChatMedia = {
+  mediaDir: string;
+  mediaPaths: string[];
+  mediaTypes: string[];
+};
+
+async function materializeParsedChatImages(
+  images: ChatImageContent[],
+  runId: string,
+): Promise<MaterializedChatMedia | null> {
+  if (images.length === 0) {
+    return null;
+  }
+  const mediaDir = await fsp.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "chat-send-"));
+  const mediaPaths: string[] = [];
+  const mediaTypes: string[] = [];
+  for (const [index, image] of images.entries()) {
+    const ext = extensionForMime(image.mimeType) ?? ".bin";
+    const filePath = path.join(mediaDir, `${runId}-${index + 1}${ext}`);
+    await fsp.writeFile(filePath, Buffer.from(image.data, "base64"), { mode: 0o600 });
+    mediaPaths.push(filePath);
+    mediaTypes.push(image.mimeType);
+  }
+  return { mediaDir, mediaPaths, mediaTypes };
+}
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -955,6 +984,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    let materializedMedia: MaterializedChatMedia | null = null;
+    if (parsedImages.length > 0) {
+      try {
+        materializedMedia = await materializeParsedChatImages(parsedImages, p.idempotencyKey);
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+        return;
+      }
+    }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
@@ -1068,6 +1106,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
+        MediaDir: materializedMedia?.mediaDir,
+        MediaPath: materializedMedia?.mediaPaths[0],
+        MediaPaths: materializedMedia?.mediaPaths,
+        MediaType: materializedMedia?.mediaTypes[0],
+        MediaTypes: materializedMedia?.mediaTypes,
         CommandAuthorized: true,
         MessageSid: clientRunId,
         SenderId: clientInfo?.id,
