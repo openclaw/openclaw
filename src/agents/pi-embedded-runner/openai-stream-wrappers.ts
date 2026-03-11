@@ -120,15 +120,19 @@ function shouldStripResponsesStore(
 function shouldStripResponsesPromptCacheFields(model: {
   api?: unknown;
   baseUrl?: unknown;
-  compat?: { supportsPromptCacheKey?: boolean };
+  compat?: unknown;
 }): boolean {
   if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
     return false;
   }
-  if (model.compat?.supportsPromptCacheKey === true) {
+  const supportsPromptCacheKey =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>).supportsPromptCacheKey
+      : undefined;
+  if (supportsPromptCacheKey === true) {
     return false;
   }
-  if (model.compat?.supportsPromptCacheKey === false) {
+  if (supportsPromptCacheKey === false) {
     return true;
   }
   return !isDirectOpenAIBaseUrl(model.baseUrl);
