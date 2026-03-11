@@ -5,10 +5,10 @@
  * These tests use a real temporary filesystem directory so the migration code
  * path is exercised end-to-end without mocking file I/O.
  *
- * Focus: fix for #2914491523 — with readOnly:true, legacy migration must still
- * persist auth-profiles.json so that updateAuthProfileStoreWithLock's
- * ensureAuthStoreFile does not create an empty file that causes toRemove
- * profiles to go un-removed.
+ * Focus: fix for #2914491523 — legacy migration (auth.json → auth-profiles.json)
+ * is suppressed when readOnly:true.  The probe call that precedes
+ * updateAuthProfileStoreWithLock uses readOnly:false so migration still runs
+ * before ensureAuthStoreFile can create an empty placeholder.
  */
 
 import fs from "node:fs";
@@ -48,26 +48,23 @@ describe("loadAgentLocalAuthProfileStore – legacy migration with readOnly:true
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("migrates legacy auth.json to auth-profiles.json even when readOnly:true", () => {
+  it("does not write auth-profiles.json or delete auth.json when readOnly:true", () => {
     writeLegacyAuthJson(tmpDir, {
       anthropic: { type: "api_key", provider: "anthropic", key: "sk-test" },
     });
 
     const store = loadAgentLocalAuthProfileStore(tmpDir, { readOnly: true });
 
-    // Profiles should be present in the returned store
+    // Profiles should be present in the returned in-memory store
     expect(store.profiles["anthropic:default"]).toBeDefined();
     expect(store.profiles["anthropic:default"]?.type).toBe("api_key");
 
-    // auth-profiles.json must have been written (migration is unconditional)
+    // auth-profiles.json must NOT have been written (migration suppressed when readOnly:true)
     const migrated = readAuthProfilesJson(tmpDir);
-    expect(migrated).not.toBeNull();
-    expect((migrated as { profiles: Record<string, unknown> }).profiles).toMatchObject({
-      "anthropic:default": { type: "api_key", provider: "anthropic" },
-    });
+    expect(migrated).toBeNull();
 
-    // legacy auth.json must have been deleted after successful migration
-    expect(fs.existsSync(path.join(tmpDir, "auth.json"))).toBe(false);
+    // legacy auth.json must NOT have been deleted (readOnly suppresses all file writes)
+    expect(fs.existsSync(path.join(tmpDir, "auth.json"))).toBe(true);
   });
 
   it("returns in-memory profiles matching what was in auth.json (readOnly:true)", () => {
@@ -123,27 +120,29 @@ describe("loadAgentLocalAuthProfileStore – legacy migration with readOnly:true
     expect(fs.existsSync(path.join(tmpDir, "auth.json"))).toBe(false);
   });
 
-  it("ensures updateAuthProfileStoreWithLock sees migrated profiles, not empty store", async () => {
-    // This is the core regression test for #2914491523:
-    // Before the fix, the sequence was:
-    //   1. Probe (readOnly:true) reads legacy profiles into memory but does NOT persist
-    //   2. updateAuthProfileStoreWithLock calls ensureAuthStoreFile → creates empty auth-profiles.json
-    //   3. Write-enabled load inside the lock reads the empty file → returns {}
-    //   4. toRemove profiles were never deleted
+  it("ensures updateAuthProfileStoreWithLock sees migrated profiles, not empty store", () => {
+    // Regression test for #2914491523.
+    // The correct fix is to probe with readOnly:false so migration runs before
+    // updateAuthProfileStoreWithLock's ensureAuthStoreFile can create an empty placeholder.
     //
-    // After the fix, step 1 persists the migration, so step 3 reads the migrated profiles.
+    // This test validates the readOnly:true probe behaviour (no writes) and confirms
+    // that a subsequent readOnly:false load still migrates correctly from the
+    // untouched auth.json.
     writeLegacyAuthJson(tmpDir, {
       anthropic: { type: "api_key", provider: "anthropic", key: "sk-legacy" },
     });
 
-    // Simulate the probe (readOnly:true) — must create auth-profiles.json
+    // Simulate a readOnly:true probe — must NOT create auth-profiles.json
     loadAgentLocalAuthProfileStore(tmpDir, { readOnly: true });
 
-    // Simulate what ensureAuthStoreFile does (no-op when file already exists)
     const authProfilesPath = path.join(tmpDir, "auth-profiles.json");
-    expect(fs.existsSync(authProfilesPath)).toBe(true); // migration created it
+    // readOnly probe leaves the filesystem untouched
+    expect(fs.existsSync(authProfilesPath)).toBe(false);
+    // auth.json still present — not deleted by readOnly probe
+    expect(fs.existsSync(path.join(tmpDir, "auth.json"))).toBe(true);
 
     // Simulate the write-enabled load inside the lock (readOnly:false default)
+    // — it still sees auth.json and performs the migration
     const freshStore = loadAgentLocalAuthProfileStore(tmpDir, { readOnly: false });
 
     // The write-enabled load must see the migrated profiles, not an empty store
