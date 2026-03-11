@@ -39,10 +39,8 @@ export type ExecutionHealthSignal = {
 export type ExecutionHealthConfig = {
   enabled?: boolean;
   fileBurstThreshold?: number;
-  /** Reserved for future time-window filtering. Current burst detection is turn-bounded. */
   fileBurstWindowMs?: number;
   toolRepeatThreshold?: number;
-  /** Reserved for future time-window filtering. Current repeat detection scans session history. */
   toolRepeatWindowMs?: number;
   noEffectLoopThreshold?: number;
   errorCascadeThreshold?: number;
@@ -85,17 +83,30 @@ const EFFECT_COMMAND_PATTERNS = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-function hashToolCall(name: string, args: unknown): string {
+const MAX_HASH_ARG_CHARS = 4096;
+
+function serializeToolArgs(args: unknown): string {
   try {
-    return `${name}:${JSON.stringify(args)}`;
+    const serialized = JSON.stringify(args);
+    if (!serialized) {
+      return "null";
+    }
+    return serialized.length > MAX_HASH_ARG_CHARS
+      ? `${serialized.slice(0, MAX_HASH_ARG_CHARS)}…`
+      : serialized;
   } catch {
-    return `${name}:<unstringifiable>`;
+    return "<unstringifiable>";
   }
+}
+
+function hashToolCall(name: string, args: unknown): string {
+  return `${name}:${serializeToolArgs(args)}`;
 }
 
 type ToolCallEntry = {
   name: string;
   args: unknown;
+  hash: string;
   timestamp: number;
   isWrite: boolean;
   isError: boolean;
@@ -118,7 +129,7 @@ function isToolResultErrorMessage(msg: AgentMessage, toolUseId: string): boolean
   }
   const resultContent = Array.isArray(msg.content) ? msg.content : [];
   return resultContent.some((rawRb) => {
-    const rb = rawRb as Record<string, unknown>;
+    const rb = rawRb as unknown as Record<string, unknown>;
     return rb.type === "tool_result" && rb.tool_use_id === toolUseId && Boolean(rb.is_error);
   });
 }
@@ -150,7 +161,7 @@ function extractToolCalls(messages: AgentMessage[], afterIndex: number): ToolCal
     const timestamp = getMessageTimestamp(msg, i);
     for (const toolCall of toolCalls) {
       const block = content.find((rawBlock) => {
-        const rec = rawBlock as Record<string, unknown>;
+        const rec = rawBlock as unknown as Record<string, unknown>;
         return rec && typeof rec === "object" && rec.id === toolCall.id;
       }) as Record<string, unknown> | undefined;
       if (!block) {
@@ -191,6 +202,7 @@ function extractToolCalls(messages: AgentMessage[], afterIndex: number): ToolCal
       entries.push({
         name,
         args,
+        hash: hashToolCall(name, args),
         timestamp,
         isWrite,
         isError,
@@ -215,6 +227,9 @@ export class ExecutionHealthMonitor {
   /** Previous evaluation index so we only scan new messages. */
   private lastEvaluatedIndex = 0;
 
+  /** Rolling recent tool calls for bounded windowed detectors. */
+  private recentToolCalls: ToolCallEntry[] = [];
+
   constructor(config?: ExecutionHealthConfig) {
     this.cfg = { ...DEFAULT_CONFIG, ...config };
   }
@@ -236,6 +251,11 @@ export class ExecutionHealthMonitor {
     const toolCalls = extractToolCalls(messages, startIndex);
     this.lastEvaluatedIndex = messages.length;
 
+    if (toolCalls.length > 0) {
+      this.recentToolCalls.push(...toolCalls);
+      this.pruneRecentToolCalls(toolCalls[toolCalls.length - 1]?.timestamp ?? Date.now());
+    }
+
     const signals: ExecutionHealthSignal[] = [];
 
     // No-effect loop tracks turns even when no new tool calls are found
@@ -249,19 +269,16 @@ export class ExecutionHealthMonitor {
       return signals;
     }
 
-    // Pattern 1: File burst
-    const fileBurstSignal = this.detectFileBurst(toolCalls);
+    const fileBurstSignal = this.detectFileBurst();
     if (fileBurstSignal) {
       signals.push(fileBurstSignal);
     }
 
-    // Pattern 2: Tool repeat
-    const toolRepeatSignal = this.detectToolRepeat(toolCalls, messages, prePromptMessageCount);
+    const toolRepeatSignal = this.detectToolRepeat();
     if (toolRepeatSignal) {
       signals.push(toolRepeatSignal);
     }
 
-    // Pattern 4: Error cascade
     const errorCascadeSignal = this.detectErrorCascade(toolCalls, messages, prePromptMessageCount);
     if (errorCascadeSignal) {
       signals.push(errorCascadeSignal);
@@ -274,14 +291,27 @@ export class ExecutionHealthMonitor {
   reset(): void {
     this.noEffectStreak = 0;
     this.lastEvaluatedIndex = 0;
+    this.recentToolCalls = [];
   }
 
-  // -------------------------------------------------------------------------
-  // Pattern detectors
-  // -------------------------------------------------------------------------
+  private getRecentToolCalls(windowMs: number): ToolCallEntry[] {
+    if (this.recentToolCalls.length === 0) {
+      return [];
+    }
+    const now = this.recentToolCalls[this.recentToolCalls.length - 1]?.timestamp ?? Date.now();
+    const cutoff = now - Math.max(windowMs, 0);
+    return this.recentToolCalls.filter((tc) => tc.timestamp >= cutoff);
+  }
 
-  private detectFileBurst(toolCalls: ToolCallEntry[]): ExecutionHealthSignal | undefined {
-    const writes = toolCalls.filter((tc) => tc.isWrite);
+  private pruneRecentToolCalls(now: number): void {
+    const maxWindowMs = Math.max(this.cfg.fileBurstWindowMs, this.cfg.toolRepeatWindowMs, 0);
+    const cutoff = now - maxWindowMs;
+    this.recentToolCalls = this.recentToolCalls.filter((tc) => tc.timestamp >= cutoff);
+  }
+
+  private detectFileBurst(): ExecutionHealthSignal | undefined {
+    const callsInWindow = this.getRecentToolCalls(this.cfg.fileBurstWindowMs);
+    const writes = callsInWindow.filter((tc) => tc.isWrite);
     if (writes.length < this.cfg.fileBurstThreshold) {
       return undefined;
     }
@@ -294,44 +324,40 @@ export class ExecutionHealthMonitor {
       severity,
       details: {
         windowMs: this.cfg.fileBurstWindowMs,
-        toolCallCount: toolCalls.length,
-        uniqueEffects: toolCalls.filter((tc) => tc.isEffect).length,
+        toolCallCount: callsInWindow.length,
+        uniqueEffects: callsInWindow.filter((tc) => tc.isEffect).length,
         fileCreations: writes.length,
         repeatedTools: [],
       },
-      recommendation: `${writes.length} file writes detected in a single evaluation window (threshold: ${this.cfg.fileBurstThreshold}). The agent may be creating artifacts instead of executing real work.`,
+      recommendation: `${writes.length} file writes detected within the last ${this.cfg.fileBurstWindowMs}ms (threshold: ${this.cfg.fileBurstThreshold}). The agent may be creating artifacts instead of executing real work.`,
     };
   }
 
-  private detectToolRepeat(
-    newCalls: ToolCallEntry[],
-    messages: AgentMessage[],
-    prePromptMessageCount: number,
-  ): ExecutionHealthSignal | undefined {
-    // Collect all tool calls in the session (not just new ones) for repeat detection
-    const allCalls = extractToolCalls(messages, prePromptMessageCount);
-    const counts = new Map<string, number>();
+  private detectToolRepeat(): ExecutionHealthSignal | undefined {
+    const callsInWindow = this.getRecentToolCalls(this.cfg.toolRepeatWindowMs);
+    const counts = new Map<string, { count: number; name: string }>();
 
-    for (const tc of allCalls) {
+    for (const tc of callsInWindow) {
       if (REPEAT_IGNORE_TOOLS.has(tc.name)) {
         continue;
       }
-      const hash = hashToolCall(tc.name, tc.args);
-      counts.set(hash, (counts.get(hash) ?? 0) + 1);
-    }
-
-    const repeated: string[] = [];
-    for (const [hash, count] of counts) {
-      if (count >= this.cfg.toolRepeatThreshold) {
-        repeated.push(hash.split(":")[0]);
+      const current = counts.get(tc.hash);
+      if (current) {
+        current.count++;
+      } else {
+        counts.set(tc.hash, { count: 1, name: tc.name });
       }
     }
+
+    const repeated = [...counts.values()]
+      .filter((entry) => entry.count >= this.cfg.toolRepeatThreshold)
+      .map((entry) => entry.name);
 
     if (repeated.length === 0) {
       return undefined;
     }
 
-    const maxCount = Math.max(...counts.values());
+    const maxCount = Math.max(...[...counts.values()].map((entry) => entry.count));
     const severity: ExecutionHealthSeverity =
       maxCount >= this.cfg.toolRepeatThreshold * 2 ? "critical" : "warning";
 
@@ -340,12 +366,12 @@ export class ExecutionHealthMonitor {
       severity,
       details: {
         windowMs: this.cfg.toolRepeatWindowMs,
-        toolCallCount: allCalls.length,
-        uniqueEffects: allCalls.filter((tc) => tc.isEffect).length,
-        fileCreations: allCalls.filter((tc) => tc.isWrite).length,
+        toolCallCount: callsInWindow.length,
+        uniqueEffects: callsInWindow.filter((tc) => tc.isEffect).length,
+        fileCreations: callsInWindow.filter((tc) => tc.isWrite).length,
         repeatedTools: [...new Set(repeated)],
       },
-      recommendation: `Tools repeated ≥${this.cfg.toolRepeatThreshold} times with identical args: ${[...new Set(repeated)].join(", ")}. The agent may be stuck in a loop.`,
+      recommendation: `Tools repeated ≥${this.cfg.toolRepeatThreshold} times with identical args in the last ${this.cfg.toolRepeatWindowMs}ms: ${[...new Set(repeated)].join(", ")}. The agent may be stuck in a loop.`,
     };
   }
 

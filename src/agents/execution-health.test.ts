@@ -2,19 +2,26 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { ExecutionHealthMonitor } from "./execution-health.js";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+function makeUserTextMessage(text: string, timestamp: number): AgentMessage {
+  return { role: "user", content: text, timestamp };
+}
+
+function makeAssistantTextMessage(text: string, timestamp: number): AgentMessage {
+  return { role: "assistant", content: [{ type: "text", text }], timestamp } as AgentMessage;
+}
 
 function makeToolUseMessage(
   tools: Array<{ name: string; input: unknown; id?: string }>,
+  timestamp = Date.now(),
 ): AgentMessage {
   return {
     role: "assistant",
+    timestamp,
     content: tools.map((t, i) => ({
       type: "tool_use" as const,
       id: t.id ?? `tool_${i}`,
       name: t.name,
+      input: t.input,
       arguments: t.input,
     })),
   } as unknown as AgentMessage;
@@ -22,9 +29,11 @@ function makeToolUseMessage(
 
 function makeToolResultMessage(
   results: Array<{ tool_use_id: string; content?: string; is_error?: boolean }>,
+  timestamp = Date.now(),
 ): AgentMessage {
   return {
     role: "user",
+    timestamp,
     content: results.map((r) => ({
       type: "tool_result" as const,
       tool_use_id: r.tool_use_id,
@@ -44,15 +53,10 @@ function makeSdkToolResultMessage(toolCallId: string, isError = false): AgentMes
   } as unknown as AgentMessage;
 }
 
-/** Build a session with N file write turns (assistant tool_use + user tool_result). */
-function buildFileWriteSession(count: number, _prePrompt = 2): AgentMessage[] {
+function buildFileWriteSession(count: number): AgentMessage[] {
   const messages: AgentMessage[] = [
-    {
-      role: "user",
-      content: [{ type: "text", text: "system prompt" }],
-      timestamp: Date.now(),
-    } as AgentMessage,
-    { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+    makeUserTextMessage("system prompt", 0),
+    makeAssistantTextMessage("acknowledged", 1),
   ];
   for (let i = 0; i < count; i++) {
     const id = `write_${i}`;
@@ -66,15 +70,10 @@ function buildFileWriteSession(count: number, _prePrompt = 2): AgentMessage[] {
   return messages;
 }
 
-/** Build a session with N identical tool calls. */
 function buildRepeatToolSession(count: number, toolName: string, input: unknown): AgentMessage[] {
   const messages: AgentMessage[] = [
-    {
-      role: "user",
-      content: [{ type: "text", text: "system prompt" }],
-      timestamp: Date.now(),
-    } as AgentMessage,
-    { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+    makeUserTextMessage("system prompt", 0),
+    makeAssistantTextMessage("acknowledged", 1),
   ];
   for (let i = 0; i < count; i++) {
     const id = `repeat_${i}`;
@@ -84,15 +83,10 @@ function buildRepeatToolSession(count: number, toolName: string, input: unknown)
   return messages;
 }
 
-/** Build a session with N error tool results. */
 function buildErrorSession(count: number): AgentMessage[] {
   const messages: AgentMessage[] = [
-    {
-      role: "user",
-      content: [{ type: "text", text: "system prompt" }],
-      timestamp: Date.now(),
-    } as AgentMessage,
-    { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+    makeUserTextMessage("system prompt", 0),
+    makeAssistantTextMessage("acknowledged", 1),
   ];
   for (let i = 0; i < count; i++) {
     const id = `err_${i}`;
@@ -103,10 +97,6 @@ function buildErrorSession(count: number): AgentMessage[] {
   }
   return messages;
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("ExecutionHealthMonitor", () => {
   describe("disabled", () => {
@@ -153,6 +143,34 @@ describe("ExecutionHealthMonitor", () => {
       expect(fb).toBeDefined();
       expect(fb!.severity).toBe("warning");
     });
+
+    it("accumulates writes across turns inside the configured window", () => {
+      const monitor = new ExecutionHealthMonitor({
+        fileBurstThreshold: 3,
+        fileBurstWindowMs: 60_000,
+      });
+      const messages: AgentMessage[] = [
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
+      ];
+
+      for (let i = 0; i < 3; i++) {
+        const ts = 1_000 + i * 10_000;
+        const id = `write_window_${i}`;
+        messages.push(
+          makeToolUseMessage(
+            [{ name: "Write", input: { file_path: `/tmp/window-${i}.md`, content: "plan" }, id }],
+            ts,
+          ),
+        );
+        messages.push(makeToolResultMessage([{ tool_use_id: id, content: "ok" }], ts + 1));
+      }
+
+      monitor.evaluate({ messages: messages.slice(0, 4), prePromptMessageCount: 2 });
+      monitor.evaluate({ messages: messages.slice(0, 6), prePromptMessageCount: 2 });
+      const signals = monitor.evaluate({ messages, prePromptMessageCount: 2 });
+      expect(signals.find((s) => s.type === "file-burst")).toBeDefined();
+    });
   });
 
   describe("tool-repeat", () => {
@@ -178,21 +196,43 @@ describe("ExecutionHealthMonitor", () => {
       const signals = monitor.evaluate({ messages, prePromptMessageCount: 2 });
       expect(signals.find((s) => s.type === "tool-repeat")).toBeUndefined();
     });
+
+    it("accumulates repeated calls across turns inside the configured window", () => {
+      const monitor = new ExecutionHealthMonitor({
+        toolRepeatThreshold: 3,
+        toolRepeatWindowMs: 60_000,
+      });
+      const messages: AgentMessage[] = [
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
+      ];
+
+      for (let i = 0; i < 3; i++) {
+        const ts = 2_000 + i * 10_000;
+        const id = `repeat_window_${i}`;
+        messages.push(
+          makeToolUseMessage([{ name: "Bash", input: { command: "echo hi" }, id }], ts),
+        );
+        messages.push(makeToolResultMessage([{ tool_use_id: id, content: "ok" }], ts + 1));
+      }
+
+      monitor.evaluate({ messages: messages.slice(0, 4), prePromptMessageCount: 2 });
+      monitor.evaluate({ messages: messages.slice(0, 6), prePromptMessageCount: 2 });
+      const signals = monitor.evaluate({ messages, prePromptMessageCount: 2 });
+      const repeat = signals.find((s) => s.type === "tool-repeat");
+      expect(repeat).toBeDefined();
+      expect(repeat!.details.repeatedTools).toContain("Bash");
+    });
   });
 
   describe("no-effect-loop", () => {
     it("detects turns without real effects", () => {
       const monitor = new ExecutionHealthMonitor({ noEffectLoopThreshold: 3 });
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
       ];
 
-      // Simulate 3 turns without real effects (only file writes)
       for (let i = 0; i < 3; i++) {
         const id = `noop_${i}`;
         messages.push(
@@ -214,18 +254,11 @@ describe("ExecutionHealthMonitor", () => {
 
     it("resets streak on successful effect", () => {
       const monitor = new ExecutionHealthMonitor({ noEffectLoopThreshold: 3 });
-
-      // Build a cumulative message array (simulating real session growth)
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
       ];
 
-      // Turn 1: no effect (file write)
       messages.push(
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/a.md", content: "x" }, id: "w1" },
@@ -234,7 +267,6 @@ describe("ExecutionHealthMonitor", () => {
       messages.push(makeToolResultMessage([{ tool_use_id: "w1", content: "ok" }]));
       monitor.evaluate({ messages, prePromptMessageCount: 2 });
 
-      // Turn 2: no effect (file write)
       messages.push(
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/b.md", content: "x" }, id: "w2" },
@@ -243,7 +275,6 @@ describe("ExecutionHealthMonitor", () => {
       messages.push(makeToolResultMessage([{ tool_use_id: "w2", content: "ok" }]));
       monitor.evaluate({ messages, prePromptMessageCount: 2 });
 
-      // Turn 3: successful effect (git push) — streak should reset, no trigger at threshold 3
       messages.push(
         makeToolUseMessage([
           { name: "Bash", input: { command: "git push origin main" }, id: "push_1" },
@@ -253,7 +284,6 @@ describe("ExecutionHealthMonitor", () => {
       const signals = monitor.evaluate({ messages, prePromptMessageCount: 2 });
       expect(signals.find((s) => s.type === "no-effect-loop")).toBeUndefined();
 
-      // Turn 4: no effect — streak is 1 after reset, should not trigger
       messages.push(
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/c.md", content: "x" }, id: "w3" },
@@ -267,12 +297,8 @@ describe("ExecutionHealthMonitor", () => {
     it("does not reset streak on failed effect attempts", () => {
       const monitor = new ExecutionHealthMonitor({ noEffectLoopThreshold: 3 });
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
       ];
 
       messages.push(
@@ -335,13 +361,8 @@ describe("ExecutionHealthMonitor", () => {
     it("stops counting on success", () => {
       const monitor = new ExecutionHealthMonitor({ errorCascadeThreshold: 3 });
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
-        // 2 errors, then a success, then 2 errors = no cascade
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
         ...buildErrorSession(2).slice(2),
         makeToolUseMessage([{ name: "Bash", input: { command: "echo ok" }, id: "ok_1" }]),
         makeToolResultMessage([{ tool_use_id: "ok_1", content: "ok" }]),
@@ -354,12 +375,8 @@ describe("ExecutionHealthMonitor", () => {
     it("counts consecutive SDK toolResult errors", () => {
       const monitor = new ExecutionHealthMonitor({ errorCascadeThreshold: 3 });
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
         makeToolUseMessage([{ name: "Bash", input: { command: "fail-1" }, id: "sdk_err_1" }]),
         makeSdkToolResultMessage("sdk_err_1", true),
         makeToolUseMessage([{ name: "Bash", input: { command: "fail-2" }, id: "sdk_err_2" }]),
@@ -378,12 +395,8 @@ describe("ExecutionHealthMonitor", () => {
     it("handles empty session", () => {
       const monitor = new ExecutionHealthMonitor();
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
       ];
       const signals = monitor.evaluate({ messages, prePromptMessageCount: 2 });
       expect(signals).toHaveLength(0);
@@ -392,19 +405,14 @@ describe("ExecutionHealthMonitor", () => {
     it("handles single turn", () => {
       const monitor = new ExecutionHealthMonitor();
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/a.md", content: "x" }, id: "w1" },
         ]),
         makeToolResultMessage([{ tool_use_id: "w1", content: "ok" }]),
       ];
       const signals = monitor.evaluate({ messages, prePromptMessageCount: 2 });
-      // 1 write is below default threshold of 10
       expect(signals.find((s) => s.type === "file-burst")).toBeUndefined();
     });
 
@@ -421,15 +429,10 @@ describe("ExecutionHealthMonitor", () => {
     it("reset clears internal state", () => {
       const monitor = new ExecutionHealthMonitor({ noEffectLoopThreshold: 2 });
       const messages: AgentMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: "system prompt" }],
-          timestamp: Date.now(),
-        } as AgentMessage,
-        { role: "assistant", content: [{ type: "text", text: "acknowledged" }] } as AgentMessage,
+        makeUserTextMessage("system prompt", 0),
+        makeAssistantTextMessage("acknowledged", 1),
       ];
 
-      // Turn 1: no effect
       messages.push(
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/a.md", content: "x" }, id: "r1" },
@@ -438,7 +441,6 @@ describe("ExecutionHealthMonitor", () => {
       messages.push(makeToolResultMessage([{ tool_use_id: "r1", content: "ok" }]));
       monitor.evaluate({ messages, prePromptMessageCount: 2 });
 
-      // Turn 2: no effect — should trigger at threshold 2
       messages.push(
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/b.md", content: "x" }, id: "r2" },
@@ -450,7 +452,6 @@ describe("ExecutionHealthMonitor", () => {
 
       monitor.reset();
 
-      // After reset, streak is 0 — turn 3 should NOT trigger
       messages.push(
         makeToolUseMessage([
           { name: "Write", input: { file_path: "/tmp/c.md", content: "x" }, id: "r3" },

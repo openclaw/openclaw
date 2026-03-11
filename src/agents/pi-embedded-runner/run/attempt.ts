@@ -27,6 +27,7 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -2669,8 +2670,9 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount,
           });
           for (const signal of healthSignals) {
+            const safeRecommendation = sanitizeForLog(signal.recommendation);
             log.warn(
-              `[execution-health] ${signal.type} (${signal.severity}): ${signal.recommendation}`,
+              `[execution-health] ${signal.type} (${signal.severity}): ${safeRecommendation}`,
             );
           }
         } catch (healthErr) {
