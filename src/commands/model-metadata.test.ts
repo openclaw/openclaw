@@ -286,4 +286,13 @@ describe("promptModelMetadataForPrimary", () => {
     const result = await promptModelMetadataForPrimary(cfg, prompter);
     expect(result).toBe(cfg);
   });
+
+  it("skips silently when primary model not in providers (built-in)", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o" } } },
+    };
+    const prompter = createWizardPrompter({});
+    const result = await promptModelMetadataForPrimary(cfg, prompter);
+    expect(result).toBe(cfg);
+  });
 });

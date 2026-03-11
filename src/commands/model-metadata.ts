@@ -274,8 +274,9 @@ export async function promptModelMetadata(
 }
 
 /**
- * After provider/model setup, offer to configure metadata for the primary model.
- * Used by both `configure --section model` and `models configure`.
+ * After custom provider setup, offer to configure metadata for the primary model.
+ * Custom providers always write explicit model entries to config, so the entry
+ * is guaranteed to exist when this is called from the custom-api-key path.
  */
 export async function promptModelMetadataForPrimary(
   cfg: OpenClawConfig,

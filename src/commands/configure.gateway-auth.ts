@@ -135,7 +135,9 @@ export async function promptAuthConfig(
     }
   }
 
-  next = await promptModelMetadataForPrimary(next, prompter);
+  if (authChoice === "custom-api-key") {
+    next = await promptModelMetadataForPrimary(next, prompter);
+  }
 
   return next;
 }
