@@ -145,15 +145,26 @@ describe("embeddings-ollama", () => {
   it("limits embed batch fan-out to avoid request storms", async () => {
     let inFlight = 0;
     let peakInFlight = 0;
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       inFlight += 1;
-      peakInFlight = Math.max(peakInFlight, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      inFlight -= 1;
-      return new Response(JSON.stringify({ embedding: [1, 0] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      try {
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        const body = typeof init?.body === "string" ? init.body : "";
+        const parsed = JSON.parse(body) as { prompt?: string };
+        const prompt = typeof parsed.prompt === "string" ? parsed.prompt : "";
+        const match = /^batch-(\d+)$/.exec(prompt);
+        const index = match ? Number.parseInt(match[1], 10) : -1;
+        if (!Number.isFinite(index) || index < 0) {
+          throw new Error(`unexpected prompt: ${prompt}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return new Response(JSON.stringify({ embedding: [index, 1] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      } finally {
+        inFlight -= 1;
+      }
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -165,8 +176,15 @@ describe("embeddings-ollama", () => {
       remote: { baseUrl: "http://127.0.0.1:11434" },
     });
 
-    await provider.embedBatch(Array.from({ length: 12 }, (_, i) => `batch-${i}`));
+    const values = Array.from({ length: 12 }, (_, i) => `batch-${i}`);
+    const result = await provider.embedBatch(values);
     expect(fetchMock).toHaveBeenCalledTimes(12);
     expect(peakInFlight).toBeLessThanOrEqual(4);
+    expect(result).toHaveLength(values.length);
+    result.forEach((vec, i) => {
+      const magnitude = Math.sqrt(i * i + 1);
+      expect(vec[0]).toBeCloseTo(i / magnitude, 5);
+      expect(vec[1]).toBeCloseTo(1 / magnitude, 5);
+    });
   });
 });

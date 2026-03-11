@@ -31,7 +31,8 @@ async function mapWithConcurrency<T, R>(
   }
   const capped = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
   const workers = Math.min(capped, items.length);
-  const out = Array.from({ length: items.length }, () => undefined as R | undefined);
+  const out: R[] = [];
+  const filled = Array.from({ length: items.length }, () => false);
   let index = 0;
   await Promise.all(
     Array.from({ length: workers }, async () => {
@@ -42,15 +43,16 @@ async function mapWithConcurrency<T, R>(
           return;
         }
         out[current] = await mapper(items[current], current);
+        filled[current] = true;
       }
     }),
   );
   const finalized: R[] = [];
-  for (const value of out) {
-    if (value === undefined) {
+  for (let i = 0; i < filled.length; i += 1) {
+    if (!filled[i]) {
       throw new Error("Ollama embedding batch mapping did not fill all results");
     }
-    finalized.push(value);
+    finalized.push(out[i]);
   }
   return finalized;
 }
