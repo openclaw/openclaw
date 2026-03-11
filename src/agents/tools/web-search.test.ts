@@ -24,6 +24,7 @@ const {
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  stripCompletionsEndpoint,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -344,6 +345,38 @@ describe("web_search kimi config resolution", () => {
   it("resolves default model and baseUrl", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+});
+
+describe("stripCompletionsEndpoint", () => {
+  it("removes trailing /chat/completions to prevent path doubling", () => {
+    expect(stripCompletionsEndpoint("https://api.moonshot.ai/v1/chat/completions")).toBe(
+      "https://api.moonshot.ai/v1",
+    );
+  });
+
+  it("removes trailing slash before stripping endpoint", () => {
+    expect(stripCompletionsEndpoint("https://api.moonshot.ai/v1/chat/completions/")).toBe(
+      "https://api.moonshot.ai/v1",
+    );
+  });
+
+  it("preserves correct base URL without /chat/completions", () => {
+    expect(stripCompletionsEndpoint("https://api.moonshot.ai/v1")).toBe(
+      "https://api.moonshot.ai/v1",
+    );
+  });
+
+  it("handles base URL with only trailing slashes", () => {
+    expect(stripCompletionsEndpoint("https://api.perplexity.ai/")).toBe(
+      "https://api.perplexity.ai",
+    );
+  });
+
+  it("trims whitespace", () => {
+    expect(stripCompletionsEndpoint("  https://api.moonshot.ai/v1  ")).toBe(
+      "https://api.moonshot.ai/v1",
+    );
   });
 });
 
