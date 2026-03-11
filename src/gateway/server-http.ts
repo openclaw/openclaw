@@ -32,7 +32,6 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
-import { handleVoiceConnectUiHttpRequest } from "./voice-connect-ui.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -69,6 +68,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleVoiceConnectUiHttpRequest } from "./voice-connect-ui.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -735,6 +735,19 @@ export function createGatewayHttpServer(opts: {
         }),
       );
 
+      // Voice Connect UI: separate SPA mounted under /voice-connect (or configured basePath).
+      // Must run BEFORE the Control UI SPA catch-all, otherwise Control UI will swallow /voice-connect/* routes.
+      if (configSnapshot.gateway?.voiceConnectUi?.enabled !== false) {
+        requestStages.push({
+          name: "voice-connect-ui-http",
+          run: () =>
+            handleVoiceConnectUiHttpRequest(req, res, {
+              basePath: configSnapshot.gateway?.voiceConnectUi?.basePath,
+              config: configSnapshot,
+            }),
+        });
+      }
+
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-avatar",
@@ -751,18 +764,6 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               root: controlUiRoot,
-            }),
-        });
-      }
-
-      // Voice Connect UI: separate SPA mounted under /voice-connect (or configured basePath).
-      if (configSnapshot.gateway?.voiceConnectUi?.enabled !== false) {
-        requestStages.push({
-          name: "voice-connect-ui-http",
-          run: () =>
-            handleVoiceConnectUiHttpRequest(req, res, {
-              basePath: configSnapshot.gateway?.voiceConnectUi?.basePath,
-              config: configSnapshot,
             }),
         });
       }
