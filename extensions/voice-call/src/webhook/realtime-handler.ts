@@ -23,6 +23,14 @@ export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
  * - Return TwiML <Connect><Stream> payload for the initial HTTP webhook
  * - Register each call with CallManager (appears in voice status/history)
  * - Route tool calls to registered handlers (Phase 5 tool framework)
+ *
+ * Provider coupling: this class currently speaks the Twilio Media Streams
+ * WebSocket protocol directly (μ-law audio, streamSid/callSid, start/media/
+ * mark/stop events) and emits Twilio TwiML. The OpenAI bridge itself is
+ * provider-agnostic. If a second provider needs realtime support, the right
+ * refactor is to extract a RealtimeMediaAdapter interface (buildStreamPayload +
+ * handleWebSocketUpgrade + MediaStreamCallbacks) so the bridge and call-manager
+ * wiring can be reused without duplicating the OpenAI session logic.
  */
 /** How long (ms) a stream token remains valid after TwiML is issued. */
 const STREAM_TOKEN_TTL_MS = 30_000;
