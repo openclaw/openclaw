@@ -296,3 +296,20 @@ flowchart TD
 
   </Accordion>
 </AccordionGroup>
+
+## Community tools
+
+### ClawAid — AI-powered auto-diagnosis
+
+[ClawAid](https://github.com/jjj5666/clawaid) is a community-built tool that
+reads your OpenClaw system state (logs, config, processes, network) and uses AI
+to diagnose the root cause automatically. It can also apply fixes with one click.
+
+```bash
+npx clawaid
+```
+
+- No API key or account needed
+- Config secrets are redacted before analysis
+- All repair commands run locally
+- Open source (MIT)

@@ -102,3 +102,19 @@ openclaw status --all
 ```
 
 如果可以的话，包含来自 `openclaw logs --follow` 的相关日志尾部。
+
+## 社区工具
+
+### ClawAid — AI 自动诊断修复
+
+[ClawAid](https://github.com/jjj5666/clawaid) 是社区开发的 AI 诊断修复工具，
+自动读取你的 OpenClaw 系统状态（日志、配置、进程、网络），用 AI 找到根本原因并一键修复。
+
+```bash
+npx clawaid
+```
+
+- 无需 API Key 或注册账号
+- 配置中的密钥在上传前自动脱敏
+- 所有修复命令在本地执行
+- 开源（MIT）
