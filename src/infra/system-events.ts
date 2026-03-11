@@ -108,9 +108,10 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   }
 
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
-  if (entry.lastText === cleaned) {
+  const hasExplicitDedupeWindow = Boolean(normalizedDedupeKey && dedupeTtlMs > 0);
+  if (!hasExplicitDedupeWindow && entry.lastText === cleaned) {
     return false;
-  } // skip consecutive duplicates
+  } // skip consecutive duplicates unless a dedupe-key window governs replay
   entry.lastText = cleaned;
   entry.lastContextKey = normalizedContextKey;
   if (normalizedDedupeKey && dedupeTtlMs > 0) {

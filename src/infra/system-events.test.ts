@@ -106,7 +106,7 @@ describe("system events (session routing)", () => {
       dedupeTtlMs: 60_000,
     });
     const cleared = clearSystemEventDedupeKey(sessionKey, dedupeKey);
-    const second = enqueueSystemEvent("Reaction command: accept (retry)", {
+    const second = enqueueSystemEvent("Reaction command: accept", {
       sessionKey,
       dedupeKey,
       dedupeTtlMs: 60_000,
