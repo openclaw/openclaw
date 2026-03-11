@@ -18,10 +18,25 @@ const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  // Split around fenced code blocks (3+ backticks) to avoid collapsing
+  // their indentation. We use replace to collect segments so we can
+  // match the opening fence length to the closing fence.
+  const parts: string[] = [];
+  let lastIndex = 0;
+  const fenceRe = /(`{3,})([^\n]*\n[\s\S]*?\n)\1/g;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRe.exec(text)) !== null) {
+    // Normalize text before this code block
+    const before = text.slice(lastIndex, match.index);
+    parts.push(before.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n"));
+    // Keep the code block as-is
+    parts.push(match[0]);
+    lastIndex = match.index + match[0].length;
+  }
+  // Normalize remaining text after the last code block
+  const after = text.slice(lastIndex);
+  parts.push(after.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n"));
+  return parts.join("").trim();
 }
 
 type StripInlineDirectiveTagsResult = {
