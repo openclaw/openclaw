@@ -427,7 +427,7 @@ describe("spawnAndCollect", () => {
           entries: {
             "skill-test": {
               env: {
-                CUSTOM_SKILL_TOKEN: "from-skill",
+                SKILL_TEST_VALUE: "from-skill",
               },
             },
           },
@@ -436,13 +436,13 @@ describe("spawnAndCollect", () => {
     });
 
     try {
-      expect(process.env.CUSTOM_SKILL_TOKEN).toBe("from-skill");
+      expect(process.env.SKILL_TEST_VALUE).toBe("from-skill");
 
       const result = await spawnAndCollect({
         command: process.execPath,
         args: [
           "-e",
-          "process.stdout.write(JSON.stringify({custom:process.env.CUSTOM_SKILL_TOKEN,shell:process.env.OPENCLAW_SHELL}))",
+          "process.stdout.write(JSON.stringify({custom:process.env.SKILL_TEST_VALUE,shell:process.env.OPENCLAW_SHELL}))",
         ],
         cwd: process.cwd(),
       });
