@@ -6,6 +6,34 @@ function normalize(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function resolveTermuxHome(env: NodeJS.ProcessEnv): string | undefined {
+  const prefix = normalize(env.PREFIX)?.replace(/\\/g, "/");
+  if (!prefix) {
+    return undefined;
+  }
+
+  const lower = prefix.toLowerCase();
+  if (!lower.startsWith("/data/data/com.termux/files/") || !lower.endsWith("/usr")) {
+    return undefined;
+  }
+
+  return `${prefix.slice(0, -4)}/home`;
+}
+
+function resolveEnvHome(env: NodeJS.ProcessEnv): string | undefined {
+  const envHome = normalize(env.HOME);
+  if (!envHome) {
+    return undefined;
+  }
+
+  const termuxHome = resolveTermuxHome(env);
+  if (termuxHome && envHome === "/home") {
+    return termuxHome;
+  }
+
+  return envHome;
+}
+
 export function resolveEffectiveHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -18,8 +46,7 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
   const explicitHome = normalize(env.OPENCLAW_HOME);
   if (explicitHome) {
     if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-      const fallbackHome =
-        normalize(env.HOME) ?? normalize(env.USERPROFILE) ?? normalizeSafe(homedir);
+      const fallbackHome = resolveEnvHome(env) ?? normalize(env.USERPROFILE) ?? normalizeSafe(homedir);
       if (fallbackHome) {
         return explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome);
       }
@@ -28,7 +55,7 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
     return explicitHome;
   }
 
-  const envHome = normalize(env.HOME);
+  const envHome = resolveEnvHome(env);
   if (envHome) {
     return envHome;
   }

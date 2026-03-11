@@ -35,6 +35,29 @@ describe("resolveEffectiveHomeDir", () => {
 
     expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
   });
+
+  it("uses Termux home derived from PREFIX when HOME is /home", () => {
+    const env = {
+      HOME: "/home",
+      PREFIX: "/data/data/com.termux/files/usr",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveEffectiveHomeDir(env, () => "/ignored")).toBe(
+      path.resolve("/data/data/com.termux/files/home"),
+    );
+  });
+
+  it("expands OPENCLAW_HOME with Termux-derived home when HOME is /home", () => {
+    const env = {
+      OPENCLAW_HOME: "~/workspace",
+      HOME: "/home",
+      PREFIX: "/data/data/com.termux/files/usr",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveEffectiveHomeDir(env, () => "/ignored")).toBe(
+      path.resolve("/data/data/com.termux/files/home/workspace"),
+    );
+  });
 });
 
 describe("resolveRequiredHomeDir", () => {
