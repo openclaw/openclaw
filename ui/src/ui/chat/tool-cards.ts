@@ -5,7 +5,7 @@ import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import { formatToolSidebarContent, getTruncatedPreview } from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -33,7 +33,11 @@ export function extractToolCards(message: unknown): ToolCard[] {
     }
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
-    cards.push({ kind: "result", name, text });
+    const explicitArgs = coerceArgs(item.arguments ?? item.args);
+    const inheritedArgs =
+      explicitArgs ??
+      [...cards].toReversed().find((card) => card.kind === "call" && card.name === name)?.args;
+    cards.push({ kind: "result", name, args: inheritedArgs, text });
   }
 
   if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
@@ -56,14 +60,7 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
-          return;
-        }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+        onOpenSidebar!(formatToolSidebarContent(card));
       }
     : undefined;
 

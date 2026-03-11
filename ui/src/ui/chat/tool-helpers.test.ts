@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import { describe, expect, it } from "vitest";
+import {
+  formatToolOutputForSidebar,
+  formatToolSidebarContent,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -74,6 +78,26 @@ describe("tool-helpers", () => {
     it("handles whitespace-only string", () => {
       const result = formatToolOutputForSidebar("   ");
       expect(result).toBe("   ");
+    });
+  });
+
+  describe("formatToolSidebarContent", () => {
+    it("shows the full exec command above sidebar output", () => {
+      const command =
+        "python3 ~/.openclaw/workspace/skills/node-cluster-3.connector/scripts/main.py invoke " +
+        'wangjx-node-host system.run --raw-command "echo this is a deliberately long command ' +
+        'that should never be truncated in the sidebar"';
+
+      const content = formatToolSidebarContent({
+        name: "exec",
+        args: { command },
+        text: "done",
+      });
+
+      expect(content).toContain("**Command:**");
+      expect(content).toContain(command);
+      expect(content).not.toContain("…");
+      expect(content).toContain("done");
     });
   });
 
