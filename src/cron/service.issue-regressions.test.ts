@@ -1837,6 +1837,5 @@ describe("Cron issue regressions", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("stale-running", { agentId: undefined, contextKey: "cron:stale-running", sessionKey: undefined });
 
     cron.stop();
-    await store.cleanup();
   });
 });
