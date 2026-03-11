@@ -1038,7 +1038,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     opts,
   });
 
-  await tryWriteCompletionCache(root, Boolean(opts.json));
+  await tryWriteCompletionCache(result.root ?? root, Boolean(opts.json));
   await tryInstallShellCompletion({
     jsonMode: Boolean(opts.json),
     skipPrompt: Boolean(opts.yes),
