@@ -21,6 +21,7 @@ const {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveMinimaxApiKey,
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
@@ -28,6 +29,8 @@ const {
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+const minimaxApiKeyEnv = ["MINIMAX_API", "KEY"].join("_");
+const minimaxOauthTokenEnv = ["MINIMAX_OAUTH", "TOKEN"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
@@ -344,6 +347,37 @@ describe("web_search kimi config resolution", () => {
   it("resolves default model and baseUrl", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+});
+
+describe("web_search minimax credential resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveMinimaxApiKey({ apiKey: "minimax-config-key" })).toBe("minimax-config-key"); // pragma: allowlist secret
+  });
+
+  it("prefers OAuth token over API key in environment fallback", () => {
+    withEnv(
+      {
+        [minimaxOauthTokenEnv]: "minimax-oauth-token",
+        [minimaxApiKeyEnv]: "minimax-api-key",
+      },
+      () => {
+        expect(resolveMinimaxApiKey({})).toBe("minimax-oauth-token");
+      },
+    );
+  });
+
+  it("uses API key when OAuth token is unavailable", () => {
+    withEnv({ [minimaxOauthTokenEnv]: undefined, [minimaxApiKeyEnv]: "minimax-api-key" }, () => {
+      expect(resolveMinimaxApiKey({})).toBe("minimax-api-key");
+    });
+  });
+
+  it("returns undefined when config and env are missing", () => {
+    withEnv({ [minimaxOauthTokenEnv]: undefined, [minimaxApiKeyEnv]: undefined }, () => {
+      expect(resolveMinimaxApiKey({})).toBeUndefined();
+      expect(resolveMinimaxApiKey(undefined)).toBeUndefined();
+    });
   });
 });
 

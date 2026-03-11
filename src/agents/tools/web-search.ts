@@ -621,7 +621,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_minimax_api_key",
       message:
-        "web_search (minimax) needs credentials. Set MINIMAX_API_KEY or MINIMAX_OAUTH_TOKEN in the Gateway environment, or configure tools.web.search.minimax.apiKey.",
+        "web_search (minimax) needs credentials. Set MINIMAX_OAUTH_TOKEN or MINIMAX_API_KEY in the Gateway environment, or configure tools.web.search.minimax.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -948,12 +948,12 @@ function resolveMinimaxApiKey(minimax?: MinimaxConfig): string | undefined {
   if (fromConfig) {
     return fromConfig;
   }
-  const fromEnvApiKey = normalizeApiKey(process.env.MINIMAX_API_KEY);
-  if (fromEnvApiKey) {
-    return fromEnvApiKey;
-  }
   const fromEnvOauthToken = normalizeApiKey(process.env.MINIMAX_OAUTH_TOKEN);
-  return fromEnvOauthToken || undefined;
+  if (fromEnvOauthToken) {
+    return fromEnvOauthToken;
+  }
+  const fromEnvApiKey = normalizeApiKey(process.env.MINIMAX_API_KEY);
+  return fromEnvApiKey || undefined;
 }
 
 function resolveMinimaxApiHost(): string {
