@@ -164,6 +164,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     service.restart.mockClear();
     service.isLoaded.mockResolvedValue(true);
     service.restart.mockResolvedValue(undefined);
+    vi.unstubAllEnvs();
   });
 
   it("aborts start when config is invalid", async () => {
@@ -202,5 +203,31 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     });
 
     expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits started when a not-loaded fallback bootstraps the service", async () => {
+    service.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "started",
+        message: "Gateway LaunchAgent bootstrapped from existing plist.",
+      }),
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("started");
+    expect(payload.message).toContain("bootstrapped");
+    expect(payload.service?.loaded).toBe(true);
   });
 });
