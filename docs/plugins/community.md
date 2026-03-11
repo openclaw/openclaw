@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Memori** — Long-term memory integration for OpenClaw agents using the Memori SDK. It continuously captures interactions, extracts structured knowledge, and intelligently ranks, decays, and retrieves the relevant memories. So your agent remembers the right things at the right time across every session.
+  npm: `@memorilabs/openclaw-memori`
+  repo: `https://github.com/MemoriLabs/Memori`
+  install: `openclaw plugins install @memorilabs/openclaw-memori`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
