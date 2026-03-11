@@ -139,8 +139,16 @@ export async function listMemoryFiles(
       // filesystems (e.g. macOS HFS+/APFS) where realpath preserves the
       // original casing and would not detect that MEMORY.md and memory.md
       // point to the same inode.
+      //
+      // Guard: some filesystems (FAT32, network mounts) report ino as 0 for
+      // every file.  In that case fall through to realpath-based dedup to
+      // avoid collapsing unrelated files into a single key.
       const stat = await fs.stat(entry);
-      key = `${stat.dev}:${stat.ino}`;
+      if (stat.ino !== 0) {
+        key = `${stat.dev}:${stat.ino}`;
+      } else {
+        key = await fs.realpath(entry);
+      }
     } catch {
       // stat may fail for broken mounts or race conditions; fall back to
       // realpath which still handles symlink-based duplicates.
