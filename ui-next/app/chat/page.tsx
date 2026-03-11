@@ -1199,6 +1199,35 @@ export default function ChatPage() {
     }
   }, [draft, selectedSessionKey, state, request, handleCommand]);
 
+  // ============================================
+  // Clear Chat (Reset messages, keep session)
+  // ============================================
+
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  const handleClearChat = useCallback(() => {
+    setShowClearConfirm(true);
+  }, []);
+
+  const confirmClearChat = useCallback(async () => {
+    if (!selectedSessionKey) return;
+
+    try {
+      // Clear local messages
+      setMessages([]);
+      setChatStream(null);
+      setError(null);
+      setShowClearConfirm(false);
+
+      // Optional: Send a system message to indicate chat was cleared
+      // (commented out - can be enabled if desired)
+      // setMessages([{ role: "system", content: "Chat history cleared", timestamp: Date.now() }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear chat");
+      setShowClearConfirm(false);
+    }
+  }, [selectedSessionKey]);
+
   const changeModel = useCallback(
     async (modelId: string) => {
       if (!selectedSessionKey || state !== "connected") {
@@ -1643,6 +1672,22 @@ export default function ChatPage() {
                   ))}
                 </select>
 
+                {/* Clear Chat Button */}
+                <button
+                  onClick={handleClearChat}
+                  style={{
+                    ...styles.btn,
+                    width: "auto",
+                    padding: "4px 10px",
+                    background: "var(--card)",
+                    color: "var(--danger)",
+                    borderColor: "var(--danger)",
+                  }}
+                  title="Clear chat history (keep session)"
+                >
+                  🗑️ Clear Chat
+                </button>
+
                 {/* Active Session Indicator */}
                 <div
                   style={{
@@ -1756,6 +1801,93 @@ export default function ChatPage() {
           )}
         </div>
       </div>
+
+      {/* Clear Chat Confirmation Modal */}
+      {showClearConfirm && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setShowClearConfirm(false)}
+        >
+          <div
+            style={{
+              background: "var(--card)",
+              borderRadius: "var(--radius-lg)",
+              padding: 24,
+              maxWidth: 400,
+              width: "90%",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "var(--border)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                margin: "0 0 12px 0",
+                fontSize: 18,
+                fontWeight: 600,
+                color: "var(--text-strong)",
+              }}
+            >
+              Clear Chat History?
+            </h3>
+            <p
+              style={{
+                margin: "0 0 20px 0",
+                fontSize: 14,
+                color: "var(--muted)",
+                lineHeight: 1.5,
+              }}
+            >
+              This will delete all messages in this conversation. The session will be kept, but the
+              chat history cannot be recovered.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                style={{
+                  ...styles.btn,
+                  width: "auto",
+                  padding: "8px 16px",
+                  background: "var(--secondary)",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmClearChat}
+                style={{
+                  ...styles.btn,
+                  width: "auto",
+                  padding: "8px 16px",
+                  background: "var(--danger)",
+                  borderColor: "var(--danger)",
+                  color: "#fff",
+                }}
+              >
+                Clear Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
