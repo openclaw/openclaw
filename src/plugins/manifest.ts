@@ -45,35 +45,56 @@ export function resolvePluginManifestPath(rootDir: string): string {
 export function loadPluginManifest(
   rootDir: string,
   rejectHardlinks = true,
+  opts?: { trusted?: boolean },
 ): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: rootDir,
-    boundaryLabel: "plugin root",
-    rejectHardlinks,
-  });
-  if (!opened.ok) {
-    if (opened.reason === "path") {
-      return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
-    }
-    return {
-      ok: false,
-      error: `unsafe plugin manifest path: ${manifestPath} (${opened.reason})`,
-      manifestPath,
-    };
-  }
+
+  // Bundled (trusted) plugins ship inside the package itself and their paths
+  // are resolved by the discovery layer. Skip boundary validation so symlink
+  // layouts used by package managers like pnpm don't trigger false rejections.
   let raw: unknown;
-  try {
-    raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-  } catch (err) {
-    return {
-      ok: false,
-      error: `failed to parse plugin manifest: ${String(err)}`,
-      manifestPath,
-    };
-  } finally {
-    fs.closeSync(opened.fd);
+  if (opts?.trusted) {
+    try {
+      raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+      }
+      return {
+        ok: false,
+        error: `failed to parse plugin manifest: ${String(err)}`,
+        manifestPath,
+      };
+    }
+  } else {
+    const opened = openBoundaryFileSync({
+      absolutePath: manifestPath,
+      rootPath: rootDir,
+      boundaryLabel: "plugin root",
+      rejectHardlinks,
+    });
+    if (!opened.ok) {
+      if (opened.reason === "path") {
+        return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+      }
+      return {
+        ok: false,
+        error: `unsafe plugin manifest path: ${manifestPath} (${opened.reason})`,
+        manifestPath,
+      };
+    }
+    try {
+      raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    } catch (err) {
+      return {
+        ok: false,
+        error: `failed to parse plugin manifest: ${String(err)}`,
+        manifestPath,
+      };
+    } finally {
+      fs.closeSync(opened.fd);
+    }
   }
   if (!isRecord(raw)) {
     return { ok: false, error: "plugin manifest must be an object", manifestPath };
