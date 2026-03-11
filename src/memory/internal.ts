@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { isFileMissingError } from "./fs-utils.js";
 
@@ -189,8 +190,8 @@ export function chunkMarkdown(
   if (lines.length === 0) {
     return [];
   }
-  const maxChars = Math.max(32, chunking.tokens * 4);
-  const overlapChars = Math.max(0, chunking.overlap * 4);
+  const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+  const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
   const chunks: MemoryChunk[] = [];
 
   let current: Array<{ line: string; lineNo: number }> = [];
@@ -229,14 +230,14 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += entry.line.length + 1;
+      acc += estimateStringChars(entry.line) + 1;
       kept.unshift(entry);
       if (acc >= overlapChars) {
         break;
       }
     }
     current = kept;
-    currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
+    currentChars = kept.reduce((sum, entry) => sum + estimateStringChars(entry.line) + 1, 0);
   };
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -246,12 +247,33 @@ export function chunkMarkdown(
     if (line.length === 0) {
       segments.push("");
     } else {
+      // First pass: slice at maxChars (preserves original behaviour for Latin).
+      // Second pass: if a segment's *weighted* size still exceeds the budget
+      // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
+      // chunking.tokens so the chunk stays within the token budget.
       for (let start = 0; start < line.length; start += maxChars) {
-        segments.push(line.slice(start, start + maxChars));
+        const coarse = line.slice(start, start + maxChars);
+        if (estimateStringChars(coarse) > maxChars) {
+          const fineStep = Math.max(1, chunking.tokens);
+          for (let j = 0; j < coarse.length; ) {
+            let end = Math.min(j + fineStep, coarse.length);
+            // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+).
+            if (end < coarse.length) {
+              const code = coarse.charCodeAt(end - 1);
+              if (code >= 0xd800 && code <= 0xdbff) {
+                end += 1; // include the low surrogate
+              }
+            }
+            segments.push(coarse.slice(j, end));
+            j = end; // advance cursor to the adjusted boundary
+          }
+        } else {
+          segments.push(coarse);
+        }
       }
     }
     for (const segment of segments) {
-      const lineSize = segment.length + 1;
+      const lineSize = estimateStringChars(segment) + 1;
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
         carryOverlap();
