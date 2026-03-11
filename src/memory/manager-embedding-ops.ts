@@ -52,7 +52,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let currentTokens = 0;
 
     for (const chunk of chunks) {
-      const estimate = estimateUtf8Bytes(chunk.text);
+      const estimate = estimateUtf8Bytes(chunk.embedText ?? chunk.text);
       const wouldExceed =
         current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
       if (wouldExceed) {
@@ -189,7 +189,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     let cursor = 0;
     for (const batch of batches) {
-      const batchEmbeddings = await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchEmbeddings = await this.embedBatchWithRetry(
+        batch.map((chunk) => chunk.embedText ?? chunk.text),
+      );
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
@@ -430,7 +432,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       provider: "voyage",
       enabled: Boolean(voyage),
       buildRequest: (chunk) => ({
-        body: { input: chunk.text },
+        body: { input: chunk.embedText ?? chunk.text },
       }),
       runBatch: async (runnerOptions) =>
         await runVoyageEmbeddingBatches({
@@ -457,7 +459,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         url: OPENAI_BATCH_ENDPOINT,
         body: {
           model: openAi?.model ?? this.provider?.model ?? "text-embedding-3-small",
-          input: chunk.text,
+          input: chunk.embedText ?? chunk.text,
         },
       }),
       runBatch: async (runnerOptions) =>
@@ -481,7 +483,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       provider: "gemini",
       enabled: Boolean(gemini),
       buildRequest: (chunk) => ({
-        content: { parts: [{ text: chunk.text }] },
+        content: { parts: [{ text: chunk.embedText ?? chunk.text }] },
         taskType: "RETRIEVAL_DOCUMENT",
       }),
       runBatch: async (runnerOptions) =>

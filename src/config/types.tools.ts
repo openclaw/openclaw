@@ -375,6 +375,8 @@ export type MemorySearchConfig = {
   chunking?: {
     tokens?: number;
     overlap?: number;
+    /** Chunking strategy: "token" (default) splits by token count; "section" splits at ## headings for better retrieval of structured markdown. */
+    strategy?: "token" | "section";
   };
   /** Sync behavior. */
   sync?: {
