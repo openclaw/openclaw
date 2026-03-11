@@ -209,48 +209,38 @@ export class AcpxRuntime implements AcpRuntime {
       command: ["sessions", "ensure", "--name", sessionName],
     });
 
-    let events = await this.runControlCommand({
+    // Note: `acpx sessions ensure/new` may exit 0 with empty stdout. Do not rely on it to
+    // return identifiers. Instead, ensure existence then read identifiers via sessions show/list.
+    await this.runControlCommand({
       args: ensureCommand,
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
     });
-    let ensuredEvent = events.find(
-      (event) =>
-        asOptionalString(event.agentSessionId) ||
-        asOptionalString(event.acpxSessionId) ||
-        asOptionalString(event.acpxRecordId),
-    );
 
-    if (!ensuredEvent) {
+    let sessionMeta = await this.readSessionMeta({ agent, cwd, sessionName });
+    if (!sessionMeta) {
       const newCommand = await this.buildVerbArgs({
         agent,
         cwd,
         command: ["sessions", "new", "--name", sessionName],
       });
-      events = await this.runControlCommand({
+      await this.runControlCommand({
         args: newCommand,
         cwd,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
       });
-      ensuredEvent = events.find(
-        (event) =>
-          asOptionalString(event.agentSessionId) ||
-          asOptionalString(event.acpxSessionId) ||
-          asOptionalString(event.acpxRecordId),
-      );
-      if (!ensuredEvent) {
+      sessionMeta = await this.readSessionMeta({ agent, cwd, sessionName });
+      if (!sessionMeta) {
         throw new AcpRuntimeError(
           "ACP_SESSION_INIT_FAILED",
-          `ACP session init failed: neither 'sessions ensure' nor 'sessions new' returned valid session identifiers for ${sessionName}.`,
+          `ACP session init failed: could not resolve session identifiers via 'sessions show/list' for ${sessionName}.`,
         );
       }
     }
 
-    const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
-    const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
-    const backendSessionId = ensuredEvent
-      ? asOptionalString(ensuredEvent.acpxSessionId)
-      : undefined;
+    const acpxRecordId = asOptionalString(sessionMeta.acpxRecordId) ?? undefined;
+    const agentSessionId = asOptionalString(sessionMeta.agentSessionId) ?? undefined;
+    const backendSessionId = asOptionalString(sessionMeta.acpxSessionId) ?? undefined;
 
     return {
       sessionKey: input.sessionKey,
@@ -685,6 +675,48 @@ export class AcpxRuntime implements AcpRuntime {
     });
     this.mcpProxyAgentCommandCache.set(cacheKey, resolved);
     return resolved;
+  }
+
+  private async readSessionMeta(params: {
+    agent: string;
+    cwd: string;
+    sessionName: string;
+  }): Promise<AcpxJsonObject | null> {
+    // Prefer `sessions show <name>` since it returns a single `acpx.session.v1` record.
+    const showArgs = await this.buildVerbArgs({
+      agent: params.agent,
+      cwd: params.cwd,
+      command: ["sessions", "show", params.sessionName],
+    });
+    const showEvents = await this.runControlCommand({
+      args: showArgs,
+      cwd: params.cwd,
+      fallbackCode: "ACP_SESSION_INIT_FAILED",
+      ignoreNoSession: true,
+    });
+    const showRecord = showEvents.find((evt) => asTrimmedString(evt.schema) === "acpx.session.v1");
+    if (showRecord) {
+      return showRecord;
+    }
+
+    // Fallback: `sessions list` then filter by name + cwd.
+    const listArgs = await this.buildVerbArgs({
+      agent: params.agent,
+      cwd: params.cwd,
+      command: ["sessions", "list"],
+    });
+    const listEvents = await this.runControlCommand({
+      args: listArgs,
+      cwd: params.cwd,
+      fallbackCode: "ACP_SESSION_INIT_FAILED",
+    });
+    const matches = listEvents.filter(
+      (evt) =>
+        asTrimmedString(evt.schema) === "acpx.session.v1" &&
+        asTrimmedString(evt.name) === params.sessionName &&
+        asTrimmedString(evt.cwd) === params.cwd,
+    );
+    return matches[0] ?? null;
   }
 
   private async runControlCommand(params: {

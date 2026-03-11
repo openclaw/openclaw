@@ -76,9 +76,7 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
-  if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
-    emitJson({ action: "session_ensured", name: ensureName });
-  } else {
+  if (process.env.MOCK_ACPX_ENSURE_EMPTY !== "1") {
     emitJson({
       action: "session_ensured",
       acpxRecordId: "rec-" + ensureName,
@@ -88,14 +86,13 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
       created: true,
     });
   }
+  // When empty, simulate real-world behavior: exit 0 with no stdout.
   process.exit(0);
 }
 
 if (command === "sessions" && args[commandIndex + 1] === "new") {
   writeLog({ kind: "new", agent, args, sessionName: ensureName });
-  if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
-    emitJson({ action: "session_created", name: ensureName });
-  } else {
+  if (process.env.MOCK_ACPX_NEW_EMPTY !== "1") {
     emitJson({
       action: "session_created",
       acpxRecordId: "rec-" + ensureName,
@@ -105,6 +102,52 @@ if (command === "sessions" && args[commandIndex + 1] === "new") {
       created: true,
     });
   }
+  // When empty, simulate real-world behavior: exit 0 with no stdout.
+  process.exit(0);
+}
+
+if (command === "sessions" && args[commandIndex + 1] === "show") {
+  const name = String(args[commandIndex + 2] || "");
+  writeLog({ kind: "show", agent, args, sessionName: name });
+  if (!name || process.env.MOCK_ACPX_SHOW_EMPTY === "1") {
+    emitJson({ type: "error", code: "NO_SESSION", message: "No session" });
+    process.exit(0);
+  }
+  emitJson({
+    schema: "acpx.session.v1",
+    acpxRecordId: "rec-" + name,
+    acpSessionId: "sid-" + name,
+    acpxSessionId: "sid-" + name,
+    agentSessionId: "inner-" + name,
+    agentCommand: "mock-agent",
+    cwd: process.cwd(),
+    name,
+    createdAt: new Date().toISOString(),
+    lastUsedAt: new Date().toISOString(),
+    closed: false,
+  });
+  process.exit(0);
+}
+
+if (command === "sessions" && args[commandIndex + 1] === "list") {
+  writeLog({ kind: "list", agent, args });
+  if (process.env.MOCK_ACPX_LIST_EMPTY === "1") {
+    process.exit(0);
+  }
+  // Minimal list output; real adapter filters by name+cwd.
+  emitJson({
+    schema: "acpx.session.v1",
+    acpxRecordId: "rec-list",
+    acpSessionId: "sid-list",
+    acpxSessionId: "sid-list",
+    agentSessionId: "inner-list",
+    agentCommand: "mock-agent",
+    cwd: process.cwd(),
+    name: "agent:codex:acp:list",
+    createdAt: new Date().toISOString(),
+    lastUsedAt: new Date().toISOString(),
+    closed: false,
+  });
   process.exit(0);
 }
 

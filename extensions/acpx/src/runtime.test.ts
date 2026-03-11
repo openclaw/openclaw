@@ -127,6 +127,27 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--approve-all");
   });
 
+  it("ensures sessions even when sessions ensure/new exit 0 with empty stdout", async () => {
+    // Simulate real-world behavior where sessions ensure/new emit no identifiers (or no stdout).
+    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
+    process.env.MOCK_ACPX_NEW_EMPTY = "1";
+    const { runtime } = await createMockRuntimeFixture();
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:empty-ensure",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+    delete process.env.MOCK_ACPX_NEW_EMPTY;
+
+    // Identifiers should still be resolved via sessions show/list.
+    expect(handle.acpxRecordId).toBe("rec-agent:codex:acp:empty-ensure");
+    expect(handle.agentSessionId).toBe("inner-agent:codex:acp:empty-ensure");
+    expect(handle.backendSessionId).toBe("sid-agent:codex:acp:empty-ensure");
+  });
+
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
 
@@ -500,7 +521,7 @@ describe("AcpxRuntime", () => {
     expect(report.installCommand).toContain("acpx");
   });
 
-  it("falls back to 'sessions new' when 'sessions ensure' returns no session IDs", async () => {
+  it("does not require sessions ensure to emit identifiers (resolves ids via sessions show)", async () => {
     process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
     try {
       const { runtime, logPath } = await createMockRuntimeFixture();
@@ -515,17 +536,19 @@ describe("AcpxRuntime", () => {
 
       const logs = await readMockRuntimeLogEntries(logPath);
       expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+      // No guarantee that sessions new is required when show is available.
     } finally {
       delete process.env.MOCK_ACPX_ENSURE_EMPTY;
     }
   });
 
-  it("fails with ACP_SESSION_INIT_FAILED when both ensure and new omit session IDs", async () => {
+  it("fails with ACP_SESSION_INIT_FAILED when show/list cannot resolve identifiers", async () => {
     process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
     process.env.MOCK_ACPX_NEW_EMPTY = "1";
+    process.env.MOCK_ACPX_SHOW_EMPTY = "1";
+    process.env.MOCK_ACPX_LIST_EMPTY = "1";
     try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
+      const { runtime } = await createMockRuntimeFixture();
 
       await expect(
         runtime.ensureSession({
@@ -535,15 +558,13 @@ describe("AcpxRuntime", () => {
         }),
       ).rejects.toMatchObject({
         code: "ACP_SESSION_INIT_FAILED",
-        message: expect.stringContaining("neither 'sessions ensure' nor 'sessions new'"),
+        message: expect.stringContaining("sessions show/list"),
       });
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
     } finally {
       delete process.env.MOCK_ACPX_ENSURE_EMPTY;
       delete process.env.MOCK_ACPX_NEW_EMPTY;
+      delete process.env.MOCK_ACPX_SHOW_EMPTY;
+      delete process.env.MOCK_ACPX_LIST_EMPTY;
     }
   });
 });
