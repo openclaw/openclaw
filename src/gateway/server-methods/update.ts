@@ -9,6 +9,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
+import { refreshGatewayServiceEnvFromUpdatedInstall } from "../../infra/update-service-refresh.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -90,6 +91,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       sentinelPath = await writeRestartSentinel(payload);
     } catch {
       sentinelPath = null;
+    }
+
+    if (result.status === "ok") {
+      try {
+        await refreshGatewayServiceEnvFromUpdatedInstall({ root: result.root });
+      } catch (err) {
+        context?.logGateway?.warn(`update.run service refresh skipped: ${String(err)}`);
+      }
     }
 
     // Only restart the gateway when the update actually succeeded.
