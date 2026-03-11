@@ -9,7 +9,11 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
+export {
+  compileAllowlist,
+  resolveAllowlistCandidates,
+  resolveAllowlistMatchByCandidates,
+} from "../channels/allowlist-match.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";
@@ -33,12 +37,15 @@ export type {
 } from "../channels/plugins/onboarding-types.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
@@ -73,6 +80,7 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -88,7 +96,12 @@ export {
   resolveDmGroupAccessWithLists,
 } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { normalizeStringEntries } from "../shared/string-normalization.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export {
+  evaluateGroupRouteAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "./group-access.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";

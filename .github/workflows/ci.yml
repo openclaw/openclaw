@@ -213,34 +213,6 @@ jobs:
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
 
-  # Report-only dead-code scan. Runs after scope detection and stores the Knip
-  # report as an artifact so we can triage findings before enabling hard gates.
-  deadcode:
-    name: dead-code report
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "true"
-
-      - name: Run Knip dead-code scan
-        run: pnpm deadcode:report:ci:knip
-
-      - name: Upload dead-code results
-        uses: actions/upload-artifact@v4
-        with:
-          name: dead-code-knip-${{ github.run_id }}
-          path: .artifacts/deadcode
-
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
@@ -295,6 +267,12 @@ jobs:
         with:
           submodules: false
 
+      - name: Ensure secrets base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -303,42 +281,26 @@ jobs:
           install-deps: "false"
 
       - name: Setup Python
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            .pre-commit-config.yaml
+            .github/workflows/ci.yml
+
+      - name: Restore pre-commit cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
           python -m pip install pre-commit
-
-      - name: Detect secrets
-        run: |
-          set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "Running full detect-secrets scan on push."
-            pre-commit run --all-files detect-secrets
-            exit 0
-          fi
-
-          BASE="${{ github.event.pull_request.base.sha }}"
-          changed_files=()
-          if git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
-            while IFS= read -r path; do
-              [ -n "$path" ] || continue
-              [ -f "$path" ] || continue
-              changed_files+=("$path")
-            done < <(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
-          fi
-
-          if [ "${#changed_files[@]}" -gt 0 ]; then
-            echo "Running detect-secrets on ${#changed_files[@]} changed file(s)."
-            pre-commit run detect-secrets --files "${changed_files[@]}"
-          else
-            echo "Falling back to full detect-secrets scan."
-            pre-commit run --all-files detect-secrets
-          fi
 
       - name: Detect committed private keys
         run: pre-commit run --all-files detect-private-key
@@ -449,9 +411,11 @@ jobs:
           cache-key-suffix: "node22"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
+          # Try exact-key actions/cache restores instead to recover store reuse
+          # without the sticky-disk mount penalty.
           use-sticky-disk: "false"
           use-restore-keys: "false"
-          use-actions-cache: "false"
+          use-actions-cache: "true"
 
       - name: Runtime versions
         run: |
@@ -470,7 +434,9 @@ jobs:
           which node
           node -v
           pnpm -v
-          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+          # Persist Windows-native postinstall outputs in the pnpm store so restored
+          # caches can skip repeated rebuild/download work on later shards/runs.
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'

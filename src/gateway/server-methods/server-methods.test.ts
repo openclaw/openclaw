@@ -305,7 +305,7 @@ describe("exec approval handlers", () => {
     systemRunPlan: {
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/tmp",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     },
@@ -358,7 +358,7 @@ describe("exec approval handlers", () => {
       requestParams.systemRunPlan = {
         argv: commandArgv,
         cwd: cwdValue,
-        rawCommand: commandText,
+        commandText: commandText ?? commandArgv.join(" "),
         agentId:
           typeof (requestParams as { agentId?: unknown }).agentId === "string"
             ? ((requestParams as { agentId: string }).agentId ?? null)
@@ -531,6 +531,19 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
+    const manager = new ExecApprovalManager();
+    const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
+    void manager.register(resolvedRecord, 2_000);
+    expect(manager.resolve("abc", "allow-once")).toBe(true);
+
+    const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
+    void manager.register(pendingRecord, 2_000);
+
+    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+  });
+
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
@@ -573,7 +586,8 @@ describe("exec approval handlers", () => {
         systemRunPlan: {
           argv: ["/usr/bin/echo", "ok"],
           cwd: "/real/cwd",
-          rawCommand: "/usr/bin/echo ok",
+          commandText: "/usr/bin/echo ok",
+          commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
         },
@@ -583,17 +597,48 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).toBe("/usr/bin/echo ok");
-    expect(request["commandArgv"]).toEqual(["/usr/bin/echo", "ok"]);
+    expect(request["commandPreview"]).toBeUndefined();
+    expect(request["commandArgv"]).toBeUndefined();
     expect(request["cwd"]).toBe("/real/cwd");
     expect(request["agentId"]).toBe("main");
     expect(request["sessionKey"]).toBe("agent:main:main");
     expect(request["systemRunPlan"]).toEqual({
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
+      commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("derives a command preview from the fallback command for older node plans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "jq --version",
+        commandArgv: ["./env", "sh", "-c", "jq --version"],
+        systemRunPlan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/real/cwd",
+          commandText: './env sh -c "jq --version"',
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe('./env sh -c "jq --version"');
+    expect(request["commandPreview"]).toBeUndefined();
+    expect((request["systemRunPlan"] as { commandPreview?: string }).commandPreview).toBe(
+      "jq --version",
+    );
   });
 
   it("accepts resolve during broadcast", async () => {
@@ -666,6 +711,134 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("accepts unique short approval id prefixes", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
+    void manager.register(record, 60_000);
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-1234",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("rejects ambiguous short approval id prefixes", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const respond = vi.fn();
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+    };
+
+    void manager.register(
+      manager.create({ command: "echo one" }, 60_000, "approval-abcd-1111"),
+      60_000,
+    );
+    void manager.register(
+      manager.create({ command: "echo two" }, 60_000, "approval-abcd-2222"),
+      60_000,
+    );
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("ambiguous approval id prefix"),
+      }),
+    );
+  });
+
+  it("returns deterministic unknown/expired message for missing approval ids", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+
+    await resolveExecApproval({
+      handlers,
+      id: "missing-approval-id",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "unknown or expired approval id",
+      }),
+    );
+  });
+
+  it("resolves only the targeted approval id when multiple requests are pending", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasExecApprovalClients: () => true,
+    };
+    const respondOne = vi.fn();
+    const respondTwo = vi.fn();
+
+    const requestOne = requestExecApproval({
+      handlers,
+      respond: respondOne,
+      context,
+      params: { id: "approval-one", host: "gateway", timeoutMs: 60_000 },
+    });
+    const requestTwo = requestExecApproval({
+      handlers,
+      respond: respondTwo,
+      context,
+      params: { id: "approval-two", host: "gateway", timeoutMs: 60_000 },
+    });
+
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-one",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-one")?.decision).toBe("allow-once");
+    expect(manager.getSnapshot("approval-two")?.decision).toBeUndefined();
+    expect(manager.getSnapshot("approval-two")?.resolvedAtMs).toBeUndefined();
+
+    expect(manager.expire("approval-two", "test-expire")).toBe(true);
+    await requestOne;
+    await requestTwo;
+
+    expect(respondOne).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-one", decision: "allow-once" }),
+      undefined,
+    );
+    expect(respondTwo).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-two", decision: null }),
+      undefined,
+    );
+  });
+
   it("forwards turn-source metadata to exec approval forwarding", async () => {
     vi.useFakeTimers();
     try {
@@ -703,32 +876,59 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("expires immediately when no approver clients and no forwarding targets", async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, handlers, forwarder, respond, context } =
-        createForwardingExecApprovalFixture();
-      const expireSpy = vi.spyOn(manager, "expire");
+  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
 
-      const requestPromise = requestExecApproval({
-        handlers,
-        respond,
-        context,
-        params: { timeoutMs: 60_000 },
-      });
-      await drainApprovalRequestTicks();
-      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-      expect(expireSpy).toHaveBeenCalledTimes(1);
-      await vi.runOnlyPendingTimersAsync();
-      await requestPromise;
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ decision: null }),
-        undefined,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
+    });
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-no-approver", decision: null }),
+      undefined,
+    );
+  });
+
+  it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
+    const resolveRespond = vi.fn();
+    forwarder.handleRequested.mockResolvedValueOnce(true);
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
+    });
+    await drainApprovalRequestTicks();
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).not.toHaveBeenCalled();
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-forwarded",
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-forwarded", decision: "allow-once" }),
+      undefined,
+    );
   });
 });
 

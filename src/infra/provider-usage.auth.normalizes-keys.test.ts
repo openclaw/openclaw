@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 describe("resolveProviderAuths key normalization", () => {
@@ -105,6 +106,44 @@ describe("resolveProviderAuths key normalization", () => {
     const legacyDir = path.join(home, ".pi", "agent");
     await fs.mkdir(legacyDir, { recursive: true });
     await fs.writeFile(path.join(legacyDir, "auth.json"), raw, "utf8");
+  }
+
+  function createTestModelDefinition() {
+    return {
+      id: "test-model",
+      name: "Test Model",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1024,
+      maxTokens: 256,
+    };
+  }
+
+  async function resolveMinimaxAuthFromConfiguredKey(apiKey: string) {
+    return await withSuiteHome(
+      async (home) => {
+        await writeConfig(home, {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com",
+                models: [createTestModelDefinition()],
+                apiKey,
+              },
+            },
+          },
+        });
+
+        return await resolveProviderAuths({
+          providers: ["minimax"],
+        });
+      },
+      {
+        MINIMAX_API_KEY: undefined,
+        MINIMAX_CODE_PLAN_KEY: undefined,
+      },
+    );
   }
 
   it("strips embedded CR/LF from env keys", async () => {
@@ -402,5 +441,15 @@ describe("resolveProviderAuths key normalization", () => {
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
     }, {});
+  });
+
+  it("ignores marker-backed config keys for provider usage auth resolution", async () => {
+    const auths = await resolveMinimaxAuthFromConfiguredKey(NON_ENV_SECRETREF_MARKER);
+    expect(auths).toEqual([]);
+  });
+
+  it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {
+    const auths = await resolveMinimaxAuthFromConfiguredKey("ALLCAPS_SAMPLE");
+    expect(auths).toEqual([{ provider: "minimax", token: "ALLCAPS_SAMPLE" }]);
   });
 });
