@@ -938,7 +938,8 @@ async function agentCommandInternal(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
-    const needsModelCatalog = hasAllowlist || hasStoredOverride;
+    const hasOneShotModelOverride = Boolean(opts.modelOverrideOnce?.trim());
+    const needsModelCatalog = hasAllowlist || hasStoredOverride || hasOneShotModelOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
@@ -1007,12 +1008,19 @@ async function agentCommandInternal(
     const turnModelOverride = opts.modelOverrideOnce?.trim();
     if (turnModelOverride) {
       const parsed = parseModelRef(turnModelOverride, provider);
-      if (parsed) {
-        const key = modelKey(parsed.provider, parsed.model);
-        if (isCliProvider(parsed.provider, cfg) || allowAnyModel || allowedModelKeys.has(key)) {
-          provider = parsed.provider;
-          model = parsed.model;
-        }
+      if (!parsed) {
+        throw new Error(
+          `Invalid --model value "${turnModelOverride}". Use format "provider/model" or a known model id.`,
+        );
+      }
+      const key = modelKey(parsed.provider, parsed.model);
+      if (isCliProvider(parsed.provider, cfg) || allowAnyModel || allowedModelKeys.has(key)) {
+        provider = parsed.provider;
+        model = parsed.model;
+      } else {
+        throw new Error(
+          `Model "${turnModelOverride}" is not allowed. Check agents.defaults.models in your config.`,
+        );
       }
     }
 
