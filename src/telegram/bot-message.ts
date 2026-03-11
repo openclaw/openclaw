@@ -47,6 +47,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     textLimit,
     opts,
   } = deps;
+  const processingIndicator = telegramCfg.processingIndicator?.trim();
 
   return async (
     primaryCtx: TelegramContext,
@@ -79,6 +80,19 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       return;
     }
+    let processingIndicatorMessageId: number | undefined;
+    if (processingIndicator) {
+      try {
+        const sent = await bot.api.sendMessage(
+          context.chatId,
+          processingIndicator,
+          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
+        );
+        processingIndicatorMessageId = sent?.message_id;
+      } catch {
+        // Best-effort UX only; continue processing if the indicator cannot be sent.
+      }
+    }
     try {
       await dispatchTelegramMessage({
         context,
@@ -91,8 +105,27 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         telegramCfg,
         opts,
       });
+      if (processingIndicatorMessageId != null) {
+        try {
+          await bot.api.deleteMessage(context.chatId, processingIndicatorMessageId);
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
+      if (processingIndicatorMessageId != null) {
+        try {
+          await bot.api.editMessageText(
+            context.chatId,
+            processingIndicatorMessageId,
+            "Something went wrong while processing your request. Please try again.",
+          );
+          return;
+        } catch {
+          // Fall back to a new message if the indicator cannot be edited.
+        }
+      }
       try {
         await bot.api.sendMessage(
           context.chatId,
