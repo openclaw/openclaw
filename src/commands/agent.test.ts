@@ -757,7 +757,7 @@ describe("agentCommand", () => {
       vi.mocked(ensureAuthProfileStoreMock).mockReturnValueOnce({
         version: 1,
         profiles: {
-          "profile-anthropic": { provider: "anthropic" },
+          "profile-anthropic": { type: "api_key", provider: "anthropic", key: "sk-test" },
         },
       } as ReturnType<typeof ensureAuthProfileStoreMock>);
 
