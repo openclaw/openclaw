@@ -233,7 +233,6 @@ export class AcpSessionManager {
       let runtime: AcpRuntime;
       let handle: AcpRuntimeHandle;
       let meta: SessionAcpMeta;
-      let backend: string;
 
       try {
         const backendObj = this.deps.requireRuntimeBackend(
@@ -326,8 +325,6 @@ export class AcpSessionManager {
           mode: input.mode,
           cwd: effectiveCwd,
         });
-
-        backend = handle.backend || backendObj.id;
       } catch (err) {
         result = "failure";
         error = {
