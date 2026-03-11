@@ -865,7 +865,7 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.telegram?.dmPolicy).toBe("allowlist");
   });
 
-  it("patches nested account config and preserves existing enabled flag", () => {
+  it("patches nested account config and enables the target account", () => {
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -888,7 +888,7 @@ describe("patchChannelConfigForAccount", () => {
     });
 
     expect(next.channels?.slack?.enabled).toBe(true);
-    expect(next.channels?.slack?.accounts?.work?.enabled).toBe(false);
+    expect(next.channels?.slack?.accounts?.work?.enabled).toBe(true);
     expect(next.channels?.slack?.accounts?.work?.botToken).toBe("new-bot");
     expect(next.channels?.slack?.accounts?.work?.appToken).toBe("new-app");
   });
