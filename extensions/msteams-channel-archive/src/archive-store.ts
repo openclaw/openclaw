@@ -129,39 +129,10 @@ export class MSTeamsChannelArchiveStore {
   async archiveMessage(input: ArchiveInboundMessageInput): Promise<ArchiveMessageRecord> {
     const conversationId = normalizeConversationId(input.conversationId);
     const archiveKey = this.getArchiveKey(conversationId);
-    const attachments = await this.archiveAttachments(input.mediaPaths, input.mediaTypes);
     const messageId = input.messageId?.trim() || undefined;
     const replyToId = input.replyToId?.trim() || undefined;
     const derivedThreadId = input.threadId?.trim() || replyToId || messageId;
     const threadRootMessageId = replyToId || messageId;
-
-    const record: ArchiveMessageRecord = {
-      provider: "msteams",
-      archiveKey,
-      conversationId,
-      conversationType: input.conversationType,
-      tenantId: input.tenantId,
-      teamId: input.teamId,
-      teamName: input.teamName,
-      channelId: input.channelId,
-      channelName: input.channelName,
-      threadId: derivedThreadId,
-      threadRootMessageId,
-      messageId,
-      replyToId,
-      timestamp: input.timestamp,
-      sender: {
-        id: input.senderId,
-        name: input.senderName,
-      },
-      text: input.content,
-      rawBody: input.rawBody,
-      attachments,
-      origin: {
-        surface: "msteams",
-        chatType: input.chatType,
-      },
-    };
 
     await this.ensureBaseDirs();
 
@@ -179,6 +150,35 @@ export class MSTeamsChannelArchiveStore {
           return existing;
         }
       }
+
+      const attachments = await this.archiveAttachments(input.mediaPaths, input.mediaTypes);
+      const record: ArchiveMessageRecord = {
+        provider: "msteams",
+        archiveKey,
+        conversationId,
+        conversationType: input.conversationType,
+        tenantId: input.tenantId,
+        teamId: input.teamId,
+        teamName: input.teamName,
+        channelId: input.channelId,
+        channelName: input.channelName,
+        threadId: derivedThreadId,
+        threadRootMessageId,
+        messageId,
+        replyToId,
+        timestamp: input.timestamp,
+        sender: {
+          id: input.senderId,
+          name: input.senderName,
+        },
+        text: input.content,
+        rawBody: input.rawBody,
+        attachments,
+        origin: {
+          surface: "msteams",
+          chatType: input.chatType,
+        },
+      };
 
       await fs.promises.mkdir(path.dirname(messageFile), { recursive: true, mode: 0o700 });
       await fs.promises.appendFile(messageFile, `${JSON.stringify(record)}\n`, "utf8");

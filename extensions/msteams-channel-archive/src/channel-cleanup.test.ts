@@ -13,10 +13,11 @@ describe("msteams archive deleted-channel cleanup", () => {
     const channelExists = vi.fn(
       async ({ channelId }: { channelId: string }) => channelId !== "channel-deleted",
     );
-    const resolveGraphTeamId = vi.fn(async ({ archive }: { archive: { teamId?: string } }) =>
-      archive.teamId === "runtime-team-key"
-        ? "00000000-0000-0000-0000-000000000001"
-        : (archive.teamId ?? null),
+    const resolveGraphTeamId = vi.fn(
+      async ({ archive }: { archive: { teamId?: string; channelId?: string } }) =>
+        archive.teamId === "runtime-team-key" && archive.channelId === "channel-deleted"
+          ? "00000000-0000-0000-0000-000000000001"
+          : (archive.teamId ?? null),
     );
 
     const result = await runArchiveCleanupSweep({
@@ -75,6 +76,13 @@ describe("msteams archive deleted-channel cleanup", () => {
     });
     expect(getAccessToken).toHaveBeenCalledTimes(1);
     expect(resolveGraphTeamId).toHaveBeenCalledTimes(2);
+    expect(resolveGraphTeamId).toHaveBeenCalledWith({
+      accessToken: "graph-token",
+      archive: expect.objectContaining({
+        teamId: "runtime-team-key",
+        channelId: "channel-deleted",
+      }),
+    });
     expect(channelExists).toHaveBeenCalledTimes(2);
     expect(pruneConversation).toHaveBeenCalledWith("19:deleted@thread.tacv2");
   });

@@ -316,8 +316,8 @@ async function resolveGraphTeamIdForArchive(params: {
   if (isGraphTeamId(params.archive.teamId)) {
     return params.archive.teamId;
   }
-  const teamRuntimeId = params.archive.teamId?.trim();
-  if (!teamRuntimeId) {
+  const channelId = params.archive.channelId?.trim();
+  if (!channelId) {
     return null;
   }
 
@@ -331,7 +331,7 @@ async function resolveGraphTeamIdForArchive(params: {
       accessToken: params.accessToken,
       teamId: graphTeamId,
     });
-    if (channels.some((channel) => channel.id?.trim() === teamRuntimeId)) {
+    if (channels.some((channel) => channel.id?.trim() === channelId)) {
       return graphTeamId;
     }
   }
