@@ -19,7 +19,7 @@ import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
-type WebhookResponsePayload = {
+export type WebhookResponsePayload = {
   statusCode: number;
   body: string;
   headers?: Record<string, string>;
@@ -244,7 +244,7 @@ export class VoiceCallWebhookServer {
       if (this.realtimeHandler || this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
           // Realtime voice takes precedence when the path matches
-          if (this.realtimeHandler && this.isRealtimeMode(request)) {
+          if (this.realtimeHandler && this.isRealtimeWebSocketUpgrade(request)) {
             console.log("[voice-call] WebSocket upgrade for realtime voice");
             this.realtimeHandler.handleWebSocketUpgrade(request, socket, head);
             return;
@@ -359,7 +359,7 @@ export class VoiceCallWebhookServer {
    * Returns true for WebSocket upgrade paths that belong to the realtime handler.
    * Used only for upgrade routing — not for the inbound HTTP webhook POST.
    */
-  private isRealtimeMode(req: http.IncomingMessage): boolean {
+  private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
     return (req.url ?? "/").includes("/realtime");
   }
 
@@ -367,17 +367,6 @@ export class VoiceCallWebhookServer {
     req: http.IncomingMessage,
     webhookPath: string,
   ): Promise<WebhookResponsePayload> {
-    // Realtime mode: whenever the realtime handler is active, ALL inbound calls
-    // use it. The handler returns TwiML <Connect><Stream> so Twilio opens a
-    // WebSocket to the /voice/stream/realtime path, which is routed back here
-    // via the upgrade handler's isRealtimeMode() check.
-    if (this.realtimeHandler && req.method === "POST") {
-      const url = buildRequestUrl(req.url, req.headers.host);
-      if (this.isWebhookPathMatch(url.pathname, webhookPath)) {
-        return this.realtimeHandler.buildTwiMLPayload(req);
-      }
-    }
-
     const url = buildRequestUrl(req.url, req.headers.host);
 
     if (url.pathname === "/voice/hold-music") {
@@ -430,6 +419,14 @@ export class VoiceCallWebhookServer {
     if (!verification.verifiedRequestKey) {
       console.warn("[voice-call] Webhook verification succeeded without request identity key");
       return { statusCode: 401, body: "Unauthorized" };
+    }
+
+    // Realtime mode: return TwiML <Connect><Stream> after verification so
+    // the request is still authenticated against the provider's signature.
+    // The WebSocket that Twilio opens in response is routed via the upgrade
+    // handler's isRealtimeWebSocketUpgrade() check.
+    if (this.realtimeHandler) {
+      return this.realtimeHandler.buildTwiMLPayload(req);
     }
 
     const parsed = this.provider.parseWebhookEvent(ctx, {
