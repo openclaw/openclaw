@@ -19,7 +19,7 @@ export const handleDetectCommand: CommandHandler = async (params, allowTextComma
   }
 
   let url = body.slice("/detect ".length).trim();
-  
+
   if (!url) {
     // Try to fall back to media attachments if no URL is provided in text
     const mediaUrl = params.ctx.MediaUrl || params.ctx.MediaUrls?.[0];
