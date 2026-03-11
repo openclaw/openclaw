@@ -39,7 +39,7 @@ struct MacNodeBrowserProxyTests {
         #expect(tabs[0]["id"] as? String == "tab-1")
     }
 
-    // Regression test: POST body with nested AnyCodable must not crash with __SwiftValue
+    // Regression test: nested POST bodies must serialize without __SwiftValue crashes.
     @Test func postRequestSerializesNestedBodyWithoutCrash() async throws {
         actor BodyCapture {
             private var body: Data?
