@@ -133,7 +133,7 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
     lines.push(`Participants: ${members}.`);
   }
   lines.push(
-    "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
+    "Your text replies are automatically sent to this group chat — reply directly for text messages. To send files, images, or other attachments to this group, you may use the message tool targeting this same group.",
   );
   return lines.join(" ");
 }
