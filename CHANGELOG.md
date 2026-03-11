@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Secret files: harden CLI and channel credential file reads against path-swap races by requiring direct regular files for `*File` secret inputs and rejecting symlink-backed secret files.
 - Archive extraction: harden TAR and external `tar.bz2` installs against destination symlink and pre-existing child-symlink escapes by extracting into staging first and merging into the canonical destination with safe file opens.
 - Models/Kimi Coding: send `anthropic-messages` tools in native Anthropic format again so `kimi-coding` stops degrading tool calls into XML/plain-text pseudo invocations instead of real `tool_use` blocks. (#38669, #39907, #40552) Thanks @opriz.
+- Agents/Anthropic-compatible tool calls: recover tool arguments when providers append trailing junk after a valid JSON object, so `kimi-coding/k2p5` tool calls no longer fail with `Unexpected non-whitespace character after JSON`. Fixes #42481. Thanks @vincentkoc.
 - Context engine/tests: add bundled-registry regression coverage for cross-chunk resolution, plugin-sdk re-exports, and concurrent chunk registration. (#40460) thanks @dsantoreis.
 - Agents/embedded runner: bound compaction retry waiting and drain embedded runs during SIGUSR1 restart so session lanes recover instead of staying blocked behind compaction. (#40324) thanks @cgdusek.
 - ACP/sessions.patch: allow `spawnedBy` and `spawnDepth` lineage fields on ACP session keys so `sessions_spawn` with `runtime: "acp"` no longer fails during child-session setup. Fixes #40971. (#40995) thanks @xaeon2026.
