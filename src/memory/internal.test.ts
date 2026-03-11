@@ -6,6 +6,7 @@ import {
   buildFileEntry,
   chunkMarkdown,
   listMemoryFiles,
+  loadMultimodalEmbeddingInput,
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
@@ -197,7 +198,18 @@ describe("buildFileEntry", () => {
       mimeType: "image/png",
       contentText: "Image file: diagram.png",
     });
-    expect(entry?.embeddingInput?.parts).toEqual([
+    expect(entry?.embeddingInput).toBeUndefined();
+  });
+
+  it("loads multimodal embedding input lazily", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "diagram.png");
+    await fs.writeFile(target, Buffer.from("png"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+    const input = await loadMultimodalEmbeddingInput(entry!);
+
+    expect(input?.parts).toEqual([
       { type: "text", text: "Image file: diagram.png" },
       expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
     ]);

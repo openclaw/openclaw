@@ -17,7 +17,7 @@ const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac
 export function normalizeMemoryMultimodalModalities(
   raw: MemoryMultimodalSelection[] | undefined,
 ): MemoryMultimodalModality[] {
-  if (!raw?.length || raw.includes("all")) {
+  if (raw === undefined || raw.includes("all")) {
     return [...MEMORY_MULTIMODAL_MODALITIES];
   }
   const normalized = new Set<MemoryMultimodalModality>();

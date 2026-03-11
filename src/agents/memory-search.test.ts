@@ -155,6 +155,29 @@ describe("memory search config", () => {
     });
   });
 
+  it("keeps an explicit empty multimodal modalities list empty", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            multimodal: {
+              enabled: true,
+              modalities: [],
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: [],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
+  });
+
   it("rejects multimodal memory on unsupported providers", () => {
     const cfg = asConfig({
       agents: {

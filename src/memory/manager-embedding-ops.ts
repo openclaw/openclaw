@@ -17,6 +17,7 @@ import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
 import {
   chunkMarkdown,
   hashText,
+  loadMultimodalEmbeddingInput,
   parseEmbedding,
   remapChunkLines,
   type MemoryChunk,
@@ -771,14 +772,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     let chunks: MemoryChunk[];
-    if ("kind" in entry && entry.kind === "multimodal" && entry.embeddingInput) {
+    if ("kind" in entry && entry.kind === "multimodal") {
+      const embeddingInput = await loadMultimodalEmbeddingInput(entry);
+      if (!embeddingInput) {
+        return;
+      }
       chunks = [
         {
           startLine: 1,
           endLine: 1,
-          text: entry.contentText ?? entry.embeddingInput.text,
+          text: entry.contentText ?? embeddingInput.text,
           hash: entry.hash,
-          embeddingInput: entry.embeddingInput,
+          embeddingInput,
         },
       ];
     } else {

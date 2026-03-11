@@ -8,7 +8,6 @@ import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs
 import { isFileMissingError } from "./fs-utils.js";
 import {
   classifyMemoryMultimodalPath,
-  isMemoryMultimodalEnabled,
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
@@ -21,7 +20,6 @@ export type MemoryFileEntry = {
   hash: string;
   kind?: "markdown" | "multimodal";
   contentText?: string;
-  embeddingInput?: EmbeddingInput;
   modality?: MemoryMultimodalModality;
   mimeType?: string;
 };
@@ -197,9 +195,6 @@ export async function buildFileEntry(
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
   if (modality) {
-    if (!isMemoryMultimodalEnabled(multimodalSettings)) {
-      return null;
-    }
     if (stat.size > multimodalSettings.maxFileBytes) {
       return null;
     }
@@ -217,17 +212,6 @@ export async function buildFileEntry(
       return null;
     }
     const contentText = `${modality === "image" ? "Image" : "Audio"} file: ${normalizedPath}`;
-    const embeddingInput: EmbeddingInput = {
-      text: contentText,
-      parts: [
-        { type: "text", text: contentText },
-        {
-          type: "inline-data",
-          mimeType,
-          data: buffer.toString("base64"),
-        },
-      ],
-    };
     const dataHash = crypto.createHash("sha256").update(buffer).digest("hex");
     const chunkHash = hashText(
       JSON.stringify({
@@ -245,7 +229,6 @@ export async function buildFileEntry(
       hash: chunkHash,
       kind: "multimodal",
       contentText,
-      embeddingInput,
       modality,
       mimeType,
     };
@@ -267,6 +250,34 @@ export async function buildFileEntry(
     size: stat.size,
     hash,
     kind: "markdown",
+  };
+}
+
+export async function loadMultimodalEmbeddingInput(
+  entry: Pick<MemoryFileEntry, "absPath" | "contentText" | "mimeType" | "kind">,
+): Promise<EmbeddingInput | null> {
+  if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
+    return null;
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await fs.readFile(entry.absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  return {
+    text: entry.contentText,
+    parts: [
+      { type: "text", text: entry.contentText },
+      {
+        type: "inline-data",
+        mimeType: entry.mimeType,
+        data: buffer.toString("base64"),
+      },
+    ],
   };
 }
 
