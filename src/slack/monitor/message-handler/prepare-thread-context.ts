@@ -81,7 +81,7 @@ export async function resolveSlackThreadContextData(params: {
   // since it reflects activity from any thread, not just this one).
   const shouldFetchHistory = !params.ctx.threadIsolation
     ? params.threadTs
-      ? !params.ctx.seenThreadIds.has(params.threadTs)
+      ? !params.ctx.seenThreadIds.has(`${params.message.channel}:${params.threadTs}`)
       : true
     : !threadSessionPreviousTimestamp;
   if (threadInitialHistoryLimit > 0 && shouldFetchHistory) {

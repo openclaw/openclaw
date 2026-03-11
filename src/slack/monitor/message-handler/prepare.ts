@@ -299,13 +299,16 @@ function resolveSlackRoutingContext(params: {
     useSuffix: ctx.threadIsolation,
   });
   const sessionKey = threadKeys.sessionKey;
-  // When thread isolation is disabled, key history off threadTs so threads
+  // When thread isolation is disabled, key history off channel:threadTs so threads
   // don't share the same history bucket on the now-shared session key.
+  // The channel prefix prevents collisions when channelIsolation is also off.
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread"
       ? ctx.threadIsolation
         ? sessionKey
-        : (threadTs ?? sessionKey)
+        : threadTs
+          ? `${message.channel}:${threadTs}`
+          : sessionKey
       : message.channel;
 
   return {
@@ -714,9 +717,10 @@ export async function prepareSlackMessage(params: {
     ParentSessionKey: threadKeys.parentSessionKey,
     // Include thread starter body on the first encounter of each thread.
     // When isolation is off, use seenThreadIds (shared session timestamp is unreliable).
+    // Channel-prefixed key prevents collisions when channelIsolation is also off.
     // When isolation is on, use threadSessionPreviousTimestamp as before.
     ThreadStarterBody: !ctx.threadIsolation
-      ? threadTs && !ctx.seenThreadIds.has(threadTs)
+      ? threadTs && !ctx.seenThreadIds.has(`${message.channel}:${threadTs}`)
         ? threadStarterBody
         : undefined
       : !threadSessionPreviousTimestamp
@@ -726,7 +730,9 @@ export async function prepareSlackMessage(params: {
     IsFirstThreadTurn:
       isThreadReply &&
       threadTs &&
-      (!ctx.threadIsolation ? !ctx.seenThreadIds.has(threadTs) : !threadSessionPreviousTimestamp)
+      (!ctx.threadIsolation
+        ? !ctx.seenThreadIds.has(`${message.channel}:${threadTs}`)
+        : !threadSessionPreviousTimestamp)
         ? true
         : undefined,
     ThreadLabel: threadLabel,
@@ -749,10 +755,17 @@ export async function prepareSlackMessage(params: {
     NativeChannelId: message.channel,
   }) satisfies FinalizedMsgContext;
 
-  // Mark this threadTs as seen so subsequent turns skip first-turn work
+  // Mark this thread as seen so subsequent turns skip first-turn work
   // (thread starter injection, history fetch, IsFirstThreadTurn flag).
-  if (threadTs && !ctx.threadIsolation) {
-    ctx.seenThreadIds.add(threadTs);
+  // Only for actual thread replies — parent messages with thread_ts === ts
+  // shouldn't be marked since they weren't processed as thread context.
+  // Channel-prefixed to prevent collisions when channelIsolation is also off.
+  if (isThreadReply && threadTs && !ctx.threadIsolation) {
+    // Cap at 500 entries to prevent unbounded growth in long-running sessions.
+    if (ctx.seenThreadIds.size >= 500) {
+      ctx.seenThreadIds.clear();
+    }
+    ctx.seenThreadIds.add(`${message.channel}:${threadTs}`);
   }
 
   const pinnedMainDmOwner = isDirectMessage

@@ -255,19 +255,19 @@ Note: `replyToMode="off"` disables **all** reply threading in Slack, including e
 
 ### Shared session across threads (`session.threadIsolation`)
 
-By default, each Slack thread forks its own session (`:thread:<threadTs>` suffix). Set `session.threadIsolation: false` to make all threads share the parent session instead. This is useful for single-identity agents where you want cross-thread memory without duplicating context.
+By default, each Slack thread forks its own session (`:thread:<threadTs>` suffix). Set `session.threadIsolation` to `false` to make all threads share the parent session instead. This is useful for single-identity agents where you want cross-thread memory without duplicating context.
 
-```yaml
-session:
-  threadIsolation: false
+```json5
+{ session: { threadIsolation: false } }
 ```
 
 When disabled:
 
 - Thread replies reuse the parent session key (no `:thread:` suffix).
-- Thread history and starter context are still injected per-thread using `threadTs` as the history bucket key, so concurrent threads don't collide.
-- `ThreadStarterBody` and `IsFirstThreadTurn` are set on the first encounter of each thread (tracked per-session via `seenThreadIds`). Subsequent turns to the same thread skip these to avoid redundant Slack API calls.
+- Thread history and starter context are still injected per-thread using a composite `channel:threadTs` history key, so concurrent threads across channels don't collide.
+- `ThreadStarterBody` and `IsFirstThreadTurn` are set on the first encounter of each thread (tracked per-session via `seenThreadIds`, capped at 500 entries). Subsequent turns to the same thread skip these to avoid redundant Slack API calls.
 - Thread history is fetched once per thread for the same reason.
+- Session reset type follows the parent session (group/direct), not the thread reset type.
 
 This setting only affects Slack today. Other channels are unaffected.
 
