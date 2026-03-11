@@ -106,19 +106,16 @@ export async function promptModelMetadata(
 ): Promise<Partial<ModelDefinitionConfig>> {
   const result: Partial<ModelDefinitionConfig> = {};
 
-  await prompter.note("Configure model metadata. Press Enter to keep defaults.", "Model metadata");
-
-  result.id = await prompter.text({
-    message: "Model ID",
-    initialValue: current?.id ?? "",
-    placeholder: "e.g. llama3, claude-sonnet-4-6",
-    validate: (v) => (v.trim() ? undefined : "Model ID is required"),
-  });
+  const modelId = current?.id ?? "unknown";
+  await prompter.note(
+    `Editing metadata for model: ${modelId}\nPress Enter to keep defaults.`,
+    "Model metadata",
+  );
 
   result.name = await prompter.text({
     message: "Display name",
-    initialValue: current?.name ?? result.id,
-    placeholder: result.id,
+    initialValue: current?.name ?? modelId,
+    placeholder: modelId,
   });
 
   const apiOptions = [
@@ -261,7 +258,7 @@ export async function promptModelMetadata(
     compat.maxTokensField = maxTokensFieldChoice;
 
     for (const [k, v] of Object.entries(compat)) {
-      if (v === false) {
+      if (v === false && k !== "supportsTools") {
         delete compat[k];
       }
     }

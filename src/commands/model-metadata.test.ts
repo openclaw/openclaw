@@ -163,7 +163,6 @@ describe("formatTokenCount", () => {
 describe("promptModelMetadata", () => {
   it("prompts for all fields and returns metadata", async () => {
     const textResponses: Record<string, string> = {
-      "Model ID": "test-model",
       "Display name": "Test Model",
       "Context window (tokens)": "128000",
       "Max output tokens": "4096",
@@ -186,7 +185,7 @@ describe("promptModelMetadata", () => {
 
     const result = await promptModelMetadata(prompter);
 
-    expect(result.id).toBe("test-model");
+    expect(result.id).toBeUndefined();
     expect(result.name).toBe("Test Model");
     expect(result.reasoning).toBe(true);
     expect(result.input).toEqual(["text", "image"]);
@@ -218,7 +217,6 @@ describe("promptModelMetadata", () => {
 
     await promptModelMetadata(prompter, current);
 
-    expect(capturedInitialValues["Model ID"]).toBe("existing");
     expect(capturedInitialValues["Display name"]).toBe("Existing Model");
     expect(capturedInitialValues["Context window (tokens)"]).toBe("64000");
     expect(capturedInitialValues["Max output tokens"]).toBe("2048");
