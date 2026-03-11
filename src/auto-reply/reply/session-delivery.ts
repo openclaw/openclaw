@@ -9,6 +9,7 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
+  isInterSessionChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
@@ -90,6 +91,23 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+
+  // Inter-session messages (from sessions_send): preserve the receiver's
+  // established external channel without injecting the sender's channel.
+  // Threading the sender's channel alone — without paired to/accountId/threadId —
+  // would leave the receiver with a mismatched channel+to state.
+  if (isInterSessionChannel(params.originatingChannelRaw)) {
+    const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+    if (isExternalRoutingChannel(persistedChannel)) {
+      return persistedChannel;
+    }
+    const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
+    if (isExternalRoutingChannel(sessionKeyChannelHint)) {
+      return sessionKeyChannelHint;
+    }
+    return undefined;
+  }
+
   // WebChat should own reply routing for direct-session UI turns, even when the
   // session previously replied through an external channel like iMessage.
   if (
@@ -121,6 +139,12 @@ export function resolveLastToRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
+  // Inter-session messages: preserve the receiver's established destination.
+  // The sender's to/accountId/threadId are irrelevant to the receiver's route.
+  if (isInterSessionChannel(params.originatingChannelRaw)) {
+    return params.persistedLastTo;
+  }
+
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&

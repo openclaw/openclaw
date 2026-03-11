@@ -450,10 +450,17 @@ describe("sessions_send gating", () => {
     expect(result.details).toMatchObject({ status: "forbidden" });
   });
 
-  it("threads agentChannel through to the agent gateway call instead of hardcoding webchat", async () => {
-    // Regression test for: sessions_send hardcodes INTERNAL_MESSAGE_CHANNEL ("webchat"),
-    // causing reply routing to flip from Discord/external channel to control UI.
-    // Fix: channel should be opts.agentChannel ?? INTERNAL_MESSAGE_CHANNEL.
+  it("uses INTER_SESSION_CHANNEL sentinel instead of hardcoding webchat or threading sender channel", async () => {
+    // Regression test for: sessions_send hardcoded INTERNAL_MESSAGE_CHANNEL ("webchat"),
+    // causing the receiver's reply to flip from its external channel to the webchat UI.
+    //
+    // First fix attempt threaded agentChannel directly, but that caused a different bug:
+    // channel alone without paired to/accountId/threadId leaves the receiver with a
+    // mismatched channel+to state (resolveLastToRaw falls back to stale persistedLastTo).
+    //
+    // Correct fix: always use INTER_SESSION_CHANNEL ("inter_session") as a sentinel so
+    // resolveLastChannelRaw/resolveLastToRaw preserve the receiver's established route.
+    //
     // See: https://github.com/openclaw/openclaw/issues/43318
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
@@ -467,30 +474,30 @@ describe("sessions_send gating", () => {
 
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
-      agentChannel: MAIN_AGENT_CHANNEL, // "whatsapp"
+      agentChannel: MAIN_AGENT_CHANNEL, // "whatsapp" — should NOT be injected as channel
     });
 
-    await tool.execute("call-channel-threading", {
+    await tool.execute("call-inter-session-sentinel", {
       sessionKey: "agent:other:main",
       message: "hello from whatsapp agent",
       timeoutSeconds: 0,
     });
 
-    // Find the "agent" gateway call (the one that carries sendParams)
     const agentCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string })?.method === "agent",
     );
     expect(agentCall).toBeDefined();
-    // Channel must be the source agent's channel, NOT "webchat"
-    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).toBe(
-      MAIN_AGENT_CHANNEL,
-    );
-    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).not.toBe(
-      "webchat",
-    );
+    const channel = (agentCall![0] as { params?: { channel?: string } })?.params?.channel;
+    // Must be the inter_session sentinel — NOT the sender's channel, NOT "webchat"
+    expect(channel).toBe("inter_session");
+    expect(channel).not.toBe("webchat");
+    expect(channel).not.toBe(MAIN_AGENT_CHANNEL);
   });
 
-  it("falls back to webchat channel when agentChannel is not provided", async () => {
+  it("uses INTER_SESSION_CHANNEL sentinel even when agentChannel is not provided", async () => {
+    // Even for internal spawns with no agentChannel, we use the sentinel so that
+    // resolveLastChannelRaw can still preserve any established external route on
+    // the receiver rather than unconditionally flipping to webchat.
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
@@ -501,12 +508,12 @@ describe("sessions_send gating", () => {
     });
     callGatewayMock.mockResolvedValueOnce({ runId: "run-test-456" });
 
-    // No agentChannel provided — internal spawn case
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      // no agentChannel
     });
 
-    await tool.execute("call-no-channel", {
+    await tool.execute("call-no-channel-sentinel", {
       sessionKey: "agent:other:main",
       message: "internal message",
       timeoutSeconds: 0,
@@ -516,7 +523,8 @@ describe("sessions_send gating", () => {
       (call) => (call[0] as { method?: string })?.method === "agent",
     );
     expect(agentCall).toBeDefined();
-    // Should fall back to webchat when no agentChannel is set
-    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).toBe("webchat");
+    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).toBe(
+      "inter_session",
+    );
   });
 });
