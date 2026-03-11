@@ -57,7 +57,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
   {
     value: "minimax",
     label: "MiniMax Search",
-    hint: "MiniMax coding_plan search · API key or OAuth token",
+    hint: "MiniMax web search · OAuth works (API key optional)",
     envKeys: ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"],
     placeholder: "minimax-...",
     signupUrl: "https://platform.minimax.io/",

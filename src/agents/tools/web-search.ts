@@ -960,7 +960,9 @@ function resolveMinimaxApiHost(): string {
   const raw = normalizeSecretInput(process.env.MINIMAX_API_HOST) || DEFAULT_MINIMAX_API_HOST;
   try {
     return new URL(raw).origin;
-  } catch {}
+  } catch {
+    // Not a full URL yet; retry below by prefixing "https://".
+  }
   try {
     return new URL(`https://${raw}`).origin;
   } catch {
