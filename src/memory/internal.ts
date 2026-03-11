@@ -20,6 +20,7 @@ export type MemoryFileEntry = {
   mtimeMs: number;
   size: number;
   hash: string;
+  dataHash?: string;
   kind?: "markdown" | "multimodal";
   contentText?: string;
   modality?: MemoryMultimodalModality;
@@ -234,6 +235,7 @@ export async function buildFileEntry(
       mtimeMs: stat.mtimeMs,
       size: stat.size,
       hash: chunkHash,
+      dataHash,
       kind: "multimodal",
       contentText,
       modality,
@@ -261,9 +263,24 @@ export async function buildFileEntry(
 }
 
 async function loadMultimodalEmbeddingInput(
-  entry: Pick<MemoryFileEntry, "absPath" | "contentText" | "mimeType" | "kind">,
+  entry: Pick<
+    MemoryFileEntry,
+    "absPath" | "contentText" | "mimeType" | "kind" | "size" | "dataHash"
+  >,
 ): Promise<EmbeddingInput | null> {
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
+    return null;
+  }
+  let stat;
+  try {
+    stat = await fs.stat(entry.absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  if (stat.size !== entry.size) {
     return null;
   }
   let buffer: Buffer;
@@ -274,6 +291,10 @@ async function loadMultimodalEmbeddingInput(
       return null;
     }
     throw err;
+  }
+  const dataHash = crypto.createHash("sha256").update(buffer).digest("hex");
+  if (entry.dataHash && entry.dataHash !== dataHash) {
+    return null;
   }
   return {
     text: entry.contentText,
@@ -289,7 +310,10 @@ async function loadMultimodalEmbeddingInput(
 }
 
 export async function buildMultimodalChunkForIndexing(
-  entry: Pick<MemoryFileEntry, "absPath" | "contentText" | "mimeType" | "kind" | "hash">,
+  entry: Pick<
+    MemoryFileEntry,
+    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
+  >,
 ): Promise<MultimodalMemoryChunk | null> {
   const embeddingInput = await loadMultimodalEmbeddingInput(entry);
   if (!embeddingInput) {
