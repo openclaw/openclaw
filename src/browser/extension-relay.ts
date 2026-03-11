@@ -84,6 +84,7 @@ type ConnectedTarget = {
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
 const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 20_000;
 const DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS = 3_000;
+const ALLOW_QUERY_TOKEN_ENV = "OPENCLAW_EXTENSION_RELAY_ALLOW_QUERY_TOKEN";
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (!value) {
@@ -104,9 +105,13 @@ function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string |
   if (headerToken) {
     return headerToken;
   }
-  const queryToken = url?.searchParams.get("token")?.trim();
-  if (queryToken) {
-    return queryToken;
+  // Avoid leaking tokens via URL (history, logs, referrers). Keep this behind
+  // an explicit debug-only env override for backwards compatibility.
+  if (process.env[ALLOW_QUERY_TOKEN_ENV] === "1") {
+    const queryToken = url?.searchParams.get("token")?.trim();
+    if (queryToken) {
+      return queryToken;
+    }
   }
   return undefined;
 }

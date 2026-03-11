@@ -581,3 +581,49 @@ describe("GatewayClient connect auth payload", () => {
     vi.useRealTimers();
   });
 });
+
+describe("GatewayClient request lifecycle", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+  });
+
+  it("rejects requests that exceed the pending limit", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      maxPendingRequests: 1,
+    });
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+
+    const first = client.request("test.method", { a: 1 });
+    await expect(client.request("test.method", { a: 2 })).rejects.toThrow(/pending request limit/i);
+    client.stop();
+    await expect(first).rejects.toThrow(/stopped|closed/i);
+  });
+
+  it("times out pending requests and cleans them up", async () => {
+    vi.useFakeTimers();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      requestTimeoutMs: 500,
+    });
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+
+    const p = client.request("test.timeout", { ok: true });
+    const pExpectation = expect(p).rejects.toThrow(/timeout/i);
+    await vi.advanceTimersByTimeAsync(600);
+    await pExpectation;
+
+    // If cleanup worked, a new request should be allowed without tripping maxPending.
+    const p2 = client.request("test.timeout.2", { ok: true }, { timeoutMs: 500 });
+    const p2Expectation = expect(p2).rejects.toThrow(/timeout/i);
+    await vi.advanceTimersByTimeAsync(600);
+    await p2Expectation;
+
+    client.stop();
+    vi.useRealTimers();
+  });
+});

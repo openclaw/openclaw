@@ -9,7 +9,7 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
-import { getHandshakeTimeoutMs } from "../server-constants.js";
+import { getHandshakeTimeoutMs, MAX_BUFFERED_BYTES } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
@@ -165,6 +165,16 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       try {
+        // Backpressure guard: avoid unbounded buffering for slow clients.
+        // If the outbound buffer grows too large, disconnect to protect gateway memory.
+        if (typeof socket.bufferedAmount === "number" && socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+          setCloseCause("slow-client", {
+            bufferedAmount: socket.bufferedAmount,
+            bufferedLimit: MAX_BUFFERED_BYTES,
+          });
+          close(1013, "client too slow");
+          return;
+        }
         socket.send(JSON.stringify(obj));
       } catch {
         /* ignore */
