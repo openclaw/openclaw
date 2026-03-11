@@ -27,7 +27,13 @@ export const INTER_SESSION_CHANNEL = "inter_session" as const;
 export type InterSessionChannel = typeof INTER_SESSION_CHANNEL;
 
 export function isInterSessionChannel(raw?: string | null): boolean {
-  return raw?.trim().toLowerCase() === INTER_SESSION_CHANNEL;
+  // Guard against collision with real deliverable plugin channels: a plugin
+  // could theoretically register a channel named "inter_session", which must
+  // not be silently treated as our sentinel.
+  if (raw?.trim().toLowerCase() !== INTER_SESSION_CHANNEL) {
+    return false;
+  }
+  return !isDeliverableMessageChannel(INTER_SESSION_CHANNEL);
 }
 
 const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([

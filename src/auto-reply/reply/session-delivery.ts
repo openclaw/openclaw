@@ -90,8 +90,6 @@ export function resolveLastChannelRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
-  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
-
   // Inter-session messages (from sessions_send): preserve the receiver's
   // established external channel without injecting the sender's channel.
   // Threading the sender's channel alone — without paired to/accountId/threadId —
@@ -107,6 +105,11 @@ export function resolveLastChannelRaw(params: {
     }
     return undefined;
   }
+
+  // originatingChannel is only needed for the webchat-flip and external-routing
+  // checks below — declared after the inter-session guard to avoid computing it
+  // for the common inter-session fast path.
+  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
 
   // WebChat should own reply routing for direct-session UI turns, even when the
   // session previously replied through an external channel like iMessage.
