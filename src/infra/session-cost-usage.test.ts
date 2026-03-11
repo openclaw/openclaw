@@ -322,15 +322,56 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const sessions = await discoverAllSessions();
-      expect(sessions.map((session) => session.sessionId).toSorted()).toEqual([
-        "sess-deleted",
-        "sess-reset",
-      ]);
+      expect(sessions.map((session) => session.sessionId)).toEqual(["sess-deleted", "sess-reset"]);
       expect(
         sessions
           .map((session) => session.firstUserMessage)
           .toSorted((a, b) => String(a).localeCompare(String(b))),
       ).toEqual(["deleted transcript", "reset transcript"]);
+    });
+  });
+
+  it("deduplicates discovered sessions by sessionId and keeps the newest archive", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-dedupe-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const resetPath = path.join(sessionsDir, "sess-shared.jsonl.reset.2026-02-12T11-00-00.000Z");
+    const deletedPath = path.join(
+      sessionsDir,
+      "sess-shared.jsonl.deleted.2026-02-12T12-00-00.000Z",
+    );
+
+    await fs.writeFile(
+      resetPath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "older archive" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      deletedPath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:05:00.000Z",
+        message: { role: "user", content: "newer archive" },
+      }),
+      "utf-8",
+    );
+
+    const older = Date.UTC(2026, 1, 12, 11, 0, 0) / 1000;
+    const newer = Date.UTC(2026, 1, 12, 12, 0, 0) / 1000;
+    await fs.utimes(resetPath, older, older);
+    await fs.utimes(deletedPath, newer, newer);
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("sess-shared");
+      expect(sessions[0]?.sessionFile).toContain(".jsonl.deleted.");
+      expect(sessions[0]?.firstUserMessage).toBe("newer archive");
     });
   });
 
@@ -363,6 +404,48 @@ describe("session cost usage", () => {
       expect(timeseries?.points[0]?.totalTokens).toBe(10);
       expect(logs).toHaveLength(1);
       expect(logs?.[0]?.content).toContain("archived answer");
+    });
+  });
+
+  it("picks the newest archive by timestamp when reset and deleted archives coexist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-archive-order-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-mixed.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T11:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "older reset archive",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-mixed.jsonl.deleted.2026-02-12T12-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "newer deleted archive",
+          usage: { input: 12, output: 8, totalTokens: 20, cost: { total: 0.02 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-mixed" });
+      const logs = await loadSessionLogs({ sessionId: "sess-mixed" });
+
+      expect(summary?.totalTokens).toBe(20);
+      expect(summary?.sessionFile).toContain(".jsonl.deleted.");
+      expect(logs?.[0]?.content).toContain("newer deleted archive");
     });
   });
 

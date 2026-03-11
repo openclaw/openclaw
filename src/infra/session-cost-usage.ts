@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseSessionArchiveTimestamp,
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
 import {
@@ -335,7 +336,17 @@ export function resolveExistingUsageSessionFile(params: {
     const latestArchive = entries
       .filter((entry) => isSessionArchiveArtifactName(entry.name))
       .map((entry) => entry.name)
-      .toSorted((a, b) => b.localeCompare(a))[0];
+      .toSorted((a, b) => {
+        const tsA =
+          parseSessionArchiveTimestamp(a, "deleted") ??
+          parseSessionArchiveTimestamp(a, "reset") ??
+          0;
+        const tsB =
+          parseSessionArchiveTimestamp(b, "deleted") ??
+          parseSessionArchiveTimestamp(b, "reset") ??
+          0;
+        return tsB - tsA || b.localeCompare(a);
+      })[0];
 
     return latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
   } catch {
@@ -446,7 +457,7 @@ export async function discoverAllSessions(params?: {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
 
-  const discovered: DiscoveredSession[] = [];
+  const discovered = new Map<string, DiscoveredSession>();
 
   for (const entry of entries) {
     if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
@@ -505,16 +516,25 @@ export async function discoverAllSessions(params?: {
       // Ignore read errors
     }
 
-    discovered.push({
-      sessionId,
-      sessionFile: filePath,
-      mtime: stats.mtimeMs,
-      firstUserMessage,
-    });
+    const existing = discovered.get(sessionId);
+    if (!existing || stats.mtimeMs >= existing.mtime) {
+      discovered.set(sessionId, {
+        sessionId,
+        sessionFile: filePath,
+        mtime: stats.mtimeMs,
+        firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
+      });
+      continue;
+    }
+
+    if (!existing.firstUserMessage && firstUserMessage) {
+      existing.firstUserMessage = firstUserMessage;
+      discovered.set(sessionId, existing);
+    }
   }
 
   // Sort by mtime descending (most recent first)
-  return discovered.toSorted((a, b) => b.mtime - a.mtime);
+  return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadSessionCostSummary(params: {
