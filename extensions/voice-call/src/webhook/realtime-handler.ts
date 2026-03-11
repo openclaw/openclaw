@@ -32,6 +32,7 @@ export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
  * handleWebSocketUpgrade + MediaStreamCallbacks) so the bridge and call-manager
  * wiring can be reused without duplicating the OpenAI session logic.
  */
+
 /** How long (ms) a stream token remains valid after TwiML is issued. */
 const STREAM_TOKEN_TTL_MS = 30_000;
 
