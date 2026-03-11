@@ -260,8 +260,9 @@ export function createProfileAvailability({
     // For remote WebSocket endpoints (e.g. Browser Use), there's no local Chrome process
     // to stop. Instead, close the cached Playwright connection to the cloud provider.
     if (capabilities.isRemote && isWebSocketUrl(profile.cdpUrl)) {
+      const wasConnected = hasActivePlaywrightConnection(profile.cdpUrl);
       await closePlaywrightBrowserConnection({ cdpUrl: profile.cdpUrl });
-      return { stopped: true };
+      return { stopped: wasConnected };
     }
     if (capabilities.requiresRelay) {
       const stopped = await stopChromeExtensionRelayServer({
