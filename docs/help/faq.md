@@ -2512,6 +2512,7 @@ Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not 
 Facts (from code):
 
 - The Control UI keeps the token in `sessionStorage` for the current browser tab session and selected gateway URL, so same-tab refreshes keep working without restoring long-lived localStorage token persistence.
+- On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
 
 Fix:
 
@@ -2520,6 +2521,9 @@ Fix:
 - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
 - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
 - In the Control UI settings, paste the same token.
+- If mismatch persists after the one retry, rotate/re-approve the paired device token:
+  - `openclaw devices list`
+  - `openclaw devices rotate --device <id> --role operator`
 - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
 ### I set gatewaybind tailnet but it can't bind nothing listens

@@ -10,6 +10,7 @@ import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./arch
 
 let fixtureRoot = "";
 let fixtureCount = 0;
+const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
 
 async function makeTempDir(prefix = "case") {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
@@ -46,6 +47,14 @@ async function writePackageArchive(params: {
   await fs.mkdir(packageDir, { recursive: true });
   await fs.writeFile(path.join(packageDir, params.fileName), params.content);
   await tar.c({ cwd: params.workDir, file: params.archivePath }, ["package"]);
+}
+
+async function createDirectorySymlink(targetDir: string, linkPath: string) {
+  await fs.symlink(targetDir, linkPath, directorySymlinkType);
+}
+
+async function expectPathMissing(filePath: string) {
+  await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function expectExtractedSizeBudgetExceeded(params: {
@@ -105,6 +114,33 @@ describe("archive utils", () => {
     },
   );
 
+  it.each([{ ext: "zip" as const }, { ext: "tar" as const }])(
+    "rejects $ext extraction when destination dir is a symlink",
+    async ({ ext }) => {
+      await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
+        const realExtractDir = path.join(workDir, "real-extract");
+        await fs.mkdir(realExtractDir, { recursive: true });
+        await writePackageArchive({
+          ext,
+          workDir,
+          archivePath,
+          fileName: "hello.txt",
+          content: "hi",
+        });
+        await fs.rm(extractDir, { recursive: true, force: true });
+        await createDirectorySymlink(realExtractDir, extractDir);
+
+        await expect(
+          extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+        ).rejects.toMatchObject({
+          code: "destination-symlink",
+        } satisfies Partial<ArchiveSecurityError>);
+
+        await expectPathMissing(path.join(realExtractDir, "package", "hello.txt"));
+      });
+    },
+  );
+
   it("rejects zip path traversal (zip slip)", async () => {
     await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
       const zip = new JSZip();
@@ -121,13 +157,7 @@ describe("archive utils", () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
       const outsideDir = path.join(workDir, "outside");
       await fs.mkdir(outsideDir, { recursive: true });
-      // Use 'junction' on Windows — junctions target directories without
-      // requiring SeCreateSymbolicLinkPrivilege.
-      await fs.symlink(
-        outsideDir,
-        path.join(extractDir, "escape"),
-        process.platform === "win32" ? "junction" : undefined,
-      );
+      await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
 
       const zip = new JSZip();
       zip.file("escape/pwn.txt", "owned");
@@ -230,6 +260,26 @@ describe("archive utils", () => {
       await expect(
         extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
       ).rejects.toThrow(/escapes destination/i);
+    });
+  });
+
+  it("rejects tar entries that traverse pre-existing destination symlinks", async () => {
+    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
+      const outsideDir = path.join(workDir, "outside");
+      const archiveRoot = path.join(workDir, "archive-root");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.mkdir(path.join(archiveRoot, "escape"), { recursive: true });
+      await fs.writeFile(path.join(archiveRoot, "escape", "pwn.txt"), "owned");
+      await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
+      await tar.c({ cwd: archiveRoot, file: archivePath }, ["escape"]);
+
+      await expect(
+        extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+      ).rejects.toMatchObject({
+        code: "destination-symlink-traversal",
+      } satisfies Partial<ArchiveSecurityError>);
+
+      await expectPathMissing(path.join(outsideDir, "pwn.txt"));
     });
   });
 
