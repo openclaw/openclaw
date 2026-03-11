@@ -730,7 +730,7 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
-      lastPartialExecution = described.partialExecution;
+      lastPartialExecution = described.partialExecution ?? lastPartialExecution;
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,

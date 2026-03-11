@@ -1449,6 +1449,52 @@ describe("runWithModelFallback", () => {
     expect(secondCallOptions?.previousPartialExecution).toBeUndefined();
   });
 
+  it("preserves previousPartialExecution across multi-hop when later attempts have none", async () => {
+    const { FailoverError } = await import("./failover-error.js");
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2.5-flash"],
+          },
+        },
+      },
+    });
+    // Attempt 1: partial execution, attempt 2: rate limit (no tools), attempt 3: succeeds
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("timeout", {
+          reason: "timeout",
+          partialExecution: {
+            hadToolExecution: true,
+            toolNames: ["send_message"],
+            didSendViaMessagingTool: true,
+          },
+        }),
+      )
+      .mockRejectedValueOnce(new FailoverError("rate limited", { reason: "rate_limit" }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(3);
+    // Third call should still have the partial execution from attempt 1
+    const thirdCallOptions = run.mock.calls[2]?.[2];
+    expect(thirdCallOptions?.previousPartialExecution).toEqual({
+      hadToolExecution: true,
+      toolNames: ["send_message"],
+      didSendViaMessagingTool: true,
+    });
+  });
+
   it("stores partialExecution in attempts array", async () => {
     const { FailoverError } = await import("./failover-error.js");
     const cfg = makeCfg();

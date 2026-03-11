@@ -1418,16 +1418,22 @@ export async function runEmbeddedPiAgent(
                 model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
-                partialExecution:
-                  attempt.toolMetas.length > 0
-                    ? {
-                        hadToolExecution: true,
-                        toolNames: FailoverError.sanitizeToolNames(
-                          attempt.toolMetas.map((t) => t.toolName),
-                        ),
-                        didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-                      }
-                    : undefined,
+                partialExecution: (() => {
+                  if (attempt.toolMetas.length === 0) {
+                    return undefined;
+                  }
+                  const sanitizedToolNames = FailoverError.sanitizeToolNames(
+                    attempt.toolMetas.map((t) => t.toolName),
+                  );
+                  if (sanitizedToolNames.length === 0) {
+                    return undefined;
+                  }
+                  return {
+                    hadToolExecution: true as const,
+                    toolNames: sanitizedToolNames,
+                    didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                  };
+                })(),
               });
             }
             logAssistantFailoverDecision("surface_error");
