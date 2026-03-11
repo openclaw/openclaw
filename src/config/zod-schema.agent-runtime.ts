@@ -296,7 +296,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     baidu: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
       })
       .strict()
       .optional(),
