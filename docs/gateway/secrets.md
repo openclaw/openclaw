@@ -45,9 +45,9 @@ Examples of inactive surfaces:
   - `gateway.mode=remote`
   - `gateway.remote.url` is configured
   - `gateway.tailscale.mode` is `serve` or `funnel`
-    In local mode without those remote surfaces:
-  - `gateway.remote.token` is active when token auth can win and no env/auth token is configured.
-  - `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
+  - In local mode without those remote surfaces:
+    - `gateway.remote.token` is active when token auth can win and no env/auth token is configured.
+    - `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
 - `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` (or `CLAWDBOT_GATEWAY_TOKEN`) is set, because env token input wins for that runtime.
 
 ## Gateway auth surface diagnostics
