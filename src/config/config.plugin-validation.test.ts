@@ -37,6 +37,8 @@ describe("config plugin validation", () => {
   let badPluginDir = "";
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
+  let dottedPluginDir = "";
+  let workspacePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   const envSnapshot = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -84,6 +86,36 @@ describe("config plugin validation", () => {
       channels: ["bluebubbles"],
       schema: { type: "object" },
     });
+    dottedPluginDir = path.join(suiteHome, "dotted-plugin");
+    await writePluginFixture({
+      dir: dottedPluginDir,
+      id: "pack.one",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          permissionMode: { type: "string", enum: ["approve-all", "approve-reads"] },
+        },
+      },
+    });
+    workspacePluginDir = path.join(
+      suiteHome,
+      "workspace",
+      ".openclaw",
+      "extensions",
+      "workspace-hint",
+    );
+    await writePluginFixture({
+      dir: workspacePluginDir,
+      id: "workspace-hint",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          queueOwnerTtlSeconds: { type: "number", minimum: 0 },
+        },
+      },
+    });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
       process.cwd(),
@@ -110,7 +142,9 @@ describe("config plugin validation", () => {
     validateInSuite({
       plugins: {
         enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
+        load: {
+          paths: [badPluginDir, bluebubblesPluginDir, dottedPluginDir, voiceCallSchemaPluginDir],
+        },
       },
     });
   });
@@ -277,6 +311,153 @@ describe("config plugin validation", () => {
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("suggests .config nesting for misplaced plugin config keys", async () => {
+    const wrong = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            permissionMode: "approve-all",
+          },
+        },
+      },
+    });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.issues).toContainEqual({
+        path: "plugins.entries.acpx",
+        message:
+          'Unrecognized key: "permissionMode". Did you mean "plugins.entries.acpx.config.permissionMode"?',
+      });
+    }
+
+    const right = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              permissionMode: "approve-all",
+            },
+          },
+        },
+      },
+    });
+    expect(right.ok).toBe(true);
+  });
+
+  it("suggests .config nesting for dotted plugin ids too", async () => {
+    const wrong = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [dottedPluginDir] },
+        entries: {
+          "pack.one": {
+            enabled: true,
+            permissionMode: "approve-all",
+          },
+        },
+      },
+    });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.issues).toContainEqual({
+        path: "plugins.entries.pack.one",
+        message:
+          'Unrecognized key: "permissionMode". Did you mean "plugins.entries.pack.one.config.permissionMode"?',
+      });
+    }
+  });
+
+  it("suggests .config nesting for multiple misplaced plugin config keys", async () => {
+    const wrong = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            permissionMode: "approve-all",
+            nonInteractivePermissions: "fail",
+          },
+        },
+      },
+    });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.issues).toContainEqual({
+        path: "plugins.entries.acpx",
+        message:
+          'Unrecognized keys: "permissionMode", "nonInteractivePermissions". Did you mean "plugins.entries.acpx.config.permissionMode", "plugins.entries.acpx.config.nonInteractivePermissions"?',
+      });
+    }
+  });
+
+  it("suggests .config nesting for workspace-installed plugins", async () => {
+    const wrong = validateInSuite({
+      agents: {
+        defaults: {
+          workspace: path.join(suiteHome, "workspace"),
+        },
+        list: [{ id: "pi" }],
+      },
+      plugins: {
+        entries: {
+          "workspace-hint": {
+            enabled: true,
+            queueOwnerTtlSeconds: 5,
+          },
+        },
+      },
+    });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.issues).toContainEqual({
+        path: "plugins.entries.workspace-hint",
+        message:
+          'Unrecognized key: "queueOwnerTtlSeconds". Did you mean "plugins.entries.workspace-hint.config.queueOwnerTtlSeconds"?',
+      });
+    }
+  });
+
+  it("keeps workspace plugin hints even when unrelated agents config is invalid", async () => {
+    const wrong = validateInSuite({
+      agents: {
+        defaults: {
+          workspace: path.join(suiteHome, "workspace"),
+          timeoutSeconds: "nope",
+        },
+        list: [{ id: "pi" }],
+      },
+      plugins: {
+        entries: {
+          "workspace-hint": {
+            enabled: true,
+            queueOwnerTtlSeconds: 5,
+          },
+        },
+      },
+    });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.issues).toEqual(
+        expect.arrayContaining([
+          {
+            path: "agents.defaults.timeoutSeconds",
+            message: expect.stringContaining("number"),
+          },
+          {
+            path: "plugins.entries.workspace-hint",
+            message:
+              'Unrecognized key: "queueOwnerTtlSeconds". Did you mean "plugins.entries.workspace-hint.config.queueOwnerTtlSeconds"?',
+          },
+        ]),
+      );
+    }
   });
 
   it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
