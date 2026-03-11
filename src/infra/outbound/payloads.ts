@@ -9,6 +9,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
+  filename?: string;
   channelData?: Record<string, unknown>;
 };
 
@@ -16,6 +17,7 @@ export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
   mediaUrls?: string[];
+  filename?: string;
   channelData?: Record<string, unknown>;
 };
 
@@ -67,6 +69,7 @@ export function normalizeReplyPayloadsForDelivery(
         }) ?? "",
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
+      filename: payload.filename,
       replyToId: payload.replyToId ?? parsed.replyToId,
       replyToTag: payload.replyToTag || parsed.replyToTag,
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
@@ -98,6 +101,7 @@ export function normalizeOutboundPayloads(
     normalizedPayloads.push({
       text,
       mediaUrls,
+      ...(payload.filename ? { filename: payload.filename } : {}),
       ...(hasChannelData ? { channelData } : {}),
     });
   }
@@ -113,6 +117,7 @@ export function normalizeOutboundPayloadsForJson(
       text: payload.text ?? "",
       mediaUrl: payload.mediaUrl ?? null,
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+      filename: payload.filename,
       channelData: payload.channelData,
     });
   }

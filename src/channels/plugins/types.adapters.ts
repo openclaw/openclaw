@@ -91,6 +91,7 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  filename?: string;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */

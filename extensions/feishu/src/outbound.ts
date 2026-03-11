@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
-import { sendMediaFeishu } from "./media.js";
+import { detectFileType, sendFileFeishu, sendMediaFeishu, uploadFileFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
 
@@ -43,6 +43,13 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+type FeishuSendPayload = {
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  filename?: string;
+};
+
 function resolveReplyToMessageId(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -78,6 +85,49 @@ async function sendOutboundText(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  sendPayload: async (ctx) => {
+    const payload = (ctx.payload ?? {}) as FeishuSendPayload;
+    const text = payload.text ?? "";
+    const mediaUrls = payload.mediaUrls?.length
+      ? payload.mediaUrls
+      : payload.mediaUrl
+        ? [payload.mediaUrl]
+        : [];
+
+    if (mediaUrls.length > 0) {
+      let lastResult;
+      const filenameOverride =
+        typeof payload.filename === "string" && payload.filename.trim()
+          ? payload.filename.trim()
+          : undefined;
+      lastResult = await feishuOutbound.sendMedia!({
+        ...ctx,
+        text,
+        mediaUrl: mediaUrls[0],
+        payload: {
+          ...payload,
+          filename: filenameOverride,
+        } as any,
+      } as any);
+      for (let i = 1; i < mediaUrls.length; i++) {
+        lastResult = await feishuOutbound.sendMedia!({
+          ...ctx,
+          text: "",
+          mediaUrl: mediaUrls[i],
+          payload: {
+            ...payload,
+            filename: filenameOverride,
+          } as any,
+        } as any);
+      }
+      return lastResult;
+    }
+
+    return await feishuOutbound.sendText!({
+      ...ctx,
+      text,
+    } as any);
+  },
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
@@ -150,10 +200,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     to,
     text,
     mediaUrl,
+    filename,
     accountId,
     mediaLocalRoots,
     replyToId,
     threadId,
+    payload,
   }) => {
     const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
     // Send text first if provided
@@ -170,10 +222,53 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     // Upload and send media if URL or local path provided
     if (mediaUrl) {
       try {
+        const filenameOverride =
+          typeof payload?.filename === "string" && payload.filename.trim()
+            ? payload.filename.trim()
+            : typeof filename === "string" && filename.trim()
+              ? filename.trim()
+              : undefined;
+        const effectiveFileName = filenameOverride ?? path.basename(mediaUrl);
+        const ext = path.extname(effectiveFileName).toLowerCase();
+        const isImage = [
+          ".jpg",
+          ".jpeg",
+          ".png",
+          ".gif",
+          ".webp",
+          ".bmp",
+          ".ico",
+          ".tiff",
+        ].includes(ext);
+        const isLocalPath =
+          path.isAbsolute(mediaUrl) && !/^(https?:\/\/|data:|file:\/\/)/i.test(mediaUrl);
+
+        if (isLocalPath && !isImage) {
+          const fileType = detectFileType(effectiveFileName);
+          const { fileKey } = await uploadFileFeishu({
+            cfg,
+            file: mediaUrl,
+            fileName: effectiveFileName,
+            fileType,
+            accountId: accountId ?? undefined,
+          });
+          const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+          const result = await sendFileFeishu({
+            cfg,
+            to,
+            fileKey,
+            msgType,
+            replyToMessageId,
+            accountId: accountId ?? undefined,
+          });
+          return { channel: "feishu", ...result };
+        }
+
         const result = await sendMediaFeishu({
           cfg,
           to,
           mediaUrl,
+          fileName: filenameOverride,
           accountId: accountId ?? undefined,
           mediaLocalRoots,
           replyToMessageId,

@@ -136,6 +136,22 @@ describe("message tool path passthrough", () => {
     expect(call?.params?.[field]).toBe(value);
     expect(call?.params?.media).toBeUndefined();
   });
+
+  it("passes filename through for send attachment flows", async () => {
+    mockSendResult({ to: "feishu:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "feishu:123",
+        filePath: "./tmp/test.md",
+        filename: "测试文件.md",
+        message: "",
+      },
+    });
+
+    expect(call?.params?.filePath).toBe("./tmp/test.md");
+    expect(call?.params?.filename).toBe("测试文件.md");
+  });
 });
 
 describe("message tool schema scoping", () => {

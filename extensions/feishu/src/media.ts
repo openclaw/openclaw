@@ -259,12 +259,10 @@ export async function uploadFileFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
 
-  const safeFileName = sanitizeFileNameForUpload(fileName);
-
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: safeFileName,
+      file_name: fileName,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       file: fileData as any,
       ...(duration !== undefined && { duration }),
@@ -435,20 +433,14 @@ export async function sendMediaFeishu(params: {
   }
   const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
-  let buffer: Buffer;
+  let buffer: Buffer | undefined;
   let name: string;
 
   if (mediaBuffer) {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
-      maxBytes: mediaMaxBytes,
-      optimizeImages: false,
-      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
-    });
-    buffer = loaded.buffer;
-    name = fileName ?? loaded.fileName ?? "file";
+    name = fileName ?? path.basename(mediaUrl) ?? "file";
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
@@ -458,13 +450,23 @@ export async function sendMediaFeishu(params: {
   const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
 
   if (isImage) {
+    if (!buffer) {
+      const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl!, {
+        maxBytes: mediaMaxBytes,
+        optimizeImages: false,
+        localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+      });
+      buffer = loaded.buffer;
+      name = fileName ?? loaded.fileName ?? name;
+    }
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
     const fileType = detectFileType(name);
+    const uploadSource = mediaUrl && !mediaBuffer ? mediaUrl : buffer!;
     const { fileKey } = await uploadFileFeishu({
       cfg,
-      file: buffer,
+      file: uploadSource,
       fileName: name,
       fileType,
       accountId,

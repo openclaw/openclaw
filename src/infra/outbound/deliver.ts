@@ -92,6 +92,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      filename?: string | null;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -166,6 +167,7 @@ function createPluginHandler(
           ...resolveCtx(overrides),
           text: caption,
           mediaUrl,
+          filename: overrides?.filename ?? undefined,
         });
       }
       return sendText({
@@ -299,6 +301,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   return {
     text: payload.text ?? "",
     mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    filename: payload.filename,
     channelData: payload.channelData,
   };
 }
@@ -696,6 +699,7 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
         forceDocument: params.forceDocument,
+        filename: effectivePayload.filename ?? undefined,
       };
       if (handler.sendPayload && effectivePayload.channelData) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
