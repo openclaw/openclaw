@@ -10,6 +10,7 @@ minimumReleaseAge: 2880
 #   - "@mariozechner/*"
 
 onlyBuiltDependencies:
+  - "@openclaw/executorch"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"

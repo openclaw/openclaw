@@ -1,0 +1,42 @@
+{
+  "id": "executorch",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable on-device STT via ExecuTorch Voxtral"
+      },
+      "backend": {
+        "type": "string",
+        "enum": ["xnnpack", "cuda", "metal"],
+        "description": "ExecuTorch backend for Voxtral runtime"
+      },
+      "runtimeLibraryPath": {
+        "type": "string",
+        "description": "Path to libvoxtral_realtime_runtime shared library"
+      },
+      "modelDir": {
+        "type": "string",
+        "description": "Directory containing model artifacts (used when explicit file paths are not set)"
+      },
+      "modelPath": {
+        "type": "string",
+        "description": "Path to model .pte file"
+      },
+      "tokenizerPath": {
+        "type": "string",
+        "description": "Path to tekken.json tokenizer file"
+      },
+      "preprocessorPath": {
+        "type": "string",
+        "description": "Path to preprocessor .pte file"
+      },
+      "dataPath": {
+        "type": "string",
+        "description": "Path to backend data file (.ptd), required for CUDA"
+      }
+    }
+  }
+}
