@@ -492,54 +492,9 @@ async function findPageByRelayTargetList(opts: {
   targets: RelayListTarget[];
   targetId: string;
 }): Promise<Page | null> {
-  const direct = matchPageByTargetList(opts.pages, opts.targets, opts.targetId);
-  if (direct) {
-    return direct;
-  }
-
-  const target = opts.targets.find((entry) => entry.id === opts.targetId);
-  if (!target) {
-    return null;
-  }
-
-  const urlMatches = opts.pages.filter((page) => page.url() === target.url);
-  if (urlMatches.length === 0) {
-    return null;
-  }
-
-  const sameUrlTargets = opts.targets.filter((entry) => entry.url === target.url);
-  const idx = sameUrlTargets.findIndex((entry) => entry.id === opts.targetId);
-  if (idx >= 0 && idx < urlMatches.length) {
-    return urlMatches[idx] ?? null;
-  }
-  if (idx >= 0 && urlMatches.length > 0) {
-    const clamped = urlMatches[Math.min(idx, urlMatches.length - 1)];
-    if (clamped) {
-      return clamped;
-    }
-  }
-
-  const normalizedTitle = String(target.title ?? "").trim();
-  if (normalizedTitle) {
-    const titleMatches: Page[] = [];
-    for (const page of urlMatches) {
-      const title = await page.title().catch(() => "");
-      if (title.trim() === normalizedTitle) {
-        titleMatches.push(page);
-      }
-    }
-    if (titleMatches.length === 1) {
-      return titleMatches[0] ?? null;
-    }
-    if (idx >= 0 && idx < titleMatches.length) {
-      return titleMatches[idx] ?? null;
-    }
-    if (titleMatches.length > 0) {
-      return titleMatches[0] ?? null;
-    }
-  }
-
-  return urlMatches[0] ?? null;
+  // Keep matching deterministic through one path; matchPageByTargetList already
+  // handles count skew and index clamping during redirect churn.
+  return matchPageByTargetList(opts.pages, opts.targets, opts.targetId);
 }
 
 async function findPageByTargetProbe(pages: Page[], targetId: string): Promise<Page | null> {

@@ -393,11 +393,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         if (!alias) {
           break;
         }
-        if (
-          !Array.from(connectedTargets.values()).some(
-            (target) => target.sessionId === alias.sessionId,
-          )
-        ) {
+        if (!connectedTargets.has(alias.sessionId)) {
           targetAliasByTargetId.delete(current);
           break;
         }
