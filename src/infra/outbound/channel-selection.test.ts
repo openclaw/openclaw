@@ -193,6 +193,17 @@ describe("resolveMessageChannelSelection", () => {
   });
 
   it("throws when explicit channel is known but not configured (#42080)", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "telegram",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isConfigured: async () => true,
+        },
+      },
+    ]);
+
     await expect(
       resolveMessageChannelSelection({
         cfg: {} as never,
