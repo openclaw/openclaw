@@ -10,6 +10,8 @@ export type PairingMessageConfig = {
   /**
    * Replaces the label before the sender's ID.
    * The sender ID value is still appended automatically.
+   * Applied centrally by buildPairingReply — pass the raw senderId via params.senderId
+   * and let channel monitors keep their default idLine fallback.
    * Default: "Your {channel} sender id:" (built by each channel monitor)
    */
   senderIdLabel?: string;

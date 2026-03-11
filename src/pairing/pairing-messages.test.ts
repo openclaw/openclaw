@@ -95,6 +95,17 @@ describe("buildPairingReply", () => {
       expect(text).toContain("ABC123");
     });
 
+    it("omits default footer when CLI hint is suppressed without custom footer", () => {
+      const text = buildPairingReply({
+        channel: "telegram",
+        idLine: "Your Telegram user id: 42",
+        code: "XYZ123",
+        pairingMessage: { showCliHint: false },
+      });
+      expect(text.split("\n")).not.toContain("Ask the bot owner to approve with:");
+      expect(text).not.toMatch(/openclaw\s+pairing\s+approve/);
+    });
+
     it("uses custom footer when provided", () => {
       const text = buildPairingReply({
         channel: "telegram",
