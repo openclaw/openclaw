@@ -62,5 +62,21 @@ export async function POST(req: Request) {
     data: { onboardingCompleted: true },
   });
 
+  // Auto-register Telegram webhook so messages start arriving immediately
+  const telegramCh = channels.find((c) => c.channel === "telegram" && c.token);
+  if (telegramCh && process.env.NEXTAUTH_URL) {
+    const webhookUrl = `${process.env.NEXTAUTH_URL}/api/webhook/telegram/${userId}`;
+    await fetch(
+      `https://api.telegram.org/bot${telegramCh.token}/setWebhook`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webhookUrl }),
+      },
+    ).catch(() => {
+      // Non-fatal — user can re-save to retry
+    });
+  }
+
   return NextResponse.json({ success: true });
 }

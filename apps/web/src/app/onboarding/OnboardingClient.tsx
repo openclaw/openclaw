@@ -27,24 +27,31 @@ const CHANNELS: ChannelDef[] = [
     id: "whatsapp",
     label: "WhatsApp",
     icon: "💬",
-    description: "Connect WhatsApp Web — scan the QR code after setup.",
-    notesLabel: "Notes (optional)",
+    description: "Connect WhatsApp via Twilio. Requires a Twilio account with WhatsApp sandbox or approved number.",
+    tokenLabel: "Twilio Account SID",
+    tokenPlaceholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    notesLabel: "Twilio Auth Token",
+    notesSingleLine: true,
   },
   {
     id: "discord",
     label: "Discord",
     icon: "🎮",
-    description: "Connect via a Discord bot token.",
+    description: "Connect via a Discord application. Set the Interactions Endpoint URL in the Discord dev portal to your webhook URL.",
     tokenLabel: "Bot token",
     tokenPlaceholder: "MTxxxxxxx.xxxxxx.xxxxxxxxxxxx",
+    notesLabel: "Application public key",
+    notesSingleLine: true,
   },
   {
     id: "slack",
     label: "Slack",
     icon: "🟣",
-    description: "Connect via a Slack app bot token.",
+    description: "Connect via a Slack app. Enable the Events API and set the Request URL to your webhook URL.",
     tokenLabel: "Bot OAuth token",
     tokenPlaceholder: "xoxb-...",
+    notesLabel: "Signing secret",
+    notesSingleLine: true,
   },
   {
     id: "signal",
@@ -102,7 +109,20 @@ const CHANNELS: ChannelDef[] = [
   },
 ];
 
-export default function OnboardingClient({ upgraded = false }: { upgraded?: boolean }) {
+// Channels that need the user to manually paste a webhook URL somewhere
+const WEBHOOK_LABELS: Record<string, string> = {
+  discord: "Interactions Endpoint URL (Discord Developer Portal → General Information)",
+  slack: "Request URL (Slack App → Event Subscriptions)",
+  whatsapp: "Webhook URL (Twilio Console → Messaging → your WhatsApp number)",
+};
+
+export default function OnboardingClient({
+  upgraded = false,
+  userId = "",
+}: {
+  upgraded?: boolean;
+  userId?: string;
+}) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [tokens, setTokens] = useState<Record<string, string>>({});
@@ -298,6 +318,43 @@ export default function OnboardingClient({ upgraded = false }: { upgraded?: bool
                     <p style={{ color: "#555", fontSize: "0.8rem" }}>
                       No credentials needed here — configuration happens on your gateway after installation.
                     </p>
+                  )}
+                  {/* Telegram: fully automatic */}
+                  {ch.id === "telegram" && (
+                    <p style={{
+                      color: "#22c55e",
+                      fontSize: "0.8rem",
+                      background: "rgba(34,197,94,0.06)",
+                      border: "1px solid rgba(34,197,94,0.2)",
+                      borderRadius: 8,
+                      padding: "0.5rem 0.75rem",
+                    }}>
+                      ✓ Webhook will be registered automatically when you save.
+                    </p>
+                  )}
+                  {/* Discord / Slack / WhatsApp: show the URL to paste */}
+                  {userId && WEBHOOK_LABELS[ch.id] && (
+                    <div style={{ marginTop: "0.25rem" }}>
+                      <label style={{ display: "block", fontSize: "0.8rem", color: "#aaa", marginBottom: "0.35rem" }}>
+                        {WEBHOOK_LABELS[ch.id]}
+                      </label>
+                      <div style={{
+                        background: "#0d0d0d",
+                        border: "1px solid #2a2a2a",
+                        borderRadius: 8,
+                        padding: "0.5rem 0.75rem",
+                        fontFamily: "monospace",
+                        fontSize: "0.78rem",
+                        color: "#ccc",
+                        wordBreak: "break-all",
+                        userSelect: "all",
+                      }}>
+                        {typeof window !== "undefined" ? window.location.origin : ""}/api/webhook/{ch.id}/{userId}
+                      </div>
+                      <p style={{ color: "#555", fontSize: "0.75rem", marginTop: "0.3rem" }}>
+                        Copy and paste this URL into {ch.label}&apos;s developer settings.
+                      </p>
+                    </div>
                   )}
                 </div>
               </div>

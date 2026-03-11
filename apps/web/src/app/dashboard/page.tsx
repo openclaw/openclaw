@@ -13,10 +13,16 @@ export default async function DashboardPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login?callbackUrl=/dashboard");
 
-  const [user, subscription, channels] = await Promise.all([
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const [user, subscription, channels, messagesToday] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.user.id } }),
     prisma.subscription.findUnique({ where: { userId: session.user.id } }),
     prisma.userChannel.findMany({ where: { userId: session.user.id }, orderBy: { createdAt: "asc" } }),
+    prisma.message.count({
+      where: { userId: session.user.id, role: "user", createdAt: { gte: todayStart } },
+    }),
   ]);
 
   const params = await searchParams;
@@ -143,6 +149,47 @@ export default async function DashboardPage({
             </div>
           )}
 
+          {/* Webhook URLs for channels that need manual configuration */}
+          {channels.some((c) => ["discord", "slack", "whatsapp"].includes(c.channel) && c.enabled) && process.env.NEXTAUTH_URL && (
+            <div style={{ background: "#111", border: "1px solid #1f1f1f", borderRadius: 16, padding: "1.5rem", marginBottom: "1.5rem" }}>
+              <h3 style={{ fontWeight: 700, fontSize: "1rem", marginBottom: "0.25rem" }}>Webhook URLs</h3>
+              <p style={{ color: "#666", fontSize: "0.8rem", marginBottom: "1rem" }}>
+                Paste these into each platform&apos;s developer settings to receive messages.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                {channels
+                  .filter((c) => ["discord", "slack", "whatsapp"].includes(c.channel) && c.enabled)
+                  .map((c) => {
+                    const labels: Record<string, string> = {
+                      discord: "Discord → Interactions Endpoint URL",
+                      slack: "Slack → Event Subscriptions → Request URL",
+                      whatsapp: "Twilio → WhatsApp → Webhook URL",
+                    };
+                    const icons: Record<string, string> = { discord: "🎮", slack: "🟣", whatsapp: "💬" };
+                    return (
+                      <div key={c.id}>
+                        <p style={{ color: "#888", fontSize: "0.75rem", marginBottom: "0.3rem" }}>
+                          {icons[c.channel]} {labels[c.channel]}
+                        </p>
+                        <code style={{
+                          display: "block",
+                          background: "#0d0d0d",
+                          border: "1px solid #222",
+                          borderRadius: 8,
+                          padding: "0.5rem 0.75rem",
+                          fontSize: "0.78rem",
+                          color: "#ccc",
+                          wordBreak: "break-all",
+                        }}>
+                          {process.env.NEXTAUTH_URL}/api/webhook/{c.channel}/{session.user.id}
+                        </code>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
           {/* Paywall gate */}
           {!isPaid ? (
             <div style={{
@@ -170,9 +217,9 @@ export default async function DashboardPage({
               gap: "1rem",
             }}>
               {[
-                { label: "Gateway status", value: "Running", color: "#22c55e" },
-                { label: "Channels connected", value: "—" },
-                { label: "Messages today", value: "—" },
+                { label: "Gateway status", value: "Active", color: "#22c55e" },
+                { label: "Channels connected", value: String(channels.filter((c) => c.enabled).length) },
+                { label: "Messages today", value: String(messagesToday) },
                 { label: "Memory entries", value: "—" },
               ].map((stat) => (
                 <div key={stat.label} style={{

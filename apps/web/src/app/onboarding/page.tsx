@@ -18,7 +18,7 @@ export default async function OnboardingPage({
     <>
       <Navbar />
       <main>
-        <OnboardingClient upgraded={upgraded} />
+        <OnboardingClient upgraded={upgraded} userId={session.user.id} />
       </main>
     </>
   );
