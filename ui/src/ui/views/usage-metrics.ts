@@ -320,6 +320,27 @@ const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => 
   target.missingCostEntries += source.missingCostEntries ?? 0;
 };
 
+const getMessageCountsWithFallback = (usage: UsageSessionEntry["usage"]) => {
+  if (!usage) {
+    return undefined;
+  }
+  if (usage.messageCounts) {
+    return usage.messageCounts;
+  }
+  if (!usage.dailyMessageCounts?.length) {
+    return undefined;
+  }
+  return usage.dailyMessageCounts.reduce(
+    (counts, day) => {
+      counts.total += day.total ?? 0;
+      counts.toolCalls += day.toolCalls ?? 0;
+      counts.errors += day.errors ?? 0;
+      return counts;
+    },
+    { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+  );
+};
+
 const buildAggregatesFromSessions = (
   sessions: UsageSessionEntry[],
   fallback?: UsageAggregates | null,
@@ -376,13 +397,14 @@ const buildAggregatesFromSessions = (
     if (!usage) {
       continue;
     }
-    if (usage.messageCounts) {
-      messages.total += usage.messageCounts.total;
-      messages.user += usage.messageCounts.user;
-      messages.assistant += usage.messageCounts.assistant;
-      messages.toolCalls += usage.messageCounts.toolCalls;
-      messages.toolResults += usage.messageCounts.toolResults;
-      messages.errors += usage.messageCounts.errors;
+    const messageCounts = getMessageCountsWithFallback(usage);
+    if (messageCounts) {
+      messages.total += messageCounts.total;
+      messages.user += messageCounts.user;
+      messages.assistant += messageCounts.assistant;
+      messages.toolCalls += messageCounts.toolCalls;
+      messages.toolResults += messageCounts.toolResults;
+      messages.errors += messageCounts.errors;
     }
 
     if (usage.toolUsage) {
