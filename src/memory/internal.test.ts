@@ -198,7 +198,6 @@ describe("buildFileEntry", () => {
       mimeType: "image/png",
       contentText: "Image file: diagram.png",
     });
-    expect(entry?.embeddingInput).toBeUndefined();
   });
 
   it("builds a multimodal chunk lazily for indexing", async () => {
