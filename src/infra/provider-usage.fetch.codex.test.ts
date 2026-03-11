@@ -56,6 +56,15 @@ describe("fetchCodexUsage", () => {
     ]);
   });
 
+  it("does not set balance for malformed credit strings", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, { plan_type: "Plus", credits: { balance: "" } }),
+    );
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.balance).toBeUndefined();
+    expect(result.plan).toBe("Plus");
+  });
+
   it("labels weekly secondary window as Week", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {

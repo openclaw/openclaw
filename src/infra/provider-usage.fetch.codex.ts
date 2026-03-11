@@ -108,8 +108,13 @@ export async function fetchCodexUsage(
     const raw =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : parseFloat(data.credits.balance) || 0;
-    balance = `$${raw.toFixed(2)}`;
+        : parseFloat(data.credits.balance);
+    // Only expose balance when the parse actually produced a finite number;
+    // malformed strings (e.g. "") become NaN via parseFloat and must not be
+    // treated as valid usage data.
+    if (Number.isFinite(raw)) {
+      balance = `$${raw.toFixed(2)}`;
+    }
   }
 
   return {
