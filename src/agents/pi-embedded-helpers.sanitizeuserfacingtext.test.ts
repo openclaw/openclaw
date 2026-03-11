@@ -90,6 +90,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("keeps context-overflow rewrites in errorContext for stream-marked *_error payloads", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request exceeds model context window"},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it("does not rewrite *_error JSON payloads without errorContext unless stream-marked", () => {
     const text =
       '{"type":"error","error":{"type":"server_error","code":"server_error","message":"Example payload for docs"}}';

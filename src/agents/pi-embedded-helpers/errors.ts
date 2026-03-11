@@ -762,7 +762,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // reach the user even when the stream chunk was not flagged as `isError`.
   // Keep this narrow to avoid clobbering legitimate assistant JSON output.
   // (#42132)
-  if (shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
+  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
