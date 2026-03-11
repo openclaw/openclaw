@@ -1,6 +1,7 @@
 import { note as clackNote } from "@clack/prompts";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
+import { isRich, theme } from "./theme.js";
 
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
@@ -144,5 +145,6 @@ export function note(message: string, title?: string) {
   if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
     return;
   }
-  clackNote(wrapNoteMessage(message), stylePromptTitle(title));
+  const wrapped = wrapNoteMessage(message);
+  clackNote(isRich() ? theme.body(wrapped) : wrapped, stylePromptTitle(title));
 }
