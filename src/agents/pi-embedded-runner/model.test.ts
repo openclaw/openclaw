@@ -180,7 +180,7 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toBeUndefined();
   });
 
-  it("preserves literal marker-shaped headers in inline provider models", () => {
+  it("drops SecretRef marker headers in inline provider models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         headers: {
@@ -196,14 +196,48 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Static": "tenant-a",
     });
   });
 });
 
 describe("resolveModel", () => {
+  it("defaults model input to text when discovery omits input", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "missing-input",
+      templateModel: {
+        id: "missing-input",
+        name: "missing-input",
+        api: "openai-completions",
+        provider: "custom",
+        baseUrl: "http://localhost:9999",
+        reasoning: false,
+        // NOTE: deliberately omit input to simulate buggy/custom catalogs.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    });
+
+    const result = resolveModel("custom", "missing-input", "/tmp/agent", {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9999",
+            api: "openai-completions",
+            // Intentionally keep this minimal — the discovered model provides the rest.
+            models: [{ id: "missing-input", name: "missing-input" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.error).toBeUndefined();
+    expect(Array.isArray(result.model?.input)).toBe(true);
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
   it("includes provider baseUrl in fallback model", () => {
     const cfg = {
       models: {
@@ -245,7 +279,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("preserves literal marker-shaped provider headers in fallback models", () => {
+  it("drops SecretRef marker provider headers in fallback models", () => {
     const cfg = {
       models: {
         providers: {
@@ -266,8 +300,6 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Custom-Auth": "token-123",
     });
   });
@@ -515,6 +547,54 @@ describe("resolveModel", () => {
     });
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Proxy-Auth": "token-123",
+    });
+  });
+
+  it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("keeps proxied openai completions transport untouched", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
     });
   });
 
