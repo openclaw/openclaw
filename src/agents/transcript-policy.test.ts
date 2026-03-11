@@ -54,6 +54,37 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
   });
 
+  it("enables tool call ID sanitization for non-OpenAI providers using openai-responses API (#43305)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-proxy",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("enables tool call ID sanitization for non-OpenAI providers using openai-codex-responses API (#43305)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-codex-proxy",
+      modelId: "codex",
+      modelApi: "openai-codex-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("does NOT sanitize tool call IDs for first-party OpenAI using openai-responses API (#43305)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      modelApi: "openai-responses",
+    });
+    // First-party OpenAI uses canonical IDs (call_123|fc_123) that must not be sanitized
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
+  });
+
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "moonshot",

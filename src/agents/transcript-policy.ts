@@ -79,6 +79,12 @@ export function resolveTranscriptPolicy(params: {
       modelId,
     });
   const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
+  // OpenAI Responses API has a 64-character limit on call_id.
+  // Only non-OpenAI providers using Responses API need sanitization.
+  // First-party OpenAI uses canonical IDs (call_123|fc_123) that must not be sanitized.
+  const requiresResponsesApiSanitization =
+    !isOpenAi &&
+    (params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses");
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
@@ -109,7 +115,9 @@ export function resolveTranscriptPolicy(params: {
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds:
-      (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
+      (!isOpenAi && sanitizeToolCallIds) ||
+      requiresOpenAiCompatibleToolIdSanitization ||
+      requiresResponsesApiSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
     preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),
