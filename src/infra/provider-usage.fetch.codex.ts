@@ -102,13 +102,14 @@ export async function fetchCodexUsage(
     });
   }
 
-  let plan = data.plan_type;
+  const plan = data.plan_type;
+  let balance: string | undefined;
   if (data.credits?.balance !== undefined && data.credits.balance !== null) {
-    const balance =
+    const raw =
       typeof data.credits.balance === "number"
         ? data.credits.balance
         : parseFloat(data.credits.balance) || 0;
-    plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+    balance = `$${raw.toFixed(2)}`;
   }
 
   return {
@@ -116,5 +117,6 @@ export async function fetchCodexUsage(
     displayName: PROVIDER_LABELS["openai-codex"],
     windows,
     plan,
+    balance,
   };
 }
