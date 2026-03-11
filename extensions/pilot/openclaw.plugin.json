@@ -1,0 +1,9 @@
+{
+  "id": "pilot",
+  "channels": ["pilot"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

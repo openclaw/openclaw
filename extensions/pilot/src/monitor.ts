@@ -1,0 +1,152 @@
+import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/pilot";
+import { resolvePilotAccount } from "./accounts.js";
+import { handlePilotInbound } from "./inbound.js";
+import * as pilotctl from "./pilotctl.js";
+import { getPilotRuntime } from "./runtime.js";
+import type { CoreConfig, PilotInboundMessage } from "./types.js";
+
+export type PilotMonitorOptions = {
+  accountId?: string;
+  config?: CoreConfig;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  onMessage?: (message: PilotInboundMessage) => void | Promise<void>;
+};
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
+}
+
+export async function monitorPilotProvider(
+  opts: PilotMonitorOptions,
+): Promise<{ stop: () => void }> {
+  const core = getPilotRuntime();
+  const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
+  const account = resolvePilotAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createLoggerBackedRuntime({
+      logger: core.logging.getChildLogger(),
+      exitError: () => new Error("Runtime exit not available"),
+    });
+
+  if (!account.configured) {
+    throw new Error(
+      `Pilot is not configured for account "${account.accountId}" (need hostname in channels.pilot).`,
+    );
+  }
+
+  const logger = core.logging.getChildLogger({
+    channel: "pilot",
+    accountId: account.accountId,
+  });
+
+  const pilotctlOpts = {
+    socketPath: account.socketPath,
+    pilotctlPath: account.pilotctlPath,
+  };
+
+  // Ensure daemon is running.
+  try {
+    const status = await pilotctl.daemonStatus(pilotctlOpts);
+    if (!status.running) {
+      logger.info(`[${account.accountId}] daemon not running, starting...`);
+      await pilotctl.daemonStart(account.hostname, account.registry, pilotctlOpts);
+    }
+  } catch {
+    logger.info(`[${account.accountId}] starting daemon...`);
+    await pilotctl.daemonStart(account.hostname, account.registry, pilotctlOpts);
+  }
+
+  logger.info(
+    `[${account.accountId}] connected to Pilot network as ${account.hostname} (polling every ${account.pollIntervalMs}ms)`,
+  );
+
+  let stopped = false;
+  const abortController = new AbortController();
+
+  // Link external abort signal.
+  if (opts.abortSignal) {
+    opts.abortSignal.addEventListener(
+      "abort",
+      () => {
+        stopped = true;
+        abortController.abort(opts.abortSignal?.reason);
+      },
+      { once: true },
+    );
+  }
+
+  // Polling loop.
+  const poll = async () => {
+    while (!stopped && !abortController.signal.aborted) {
+      try {
+        const messages = await pilotctl.receiveMessages(pilotctlOpts);
+        for (const message of messages) {
+          core.channel.activity.record({
+            channel: "pilot",
+            accountId: account.accountId,
+            direction: "inbound",
+            at: message.timestamp,
+          });
+
+          if (opts.onMessage) {
+            await opts.onMessage(message);
+            continue;
+          }
+
+          await handlePilotInbound({
+            message,
+            account,
+            config: cfg,
+            runtime,
+            statusSink: opts.statusSink,
+          });
+        }
+      } catch (err) {
+        if (!stopped) {
+          logger.error(`[${account.accountId}] poll error: ${String(err)}`);
+        }
+      }
+
+      try {
+        await sleep(account.pollIntervalMs, abortController.signal);
+      } catch {
+        break;
+      }
+    }
+  };
+
+  // Start polling in background.
+  poll().catch((err) => {
+    if (!stopped) {
+      logger.error(`[${account.accountId}] monitor loop exited: ${String(err)}`);
+    }
+  });
+
+  return {
+    stop: () => {
+      stopped = true;
+      abortController.abort(new Error("shutdown"));
+    },
+  };
+}

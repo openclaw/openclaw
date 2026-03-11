@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/pilot",
+  "version": "2026.3.11",
+  "description": "OpenClaw Pilot Protocol channel plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
