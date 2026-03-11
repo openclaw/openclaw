@@ -16,6 +16,7 @@ import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
   buildOllamaProvider,
+  buildSglangProvider,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
   buildVllmProvider,
@@ -830,6 +831,24 @@ async function resolveOllamaImplicitProvider(
   };
 }
 
+async function resolveSglangImplicitProvider(
+  ctx: ImplicitProviderContext,
+): Promise<Record<string, ProviderConfig> | undefined> {
+  if (ctx.explicitProviders?.sglang) {
+    return undefined;
+  }
+  const { apiKey: sglangKey, discoveryApiKey } = ctx.resolveProviderApiKey("sglang");
+  if (!sglangKey) {
+    return undefined;
+  }
+  return {
+    sglang: {
+      ...(await buildSglangProvider({ apiKey: discoveryApiKey })),
+      apiKey: sglangKey,
+    },
+  };
+}
+
 async function resolveVllmImplicitProvider(
   ctx: ImplicitProviderContext,
 ): Promise<Record<string, ProviderConfig> | undefined> {
@@ -890,6 +909,7 @@ export async function resolveImplicitProviders(
   }
   mergeImplicitProviderSet(providers, await resolveCloudflareAiGatewayImplicitProvider(context));
   mergeImplicitProviderSet(providers, await resolveOllamaImplicitProvider(context));
+  mergeImplicitProviderSet(providers, await resolveSglangImplicitProvider(context));
   mergeImplicitProviderSet(providers, await resolveVllmImplicitProvider(context));
 
   if (!providers["github-copilot"]) {

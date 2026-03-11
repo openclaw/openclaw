@@ -35,6 +35,41 @@ describe("provider discovery auth marker guardrails", () => {
     delete process.env.NODE_ENV;
   }
 
+  it("does not send marker value as SGLang bearer token during discovery", async () => {
+    enableDiscovery();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [] }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await writeFile(
+      join(agentDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "sglang:default": {
+              type: "api_key",
+              provider: "sglang",
+              keyRef: { source: "file", provider: "vault", id: "/sglang/apiKey" },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
+    expect(providers?.sglang?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    const sglangCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":30000"));
+    const request = sglangCall?.[1] as { headers?: Record<string, string> } | undefined;
+    expect(request?.headers?.Authorization).toBeUndefined();
+  });
+
   it("does not send marker value as vLLM bearer token during discovery", async () => {
     enableDiscovery();
     const fetchMock = vi.fn().mockResolvedValue({

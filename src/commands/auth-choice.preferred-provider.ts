@@ -6,6 +6,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "claude-cli": "anthropic",
   token: "anthropic",
   apiKey: "anthropic",
+  sglang: "sglang",
   vllm: "vllm",
   ollama: "ollama",
   "openai-codex": "openai-codex",

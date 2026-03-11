@@ -474,6 +474,17 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("rejects SGLang auth choice in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-sglang-non-interactive-", async ({ runtime }) => {
+      await expect(
+        runNonInteractiveOnboardingWithDefaults(runtime, {
+          authChoice: "sglang",
+          skipSkills: true,
+        }),
+      ).rejects.toThrow('Auth choice "sglang" requires interactive mode.');
+    });
+  });
+
   it("rejects vLLM auth choice in non-interactive mode", async () => {
     await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
       await expect(

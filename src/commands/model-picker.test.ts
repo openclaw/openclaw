@@ -61,6 +61,52 @@ function createSelectAllMultiselect() {
 }
 
 describe("promptDefaultModel", () => {
+  it("supports configuring SGLang during onboarding", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+      },
+    ]);
+
+    const select = vi.fn(async (params) => {
+      const sglang = params.options.find((opt: { value: string }) => opt.value === "__sglang__");
+      return (sglang?.value ?? "") as never;
+    });
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("http://127.0.0.1:30000/v1")
+      .mockResolvedValueOnce("sk-sglang-test")
+      .mockResolvedValueOnce("Qwen/Qwen3-8B");
+    const prompter = makePrompter({ select, text: text as never });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      includeSglang: true,
+      ignoreAllowlist: true,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "sglang:default",
+        credential: expect.objectContaining({ provider: "sglang" }),
+      }),
+    );
+    expect(result.model).toBe("sglang/Qwen/Qwen3-8B");
+    expect(result.config?.models?.providers?.sglang).toMatchObject({
+      baseUrl: "http://127.0.0.1:30000/v1",
+      api: "openai-completions",
+      apiKey: "SGLANG_API_KEY", // pragma: allowlist secret
+      models: [{ id: "Qwen/Qwen3-8B", name: "Qwen/Qwen3-8B" }],
+    });
+  });
+
   it("supports configuring vLLM during onboarding", async () => {
     loadModelCatalog.mockResolvedValue([
       {

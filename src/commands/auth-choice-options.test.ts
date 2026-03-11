@@ -40,6 +40,7 @@ describe("buildAuthChoiceOptions", () => {
       "mistral-api-key",
       "volcengine-api-key",
       "byteplus-api-key",
+      "sglang",
       "vllm",
       "opencode-go",
       "ollama",
@@ -104,5 +105,16 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(ollamaGroup).toBeDefined();
     expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
+  });
+
+  it("shows SGLang in grouped provider selection", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const sglangGroup = groups.find((group) => group.value === "sglang");
+
+    expect(sglangGroup).toBeDefined();
+    expect(sglangGroup?.options.some((opt) => opt.value === "sglang")).toBe(true);
   });
 });

@@ -42,6 +42,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["chutes"],
   },
   {
+    value: "sglang",
+    label: "SGLang",
+    hint: "Local/self-hosted OpenAI-compatible",
+    choices: ["sglang"],
+  },
+  {
     value: "vllm",
     label: "vLLM",
     hint: "Local/self-hosted OpenAI-compatible",
@@ -239,6 +245,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "OpenAI Codex (ChatGPT OAuth)",
   },
   { value: "chutes", label: "Chutes (OAuth)" },
+  {
+    value: "sglang",
+    label: "SGLang (custom URL + model)",
+    hint: "Local/self-hosted OpenAI-compatible server",
+  },
   {
     value: "vllm",
     label: "vLLM (custom URL + model)",

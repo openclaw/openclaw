@@ -163,6 +163,17 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
+  if (authChoice === "sglang") {
+    runtime.error(
+      [
+        'Auth choice "sglang" requires interactive mode.',
+        "Use interactive onboard/configure to enter base URL, API key, and model ID.",
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
   if (authChoice === "vllm") {
     runtime.error(
       [
