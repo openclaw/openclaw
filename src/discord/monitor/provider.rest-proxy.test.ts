@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
-const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
-  undiciFetchMock: vi.fn(),
+const { globalFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
+  globalFetchMock: vi.fn(),
   proxyAgentSpy: vi.fn(),
 }));
 
@@ -19,26 +19,36 @@ vi.mock("undici", () => {
   }
   return {
     ProxyAgent,
-    fetch: undiciFetchMock,
   };
 });
 
 describe("resolveDiscordRestFetch", () => {
-  it("uses undici proxy fetch when a proxy URL is configured", async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("fetch", globalFetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses global fetch with dispatcher when a proxy URL is configured", async () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     } as const;
-    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
-    proxyAgentSpy.mockClear();
+    globalFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
     const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
+    const request = globalFetchMock.mock.calls[0]?.[0] as Request;
     expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(undiciFetchMock).toHaveBeenCalledWith(
-      "https://discord.com/api/v10/oauth2/applications/@me",
+    expect(request).toBeInstanceOf(Request);
+    expect(request.url).toBe("https://discord.com/api/v10/oauth2/applications/@me");
+    expect(globalFetchMock).toHaveBeenCalledWith(
+      request,
       expect.objectContaining({
         dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
       }),

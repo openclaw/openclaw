@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, getLastAgent } =
+const { ProxyAgent, EnvHttpProxyAgent, globalFetch, proxyAgentSpy, envAgentSpy, getLastAgent } =
   vi.hoisted(() => {
-    const undiciFetch = vi.fn();
+    const globalFetch = vi.fn();
     const proxyAgentSpy = vi.fn();
     const envAgentSpy = vi.fn();
     class ProxyAgent {
@@ -25,7 +25,7 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
     return {
       ProxyAgent,
       EnvHttpProxyAgent,
-      undiciFetch,
+      globalFetch,
       proxyAgentSpy,
       envAgentSpy,
       getLastAgent: () => ProxyAgent.lastCreated,
@@ -35,33 +35,60 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
 vi.mock("undici", () => ({
   ProxyAgent,
   EnvHttpProxyAgent,
-  fetch: undiciFetch,
 }));
 
 import { makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 
 describe("makeProxyFetch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("fetch", globalFetch);
+  });
+  afterEach(() => vi.unstubAllGlobals());
 
-  it("uses undici fetch with ProxyAgent dispatcher", async () => {
+  it("uses global fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";
-    undiciFetch.mockResolvedValue({ ok: true });
+    globalFetch.mockResolvedValue({ ok: true });
 
     const proxyFetch = makeProxyFetch(proxyUrl);
     expect(proxyAgentSpy).not.toHaveBeenCalled();
     await proxyFetch("https://api.example.com/v1/audio");
 
+    const request = globalFetch.mock.calls[0]?.[0] as Request;
     expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com/v1/audio",
+    expect(request).toBeInstanceOf(Request);
+    expect(request.url).toBe("https://api.example.com/v1/audio");
+    expect(globalFetch).toHaveBeenCalledWith(
+      request,
       expect.objectContaining({ dispatcher: getLastAgent() }),
     );
+  });
+
+  it("materializes multipart content-type before proxy dispatch", async () => {
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const form = new FormData();
+    form.append("file", new Blob(["hello"]), "smoke.txt");
+    globalFetch.mockResolvedValue({ ok: true });
+
+    await proxyFetch("https://api.example.com/upload", {
+      method: "POST",
+      body: form,
+    });
+
+    const request = globalFetch.mock.calls[0]?.[0] as Request;
+    expect(request.headers.get("content-type")).toContain("multipart/form-data");
   });
 });
 
 describe("resolveProxyFetchFromEnv", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("fetch", globalFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
 
   it("returns undefined when no proxy env vars are set", () => {
     vi.stubEnv("HTTPS_PROXY", "");
@@ -79,17 +106,19 @@ describe("resolveProxyFetchFromEnv", () => {
     vi.stubEnv("https_proxy", "");
     vi.stubEnv("http_proxy", "");
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-    undiciFetch.mockResolvedValue({ ok: true });
+    globalFetch.mockResolvedValue({ ok: true });
 
     const fetchFn = resolveProxyFetchFromEnv();
     expect(fetchFn).toBeDefined();
     expect(envAgentSpy).toHaveBeenCalled();
 
     await fetchFn!("https://api.example.com");
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com",
+    const request = globalFetch.mock.calls[0]?.[0] as Request;
+    expect(globalFetch).toHaveBeenCalledWith(
+      request,
       expect.objectContaining({ dispatcher: EnvHttpProxyAgent.lastCreated }),
     );
+    expect(request.url).toBe("https://api.example.com/");
   });
 
   it("returns proxy fetch when HTTP_PROXY is set", () => {

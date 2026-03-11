@@ -1,5 +1,9 @@
-import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { logWarn } from "../../logger.js";
+
+function buildProxiedRequest(input: RequestInfo | URL, init?: RequestInit): Request {
+  return new Request(input, init);
+}
 
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
@@ -18,13 +22,10 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
     }
     return agent;
   };
-  // undici's fetch is runtime-compatible with global fetch but the types diverge
-  // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
   const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    undiciFetch(input as string | URL, {
-      ...(init as Record<string, unknown>),
+    fetch(buildProxiedRequest(input, init), {
       dispatcher: resolveAgent(),
-    }) as unknown as Promise<Response>) as ProxyFetchWithMetadata;
+    } as RequestInit & { dispatcher: ProxyAgent })) as ProxyFetchWithMetadata;
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
     value: proxyUrl,
     enumerable: false,
@@ -62,10 +63,9 @@ export function resolveProxyFetchFromEnv(): typeof fetch | undefined {
   try {
     const agent = new EnvHttpProxyAgent();
     return ((input: RequestInfo | URL, init?: RequestInit) =>
-      undiciFetch(input as string | URL, {
-        ...(init as Record<string, unknown>),
+      fetch(buildProxiedRequest(input, init), {
         dispatcher: agent,
-      }) as unknown as Promise<Response>) as typeof fetch;
+      } as RequestInit & { dispatcher: EnvHttpProxyAgent })) as typeof fetch;
   } catch (err) {
     logWarn(
       `Proxy env var set but agent creation failed — falling back to direct fetch: ${err instanceof Error ? err.message : String(err)}`,
