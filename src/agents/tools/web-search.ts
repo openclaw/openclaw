@@ -1416,7 +1416,12 @@ async function runKimiSearch(params: {
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
-  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  // Strip a stray trailing /chat/completions so users who copy the full endpoint
+  // URL into baseUrl don't end up with a doubled path like /v1/chat/completions/chat/completions.
+  const baseUrl = params.baseUrl
+    .trim()
+    .replace(/\/$/, "")
+    .replace(/\/chat\/completions$/, "");
   const endpoint = `${baseUrl}/chat/completions`;
   const messages: Array<Record<string, unknown>> = [
     {
