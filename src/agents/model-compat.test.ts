@@ -313,6 +313,12 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
   });
+
+  it("accepts all opencode-go models without zen exclusions", () => {
+    expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
+  });
 });
 
 describe("resolveForwardCompatModel", () => {
