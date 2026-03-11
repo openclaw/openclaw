@@ -241,6 +241,42 @@ describe("restartScheduledTask", () => {
     expect(taskQueryCount).toBe(41);
   });
 
+  it("throws when schtasks query fails while waiting for the task to stop", async () => {
+    const calls: string[][] = [];
+
+    execSchtasksMock.mockImplementation(async (argv: string[]) => {
+      calls.push(argv);
+      if (argv.length === 1 && argv[0] === "/Query") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (argv[0] === "/End") {
+        return { code: 0, stdout: "SUCCESS", stderr: "" };
+      }
+      if (argv[0] === "/Query" && argv.includes("/TN")) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "ERROR: Access is denied.",
+        };
+      }
+      throw new Error(`Unexpected schtasks call: ${argv.join(" ")}`);
+    });
+
+    const restart = restartScheduledTask({
+      env: { USERNAME: "tester" },
+      stdout: new PassThrough(),
+    });
+    const rejection = expect(restart).rejects.toThrow(/schtasks query failed while waiting/i);
+
+    await vi.runAllTimersAsync();
+    await rejection;
+    expect(calls).toEqual([
+      ["/Query"],
+      ["/End", "/TN", "OpenClaw Gateway"],
+      ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+    ]);
+  });
+
   it("still starts the task immediately when /End reports it was not running", async () => {
     const calls: string[][] = [];
 

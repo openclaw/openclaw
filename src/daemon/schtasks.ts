@@ -328,26 +328,44 @@ function isTaskNotRunning(res: { stdout: string; stderr: string; code: number })
 async function queryScheduledTaskInfo(taskName: string): Promise<{
   res: { stdout: string; stderr: string; code: number };
   parsed: ScheduledTaskInfo | null;
+  missing: boolean;
 }> {
   const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+  const detail = (res.stderr || res.stdout).trim().toLowerCase();
   return {
     res,
     parsed: res.code === 0 ? parseSchtasksQuery(res.stdout || "") : null,
+    missing: res.code !== 0 && detail.includes("cannot find the file"),
   };
 }
 
 async function waitForScheduledTaskStop(taskName: string): Promise<void> {
   for (let attempt = 0; attempt < TASK_STOP_WAIT_ATTEMPTS; attempt += 1) {
-    const { parsed: info } = await queryScheduledTaskInfo(taskName);
-    if (!info || !isScheduledTaskActive(info)) {
+    const { res, parsed: info, missing } = await queryScheduledTaskInfo(taskName);
+    if (missing || (info && !isScheduledTaskActive(info))) {
       return;
+    }
+    if (!info) {
+      throw new Error(
+        `schtasks query failed while waiting for "${taskName}" to stop: ${(
+          res.stderr || res.stdout || "unknown error"
+        ).trim()}`.trim(),
+      );
     }
     await sleep(TASK_STOP_WAIT_DELAY_MS);
   }
 
-  const { parsed: finalInfo } = await queryScheduledTaskInfo(taskName);
-  if (!finalInfo || !isScheduledTaskActive(finalInfo)) {
+  const { res: finalRes, parsed: finalInfo, missing: finalMissing } =
+    await queryScheduledTaskInfo(taskName);
+  if (finalMissing || (finalInfo && !isScheduledTaskActive(finalInfo))) {
     return;
+  }
+  if (!finalInfo) {
+    throw new Error(
+      `schtasks query failed while waiting for "${taskName}" to stop: ${(
+        finalRes.stderr || finalRes.stdout || "unknown error"
+      ).trim()}`.trim(),
+    );
   }
 
   const waitSeconds = Math.ceil((TASK_STOP_WAIT_ATTEMPTS * TASK_STOP_WAIT_DELAY_MS) / 1000);
@@ -403,10 +421,9 @@ export async function readScheduledTaskRuntime(
     };
   }
   const taskName = resolveTaskName(env);
-  const { res, parsed } = await queryScheduledTaskInfo(taskName);
+  const { res, parsed, missing } = await queryScheduledTaskInfo(taskName);
   if (!parsed) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("cannot find the file");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
