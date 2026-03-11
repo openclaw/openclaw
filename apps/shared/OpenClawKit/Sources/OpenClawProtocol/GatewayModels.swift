@@ -1330,6 +1330,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let reasoninglevel: AnyCodable?
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
+    public let workspace: AnyCodable?
     public let exechost: AnyCodable?
     public let execsecurity: AnyCodable?
     public let execask: AnyCodable?
@@ -1350,6 +1351,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         reasoninglevel: AnyCodable?,
         responseusage: AnyCodable?,
         elevatedlevel: AnyCodable?,
+        workspace: AnyCodable?,
         exechost: AnyCodable?,
         execsecurity: AnyCodable?,
         execask: AnyCodable?,
@@ -1369,6 +1371,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.reasoninglevel = reasoninglevel
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
+        self.workspace = workspace
         self.exechost = exechost
         self.execsecurity = execsecurity
         self.execask = execask
@@ -1390,6 +1393,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case reasoninglevel = "reasoningLevel"
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
+        case workspace
         case exechost = "execHost"
         case execsecurity = "execSecurity"
         case execask = "execAsk"
