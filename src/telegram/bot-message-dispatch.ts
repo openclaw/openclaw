@@ -117,22 +117,26 @@ async function mirrorTelegramReplyToSessionTranscript(params: {
   agentId: string;
   payload: ReplyPayload;
 }): Promise<void> {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-  const mirrored = await appendAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
-    sessionKey,
-    text: params.payload.text,
-    mediaUrls:
-      params.payload.mediaUrls ??
-      (params.payload.mediaUrl ? [params.payload.mediaUrl] : undefined),
-  });
-  if (!mirrored.ok) {
-    logVerbose(
-      `telegram: failed mirroring outbound reply to transcript for ${sessionKey}: ${mirrored.reason}`,
-    );
+  try {
+    const sessionKey = params.sessionKey?.trim();
+    if (!sessionKey) {
+      return;
+    }
+    const mirrored = await appendAssistantMessageToSessionTranscript({
+      agentId: params.agentId,
+      sessionKey,
+      text: params.payload.text,
+      mediaUrls:
+        params.payload.mediaUrls ??
+        (params.payload.mediaUrl ? [params.payload.mediaUrl] : undefined),
+    });
+    if (!mirrored.ok) {
+      logVerbose(
+        `telegram: failed mirroring outbound reply to transcript for ${sessionKey}: ${mirrored.reason}`,
+      );
+    }
+  } catch (err) {
+    logVerbose(`telegram: transcript mirror threw: ${String(err)}`);
   }
 }
 
@@ -492,6 +496,15 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, text };
   };
+  const mirrorDeliveredTranscriptPayloads = async (payloads: ReplyPayload[]) => {
+    for (const mirroredPayload of payloads) {
+      await mirrorTelegramReplyToSessionTranscript({
+        sessionKey: ctxPayload.SessionKey,
+        agentId: route.agentId,
+        payload: mirroredPayload,
+      });
+    }
+  };
   const sendPayload = async (payload: ReplyPayload) => {
     const result = await deliverReplies({
       ...deliveryBaseOptions,
@@ -582,10 +595,10 @@ export const dispatchTelegramMessage = async ({
           const segments = split.segments;
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
-          const flushBufferedFinalAnswer = async () => {
+          const flushBufferedFinalAnswer = async (): Promise<ReplyPayload | null> => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
             if (!buffered) {
-              return false;
+              return null;
             }
             const bufferedButtons = (
               buffered.payload.channelData?.telegram as
@@ -600,10 +613,11 @@ export const dispatchTelegramMessage = async ({
               previewButtons: bufferedButtons,
             });
             reasoningStepState.resetForNextStep();
-            return result !== "skipped";
+            return result !== "skipped" ? applyTextToPayload(buffered.payload, buffered.text) : null;
           };
 
           let deliveredFinalPayload = false;
+          const mirroredTranscriptPayloads: ReplyPayload[] = [];
           for (const segment of segments) {
             if (
               segment.lane === "answer" &&
@@ -629,12 +643,18 @@ export const dispatchTelegramMessage = async ({
             });
             if (info.kind === "final" && result !== "skipped") {
               deliveredFinalPayload = true;
+              if (segment.lane === "answer") {
+                mirroredTranscriptPayloads.push(applyTextToPayload(payload, segment.text));
+              }
             }
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
-                deliveredFinalPayload =
-                  (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
+                const flushedAnswer = await flushBufferedFinalAnswer();
+                if (flushedAnswer) {
+                  mirroredTranscriptPayloads.push(flushedAnswer);
+                  deliveredFinalPayload = true;
+                }
               }
               continue;
             }
@@ -648,11 +668,7 @@ export const dispatchTelegramMessage = async ({
           }
           if (segments.length > 0) {
             if (info.kind === "final" && deliveredFinalPayload) {
-              await mirrorTelegramReplyToSessionTranscript({
-                sessionKey: ctxPayload.SessionKey,
-                agentId: route.agentId,
-                payload,
-              });
+              await mirrorDeliveredTranscriptPayloads(mirroredTranscriptPayloads);
             }
             return;
           }
@@ -661,16 +677,18 @@ export const dispatchTelegramMessage = async ({
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
               deliveredFinalPayload = await sendPayload(payloadWithoutSuppressedReasoning);
+              if (deliveredFinalPayload) {
+                mirroredTranscriptPayloads.push(payloadWithoutSuppressedReasoning);
+              }
             }
             if (info.kind === "final") {
-              deliveredFinalPayload =
-                (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
+              const flushedAnswer = await flushBufferedFinalAnswer();
+              if (flushedAnswer) {
+                mirroredTranscriptPayloads.push(flushedAnswer);
+                deliveredFinalPayload = true;
+              }
               if (deliveredFinalPayload) {
-                await mirrorTelegramReplyToSessionTranscript({
-                  sessionKey: ctxPayload.SessionKey,
-                  agentId: route.agentId,
-                  payload,
-                });
+                await mirrorDeliveredTranscriptPayloads(mirroredTranscriptPayloads);
               }
             }
             return;
@@ -685,19 +703,26 @@ export const dispatchTelegramMessage = async ({
             hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
           if (!canSendAsIs) {
             if (info.kind === "final") {
-              deliveredFinalPayload = (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
+              const flushedAnswer = await flushBufferedFinalAnswer();
+              if (flushedAnswer) {
+                mirroredTranscriptPayloads.push(flushedAnswer);
+                deliveredFinalPayload = true;
+              }
             }
             return;
           }
           deliveredFinalPayload = await sendPayload(payload);
+          if (deliveredFinalPayload) {
+            mirroredTranscriptPayloads.push(payload);
+          }
           if (info.kind === "final") {
-            deliveredFinalPayload = (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
+            const flushedAnswer = await flushBufferedFinalAnswer();
+            if (flushedAnswer) {
+              mirroredTranscriptPayloads.push(flushedAnswer);
+              deliveredFinalPayload = true;
+            }
             if (deliveredFinalPayload) {
-              await mirrorTelegramReplyToSessionTranscript({
-                sessionKey: ctxPayload.SessionKey,
-                agentId: route.agentId,
-                payload,
-              });
+              await mirrorDeliveredTranscriptPayloads(mirroredTranscriptPayloads);
             }
           }
         },

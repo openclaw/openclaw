@@ -282,6 +282,117 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("does not let transcript mirror failures trigger fallback delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello from Telegram" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(
+      dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "agent:main:main",
+          } as unknown as TelegramMessageContext["ctxPayload"],
+          route: {
+            agentId: "main",
+            accountId: "default",
+          } as unknown as TelegramMessageContext["route"],
+        }),
+        streamMode: "off",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Hello from Telegram" })],
+      }),
+    );
+  });
+
+  it("mirrors sanitized final answer text instead of raw think-tag payload text", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>Counting letters in strawberry</think>3" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "3" })],
+      }),
+    );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      text: "3",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("does not mirror suppressed reasoning text for media-only final delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "<think>Internal hidden reasoning</think>",
+          mediaUrl: "file:///tmp/final-image.png",
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "",
+            mediaUrl: "file:///tmp/final-image.png",
+          }),
+        ],
+      }),
+    );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      text: "",
+      mediaUrls: ["file:///tmp/final-image.png"],
+    });
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
