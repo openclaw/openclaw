@@ -182,6 +182,9 @@ export class TelegramPollingSession {
     bot.api.config.use((prev, method, payload, signal) => {
       if (method === "getUpdates") {
         lastGetUpdatesAt = Date.now();
+        // Reset backoff after a successful getUpdates cycle so that
+        // transient network blips don't permanently inflate the delay.
+        this.#restartAttempts = 0;
       }
       return prev(method, payload, signal);
     });
