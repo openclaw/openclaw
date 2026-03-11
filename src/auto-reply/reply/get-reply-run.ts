@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveAdaptiveThinking } from "../../agents/adaptive-thinking/index.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import {
@@ -387,7 +388,23 @@ export async function runPreparedReply(
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
   if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+    const adaptiveResolution = await resolveAdaptiveThinking({
+      cfg,
+      provider,
+      model,
+      explicitOverride: undefined,
+      sessionOverride: sessionEntry?.thinkingLevel
+        ? normalizeThinkLevel(sessionEntry.thinkingLevel)
+        : undefined,
+      currentMessage: prefixedBodyBase,
+      recentMessages: [threadHistoryBody ?? "", threadStarterBody ?? ""].filter(Boolean),
+      attachmentCount: hasMediaAttachment ? 1 : 0,
+      catalog: undefined,
+      config: agentCfg?.adaptiveThinking,
+      logger: (line) => logVerbose(line),
+    });
+    resolvedThinkLevel =
+      adaptiveResolution.thinkingLevel ?? (await modelState.resolveDefaultThinkingLevel());
   }
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;

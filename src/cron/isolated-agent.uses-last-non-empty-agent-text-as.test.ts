@@ -524,6 +524,67 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("uses adaptive thinking for debugging cron turns when enabled", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "claude-opus-4-5",
+          name: "Opus 4.5",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ]);
+
+      await runCronTurn(home, {
+        cfgOverrides: {
+          agents: { defaults: { adaptiveThinking: { enabled: true } } },
+        },
+        jobPayload: {
+          kind: "agentTurn",
+          message: "debug this failing test and inspect the repo files",
+          deliver: false,
+        },
+        mockTexts: ["done"],
+      });
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.thinkLevel).toBe("medium");
+    });
+  });
+
+  it("uses adaptive thinking for cron turns when no job or hook override is present", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "claude-opus-4-5",
+          name: "Opus 4.5",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ]);
+
+      await runCronTurn(home, {
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 },
+            },
+          },
+        },
+        jobPayload: {
+          kind: "agentTurn",
+          message: "debug this failing test in the TypeScript repo",
+          deliver: false,
+        },
+        message: "debug this failing test in the TypeScript repo",
+        mockTexts: ["done"],
+      });
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.thinkLevel).toBe("medium");
+    });
+  });
+
   it("truncates long summaries", async () => {
     await withTempHome(async (home) => {
       const long = "a".repeat(2001);

@@ -11,7 +11,6 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -465,19 +464,11 @@ describe("agentCommand", () => {
       const store = path.join(customStoreDir, "sessions.json");
       writeSessionStoreSeed(store, {});
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
 
       await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
 
-      const matchingCall = resolveSessionFilePathSpy.mock.calls.find(
-        (call) => call[0] === "session-custom-123",
-      );
-      expect(matchingCall?.[2]).toEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionsDir: customStoreDir,
-        }),
-      );
+      expect(getLastEmbeddedCall()?.sessionFile).toContain(customStoreDir);
+      expect(getLastEmbeddedCall()?.sessionFile).toContain("session-custom-123");
     });
   });
 
@@ -865,6 +856,56 @@ describe("agentCommand", () => {
       },
       expected: "high",
     });
+  });
+
+  it("uses adaptive thinking when no explicit or session override is present", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "claude-opus-4-5",
+          name: "Opus 4.5",
+          provider: "anthropic",
+          reasoning: true,
+        } as never,
+      ]);
+
+      await agentCommand(
+        { message: "debug this failing test in the TypeScript repo", to: "+1555" },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("medium");
+    });
+  });
+
+  it("raises thinking for debugging tasks when adaptive thinking is enabled", async () => {
+    const callArgs = await runEmbeddedWithTempConfig({
+      args: { message: "Debug this failing test and inspect the repo files", to: "+1333" },
+      agentOverrides: {
+        thinkingDefault: "low",
+        adaptiveThinking: { enabled: true },
+      },
+    });
+    expect(callArgs?.thinkLevel).toBe("medium");
+  });
+
+  it("keeps explicit thinking override above adaptive thinking", async () => {
+    const callArgs = await runEmbeddedWithTempConfig({
+      args: {
+        message: "Debug this failing test and inspect the repo files",
+        to: "+1333",
+        thinking: "high",
+      },
+      agentOverrides: {
+        thinkingDefault: "low",
+        adaptiveThinking: { enabled: true },
+      },
+    });
+    expect(callArgs?.thinkLevel).toBe("high");
   });
 
   it("prints JSON payload when requested", async () => {

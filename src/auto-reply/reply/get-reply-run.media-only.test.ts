@@ -208,6 +208,41 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("uses adaptive thinking when there is no inline or session override", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "debug this failing test in the TypeScript repo",
+          RawBody: "debug this failing test in the TypeScript repo",
+          CommandBody: "debug this failing test in the TypeScript repo",
+        },
+        sessionCtx: {
+          Body: "debug this failing test in the TypeScript repo",
+          BodyStripped: "debug this failing test in the TypeScript repo",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        resolvedThinkLevel: undefined,
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "off",
+        } as never,
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: { adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 } } },
+        },
+        agentCfg: {
+          adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 },
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.thinkLevel).toBe("medium");
+  });
+
   it("omits auth key labels from /new and /reset confirmation messages", async () => {
     await runPreparedReply(
       baseParams({

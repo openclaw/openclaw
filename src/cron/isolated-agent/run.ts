@@ -1,3 +1,4 @@
+import { resolveAdaptiveThinking } from "../../agents/adaptive-thinking/index.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -22,7 +23,6 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-  resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
@@ -400,7 +400,7 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  // Resolve thinking level - job thinking > hooks.gmail.thinking > model/global defaults
+  // Resolve thinking level - job thinking > hooks.gmail.thinking > session override > adaptive/default
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
     : undefined;
@@ -408,14 +408,25 @@ export async function runCronIsolatedAgentTurn(params: {
     (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
       undefined,
   );
+  const sessionThink = normalizeThinkLevel(
+    typeof cronSession.sessionEntry.thinkingLevel === "string"
+      ? cronSession.sessionEntry.thinkingLevel
+      : undefined,
+  );
   let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
-    thinkLevel = resolveThinkingDefault({
+    const adaptiveResolution = await resolveAdaptiveThinking({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
+      sessionOverride: sessionThink,
+      currentMessage: params.message,
+      recentMessages: [],
+      attachmentCount: 0,
       catalog: await loadCatalog(),
+      config: cfgWithAgentDefaults.agents?.defaults?.adaptiveThinking,
     });
+    thinkLevel = adaptiveResolution.thinkingLevel;
   }
   if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     logWarn(
