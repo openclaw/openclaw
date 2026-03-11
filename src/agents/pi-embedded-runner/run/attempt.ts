@@ -1730,9 +1730,7 @@ export async function runEmbeddedAttempt(
               sandbox?.enabled && sandbox?.fsBridge
                 ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
                 : undefined,
-            allowedExternalDirs: [
-              path.join(os.homedir(), ".openclaw", "media", "inbound"),
-            ],
+            allowedExternalDirs: [path.join(os.homedir(), ".openclaw", "media", "inbound")],
           });
 
           cacheTrace?.recordStage("prompt:images", {
