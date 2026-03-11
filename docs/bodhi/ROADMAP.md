@@ -11,7 +11,7 @@
 - [x] Fork OpenClaw
 - [x] Documentation, architecture, and ontology specs
 - [x] GitHub repo setup
-- [x] Landing page at qenjin.io/openbodhi
+- [ ] Public landing page (self-host your own)
 - [ ] Community: GitHub Discussions, contribution guidelines
 
 ---
