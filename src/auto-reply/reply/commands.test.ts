@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import {
+  abortEmbeddedPiRun,
+  compactEmbeddedPiSession,
+  runEmbeddedPiAgent,
+} from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -1124,6 +1128,10 @@ describe("/models command", () => {
     agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
   } as unknown as OpenClawConfig;
 
+  beforeEach(() => {
+    vi.mocked(runEmbeddedPiAgent).mockReset();
+  });
+
   it.each(["discord", "whatsapp"])("lists providers on %s (text)", async (surface) => {
     const params = buildPolicyParams("/models", cfg, { Provider: surface, Surface: surface });
     const result = await handleCommands(params);
@@ -1259,6 +1267,152 @@ describe("/models command", () => {
     });
 
     expect(result.reply?.text).toContain("localai");
+  });
+
+  it("tests the first configured fallback by default", async () => {
+    vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      payloads: [{ text: "OK" }],
+      meta: {},
+    } as never);
+
+    const fallbackCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-4.1", "google/gemini-2.0-flash"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleCommands(
+      buildPolicyParams("/models test-fallback", fallbackCfg, {
+        Provider: "discord",
+        Surface: "discord",
+      }),
+    );
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain(
+      "Fallback test (primary skipped: anthropic/claude-opus-4-5)",
+    );
+    expect(result.reply?.text).toContain("- openai/gpt-4.1: OK");
+    expect(result.reply?.text).toContain("More: /models test-fallback all");
+    expect(result.reply?.text).not.toContain("google/gemini-2.0-flash");
+    expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4.1",
+        disableTools: true,
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              model: {
+                primary: "openai/gpt-4.1",
+                fallbacks: [],
+              },
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("tests every fallback when /models test-fallback all is used", async () => {
+    vi.mocked(runEmbeddedPiAgent)
+      .mockResolvedValueOnce({
+        payloads: [{ text: "OK" }],
+        meta: {},
+      } as never)
+      .mockRejectedValueOnce(new Error("provider unavailable"));
+
+    const fallbackCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-4.1", "google/gemini-2.0-flash"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleCommands(
+      buildPolicyParams("/models test-fallback all", fallbackCfg, {
+        Provider: "discord",
+        Surface: "discord",
+      }),
+    );
+
+    expect(result.reply?.text).toContain("- openai/gpt-4.1: OK");
+    expect(result.reply?.text).toContain("- google/gemini-2.0-flash:");
+    expect(result.reply?.text).toContain("provider unavailable");
+    expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses agent-specific fallback overrides for /models test-fallback", async () => {
+    vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      payloads: [{ text: "OK" }],
+      meta: {},
+    } as never);
+
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-4.1"],
+          },
+        },
+        list: [
+          {
+            id: "support",
+            model: {
+              primary: "localai/ultra-chat",
+              fallbacks: ["google/gemini-2.0-flash"],
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const params = buildPolicyParams("/models test-fallback", scopedCfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
+    const result = await handleCommands({
+      ...params,
+      agentId: "support",
+      sessionKey: "agent:support:main",
+    });
+
+    expect(result.reply?.text).toContain("Fallback test (primary skipped: localai/ultra-chat)");
+    expect(result.reply?.text).toContain("- google/gemini-2.0-flash: OK");
+    expect(result.reply?.text).not.toContain("openai/gpt-4.1");
+    expect(vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "google",
+        model: "gemini-2.0-flash",
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            list: expect.arrayContaining([
+              expect.objectContaining({
+                id: "support",
+                model: {
+                  primary: "google/gemini-2.0-flash",
+                  fallbacks: [],
+                },
+              }),
+            ]),
+          }),
+        }),
+      }),
+    );
   });
 });
 
