@@ -185,8 +185,6 @@ export function patchScopedAccountConfig(params: {
             ...existingAccount,
             ...(ensureAccountEnabled
               ? {
-                  // Preserve an explicitly disabled account; callers patching scoped
-                  // config should not reactivate accounts unless they set enabled.
                   enabled:
                     typeof existingAccount.enabled === "boolean" ? existingAccount.enabled : true,
                 }
