@@ -1,3 +1,4 @@
+import { isKnownCoreToolId } from "./tool-catalog.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -173,10 +174,11 @@ export function stripPluginOnlyAllowlist(
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
+    const isKnownCoreEntry = expanded.some((tool) => isKnownCoreToolId(tool));
     if (isCoreEntry) {
       hasCoreEntry = true;
     }
-    if (!isCoreEntry && !isPluginEntry) {
+    if (!isCoreEntry && !isPluginEntry && !isKnownCoreEntry) {
       unknownAllowlist.push(entry);
     }
   }
