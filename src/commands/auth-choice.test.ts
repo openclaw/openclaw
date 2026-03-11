@@ -363,9 +363,9 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       "azure-openai-responses/gpt-5.4",
     );
-    expect(result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-5.4"]?.params).toEqual(
-      {},
-    );
+    expect(
+      result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-5.4"]?.params,
+    ).toEqual({});
     expect((await readAuthProfile("azure-openai-responses:default"))?.key).toBe("azure-test-key");
   });
 
@@ -397,11 +397,11 @@ describe("applyAuthChoice", () => {
       },
     });
 
-    expect(result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-5.4"]?.params).toMatchObject(
-      {
-        azureApiVersion: "2025-04-01-preview",
-      },
-    );
+    expect(
+      result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-5.4"]?.params,
+    ).toMatchObject({
+      azureApiVersion: "2025-04-01-preview",
+    });
   });
 
   it("handles Z.AI endpoint selection and detection paths", async () => {
@@ -1182,9 +1182,9 @@ describe("applyAuthChoice", () => {
     const profile = await readAuthProfile("azure-openai-responses:default");
     expect(profile?.key).toBe("");
     expect(profile?.key).not.toBe("undefined");
-    expect(result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-4.1"]?.params).toEqual(
-      {},
-    );
+    expect(
+      result.config.agents?.defaults?.models?.["azure-openai-responses/gpt-4.1"]?.params,
+    ).toEqual({});
   });
 
   it("ignores legacy LiteLLM oauth profiles when selecting litellm-api-key", async () => {

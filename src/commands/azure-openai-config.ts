@@ -90,7 +90,7 @@ export function applyAzureOpenAIProviderConfig(
 
   const agentModels = { ...cfg.agents?.defaults?.models };
   const existingModelParams = {
-    ...((agentModels[modelRef]?.params as Record<string, unknown> | undefined) ?? {}),
+    ...agentModels[modelRef]?.params,
   };
   if (apiVersion === AZURE_OPENAI_DEFAULT_API_VERSION) {
     delete existingModelParams.azureApiVersion;
