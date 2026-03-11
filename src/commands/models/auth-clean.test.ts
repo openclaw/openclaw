@@ -219,12 +219,12 @@ describe("modelsAuthCleanCommand", () => {
     expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 
-  it("passes readOnly:false to ensureAuthProfileStore when not dry-run (default agent)", async () => {
-    // #2914711181: the probe for actual cleanup must use readOnly:false so legacy
-    // auth.json → auth-profiles.json migration runs before
+  it("probe uses readOnly:true; migration trigger uses readOnly:false after guards pass (default agent)", async () => {
+    // #2915530629: probe must always use readOnly:true — never open a write-capable
+    // store before guards pass. After guards pass, a separate write-enabled call
+    // (readOnly:false) triggers legacy auth.json migration before
     // updateAuthProfileStoreWithLock's ensureAuthStoreFile can create an empty
-    // placeholder (which would cause the write-enabled load inside the lock to
-    // return an empty store and skip all removals).
+    // placeholder. (#2914491523, #2914711181)
     const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
@@ -233,14 +233,21 @@ describe("modelsAuthCleanCommand", () => {
 
     await modelsAuthCleanCommand({}, makeRuntime()); // no dryRun
 
+    // Probe call: readOnly:true (always, even for non-dryRun)
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+    // Migration trigger call: readOnly:false (after guards pass, before lock)
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ readOnly: false }),
     );
   });
 
-  it("passes readOnly:false to loadAgentLocalAuthProfileStore when not dry-run (non-default agent)", async () => {
-    // #2914711181: same as above for non-default agent path.
+  it("probe uses readOnly:true; migration trigger uses readOnly:false after guards pass (non-default agent)", async () => {
+    // #2915530629: same as default agent path — probe is always readOnly:true;
+    // migration trigger uses readOnly:false after guards pass. (#2914491523, #2914711181)
     const store = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
@@ -251,6 +258,12 @@ describe("modelsAuthCleanCommand", () => {
 
     await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime()); // no dryRun
 
+    // Probe call: readOnly:true (always, even for non-dryRun)
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+    // Migration trigger call: readOnly:false (after guards pass, before lock)
     expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ readOnly: false }),
