@@ -46,6 +46,33 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
+function renderMissingNodeInstallHint(
+  installError: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const normalized = installError.toLowerCase();
+  const missingNode =
+    normalized.includes("node not found in path") ||
+    normalized.includes("command not found: node") ||
+    normalized.includes("env: node") ||
+    (normalized.includes("no such file or directory") && normalized.includes("node"));
+  if (!missingNode) {
+    return null;
+  }
+
+  const lines = [
+    "Node runtime was not found while installing the Gateway service.",
+    `Install Node 22+ and rerun ${formatCliCommand("openclaw gateway install")}.`,
+  ];
+  if (platform === "darwin") {
+    lines.push(
+      "macOS quick fix: brew install node@22",
+      `Then ensure non-interactive shells include Homebrew bin directories before retrying ${formatCliCommand("openclaw onboard --install-daemon")}.`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export async function finalizeOnboardingWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
@@ -208,6 +235,10 @@ export async function finalizeOnboardingWizard(
       }
       if (installError) {
         await prompter.note(`Gateway service install failed: ${installError}`, "Gateway");
+        const missingNodeHint = renderMissingNodeInstallHint(installError);
+        if (missingNodeHint) {
+          await prompter.note(missingNodeHint, "Gateway runtime");
+        }
         await prompter.note(gatewayInstallErrorHint(), "Gateway");
       }
     }

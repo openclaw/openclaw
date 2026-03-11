@@ -35,12 +35,45 @@ function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
   return normalized;
 }
 
+function uniquePreserveOrder(items: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const item of items) {
+    if (!item || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function resolveHomebrewPrefixes(env: Record<string, string | undefined>): string[] {
+  const candidates = [env.HOMEBREW_PREFIX?.trim(), "/opt/homebrew", "/usr/local"];
+  return uniquePreserveOrder(candidates.filter((value): value is string => Boolean(value)));
+}
+
+function buildDarwinSystemNodeCandidates(
+  env: Record<string, string | undefined>,
+  pathModule: typeof path.posix,
+): string[] {
+  const candidates: string[] = [];
+  for (const prefix of resolveHomebrewPrefixes(env)) {
+    candidates.push(pathModule.join(prefix, "opt", "node@24", "bin", "node"));
+    candidates.push(pathModule.join(prefix, "opt", "node@22", "bin", "node"));
+    candidates.push(pathModule.join(prefix, "opt", "node", "bin", "node"));
+    candidates.push(pathModule.join(prefix, "bin", "node"));
+  }
+  candidates.push("/usr/bin/node");
+  return uniquePreserveOrder(candidates);
+}
+
 function buildSystemNodeCandidates(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
 ): string[] {
   if (platform === "darwin") {
-    return ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
+    return buildDarwinSystemNodeCandidates(env, path.posix);
   }
   if (platform === "linux") {
     return ["/usr/local/bin/node", "/usr/bin/node"];

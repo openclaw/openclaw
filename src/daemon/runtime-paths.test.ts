@@ -214,6 +214,7 @@ describe("resolvePreferredNodePath — Homebrew Cellar", () => {
 
 describe("resolveSystemNodeInfo", () => {
   const darwinNode = "/opt/homebrew/bin/node";
+  const darwinNode22 = "/opt/homebrew/opt/node@22/bin/node";
 
   it("returns supported info when version is new enough", async () => {
     mockNodePathPresent(darwinNode);
@@ -239,6 +240,41 @@ describe("resolveSystemNodeInfo", () => {
     const execFile = vi.fn();
     const result = await resolveSystemNodeInfo({ env: {}, platform: "darwin", execFile });
     expect(result).toBeNull();
+  });
+
+  it("detects Homebrew node@22 when the default node symlink is missing", async () => {
+    mockNodePathPresent(darwinNode22);
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.1\n", stderr: "" });
+
+    const result = await resolveSystemNodeInfo({
+      env: {},
+      platform: "darwin",
+      execFile,
+    });
+
+    expect(result).toEqual({
+      path: darwinNode22,
+      version: "22.12.1",
+      supported: true,
+    });
+  });
+
+  it("respects HOMEBREW_PREFIX candidates for versioned node formulas", async () => {
+    const customNode = "/custom/homebrew/opt/node@24/bin/node";
+    mockNodePathPresent(customNode);
+    const execFile = vi.fn().mockResolvedValue({ stdout: "24.9.0\n", stderr: "" });
+
+    const result = await resolveSystemNodeInfo({
+      env: { HOMEBREW_PREFIX: "/custom/homebrew" },
+      platform: "darwin",
+      execFile,
+    });
+
+    expect(result).toEqual({
+      path: customNode,
+      version: "24.9.0",
+      supported: true,
+    });
   });
 
   it("renders a warning when system node is too old", () => {
