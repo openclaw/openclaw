@@ -1,5 +1,7 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -19,7 +21,7 @@ type ReplyDispatchSkipHandler = (
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
-) => Promise<void>;
+) => Promise<boolean | void>;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -40,6 +42,12 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+export type ChannelHookContext = {
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+};
+
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
@@ -55,6 +63,10 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Whether dispatcher should run message_sending/message_sent hooks. */
+  enableMessageHooks?: boolean;
+  /** Channel context for message_sending/message_sent hooks. */
+  channelContext?: ChannelHookContext;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -155,9 +167,73 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+
+        const shouldRunMessageHooks = options.enableMessageHooks !== false;
+        const hookRunner = shouldRunMessageHooks ? getGlobalHookRunner() : undefined;
+        const ctx = options.channelContext ?? {};
+        const channelId = ctx.channelId ?? "unknown";
+        const targetId = ctx.conversationId ?? channelId;
+
+        // Run message_sending hook (may modify content or cancel)
+        let effectivePayload = normalized;
+        if (hookRunner?.hasHooks("message_sending")) {
+          try {
+            const sendingResult = await hookRunner.runMessageSending(
+              {
+                to: targetId,
+                content: normalized.text ?? "",
+                metadata: { kind, channelId },
+              },
+              {
+                channelId,
+                accountId: ctx.accountId,
+                conversationId: ctx.conversationId,
+              },
+            );
+            if (sendingResult?.cancel) {
+              queuedCounts[kind] = Math.max(0, queuedCounts[kind] - 1);
+              return; // Cancel sending
+            }
+            if (sendingResult?.content != null) {
+              effectivePayload = { ...normalized, text: sendingResult.content };
+            }
+          } catch {
+            // Don't block delivery on hook failure
+          }
+        }
+
+        // Call original deliver
+        let success = true;
+        let deliveryError: unknown;
+        try {
+          const delivered = await options.deliver(effectivePayload, { kind });
+          if (delivered === false) {
+            success = false;
+          }
+        } catch (err) {
+          success = false;
+          deliveryError = err;
+          throw err;
+        } finally {
+          // Run message_sent hook
+          if (hookRunner?.hasHooks("message_sent")) {
+            void hookRunner
+              .runMessageSent(
+                {
+                  to: targetId,
+                  content: effectivePayload.text ?? "",
+                  success,
+                  error: deliveryError != null ? formatErrorMessage(deliveryError) : undefined,
+                },
+                {
+                  channelId,
+                  accountId: ctx.accountId,
+                  conversationId: ctx.conversationId,
+                },
+              )
+              .catch(() => {});
+          }
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
