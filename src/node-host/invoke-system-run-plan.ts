@@ -6,6 +6,7 @@ import type {
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
+import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
@@ -316,6 +317,53 @@ function resolveOptionFilteredPositionalIndex(params: {
   return null;
 }
 
+function collectExistingFileOperandIndexes(params: {
+  argv: string[];
+  startIndex: number;
+  cwd: string | undefined;
+}): number[] {
+  let afterDoubleDash = false;
+  const hits: number[] = [];
+  for (let i = params.startIndex; i < params.argv.length; i += 1) {
+    const token = params.argv[i]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (afterDoubleDash) {
+      if (resolvesToExistingFileSync(token, params.cwd)) {
+        hits.push(i);
+      }
+      continue;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (token === "-") {
+      return [];
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    if (resolvesToExistingFileSync(token, params.cwd)) {
+      hits.push(i);
+    }
+  }
+  return hits;
+}
+
+function resolveGenericInterpreterScriptOperandIndex(params: {
+  argv: string[];
+  cwd: string | undefined;
+}): number | null {
+  const hits = collectExistingFileOperandIndexes({
+    argv: params.argv,
+    startIndex: 1,
+    cwd: params.cwd,
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
 function resolveBunScriptOperandIndex(params: {
   argv: string[];
   cwd: string | undefined;
@@ -371,36 +419,76 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv);
     return shellIndex === null ? null : unwrapped.baseIndex + shellIndex;
   }
-  if (!MUTABLE_ARGV1_INTERPRETER_PATTERNS.some((pattern) => pattern.test(executable))) {
-    if (executable === "bun") {
-      const bunIndex = resolveBunScriptOperandIndex({
-        argv: unwrapped.argv,
-        cwd,
-      });
-      return bunIndex === null ? null : unwrapped.baseIndex + bunIndex;
+  if (MUTABLE_ARGV1_INTERPRETER_PATTERNS.some((pattern) => pattern.test(executable))) {
+    const operand = unwrapped.argv[1]?.trim() ?? "";
+    if (operand && operand !== "-" && !operand.startsWith("-")) {
+      return unwrapped.baseIndex + 1;
     }
-    if (executable === "deno") {
-      const denoIndex = resolveDenoRunScriptOperandIndex({
-        argv: unwrapped.argv,
-        cwd,
-      });
-      return denoIndex === null ? null : unwrapped.baseIndex + denoIndex;
+  }
+  if (executable === "bun") {
+    const bunIndex = resolveBunScriptOperandIndex({
+      argv: unwrapped.argv,
+      cwd,
+    });
+    if (bunIndex !== null) {
+      return unwrapped.baseIndex + bunIndex;
     }
+  }
+  if (executable === "deno") {
+    const denoIndex = resolveDenoRunScriptOperandIndex({
+      argv: unwrapped.argv,
+      cwd,
+    });
+    if (denoIndex !== null) {
+      return unwrapped.baseIndex + denoIndex;
+    }
+  }
+  if (!isInterpreterLikeSafeBin(executable)) {
     return null;
   }
-  const operand = unwrapped.argv[1]?.trim() ?? "";
-  if (!operand || operand === "-" || operand.startsWith("-")) {
-    return null;
+  const genericIndex = resolveGenericInterpreterScriptOperandIndex({
+    argv: unwrapped.argv,
+    cwd,
+  });
+  return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
+}
+
+function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
+  argv: string[];
+  shellCommand: string | null;
+}): boolean {
+  if (params.shellCommand !== null) {
+    return false;
   }
-  return unwrapped.baseIndex + 1;
+  const unwrapped = unwrapArgvForMutableOperand(params.argv);
+  const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
+  if (!executable) {
+    return false;
+  }
+  if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+    return false;
+  }
+  return isInterpreterLikeSafeBin(executable);
 }
 
 function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
   cwd: string | undefined;
+  shellCommand: string | null;
 }): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | { ok: false; message: string } {
   const argvIndex = resolveMutableFileOperandIndex(params.argv, params.cwd);
   if (argvIndex === null) {
+    if (
+      requiresStableInterpreterApprovalBindingWithShellCommand({
+        argv: params.argv,
+        shellCommand: params.shellCommand,
+      })
+    ) {
+      return {
+        ok: false,
+        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+      };
+    }
     return { ok: true, snapshot: null };
   }
   const rawOperand = params.argv[argvIndex]?.trim();
@@ -658,6 +746,7 @@ export function buildSystemRunApprovalPlan(params: {
   const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
     argv: hardening.argv,
     cwd: hardening.cwd,
+    shellCommand: command.shellCommand,
   });
   if (!mutableFileOperand.ok) {
     return { ok: false, message: mutableFileOperand.message };
