@@ -40,6 +40,17 @@ type ChatEventPayload = {
 };
 
 // ============================================
+// Command Types
+// ============================================
+
+type ParsedCommand = {
+  name: string;
+  args: string;
+};
+
+type CommandHandler = (args: string) => Promise<void>;
+
+// ============================================
 // Styles
 // ============================================
 
@@ -339,7 +350,87 @@ const styles = {
     background: "linear-gradient(to bottom, transparent, var(--bg))",
     pointerEvents: "none" as const,
   } as React.CSSProperties,
+  autocomplete: {
+    position: "absolute" as const,
+    bottom: "100%",
+    left: 0,
+    right: 0,
+    marginBottom: 8,
+    maxHeight: 200,
+    overflow: "auto",
+    background: "var(--card)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    borderRadius: "var(--radius-md)",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+    zIndex: 10,
+  } as React.CSSProperties,
+  autocompleteItem: {
+    padding: "8px 12px",
+    fontSize: 13,
+    cursor: "pointer",
+    background: "transparent",
+    borderWidth: 0,
+    borderBottom: "1px solid var(--border)",
+    width: "100%",
+    textAlign: "left" as const,
+    color: "var(--text)",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  } as React.CSSProperties,
+  autocompleteItemHover: {
+    background: "var(--bg-hover)",
+  } as React.CSSProperties,
+  autocompleteDescription: {
+    fontSize: 11,
+    color: "var(--muted)",
+    marginLeft: 8,
+  } as React.CSSProperties,
 };
+
+// ============================================
+// Command Parser
+// ============================================
+
+const COMMAND_ALIASES: Record<string, string> = {
+  elev: "elevated",
+};
+
+const COMMAND_DEFINITIONS: Array<{ name: string; description: string }> = [
+  { name: "help", description: "Show slash command help" },
+  { name: "status", description: "Show gateway status summary" },
+  { name: "agent", description: "Switch agent" },
+  { name: "session", description: "Switch session" },
+  { name: "model", description: "Set AI model" },
+  { name: "think", description: "Set thinking level" },
+  { name: "verbose", description: "Toggle verbose mode" },
+  { name: "reasoning", description: "Toggle reasoning" },
+  { name: "usage", description: "Toggle usage footer" },
+  { name: "elevated", description: "Set elevated mode" },
+  { name: "new", description: "Reset session" },
+  { name: "reset", description: "Reset session" },
+  { name: "abort", description: "Abort active run" },
+];
+
+function parseCommand(input: string): ParsedCommand {
+  const trimmed = input.replace(/^\//, "").trim();
+  if (!trimmed) {
+    return { name: "", args: "" };
+  }
+  const [name, ...rest] = trimmed.split(/\s+/);
+  const normalized = name.toLowerCase();
+  return {
+    name: COMMAND_ALIASES[normalized] ?? normalized,
+    args: rest.join(" ").trim(),
+  };
+}
+
+function getCommandCompletions(partial: string) {
+  const query = partial.toLowerCase();
+  return COMMAND_DEFINITIONS.filter((cmd) => cmd.name.startsWith(query));
+}
 
 // ============================================
 // Message Component
@@ -603,6 +694,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 function Message({ message }: { message: ChatMessage }) {
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const isUser = message.role === "user";
+  const isSystem = message.role === "system";
 
   let contentToRender: React.ReactNode;
   let thinkingContent: React.ReactNode = null;
@@ -652,6 +744,36 @@ function Message({ message }: { message: ChatMessage }) {
     }
   }
 
+  // System messages have a different style
+  if (isSystem) {
+    return (
+      <div
+        style={{
+          ...styles.messageRow,
+          alignSelf: "center",
+          maxWidth: "90%",
+        }}
+      >
+        <div
+          style={{
+            ...styles.bubble,
+            background: "var(--secondary)",
+            color: "var(--muted)",
+            fontSize: 12,
+            fontFamily: "monospace",
+            borderBottomLeftRadius: 4,
+            borderBottomRightRadius: 4,
+          }}
+        >
+          {contentToRender}
+        </div>
+        {message.timestamp && (
+          <div style={styles.timestamp}>{formatRelativeTimestamp(message.timestamp)}</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -693,9 +815,13 @@ export default function ChatPage() {
   const [models, setModels] = useState<ModelChoice[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
+  const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [autocompleteIndex, setAutocompleteIndex] = useState(0);
+  const [commandPrefix, setCommandPrefix] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedSessionKeyRef = useRef<string | null>(null);
   selectedSessionKeyRef.current = selectedSessionKey;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -760,6 +886,274 @@ export default function ChatPage() {
     }
   }, [state, request]);
 
+  // ============================================
+  // Command Handlers
+  // ============================================
+
+  const addSystemMessage = useCallback((content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "system",
+        content,
+        timestamp: Date.now(),
+      },
+    ]);
+  }, []);
+
+  const handleCommand = useCallback(
+    async (raw: string) => {
+      const { name, args } = parseCommand(raw);
+      if (!name) {
+        return false;
+      }
+
+      const addSystem = (content: string) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "system",
+            content,
+            timestamp: Date.now(),
+          },
+        ]);
+      };
+
+      try {
+        switch (name) {
+          case "help": {
+            const helpText = [
+              "Slash commands:",
+              "/help - Show this help",
+              "/status - Show gateway status",
+              "/agent <id> - Switch agent",
+              "/session <key> - Switch session",
+              "/model <provider/model> - Set model",
+              "/think <level> - Set thinking level",
+              "/verbose <on|off> - Toggle verbose",
+              "/reasoning <on|off> - Toggle reasoning",
+              "/usage <off|tokens|full> - Toggle usage footer",
+              "/elevated <on|off|ask|full> - Set elevated mode",
+              "/new or /reset - Reset session",
+              "/abort - Abort active run",
+            ].join("\n");
+            addSystem(helpText);
+            break;
+          }
+
+          case "new":
+          case "reset": {
+            const newKey = `agent:main:${new Date().getTime()}`;
+            const res = await request<{ key: string }>("sessions.reset", { key: newKey });
+            if (res.key) {
+              setMessages([]);
+              setChatStream(null);
+              setError(null);
+              setSelectedSessionKey(res.key);
+              addSystem(`Session reset: ${res.key}`);
+              void loadSessions();
+            }
+            break;
+          }
+
+          case "model": {
+            if (!args) {
+              addSystem(`Current model: ${currentModel || "default"}`);
+              addSystem("Usage: /model <provider/model>");
+              break;
+            }
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            const result = await request<SessionsPatchResult>("sessions.patch", {
+              key: selectedSessionKey,
+              model: args,
+            });
+            if (result.resolved) {
+              setCurrentModel(`${result.resolved.modelProvider}/${result.resolved.model}`);
+              addSystem(`Model set to ${result.resolved.modelProvider}/${result.resolved.model}`);
+            } else {
+              setCurrentModel(args);
+              addSystem(`Model set to ${args}`);
+            }
+            void loadSessions();
+            break;
+          }
+
+          case "think": {
+            if (!args) {
+              addSystem("Usage: /think <level>");
+              addSystem("Levels: low, medium, high, ultra (varies by model)");
+              break;
+            }
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            const result = await request<SessionsPatchResult>("sessions.patch", {
+              key: selectedSessionKey,
+              thinkingLevel: args,
+            });
+            addSystem(`Thinking level set to ${args}`);
+            if (result.resolved?.thinkingLevel) {
+              addSystem(`Applied: ${result.resolved.thinkingLevel}`);
+            }
+            break;
+          }
+
+          case "verbose": {
+            if (!args || !["on", "off"].includes(args.toLowerCase())) {
+              addSystem("Usage: /verbose <on|off>");
+              break;
+            }
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            const result = await request<SessionsPatchResult>("sessions.patch", {
+              key: selectedSessionKey,
+              verboseLevel: args.toLowerCase(),
+            });
+            addSystem(`Verbose set to ${args.toLowerCase()}`);
+            break;
+          }
+
+          case "reasoning": {
+            if (!args || !["on", "off"].includes(args.toLowerCase())) {
+              addSystem("Usage: /reasoning <on|off>");
+              break;
+            }
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            const result = await request<SessionsPatchResult>("sessions.patch", {
+              key: selectedSessionKey,
+              reasoningLevel: args.toLowerCase(),
+            });
+            addSystem(`Reasoning set to ${args.toLowerCase()}`);
+            break;
+          }
+
+          case "usage": {
+            if (!args || !["off", "tokens", "full"].includes(args.toLowerCase())) {
+              addSystem("Usage: /usage <off|tokens|full>");
+              break;
+            }
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            const result = await request<SessionsPatchResult>("sessions.patch", {
+              key: selectedSessionKey,
+              responseUsage: args.toLowerCase() === "off" ? null : (args.toLowerCase() as "tokens" | "full"),
+            });
+            addSystem(`Usage footer set to ${args.toLowerCase()}`);
+            break;
+          }
+
+          case "elevated":
+          case "elev": {
+            if (!args || !["on", "off", "ask", "full"].includes(args.toLowerCase())) {
+              addSystem("Usage: /elevated <on|off|ask|full>");
+              break;
+            }
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            const result = await request<SessionsPatchResult>("sessions.patch", {
+              key: selectedSessionKey,
+              elevatedLevel: args.toLowerCase(),
+            });
+            addSystem(`Elevated mode set to ${args.toLowerCase()}`);
+            break;
+          }
+
+          case "status": {
+            try {
+              const status = await request<Record<string, unknown>>("gateway.status", {});
+              const lines = [
+                "Gateway Status:",
+                `Connected: ${state}`,
+                `Sessions: ${sessions.length}`,
+                `Model: ${currentModel || "default"}`,
+              ];
+              if (status && typeof status === "object") {
+                if (typeof status.gateway === "string") {
+                  lines.push(`Gateway: ${status.gateway}`);
+                }
+                if (typeof status.version === "string") {
+                  lines.push(`Version: ${status.version}`);
+                }
+              }
+              addSystem(lines.join("\n"));
+            } catch (err) {
+              addSystem(`Status check failed: ${err instanceof Error ? err.message : "unknown error"}`);
+            }
+            break;
+          }
+
+          case "abort": {
+            if (!selectedSessionKey) {
+              addSystem("No session selected");
+              break;
+            }
+            try {
+              await request("chat.abort", { sessionKey: selectedSessionKey });
+              addSystem("Run aborted");
+            } catch (err) {
+              addSystem(`Abort failed: ${err instanceof Error ? err.message : "unknown error"}`);
+            }
+            break;
+          }
+
+          case "session": {
+            if (!args) {
+              addSystem(`Current session: ${selectedSessionKey || "none"}`);
+              addSystem("Usage: /session <session-key>");
+              addSystem(`Available sessions: ${sessions.map((s) => s.key).join(", ")}`);
+              break;
+            }
+            setSelectedSessionKey(args);
+            setMessages([]);
+            setChatStream(null);
+            setError(null);
+            addSystem(`Session switched to ${args}`);
+            void loadChatHistory();
+            break;
+          }
+
+          case "agent": {
+            if (!args) {
+              addSystem(`Current agent: agent:main`);
+              addSystem("Usage: /agent <agent-id>");
+              break;
+            }
+            // Agent switching would require agent management - for now just inform
+            addSystem(`Agent switch requested: ${args}`);
+            addSystem("Note: Agent switching requires session reset to take effect");
+            break;
+          }
+
+          default:
+            // Unknown command - let it be sent as a message
+            return false;
+        }
+        return true;
+      } catch (err) {
+        addSystem(`Command failed: ${err instanceof Error ? err.message : "unknown error"}`);
+        return true;
+      }
+    },
+    [state, request, selectedSessionKey, currentModel, sessions, loadSessions, loadChatHistory],
+  );
+
+  // ============================================
+  // Send Message & Model Change
+  // ============================================
+
   const sendMessage = useCallback(async () => {
     if (!draft.trim() || !selectedSessionKey || state !== "connected") {
       return;
@@ -767,6 +1161,16 @@ export default function ChatPage() {
 
     const text = draft.trim();
     setDraft("");
+
+    // Check if it's a command (starts with /)
+    if (text.startsWith("/")) {
+      const handled = await handleCommand(text);
+      if (handled) {
+        return;
+      }
+      // If command not recognized, fall through to send as message
+    }
+
     setSending(true);
     setError(null);
     setChatStream("");
@@ -793,7 +1197,7 @@ export default function ChatPage() {
     } finally {
       setSending(false);
     }
-  }, [draft, selectedSessionKey, state, request]);
+  }, [draft, selectedSessionKey, state, request, handleCommand]);
 
   const changeModel = useCallback(
     async (modelId: string) => {
@@ -954,6 +1358,85 @@ export default function ChatPage() {
     [state, request, selectedSessionKey, loadSessions],
   );
 
+  // ============================================
+  // Autocomplete Handlers
+  // ============================================
+
+  const handleDraftChange = useCallback((value: string) => {
+    setDraft(value);
+
+    // Show autocomplete when typing a command
+    const trimmed = value.trim();
+    if (trimmed.startsWith("/")) {
+      const parts = trimmed.split(/\s+/);
+      const commandPart = parts[0].slice(1); // Remove leading /
+      if (parts.length === 1 && commandPart) {
+        const completions = getCommandCompletions(commandPart);
+        if (completions.length > 0) {
+          setShowAutocomplete(true);
+          setCommandPrefix(commandPart);
+          setAutocompleteIndex(0);
+        } else {
+          setShowAutocomplete(false);
+        }
+      } else {
+        setShowAutocomplete(false);
+      }
+    } else {
+      setShowAutocomplete(false);
+    }
+  }, []);
+
+  const selectAutocomplete = useCallback(
+    (index: number) => {
+      const completions = getCommandCompletions(commandPrefix);
+      if (completions.length === 0 || index >= completions.length) {
+        return;
+      }
+      const selected = completions[index];
+      const trimmed = draft.trim();
+      const parts = trimmed.split(/\s+/);
+      if (parts.length === 1) {
+        // Replace the command only
+        setDraft(`/${selected.name} `);
+      }
+      setShowAutocomplete(false);
+      textareaRef.current?.focus();
+    },
+    [commandPrefix, draft],
+  );
+
+  const handleAutocompleteKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!showAutocomplete) {
+        return;
+      }
+
+      const completions = getCommandCompletions(commandPrefix);
+      if (completions.length === 0) {
+        return;
+      }
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAutocompleteIndex((prev) => (prev + 1) % completions.length);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAutocompleteIndex((prev) => (prev - 1 + completions.length) % completions.length);
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        selectAutocomplete(autocompleteIndex);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setShowAutocomplete(false);
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        selectAutocomplete(autocompleteIndex);
+      }
+    },
+    [showAutocomplete, commandPrefix, autocompleteIndex, selectAutocomplete],
+  );
+
   useEffect(() => {
     if (state === "connected") {
       void loadSessions();
@@ -987,7 +1470,11 @@ export default function ChatPage() {
   }, [messages, scrollToBottom]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // First check autocomplete shortcuts
+    handleAutocompleteKeyDown(e);
+
+    // Then handle send
+    if (e.key === "Enter" && !e.shiftKey && !showAutocomplete) {
       e.preventDefault();
       void sendMessage();
     }
@@ -1226,11 +1713,30 @@ export default function ChatPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <div style={styles.compose}>
+              <div style={{ ...styles.compose, position: "relative" as const }}>
+                {showAutocomplete && (
+                  <div style={styles.autocomplete}>
+                    {getCommandCompletions(commandPrefix).map((cmd, idx) => (
+                      <button
+                        key={cmd.name}
+                        style={{
+                          ...styles.autocompleteItem,
+                          ...(idx === autocompleteIndex ? styles.autocompleteItemHover : {}),
+                        }}
+                        onClick={() => selectAutocomplete(idx)}
+                        onMouseEnter={() => setAutocompleteIndex(idx)}
+                      >
+                        <span>/{cmd.name}</span>
+                        <span style={styles.autocompleteDescription}>{cmd.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <textarea
+                  ref={textareaRef}
                   style={styles.input}
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => handleDraftChange(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={
                     isDisabled ? "Connect to gateway to chat..." : "Type a message (Enter to send)"
