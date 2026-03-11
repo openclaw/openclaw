@@ -46,6 +46,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
+import { performGatewaySessionReset } from "../session-reset-service.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
@@ -62,7 +63,6 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sessionsHandlers } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
@@ -72,101 +72,26 @@ function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["cl
   return scopes.includes(ADMIN_SCOPE);
 }
 
-function isGatewayErrorShape(value: unknown): value is { code: string; message: string } {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as { code?: unknown; message?: unknown };
-  return typeof candidate.code === "string" && typeof candidate.message === "string";
-}
-
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
-  idempotencyKey: string;
-  context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
-  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
 }): Promise<
   | { ok: true; key: string; sessionId?: string }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  return await new Promise((resolve) => {
-    let settled = false;
-    const settle = (
-      result:
-        | { ok: true; key: string; sessionId?: string }
-        | { ok: false; error: ReturnType<typeof errorShape> },
-    ) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(result);
-    };
-
-    const respond: GatewayRequestHandlerOptions["respond"] = (ok, payload, error) => {
-      if (!ok) {
-        settle({
-          ok: false,
-          error: isGatewayErrorShape(error)
-            ? error
-            : errorShape(ErrorCodes.UNAVAILABLE, String(error ?? "sessions.reset failed")),
-        });
-        return;
-      }
-      const payloadObj = payload as
-        | {
-            key?: unknown;
-            entry?: {
-              sessionId?: unknown;
-            };
-          }
-        | undefined;
-      const key = typeof payloadObj?.key === "string" ? payloadObj.key : params.key;
-      const sessionId =
-        payloadObj?.entry && typeof payloadObj.entry.sessionId === "string"
-          ? payloadObj.entry.sessionId
-          : undefined;
-      settle({ ok: true, key, sessionId });
-    };
-
-    const resetResult = sessionsHandlers["sessions.reset"]({
-      req: {
-        type: "req",
-        id: `${params.idempotencyKey}:reset`,
-        method: "sessions.reset",
-      },
-      params: {
-        key: params.key,
-        reason: params.reason,
-      },
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-      respond,
-    });
-
-    void (async () => {
-      try {
-        await resetResult;
-        if (!settled) {
-          settle({
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "sessions.reset completed without returning a response",
-            ),
-          });
-        }
-      } catch (err: unknown) {
-        settle({
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
-        });
-      }
-    })();
+  const result = await performGatewaySessionReset({
+    key: params.key,
+    reason: params.reason,
+    commandSource: "gateway:agent",
   });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    key: result.key,
+    sessionId: result.entry.sessionId,
+  };
 }
 
 function dispatchAgentRunFromGateway(params: {
@@ -399,10 +324,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
         reason: resetReason,
-        idempotencyKey: idem,
-        context,
-        client,
-        isWebchatConnect,
       });
       if (!resetResult.ok) {
         respond(false, undefined, resetResult.error);
