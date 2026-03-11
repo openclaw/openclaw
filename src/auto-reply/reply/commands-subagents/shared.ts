@@ -1,3 +1,5 @@
+import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
+import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import {
   countPendingDescendantRuns,
   type SubagentRunRecord,
@@ -18,6 +20,7 @@ import { parseDiscordTarget } from "../../../discord/targets.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
@@ -245,6 +248,29 @@ export function resolveRequesterSessionKey(
   }
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
+}
+
+export function resolveCommandSubagentController(
+  params: SubagentsCommandParams,
+  requesterKey: string,
+): ResolvedSubagentController {
+  if (!isSubagentSessionKey(requesterKey)) {
+    return {
+      controllerSessionKey: requesterKey,
+      callerSessionKey: requesterKey,
+      callerIsSubagent: false,
+      controlScope: "children",
+    };
+  }
+  const capabilities = resolveStoredSubagentCapabilities(requesterKey, {
+    cfg: params.cfg,
+  });
+  return {
+    controllerSessionKey: requesterKey,
+    callerSessionKey: requesterKey,
+    callerIsSubagent: true,
+    controlScope: capabilities.controlScope,
+  };
 }
 
 export function resolveHandledPrefix(normalized: string): string | null {

@@ -157,6 +157,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         provider: settings.provider,
         remote: settings.remote,
         model: settings.model,
+        outputDimensionality: settings.outputDimensionality,
         fallback: settings.fallback,
         local: settings.local,
       });

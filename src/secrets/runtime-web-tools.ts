@@ -18,7 +18,7 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
-type SecretResolutionSource = "config" | "secretRef" | "env" | "missing";
+type SecretResolutionSource = "config" | "secretRef" | "env" | "missing"; // pragma: allowlist secret
 type RuntimeWebProviderSource = "configured" | "auto-detect" | "none";
 
 export type RuntimeWebDiagnosticCode =

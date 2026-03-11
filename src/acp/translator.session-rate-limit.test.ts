@@ -52,7 +52,7 @@ function createSetSessionModeRequest(sessionId: string, modeId: string): SetSess
 function createSetSessionConfigOptionRequest(
   sessionId: string,
   configId: string,
-  value: string,
+  value: string | boolean,
 ): SetSessionConfigOptionRequest {
   return {
     sessionId,
@@ -641,6 +641,55 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         ]),
       },
     });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects non-string ACP config option values", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "bool-config-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("bool-config-session"));
+
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("bool-config-session", "thought_level", false),
+      ),
+    ).rejects.toThrow(
+      'ACP bridge does not support non-string session config option values for "thought_level".',
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ key: "bool-config-session" }),
+    );
 
     sessionStore.clearAllSessionsForTest();
   });

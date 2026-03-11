@@ -47,6 +47,7 @@ const KIMI_WEB_SEARCH_TOOL = {
 const DEFAULT_MISTRAL_MODEL = "mistral-medium-latest";
 const MISTRAL_API_BASE_URL = "https://api.mistral.ai/v1";
 const MISTRAL_WEB_SEARCH_TOOL = { type: "web_search" } as const;
+const AGENT_CREATION_PROMISES = new Map<string, Promise<string>>();
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -1668,44 +1669,57 @@ async function runMistralSearch(params: {
     const hash = createHash("md5").update(params.apiKey).digest("hex");
     const dynamicCacheKey = `mistral_agent_${hash}_${params.model}`; // prevents invalid/unauthroized reuse across different user contexts
     const cachedAgent = readCache(SEARCH_CACHE, dynamicCacheKey);
+    // Check if active agentId is already cached
     if (cachedAgent?.cached) {
       agent_id = cachedAgent.value.id as string;
     } else {
-      // Create + cache new agent for web-searching tool
-      const agentRes = await withTrustedWebSearchEndpoint(
-        {
-          url: `${MISTRAL_API_BASE_URL}/agents`,
-          timeoutSeconds: params.timeoutSeconds,
-          init: {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${params.apiKey}`,
-              "Content-Type": "application/json",
+      // Check if agent creation promise is already underway (concurrent web-search calls -> no duplicates)
+      let inFlightPromise = AGENT_CREATION_PROMISES.get(dynamicCacheKey);
+      if (!inFlightPromise) {
+        // Create + cache new agent for web-searching tool (create and register promise)
+        inFlightPromise = (async () => {
+          const agentRes = await withTrustedWebSearchEndpoint(
+            {
+              url: `${MISTRAL_API_BASE_URL}/agents`,
+              timeoutSeconds: params.timeoutSeconds,
+              init: {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${params.apiKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: params.model,
+                  description:
+                    "Agent able to search information over the web, such as news, weather, sport results...",
+                  name: "Websearch Agent",
+                  instructions:
+                    "You have the ability to perform web searches with `web_search` to find up-to-date information.",
+                  tools: [MISTRAL_WEB_SEARCH_TOOL],
+                }),
+              },
             },
-            body: JSON.stringify({
-              model: params.model,
-              description:
-                "Agent able to search information over the web, such as news, weather, sport results...",
-              name: "Websearch Agent",
-              instructions:
-                "You have the ability to perform web searches with `web_search` to find up-to-date information.",
-              tools: [MISTRAL_WEB_SEARCH_TOOL],
-            }),
-          },
-        },
-        async (res) => {
-          if (!res.ok) {
-            return await throwWebSearchApiError(res, "Mistral agent creation");
+            async (res) => {
+              if (!res.ok) {
+                return await throwWebSearchApiError(res, "Mistral agent creation");
+              }
+              const data = (await res.json()) as { id?: string };
+              return data.id || undefined; // Extract agent id
+            },
+          );
+          if (!agentRes) {
+            throw new Error("Mistral agent creation succeeded but returned no agent id");
           }
-          const data = (await res.json()) as { id?: string };
-          return data.id || undefined; // Extract agent id
-        },
-      );
-      if (!agentRes) {
-        throw new Error("Mistral agent creation succeeded but returned no agent id");
+          writeCache(SEARCH_CACHE, dynamicCacheKey, { id: agent_id }, 3600000); // TTL: 1 hour
+          return agentRes;
+        })();
+        AGENT_CREATION_PROMISES.set(dynamicCacheKey, inFlightPromise); // register promise so concurrent calls can use same agentId promise (no duplication)
       }
-      agent_id = agentRes;
-      writeCache(SEARCH_CACHE, dynamicCacheKey, { id: agent_id }, 3600000); // TTL: 1 hour
+      try {
+        agent_id = await inFlightPromise; // wait for existing / new promise to resolve (returns API-fetched agent id)
+      } finally {
+        AGENT_CREATION_PROMISES.delete(dynamicCacheKey); // cleanup memory map once promise is resolved/finished (success or failure)
+      }
     }
   }
 
