@@ -7,6 +7,7 @@ import { DEFAULT_PROVIDER } from "../../../../src/agents/defaults.js";
 import { getApiKeyForModel } from "../../../../src/agents/model-auth.js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { parseModelRef } from "../../../../src/agents/model-selection.js";
+import { resolveModelWithRegistry } from "../../../../src/agents/pi-embedded-runner/model.js";
 import { extractAssistantText } from "../../../../src/agents/pi-embedded-utils.js";
 import {
   discoverAuthStorage,
@@ -113,7 +114,12 @@ async function resolveThreadTitleModel(params: {
 }): Promise<ThreadTitleModel | null> {
   const authStorage = discoverAuthStorage(params.selection.agentDir);
   const modelRegistry = discoverModels(authStorage, params.selection.agentDir);
-  const model = modelRegistry.find(params.selection.provider, params.selection.modelId);
+  const model = resolveModelWithRegistry({
+    provider: params.selection.provider,
+    modelId: params.selection.modelId,
+    modelRegistry,
+    cfg: params.cfg,
+  });
   if (!model) {
     logVerbose(
       `thread-title: model not found for agent ${params.agentId}: ${params.selection.provider}/${params.selection.modelId}`,

@@ -7,6 +7,7 @@ const hoisted = vi.hoisted(() => ({
   resolveAgentEffectiveModelPrimaryMock: vi.fn(),
   discoverAuthStorageMock: vi.fn(),
   discoverModelsMock: vi.fn(),
+  resolveModelWithRegistryMock: vi.fn(),
   findModelMock: vi.fn(),
   getApiKeyForModelMock: vi.fn(),
   extractAssistantTextMock: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("../../../../src/agents/agent-scope.js", () => ({
 vi.mock("../../../../src/agents/pi-model-discovery.js", () => ({
   discoverAuthStorage: hoisted.discoverAuthStorageMock,
   discoverModels: hoisted.discoverModelsMock,
+}));
+
+vi.mock("../../../../src/agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: hoisted.resolveModelWithRegistryMock,
 }));
 
 vi.mock("../../../../src/agents/model-auth.js", () => ({
@@ -48,6 +53,7 @@ beforeEach(() => {
   hoisted.resolveAgentEffectiveModelPrimaryMock.mockReset();
   hoisted.discoverAuthStorageMock.mockReset();
   hoisted.discoverModelsMock.mockReset();
+  hoisted.resolveModelWithRegistryMock.mockReset();
   hoisted.findModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.extractAssistantTextMock.mockReset();
@@ -62,6 +68,9 @@ beforeEach(() => {
   hoisted.discoverModelsMock.mockReturnValue({
     find: hoisted.findModelMock,
   });
+  hoisted.resolveModelWithRegistryMock.mockImplementation(({ provider, modelId, modelRegistry }) =>
+    modelRegistry.find(provider, modelId),
+  );
   hoisted.findModelMock.mockReturnValue({
     provider: "anthropic",
     id: "claude-opus-4-6",
@@ -158,5 +167,37 @@ describe("generateThreadTitle", () => {
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-token");
     const completeOptions = hoisted.completeMock.mock.calls[0]?.[2] as Record<string, unknown>;
     expect("apiKey" in completeOptions).toBe(false);
+  });
+
+  it("uses runtime model fallback resolution when registry lookup misses", async () => {
+    hoisted.findModelMock.mockReturnValueOnce(null);
+    hoisted.resolveModelWithRegistryMock.mockReturnValueOnce({
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4-5",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+      input: ["text"],
+      reasoning: false,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "sk-openrouter",
+      mode: "api-key",
+      source: "models.providers.openrouter",
+    });
+    hoisted.extractAssistantTextMock.mockReturnValueOnce("Fallback generated title");
+
+    const result = await generateThreadTitle({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      messageText: "Need a title from fallback model resolution.",
+    });
+
+    expect(result).toBe("Fallback generated title");
+    expect(hoisted.resolveModelWithRegistryMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.completeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("openrouter", "sk-openrouter");
   });
 });
