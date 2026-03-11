@@ -23,11 +23,34 @@ vi.mock("../channels/plugins/index.js", async (importOriginal) => {
           },
         };
       }
+      // Support test-only channels for crossChannelMemory tests
+      if (["webchat", "dingtalk"].includes(channel)) {
+        return {
+          id: channel,
+          meta: {
+            id: channel,
+            label: channel,
+            selectionLabel: channel,
+            docsPath: `/channels/${channel}`,
+            blurb: "test channel",
+          },
+          capabilities: { chatTypes: ["direct"] as const },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        };
+      }
       return actual.getChannelPlugin(channel);
     },
     normalizeChannelId: (channel: string) => {
-      if (channel.trim().toLowerCase() === "matrix-js") {
+      const normalized = channel.trim().toLowerCase();
+      if (normalized === "matrix-js") {
         return "matrix-js";
+      }
+      // Support test-only channels for crossChannelMemory tests
+      if (normalized === "webchat" || normalized === "dingtalk") {
+        return normalized;
       }
       return actual.normalizeChannelId(channel);
     },
@@ -203,6 +226,7 @@ describe("agents bind/unbind commands", () => {
       ...baseConfigSnapshot,
       config: {
         agents: {
+          defaults: { agent: "main" },
           list: [{ id: "main" }],
         },
       },
@@ -213,6 +237,7 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
+          defaults: { agent: "main" },
           list: [
             expect.objectContaining({
               id: "main",
@@ -235,6 +260,7 @@ describe("agents bind/unbind commands", () => {
       ...baseConfigSnapshot,
       config: {
         agents: {
+          defaults: { agent: "main" },
           list: [{ id: "main" }],
         },
       },
@@ -245,6 +271,7 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
+          defaults: { agent: "main" },
           list: [
             expect.objectContaining({
               id: "main",
@@ -263,6 +290,7 @@ describe("agents bind/unbind commands", () => {
       ...baseConfigSnapshot,
       config: {
         agents: {
+          defaults: { agent: "main" },
           list: [
             {
               id: "main",
@@ -279,6 +307,7 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agents: {
+          defaults: { agent: "main" },
           list: [
             expect.objectContaining({
               id: "main",
@@ -298,6 +327,7 @@ describe("agents bind/unbind commands", () => {
       ...baseConfigSnapshot,
       config: {
         agents: {
+          defaults: { agent: "main" },
           list: [{ id: "main" }],
         },
       },
@@ -305,9 +335,7 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindCommand({ bind: ["webchat"], shareMemory: true, json: true }, runtime);
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining('"crossChannelMemory": true'),
-    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"crossChannelMemory": true'));
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

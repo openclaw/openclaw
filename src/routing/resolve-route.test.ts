@@ -811,8 +811,9 @@ describe("binding evaluation cache scalability", () => {
 });
 
 describe("crossChannelMemory", () => {
-  test("direct chat sessionKey uses unified channel when crossChannelMemory is enabled", () => {
+  test("direct chat sessionKey uses unified channel when crossChannelMemory is enabled with per-channel-peer dmScope", () => {
     const cfg: OpenClawConfig = {
+      session: { dmScope: "per-channel-peer" },
       agents: {
         list: [
           {
@@ -849,14 +850,15 @@ describe("crossChannelMemory", () => {
       peer: { kind: "direct", id: "user123" },
     });
 
-    // Both should use unified "shared" channel identifier
+    // Both should use unified "shared" channel identifier with per-channel-peer scope
     expect(webchatRoute.sessionKey).toBe("agent:main:shared:direct:user123");
     expect(dingtalkRoute.sessionKey).toBe("agent:main:shared:direct:user123");
     expect(webchatRoute.sessionKey).toBe(dingtalkRoute.sessionKey);
   });
 
-  test("direct chat sessionKey remains channel-specific when crossChannelMemory is disabled", () => {
+  test("direct chat sessionKey remains channel-specific when crossChannelMemory is disabled with per-channel-peer dmScope", () => {
     const cfg: OpenClawConfig = {
+      session: { dmScope: "per-channel-peer" },
       agents: {
         list: [
           {
@@ -899,6 +901,7 @@ describe("crossChannelMemory", () => {
 
   test("group/channel chats remain isolated even when crossChannelMemory is enabled", () => {
     const cfg: OpenClawConfig = {
+      session: { dmScope: "per-channel-peer" },
       agents: {
         list: [
           {
@@ -937,14 +940,15 @@ describe("crossChannelMemory", () => {
       teamId: "team123",
     });
 
-    // Group chats should remain channel-specific
+    // Group chats should remain channel-specific (crossChannelMemory only affects direct chats)
     expect(discordRoute.sessionKey).toContain("discord");
     expect(slackRoute.sessionKey).toContain("slack");
     expect(discordRoute.sessionKey).not.toBe(slackRoute.sessionKey);
   });
 
-  test("crossChannelMemory defaults to false when not specified", () => {
+  test("crossChannelMemory defaults to false when not specified with per-channel-peer dmScope", () => {
     const cfg: OpenClawConfig = {
+      session: { dmScope: "per-channel-peer" },
       agents: {
         list: [
           {
@@ -1021,13 +1025,17 @@ describe("crossChannelMemory", () => {
       peer: { kind: "direct", id: "user123" },
     });
 
-    // Both should use unified channel with per-peer scope
-    expect(webchatRoute.sessionKey).toBe("agent:main:shared:direct:user123");
-    expect(telegramRoute.sessionKey).toBe("agent:main:shared:direct:user123");
+    // Both should use unified channel with per-peer scope (channel is omitted in per-peer mode)
+    // When crossChannelMemory is enabled, direct chats use "shared" but per-peer dmScope omits channel
+    // So the result is agent:main:direct:user123 for both
+    expect(webchatRoute.sessionKey).toBe("agent:main:direct:user123");
+    expect(telegramRoute.sessionKey).toBe("agent:main:direct:user123");
+    expect(webchatRoute.sessionKey).toBe(telegramRoute.sessionKey);
   });
 
-  test("crossChannelMemory with different accountIds", () => {
+  test("crossChannelMemory with different accountIds and per-account-channel-peer dmScope", () => {
     const cfg: OpenClawConfig = {
+      session: { dmScope: "per-account-channel-peer" },
       agents: {
         list: [
           {
@@ -1062,7 +1070,8 @@ describe("crossChannelMemory", () => {
       peer: { kind: "direct", id: "user123" },
     });
 
-    // Different accountIds should result in different sessionKeys
+    // Different accountIds should result in different sessionKeys even with crossChannelMemory
+    // But channel should be "shared" instead of the actual channel name
     expect(webchatRoute.sessionKey).toBe("agent:main:shared:acct1:direct:user123");
     expect(dingtalkRoute.sessionKey).toBe("agent:main:shared:acct2:direct:user123");
     expect(webchatRoute.sessionKey).not.toBe(dingtalkRoute.sessionKey);

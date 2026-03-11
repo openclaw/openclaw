@@ -233,18 +233,18 @@ export async function agentsBindCommand(
 
   const result = applyAgentBindings(cfg, parsed.bindings);
   let configUpdated = false;
-  
+
   // Apply binding changes
   if (result.added.length > 0 || result.updated.length > 0) {
     result.config = { ...result.config };
     configUpdated = true;
   }
-  
+
   // Enable cross-channel memory if requested
   if (opts.shareMemory) {
-    const agents = cfg.agents?.list ?? [];
+    const agents = result.config.agents?.list ?? cfg.agents?.list ?? [];
     const agentIndex = agents.findIndex(
-      (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId)
+      (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
     );
     if (agentIndex >= 0) {
       const updatedAgents = [...agents];
@@ -253,12 +253,34 @@ export async function agentsBindCommand(
         crossChannelMemory: true,
       };
       result.config.agents = {
-        ...result.config.agents,
+        ...(result.config.agents || cfg.agents),
         list: updatedAgents,
       };
       configUpdated = true;
       if (!opts.json) {
         runtime.log("Enabled cross-channel shared memory.");
+      }
+    } else {
+      // Agent not in config list - need to ensure agents config exists
+      if (!result.config.agents) {
+        result.config.agents = { ...cfg.agents };
+      }
+      if (!result.config.agents.list) {
+        result.config.agents.list = cfg.agents?.list || [];
+      }
+      // Add the agent with crossChannelMemory enabled
+      const existingAgent = result.config.agents.list.find(
+        (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
+      );
+      if (!existingAgent) {
+        result.config.agents.list.push({
+          id: agentId,
+          crossChannelMemory: true,
+        });
+        configUpdated = true;
+        if (!opts.json) {
+          runtime.log("Enabled cross-channel shared memory.");
+        }
       }
     }
   }

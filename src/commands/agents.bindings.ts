@@ -280,7 +280,7 @@ export function buildChannelBindings(params: {
     if (accountId) {
       match.accountId = accountId;
     }
-    bindings.push({ type: "route", agentId, match });
+    bindings.push({ agentId, match });
   }
   return bindings;
 }
@@ -320,7 +320,7 @@ export function parseBindingSpecs(params: {
     if (accountId) {
       match.accountId = accountId;
     }
-    bindings.push({ type: "route", agentId, match });
+    bindings.push({ agentId, match });
   }
   return { bindings, errors };
 }
