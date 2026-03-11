@@ -9,6 +9,62 @@ const isWin = process.platform === "win32";
 const describeNonWin = isWin ? describe.skip : describe;
 
 describeNonWin("exec script preflight", () => {
+  it("blocks sandboxed node scripts that import denied runtime modules", async () => {
+    await withTempDir("openclaw-exec-preflight-sandbox-", async (tmp) => {
+      const jsPath = path.join(tmp, "bad.js");
+      await fs.writeFile(
+        jsPath,
+        [
+          'const { execSync } = require("node:child_process");',
+          "console.log(typeof execSync);",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({
+        host: "sandbox",
+        security: "full",
+        ask: "off",
+        sandbox: {
+          containerName: "openclaw-test-sandbox",
+          workspaceDir: tmp,
+          containerWorkdir: "/workspace",
+        },
+      });
+
+      await expect(
+        tool.execute("call-sandbox-blocked", {
+          command: "node bad.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/sandbox template "node-research" blocks import "node:child_process"/);
+    });
+  });
+
+  it("keeps import-template validation sandbox-only for host exec", async () => {
+    await withTempDir("openclaw-exec-preflight-host-", async (tmp) => {
+      const jsPath = path.join(tmp, "host-ok.js");
+      await fs.writeFile(
+        jsPath,
+        [
+          'const { execSync } = require("node:child_process");',
+          "console.log(typeof execSync);",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-host-allowed", {
+        command: "node host-ok.js",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+
+      expect(text).toContain("function");
+      expect(text).not.toContain('sandbox template "node-research"');
+    });
+  });
+
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
