@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
   type SecretInput,
@@ -61,7 +62,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     value: "minimax",
     label: "MiniMax Search",
     hint: "MiniMax web search · OAuth works (API key optional)",
-    envKeys: ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"],
+    envKeys: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
     placeholder: "minimax-...",
     signupUrl: MINIMAX_SIGNUP_URL_GLOBAL,
   },
@@ -87,7 +88,8 @@ function resolveSearchProviderSignupUrl(
     return entry.signupUrl;
   }
 
-  const modelPrimary = config.agents?.defaults?.model?.primary?.trim().toLowerCase() ?? "";
+  const modelPrimary =
+    resolveAgentModelPrimaryValue(config.agents?.defaults?.model)?.trim().toLowerCase() ?? "";
   if (modelPrimary.startsWith("minimax-cn/")) {
     return MINIMAX_SIGNUP_URL_CN;
   }

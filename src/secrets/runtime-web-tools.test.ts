@@ -267,6 +267,33 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("prefers MINIMAX_OAUTH_TOKEN over MINIMAX_API_KEY when both are set", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {
+        MINIMAX_API_KEY: "minimax-api-key", // pragma: allowlist secret
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("minimax");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("minimax-oauth-token");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
   it("auto-detects the next provider when a higher-priority ref is unresolved", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({

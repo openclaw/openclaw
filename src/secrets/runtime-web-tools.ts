@@ -331,7 +331,7 @@ function envVarsForProvider(provider: WebSearchProvider): string[] {
     return ["KIMI_API_KEY", "MOONSHOT_API_KEY"];
   }
   if (provider === "minimax") {
-    return ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"];
+    return ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"];
   }
   return ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"];
 }

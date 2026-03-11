@@ -355,6 +355,38 @@ describe("setupSearch", () => {
     }
   });
 
+  it("prefers MINIMAX_OAUTH_TOKEN ref when both minimax env vars are set", async () => {
+    const originalApiKey = process.env.MINIMAX_API_KEY;
+    const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
+    process.env.MINIMAX_API_KEY = "api-key-present"; // pragma: allowlist secret
+    process.env.MINIMAX_OAUTH_TOKEN = "oauth-token-present"; // pragma: allowlist secret
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter } = createPrompter({ selectValue: "minimax" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        secretInputMode: "ref", // pragma: allowlist secret
+      });
+      expect(result.tools?.web?.search?.provider).toBe("minimax");
+      expect(result.tools?.web?.search?.minimax?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "MINIMAX_OAUTH_TOKEN", // pragma: allowlist secret
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = originalApiKey;
+      }
+      if (originalOauthToken === undefined) {
+        delete process.env.MINIMAX_OAUTH_TOKEN;
+      } else {
+        process.env.MINIMAX_OAUTH_TOKEN = originalOauthToken;
+      }
+    }
+  });
+
   it("stores plaintext key when secretInputMode is unset", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
