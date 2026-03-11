@@ -1074,6 +1074,19 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
   return canonical;
 }
 
+function isDirectBraveSearchLangToken(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_BRAVE_LANG_TAG_LENGTH) {
+    return false;
+  }
+  const lowered = trimmed.toLowerCase();
+  const aliased = BRAVE_SEARCH_LANG_ALIASES[lowered] ?? lowered;
+  return BRAVE_SEARCH_LANG_CODES.has(aliased);
+}
+
 function normalizeBraveUiLang(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -1101,7 +1114,13 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
   let uiLangCandidate = rawUiLang;
 
   // Recover common LLM mix-up: locale in search_lang + short code in ui_lang.
-  if (normalizeBraveUiLang(rawSearchLang) && normalizeBraveSearchLang(rawUiLang)) {
+  // Only swap when ui_lang already looks like a direct Brave search_lang token.
+  // This avoids silently accepting invalid ui_lang locale forms like `zh_CN`.
+  if (
+    normalizeBraveUiLang(rawSearchLang) &&
+    normalizeBraveSearchLang(rawUiLang) &&
+    isDirectBraveSearchLangToken(rawUiLang)
+  ) {
     searchLangCandidate = rawUiLang;
     uiLangCandidate = rawSearchLang;
   }

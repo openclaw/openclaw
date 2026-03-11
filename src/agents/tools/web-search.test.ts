@@ -125,6 +125,10 @@ describe("web_search brave language param normalization", () => {
       search_lang: "tr",
       ui_lang: "tr-TR",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-TW", ui_lang: "zh-hant" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: "zh-TW",
+    });
     expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
       search_lang: "en",
       ui_lang: "en-US",
@@ -174,6 +178,9 @@ describe("web_search brave language param normalization", () => {
       invalidField: "search_lang",
     });
     expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
+      invalidField: "ui_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-TW", ui_lang: "zh_CN" })).toEqual({
       invalidField: "ui_lang",
     });
   });
