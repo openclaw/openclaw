@@ -12,7 +12,7 @@ export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): 
 
   // Capture the previous lock (or a resolved promise if none exists)
   const previousStoreLock = storeLocks.get(storePath) ?? Promise.resolve();
-  const previousInstanceOp = state.op ?? Promise.resolve();
+  const previousInstanceOp = state.op;
 
   // Create deferred promises for this operation - resolved when we're done
   let resolveStoreLock!: () => void;
