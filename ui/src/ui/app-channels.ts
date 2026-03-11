@@ -3,6 +3,7 @@ import {
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
+  stopWhatsAppQrPoll,
   waitWhatsAppLogin,
 } from "./controllers/channels.ts";
 import { loadConfig, saveConfig } from "./controllers/config.ts";

@@ -32,6 +32,16 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Wait for any pending creds writes to flush to disk.
+ * Must be awaited before restarting a socket that relies on saved creds
+ * (e.g. after a 515 "restart required" from WhatsApp).
+ */
+export function flushCredsSaveQueue(): Promise<void> {
+  return credsSaveQueue;
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -186,6 +196,8 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+    // Baileys wraps Boom errors under `error` (e.g. lastDisconnect = { error: BoomError }).
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
     (err as { status?: number })?.status
   );
 }
