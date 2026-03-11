@@ -17,6 +17,7 @@ export type GeminiEmbeddingClient = {
   model: string;
   modelPath: string;
   apiKeys: string[];
+  dimensions?: number;
 };
 
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -113,6 +114,7 @@ export async function createGeminiEmbeddingProvider(
         fetchWithGeminiAuth(apiKey, embedUrl, {
           content: { parts: [{ text }] },
           taskType: "RETRIEVAL_QUERY",
+          ...(client.dimensions && { outputDimensionality: client.dimensions }),
         }),
     });
     return payload.embedding?.values ?? [];
@@ -126,6 +128,7 @@ export async function createGeminiEmbeddingProvider(
       model: client.modelPath,
       content: { parts: [{ text }] },
       taskType: "RETRIEVAL_DOCUMENT",
+      ...(client.dimensions && { outputDimensionality: client.dimensions }),
     }));
     const payload = await executeWithApiKeyRotation({
       provider: "google",
@@ -191,5 +194,13 @@ export async function resolveGeminiEmbeddingClient(
     embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
     batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
   });
-  return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys };
+  return {
+    baseUrl,
+    headers,
+    ssrfPolicy,
+    model,
+    modelPath,
+    apiKeys,
+    dimensions: options.dimensions,
+  };
 }

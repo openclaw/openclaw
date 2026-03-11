@@ -11,6 +11,7 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  dimensions?: number;
 };
 
 export function createRemoteEmbeddingProvider(params: {
@@ -30,7 +31,11 @@ export function createRemoteEmbeddingProvider(params: {
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
-      body: { model: client.model, input },
+      body: {
+        model: client.model,
+        input,
+        ...(client.dimensions && { dimensions: client.dimensions }),
+      },
       errorPrefix: params.errorPrefix,
     });
   };
@@ -59,5 +64,5 @@ export async function resolveRemoteEmbeddingClient(params: {
     defaultBaseUrl: params.defaultBaseUrl,
   });
   const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { baseUrl, headers, ssrfPolicy, model, dimensions: params.options.dimensions };
 }
