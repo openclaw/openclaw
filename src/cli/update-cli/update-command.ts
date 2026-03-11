@@ -1,4 +1,3 @@
-import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
   checkShellCompletionStatus,
@@ -29,8 +28,8 @@ import {
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { refreshGatewayServiceEnvFromUpdatedInstall } from "../../infra/update-service-refresh.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
@@ -66,8 +65,6 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
-const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
-
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
   "Fresh code, same lobster. Miss me?",
@@ -93,26 +90,6 @@ const UPDATE_QUIPS = [
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
-}
-
-function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
-  if (!root) {
-    return [];
-  }
-  return [
-    path.join(root, "dist", "entry.js"),
-    path.join(root, "dist", "entry.mjs"),
-    path.join(root, "dist", "index.js"),
-    path.join(root, "dist", "index.mjs"),
-  ];
-}
-
-function formatCommandFailure(stdout: string, stderr: string): string {
-  const detail = (stderr || stdout).trim();
-  if (!detail) {
-    return "command returned a non-zero exit code";
-  }
-  return detail.split("\n").slice(-3).join("\n");
 }
 
 type UpdateDryRunPreview = {
@@ -178,27 +155,13 @@ async function refreshGatewayServiceEnv(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
 }): Promise<void> {
-  const args = ["gateway", "install", "--force"];
-  if (params.jsonMode) {
-    args.push("--json");
-  }
-
-  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
-    if (!(await pathExists(candidate))) {
-      continue;
-    }
-    const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
-      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
-    });
-    if (res.code === 0) {
-      return;
-    }
-    throw new Error(
-      `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
-    );
-  }
-
-  await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
+  await refreshGatewayServiceEnvFromUpdatedInstall({
+    root: params.result.root,
+    json: params.jsonMode,
+    fallback: async () => {
+      await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
+    },
+  });
 }
 
 async function tryInstallShellCompletion(opts: {

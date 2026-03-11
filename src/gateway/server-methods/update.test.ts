@@ -6,6 +6,7 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 let capturedPayload: RestartSentinelPayload | undefined;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
+const refreshGatewayServiceEnvFromUpdatedInstallMock = vi.fn<() => Promise<void>>();
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
@@ -59,6 +60,10 @@ vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdate: runGatewayUpdateMock,
 }));
 
+vi.mock("../../infra/update-service-refresh.js", () => ({
+  refreshGatewayServiceEnvFromUpdatedInstall: refreshGatewayServiceEnvFromUpdatedInstallMock,
+}));
+
 vi.mock("../protocol/index.js", () => ({
   validateUpdateRunParams: () => true,
 }));
@@ -81,9 +86,12 @@ beforeEach(() => {
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
+    root: "/tmp/openclaw",
     steps: [],
     durationMs: 100,
   });
+  refreshGatewayServiceEnvFromUpdatedInstallMock.mockClear();
+  refreshGatewayServiceEnvFromUpdatedInstallMock.mockResolvedValue();
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
 });
@@ -164,6 +172,9 @@ describe("update.run restart scheduling", () => {
       payload = typed;
     });
 
+    expect(refreshGatewayServiceEnvFromUpdatedInstallMock).toHaveBeenCalledWith({
+      root: "/tmp/openclaw",
+    });
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
     expect(payload?.restart).toEqual({ scheduled: true });
@@ -185,6 +196,7 @@ describe("update.run restart scheduling", () => {
       payload = typed;
     });
 
+    expect(refreshGatewayServiceEnvFromUpdatedInstallMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
