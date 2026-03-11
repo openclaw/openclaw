@@ -3,7 +3,7 @@ import {
   setByteplusApiKey,
   setCloudflareAiGatewayConfig,
   setMoonshotApiKey,
-  setOpencodeGoApiKey,
+  setOpencodeZenApiKey,
   setOpenaiApiKey,
   setVolcengineApiKey,
 } from "./onboard-auth.js";
@@ -210,19 +210,24 @@ describe("onboard auth credentials secret refs", () => {
     expect(parsed.profiles?.["byteplus:default"]?.key).toBeUndefined();
   });
 
-  it("stores env-backed opencode-go key as keyRef in ref mode", async () => {
-    await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-opencode-go-ref-",
-      envVar: "OPENCODE_API_KEY",
-      envValue: "sk-opencode-go-env",
-      profileId: "opencode-go:default",
-      apply: async (agentDir) => {
-        await setOpencodeGoApiKey("sk-opencode-go-env", agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
-      },
-      expected: {
-        keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
-      },
-      absent: ["key"],
+  it("stores shared OpenCode credentials for both runtime providers", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-opencode-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
+
+    await setOpencodeZenApiKey("sk-opencode-env", env.agentDir, {
+      secretInputMode: "ref", // pragma: allowlist secret
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+
+    expect(parsed.profiles?.["opencode:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
+    expect(parsed.profiles?.["opencode-go:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
     });
   });
 });

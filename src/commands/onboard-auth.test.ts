@@ -680,7 +680,7 @@ describe("allowlist provider helpers", () => {
       {
         applyConfig: applyOpencodeGoProviderConfig,
         modelRef: "opencode-go/kimi-k2.5",
-        alias: "My Kimi",
+        alias: "Kimi",
       },
       {
         applyConfig: applyOpenrouterProviderConfig,

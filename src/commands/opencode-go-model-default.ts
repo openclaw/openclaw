@@ -1,8 +1,7 @@
-import { OPENCODE_GO_DEFAULT_MODEL_REF as AGENT_OPENCODE_GO_DEFAULT_MODEL_REF } from "../agents/opencode-go-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyAgentDefaultPrimaryModel } from "./model-default.js";
 
-export const OPENCODE_GO_DEFAULT_MODEL_REF = AGENT_OPENCODE_GO_DEFAULT_MODEL_REF;
+export const OPENCODE_GO_DEFAULT_MODEL_REF = "opencode-go/kimi-k2.5";
 
 export function applyOpencodeGoModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;

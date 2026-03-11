@@ -442,7 +442,7 @@ describe("onboard (non-interactive): provider auth", () => {
     },
   );
 
-  it("stores the detected env alias as keyRef for opencode ref mode", async () => {
+  it("stores the detected env alias as keyRef for both OpenCode runtime providers", async () => {
     await withOnboardEnv("openclaw-onboard-ref-opencode-alias-", async ({ runtime }) => {
       await withEnvAsync(
         {
@@ -457,45 +457,17 @@ describe("onboard (non-interactive): provider auth", () => {
           });
 
           const store = ensureAuthProfileStore();
-          const profile = store.profiles["opencode:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENCODE_ZEN_API_KEY",
-            });
-          }
-        },
-      );
-    });
-  });
-
-  it("stores OPENCODE_API_KEY as keyRef for opencode-go ref mode", async () => {
-    await withOnboardEnv("openclaw-onboard-ref-opencode-go-", async ({ runtime }) => {
-      await withEnvAsync(
-        {
-          OPENCODE_API_KEY: "opencode-go-env-key", // pragma: allowlist secret
-          OPENCODE_ZEN_API_KEY: undefined,
-        },
-        async () => {
-          await runNonInteractiveOnboardingWithDefaults(runtime, {
-            authChoice: "opencode-go",
-            secretInputMode: "ref", // pragma: allowlist secret
-            skipSkills: true,
-          });
-
-          const store = ensureAuthProfileStore();
-          const profile = store.profiles["opencode-go:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENCODE_API_KEY",
-            });
+          for (const profileId of ["opencode:default", "opencode-go:default"]) {
+            const profile = store.profiles[profileId];
+            expect(profile?.type).toBe("api_key");
+            if (profile?.type === "api_key") {
+              expect(profile.key).toBeUndefined();
+              expect(profile.keyRef).toEqual({
+                source: "env",
+                provider: "default",
+                id: "OPENCODE_ZEN_API_KEY",
+              });
+            }
           }
         },
       );

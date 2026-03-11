@@ -1,13 +1,6 @@
-import {
-  getOpencodeGoStaticFallbackModels,
-  OPENCODE_GO_API_BASE_URL,
-  OPENCODE_GO_DEFAULT_MODEL_REF,
-} from "../agents/opencode-go-models.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
-} from "./onboard-auth.config-shared.js";
+import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
+import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./opencode-go-model-default.js";
 
 const OPENCODE_GO_ALIAS_DEFAULTS: Record<string, string> = {
   "opencode-go/kimi-k2.5": "Kimi",
@@ -16,15 +9,8 @@ const OPENCODE_GO_ALIAS_DEFAULTS: Record<string, string> = {
 };
 
 export function applyOpencodeGoProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: { ...cfg.agents?.defaults?.models },
-    providerId: "opencode-go",
-    api: "openai-completions",
-    baseUrl: OPENCODE_GO_API_BASE_URL,
-    catalogModels: getOpencodeGoStaticFallbackModels(),
-  });
-
-  const models = { ...next.agents?.defaults?.models };
+  // Use the built-in opencode-go provider from pi-ai; only seed allowlist aliases.
+  const models = { ...cfg.agents?.defaults?.models };
   for (const [modelRef, alias] of Object.entries(OPENCODE_GO_ALIAS_DEFAULTS)) {
     models[modelRef] = {
       ...models[modelRef],
@@ -33,11 +19,11 @@ export function applyOpencodeGoProviderConfig(cfg: OpenClawConfig): OpenClawConf
   }
 
   return {
-    ...next,
+    ...cfg,
     agents: {
-      ...next.agents,
+      ...cfg.agents,
       defaults: {
-        ...next.agents?.defaults,
+        ...cfg.agents?.defaults,
         models,
       },
     },

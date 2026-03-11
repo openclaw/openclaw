@@ -164,14 +164,14 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     authChoice: "opencode-zen",
     cliFlag: "--opencode-zen-api-key",
     cliOption: "--opencode-zen-api-key <key>",
-    description: "OpenCode Zen API key",
+    description: "OpenCode API key (Zen catalog)",
   },
   {
     optionKey: "opencodeGoApiKey",
     authChoice: "opencode-go",
     cliFlag: "--opencode-go-api-key",
     cliOption: "--opencode-go-api-key <key>",
-    description: "OpenCode Go API key",
+    description: "OpenCode API key (Go catalog)",
   },
   {
     optionKey: "xaiApiKey",
