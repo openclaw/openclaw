@@ -9,6 +9,8 @@ import {
   isOwnerOnlyToolName,
   normalizeToolName,
   resolveToolProfilePolicy,
+  stripPluginOnlyAllowlist,
+  type PluginToolGroups,
   TOOL_GROUPS,
 } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -223,5 +225,31 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
     expect(resolved.deny).toEqual(["image"]);
+  });
+});
+
+describe("stripPluginOnlyAllowlist", () => {
+  const emptyPlugins: PluginToolGroups = {
+    all: [],
+    byPlugin: new Map(),
+  };
+
+  it("adds unknown tools to unknownAllowlist and sets strippedAllowlist=true if no core tools present", () => {
+    const policy = { allow: ["random_tool"] };
+    const result = stripPluginOnlyAllowlist(policy, emptyPlugins, new Set(["read"]));
+    expect(result.unknownAllowlist).toEqual(["random_tool"]);
+    expect(result.strippedAllowlist).toBe(true);
+  });
+
+  it("handles cases where a known core tool is requested but omitted from active coreTools", () => {
+    // "apply_patch" is a known core tool but is not in the active set here
+    const policy = { allow: ["apply_patch"] };
+    const result = stripPluginOnlyAllowlist(policy, emptyPlugins, new Set(["read", "write"]));
+
+    // The known core tool should NOT be flagged as unknown
+    expect(result.unknownAllowlist).toEqual([]);
+
+    // The known core tool should count as a core entry, so the allowlist shouldn't be stripped
+    expect(result.strippedAllowlist).toBe(false);
   });
 });

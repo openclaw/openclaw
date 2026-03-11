@@ -1,3 +1,4 @@
+import { isKnownCoreToolId } from "./tool-catalog.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -6,6 +7,7 @@ import {
   TOOL_GROUPS,
 } from "./tool-policy-shared.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
 export {
   expandToolGroups,
   normalizeToolList,
@@ -13,7 +15,6 @@ export {
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy-shared.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
 export type { ToolProfileId } from "./tool-policy-shared.js";
 
 // Keep tool-policy browser-safe: do not import tools/common at runtime.
@@ -179,10 +180,12 @@ export function stripPluginOnlyAllowlist(
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
-    if (isCoreEntry) {
+    const isKnownCoreEntry = expanded.some((tool) => isKnownCoreToolId(tool));
+
+    if (isCoreEntry || isKnownCoreEntry) {
       hasCoreEntry = true;
     }
-    const isKnownCoreEntry = expanded.some((tool) => isKnownCoreToolId(tool));
+
     if (!isCoreEntry && !isPluginEntry && !isKnownCoreEntry) {
       unknownAllowlist.push(entry);
     }
