@@ -1,6 +1,7 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { createCardEntity, updateCardEntity, buildCardData } from "./cardkit.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -17,61 +18,6 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   }
   const msg = response.msg?.toLowerCase() ?? "";
   return msg.includes("withdrawn") || msg.includes("not found");
-}
-
-/** Check whether a thrown error indicates a withdrawn/not-found reply target. */
-function isWithdrawnReplyError(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) {
-    return false;
-  }
-  // SDK error shape: err.code
-  const code = (err as { code?: number }).code;
-  if (typeof code === "number" && WITHDRAWN_REPLY_ERROR_CODES.has(code)) {
-    return true;
-  }
-  // AxiosError shape: err.response.data.code
-  const response = (err as { response?: { data?: { code?: number; msg?: string } } }).response;
-  if (
-    typeof response?.data?.code === "number" &&
-    WITHDRAWN_REPLY_ERROR_CODES.has(response.data.code)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-type FeishuCreateMessageClient = {
-  im: {
-    message: {
-      create: (opts: {
-        params: { receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id" };
-        data: { receive_id: string; content: string; msg_type: string };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
-    };
-  };
-};
-
-/** Send a direct message as a fallback when a reply target is unavailable. */
-async function sendFallbackDirect(
-  client: FeishuCreateMessageClient,
-  params: {
-    receiveId: string;
-    receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
-    content: string;
-    msgType: string;
-  },
-  errorPrefix: string,
-): Promise<FeishuSendResult> {
-  const response = await client.im.message.create({
-    params: { receive_id_type: params.receiveIdType },
-    data: {
-      receive_id: params.receiveId,
-      content: params.content,
-      msg_type: params.msgType,
-    },
-  });
-  assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, params.receiveId);
 }
 
 export type FeishuMessageInfo = {
@@ -294,33 +240,41 @@ export async function sendMessageFeishu(
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
-  const directParams = { receiveId, receiveIdType, content, msgType };
-
   if (replyToMessageId) {
-    let response: { code?: number; msg?: string; data?: { message_id?: string } };
-    try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: msgType,
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    if (shouldFallbackFromReplyTarget(response)) {
+      const fallback = await client.im.message.create({
+        params: { receive_id_type: receiveIdType },
         data: {
+          receive_id: receiveId,
           content,
           msg_type: msgType,
-          ...(replyInThread ? { reply_in_thread: true } : {}),
         },
       });
-    } catch (err) {
-      if (!isWithdrawnReplyError(err)) {
-        throw err;
-      }
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
-    }
-    if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
+      assertFeishuMessageApiSuccess(fallback, "Feishu send failed");
+      return toFeishuSendResult(fallback, receiveId);
     }
     assertFeishuMessageApiSuccess(response, "Feishu reply failed");
     return toFeishuSendResult(response, receiveId);
   }
 
-  return sendFallbackDirect(client, directParams, "Feishu send failed");
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: msgType,
+    },
+  });
+  assertFeishuMessageApiSuccess(response, "Feishu send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 export type SendFeishuCardParams = {
@@ -338,33 +292,41 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
-  const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-
   if (replyToMessageId) {
-    let response: { code?: number; msg?: string; data?: { message_id?: string } };
-    try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: "interactive",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    if (shouldFallbackFromReplyTarget(response)) {
+      const fallback = await client.im.message.create({
+        params: { receive_id_type: receiveIdType },
         data: {
+          receive_id: receiveId,
           content,
           msg_type: "interactive",
-          ...(replyInThread ? { reply_in_thread: true } : {}),
         },
       });
-    } catch (err) {
-      if (!isWithdrawnReplyError(err)) {
-        throw err;
-      }
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
-    }
-    if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
+      assertFeishuMessageApiSuccess(fallback, "Feishu card send failed");
+      return toFeishuSendResult(fallback, receiveId);
     }
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
     return toFeishuSendResult(response, receiveId);
   }
 
-  return sendFallbackDirect(client, directParams, "Feishu card send failed");
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: "interactive",
+    },
+  });
+  assertFeishuMessageApiSuccess(response, "Feishu card send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 export async function updateCardFeishu(params: {
@@ -474,4 +436,107 @@ export async function editMessageFeishu(params: {
   if (response.code !== 0) {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
   }
+}
+
+/**
+ * Send a streaming message using CardKit entity.
+ * 
+ * This creates a card entity that can be updated unlimited times,
+ * enabling typewriter effect for AI streaming output.
+ * 
+ * @returns Object with cardId and sendResult, or null if card creation failed
+ */
+export async function sendStreamingMessageFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  initialContent: string;
+  title?: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  mentions?: MentionTarget[];
+  accountId?: string;
+}): Promise<{ cardId: string; messageId: string; sendResult: FeishuSendResult } | null> {
+  const { cfg, to, initialContent, title = "🤖 AI 助手", replyToMessageId, replyInThread, mentions, accountId } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+
+  // 1. Create card entity
+  const cardId = await createCardEntity({
+    cfg,
+    content: initialContent,
+    title,
+    accountId,
+  });
+
+  if (!cardId) {
+    return null;
+  }
+
+  // 2. Build card data for sending
+  let cardContent = buildCardData({ content: initialContent, title, streaming: true });
+  
+  // Add mentions if provided
+  if (mentions && mentions.length > 0) {
+    cardContent = buildCardData({
+      content: buildMentionedCardContent(mentions, initialContent),
+      title,
+      streaming: true,
+    });
+  }
+
+  // 3. Send card message
+  const content = JSON.stringify(cardContent);
+  let response;
+
+  if (replyToMessageId) {
+    response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: "interactive",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+  } else {
+    response = await client.im.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: {
+        receive_id: receiveId,
+        content,
+        msg_type: "interactive",
+      },
+    });
+  }
+
+  assertFeishuMessageApiSuccess(response, "Feishu streaming message send failed");
+  const sendResult = toFeishuSendResult(response, receiveId);
+
+  return {
+    cardId,
+    messageId: sendResult.messageId,
+    sendResult,
+  };
+}
+
+/**
+ * Update a streaming message content.
+ * 
+ * ⚠️ Must manage sequence externally (strictly incrementing).
+ * For automatic sequence management, use StreamingManager.
+ */
+export async function updateStreamingMessage(params: {
+  cfg: ClawdbotConfig;
+  cardId: string;
+  content: string;
+  sequence: number;
+  accountId?: string;
+}): Promise<boolean> {
+  const { cfg, cardId, content, sequence, accountId } = params;
+
+  return updateCardEntity({
+    cfg,
+    cardId,
+    content,
+    sequence,
+    accountId,
+  });
 }
