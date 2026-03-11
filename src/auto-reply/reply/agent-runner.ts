@@ -490,12 +490,18 @@ export async function runReplyAgent(params: {
     const hasNonErrorPayload = payloadArray.some(
       (p) => !p.isError && Boolean(p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
     );
+    // Also count messaging-tool sends (NO_REPLY / tool-only runs still
+    // represent a successful LLM completion and should not re-trigger
+    // first-turn system prompt re-sends).
+    const hasSentViaMessagingTool =
+      (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+      (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0;
     if (
       sessionKey &&
       storePath &&
       activeSessionEntry?.systemSent !== true &&
       !hasMetaError &&
-      hasNonErrorPayload
+      (hasNonErrorPayload || hasSentViaMessagingTool)
     ) {
       await updateSessionStoreEntry({
         storePath,
