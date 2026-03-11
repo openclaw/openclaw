@@ -4,6 +4,7 @@ import {
   type EmbeddingBatchExecutionParams,
 } from "./batch-runner.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
+import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embeddings-gemini.js";
 import { hashText } from "./internal.js";
@@ -346,7 +347,9 @@ export async function runGeminiEmbeddingBatches(
           errors.push(`${customId}: ${line.response.error.message}`);
           continue;
         }
-        const embedding = line.embedding?.values ?? line.response?.embedding?.values ?? [];
+        const embedding = sanitizeAndNormalizeEmbedding(
+          line.embedding?.values ?? line.response?.embedding?.values ?? [],
+        );
         if (embedding.length === 0) {
           errors.push(`${customId}: empty embedding`);
           continue;

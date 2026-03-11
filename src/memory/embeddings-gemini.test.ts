@@ -41,6 +41,10 @@ function parseFetchBody(fetchMock: { mock: { calls: unknown[][] } }, callIndex =
   return JSON.parse((init?.body as string) ?? "{}") as Record<string, unknown>;
 }
 
+function magnitude(values: number[]) {
+  return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+}
+
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
@@ -216,6 +220,25 @@ describe("gemini-embedding-2-preview provider", () => {
     expect(body.content).toEqual({ parts: [{ text: "test query" }] });
   });
 
+  it("normalizes embedQuery response vectors", async () => {
+    const fetchMock = createGeminiFetchMock([3, 4]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    const embedding = await provider.embedQuery("test query");
+
+    expect(embedding[0]).toBeCloseTo(0.6, 5);
+    expect(embedding[1]).toBeCloseTo(0.8, 5);
+    expect(magnitude(embedding)).toBeCloseTo(1, 5);
+  });
+
   it("includes outputDimensionality in embedBatch request", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
     vi.stubGlobal("fetch", fetchMock);
@@ -245,6 +268,28 @@ describe("gemini-embedding-2-preview provider", () => {
         outputDimensionality: 3072,
       },
     ]);
+  });
+
+  it("normalizes embedBatch response vectors", async () => {
+    const fetchMock = createGeminiBatchFetchMock(2, [3, 4]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    const embeddings = await provider.embedBatch(["text1", "text2"]);
+
+    expect(embeddings).toHaveLength(2);
+    for (const embedding of embeddings) {
+      expect(embedding[0]).toBeCloseTo(0.6, 5);
+      expect(embedding[1]).toBeCloseTo(0.8, 5);
+      expect(magnitude(embedding)).toBeCloseTo(1, 5);
+    }
   });
 
   it("respects custom outputDimensionality", async () => {
@@ -397,6 +442,28 @@ describe("gemini-embedding-2-preview provider", () => {
         outputDimensionality: 512,
       }),
     ).rejects.toThrow(/Invalid outputDimensionality 512/);
+  });
+
+  it("sanitizes non-finite values before normalization", async () => {
+    const fetchMock = createGeminiFetchMock([
+      1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    const embedding = await provider.embedQuery("test");
+
+    expect(embedding).toEqual([1, 0, 0, 0]);
   });
 
   it("uses correct endpoint URL", async () => {
