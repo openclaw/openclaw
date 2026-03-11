@@ -11,6 +11,7 @@ type MockCtx = {
   me?: { username: string };
   getFile: () => Promise<unknown>;
 };
+type TelegramMiddleware = (ctx: unknown, next: () => Promise<void>) => void | Promise<void>;
 
 // Fake bot to capture handler and API calls
 const handlers: Record<string, (ctx: MockCtx) => Promise<void> | void> = {};
@@ -65,6 +66,9 @@ const { createTelegramBotErrors } = vi.hoisted(() => ({
 
 const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
+}));
+const { botMiddlewares } = vi.hoisted(() => ({
+  botMiddlewares: [] as TelegramMiddleware[],
 }));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
@@ -163,6 +167,9 @@ vi.mock("./bot.js", () => ({
     };
     return {
       on: vi.fn(),
+      use: vi.fn((middleware: TelegramMiddleware) => {
+        botMiddlewares.push(middleware);
+      }),
       api,
       me: { username: "mybot" },
       init: initSpy,
@@ -224,6 +231,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    botMiddlewares.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -524,6 +532,55 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(computeBackoff).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("does not force-restart watchdog while update handling is in flight", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    let running = true;
+    let releaseTask: (() => void) | undefined;
+    const stop = vi.fn(async () => {
+      running = false;
+      releaseTask?.();
+    });
+
+    runSpy.mockImplementationOnce(() =>
+      makeRunnerStub({
+        task: () =>
+          new Promise<void>((resolve) => {
+            releaseTask = resolve;
+          }),
+        stop,
+        isRunning: () => running,
+      }),
+    );
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+    expect(botMiddlewares.length).toBe(1);
+
+    let releaseUpdate: (() => void) | undefined;
+    const inFlightUpdate = Promise.resolve(
+      botMiddlewares[0]?.(
+        {} as MockCtx,
+        () => new Promise<void>((resolve) => (releaseUpdate = resolve)),
+      ),
+    );
+    await Promise.resolve();
+
+    // Long-running model calls can hold the handler open for >90s.
+    vi.advanceTimersByTime(120_000);
+    await Promise.resolve();
+    expect(stop).not.toHaveBeenCalled();
+    expect(computeBackoff).not.toHaveBeenCalled();
+
+    releaseUpdate?.();
+    await inFlightUpdate;
+    abort.abort();
+    await monitor;
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 

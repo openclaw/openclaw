@@ -305,11 +305,22 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
       // Track getUpdates calls to detect polling stalls.
       let lastGetUpdatesAt = Date.now();
+      let inFlightUpdates = 0;
       bot.api.config.use((prev, method, payload, signal) => {
         if (method === "getUpdates") {
           lastGetUpdatesAt = Date.now();
         }
         return prev(method, payload, signal);
+      });
+      // Long-running update handlers can naturally pause getUpdates calls.
+      // Only treat missing getUpdates as a stall when nothing is being processed.
+      bot.use(async (_ctx, next) => {
+        inFlightUpdates += 1;
+        try {
+          await next();
+        } finally {
+          inFlightUpdates -= 1;
+        }
       });
 
       const runner = run(bot, runnerOptions);
@@ -343,7 +354,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           return;
         }
         const elapsed = Date.now() - lastGetUpdatesAt;
-        if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+        if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning() && inFlightUpdates === 0) {
           stalledRestart = true;
           log(
             `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
