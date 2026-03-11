@@ -2,6 +2,9 @@ import type { CronServiceState } from "./state.js";
 
 const storeLocks = new Map<string, Promise<void>>();
 
+/** Exposed for testing only — do not use in production code. */
+export const storeLocks_TEST_ONLY = () => storeLocks;
+
 const resolveChain = (promise: Promise<unknown>) =>
   promise.then(
     () => undefined,
@@ -18,5 +21,12 @@ export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): 
   state.op = keepAlive;
   storeLocks.set(storePath, keepAlive);
 
-  return (await next) as T;
+  try {
+    return (await next) as T;
+  } finally {
+    // Prune resolved entry if no subsequent operation replaced it.
+    if (storeLocks.get(storePath) === keepAlive) {
+      storeLocks.delete(storePath);
+    }
+  }
 }
