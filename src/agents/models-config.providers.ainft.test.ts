@@ -6,7 +6,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 import { buildAinftProvider } from "./models-config.providers.js";
 
-const AINFT_BASE_URL = "https://chat.ainft.com/webapi/";
+const AINFT_BASE_URL = "https://api.ainft.com/v1/";
 const AINFT_MODEL_IDS = [
   "gpt-5.2",
   "gpt-5-mini",
