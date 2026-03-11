@@ -90,6 +90,7 @@ Docs: https://docs.openclaw.ai
 - Commands/config writes: enforce `configWrites` against both the originating account and the targeted account scope for `/config` and config-backed `/allowlist` edits, blocking sibling-account mutations while preserving gateway `operator.admin` flows. Thanks @tdjackey for reporting.
 - Security/system.run: fail closed for approval-backed interpreter/runtime commands when OpenClaw cannot bind exactly one concrete local file operand, while extending best-effort direct-file binding to additional runtime forms. Thanks @tdjackey for reporting.
 - Gateway/session reset auth: split conversation `/new` and `/reset` handling away from the admin-only `sessions.reset` control-plane RPC so write-scoped gateway callers can no longer reach the privileged reset path through `agent`. Thanks @tdjackey for reporting.
+- Model scan: add null check for `model.input` to prevent crashes when using custom OpenAI-compatible providers that do not define the `input` field on model objects. (#42068)
 
 ## 2026.3.8
 
