@@ -538,7 +538,7 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("retains when the first preview send may have landed without a message id", async () => {
+  it("falls back when the first preview send may have landed without a message id", async () => {
     const stream = createTestDraftStream();
     stream.sendMayHaveLanded.mockReturnValue(true);
     const harness = createHarness({ answerStream: stream });
@@ -550,10 +550,9 @@ describe("createLaneTextDeliverer", () => {
       infoKind: "final",
     });
 
-    expect(result).toBe("preview-retained");
-    expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.log).toHaveBeenCalledWith(
-      expect.stringContaining("first preview send may have landed despite missing message id"),
+    expect(result).toBe("sent");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hello final" }),
     );
   });
 
