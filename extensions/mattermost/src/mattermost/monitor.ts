@@ -1864,6 +1864,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     });
                     runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
                   } catch (err) {
+                    // Undo the increment so deliver() can re-deliver this turn's
+                    // content rather than silently skipping it.
+                    streamedTurnCount--;
                     logVerboseMessage(
                       `mattermost stream-patch turn finalize failed: ${String(err)}`,
                     );
