@@ -65,6 +65,32 @@ Example:
 
 Reference: [/tools/plugin#distribution-npm](/tools/plugin#distribution-npm)
 
+## docs.openclaw.ai shows an SSL error (Comcast/Xfinity)
+
+Symptom: `docs.openclaw.ai` fails with SSL/privacy errors, often only on Comcast/Xfinity networks.
+
+Why this happens:
+
+- Xfinity Advanced Security can incorrectly block `docs.openclaw.ai`.
+- Browser-level DNS/SSL caching can keep the error visible after network policy changes.
+
+Fast checks:
+
+1. Open `https://docs.openclaw.ai` from mobile data (or another network).
+2. If it works there, your local/Xfinity path is likely the blocker.
+
+Fix steps:
+
+1. In Xfinity Advanced Security, allowlist `docs.openclaw.ai` (or disable Advanced Security).
+2. Restart your router/modem if policy changes do not apply immediately.
+3. Clear browser DNS/SSL cache or retry from an incognito window.
+4. Verify direct access again: `https://docs.openclaw.ai/help/faq`.
+
+Still blocked?
+
+- Use the GitHub mirror meanwhile: [openclaw/openclaw docs](https://github.com/openclaw/openclaw/tree/main/docs)
+- Report false positive to Comcast/Xfinity: [https://spa.xfinity.com/check_url_status](https://spa.xfinity.com/check_url_status)
+
 ## Decision tree
 
 ```mermaid
