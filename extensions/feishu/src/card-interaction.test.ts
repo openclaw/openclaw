@@ -52,6 +52,43 @@ describe("feishu card interaction decoder", () => {
     ).toBe("/new");
   });
 
+  it("preserves legacy card-action sibling fields in JSON fallbacks", () => {
+    const fallback = buildFeishuCardActionTextFallback({
+      operator: { open_id: "u123" },
+      context: { chat_id: "chat1" },
+      action: {
+        value: { field: "selector" },
+        option: "gpt-4o",
+        options: [],
+        form_value: {},
+      },
+    });
+
+    expect(JSON.parse(fallback)).toEqual({
+      field: "selector",
+      option: "gpt-4o",
+      options: [],
+      form_value: {},
+    });
+  });
+
+  it("keeps value text and command fallbacks ahead of sibling fields", () => {
+    expect(
+      buildFeishuCardActionTextFallback({
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: { value: { text: "/ping" }, option: "ignored" },
+      }),
+    ).toBe("/ping");
+    expect(
+      buildFeishuCardActionTextFallback({
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: { value: { command: "/new" }, options: [] },
+      }),
+    ).toBe("/new");
+  });
+
   it("rejects malformed structured payloads", () => {
     const result = decodeFeishuCardAction({
       event: {

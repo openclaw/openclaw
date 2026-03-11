@@ -21,6 +21,9 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
+    option?: string;
+    options?: string[];
+    form_value?: Record<string, unknown>;
   };
   open_message_id?: string;
   context: {
