@@ -158,6 +158,15 @@ describe("web_search brave language param normalization", () => {
     expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
       invalidField: "search_lang",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "en_GB" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zhx" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zhtw" })).toEqual({
+      invalidField: "search_lang",
+    });
     expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
       invalidField: "ui_lang",
     });

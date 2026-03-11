@@ -92,11 +92,6 @@ const BRAVE_SEARCH_LANG_CODES = new Set([
 ]);
 const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
   ja: "jp",
-  zh: "zh-hans",
-  "zh-cn": "zh-hans",
-  "zh-hk": "zh-hant",
-  "zh-sg": "zh-hans",
-  "zh-tw": "zh-hant",
 };
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
@@ -1018,11 +1013,19 @@ function resolveSearchCount(value: unknown, fallback: number): number {
 }
 
 function canonicalizeChineseSearchLang(value: string): string {
-  const normalized = value.toLowerCase().replace(/_/g, "-");
-  if (!normalized.startsWith("zh")) {
-    return normalized;
+  const lowered = value.toLowerCase();
+
+  if (lowered === "zh") {
+    return "zh-hans";
   }
 
+  // Only canonicalize locale-tag forms (`zh-*` / `zh_*`). Inputs that merely
+  // start with `zh` (for example, `zhx` or `zhtw`) should stay invalid.
+  if (!/^zh[-_][a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(lowered)) {
+    return lowered;
+  }
+
+  const normalized = lowered.replace(/_/g, "-");
   const parts = normalized.split("-");
   if (parts.includes("hant")) {
     return "zh-hant";
