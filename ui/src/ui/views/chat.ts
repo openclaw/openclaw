@@ -480,7 +480,10 @@ export function renderChat(props: ChatProps) {
   `;
 }
 
-const CHAT_HISTORY_RENDER_LIMIT = 200;
+// The chat page is an intervention surface, not a full transcript viewer.
+// Keep the render window conservative so oversized session histories do not
+// freeze the page during initial load.
+const CHAT_HISTORY_RENDER_LIMIT = 80;
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];

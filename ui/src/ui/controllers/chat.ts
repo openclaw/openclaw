@@ -74,7 +74,10 @@ export async function loadChatHistory(state: ChatState) {
       "chat.history",
       {
         sessionKey: state.sessionKey,
-        limit: 200,
+        // Keep initial WebUI chat hydration intentionally smaller than the
+        // server-side default to avoid tab freezes on sessions with many large
+        // toolResult payloads.
+        limit: 80,
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
