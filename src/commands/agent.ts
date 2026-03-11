@@ -1104,6 +1104,7 @@ async function agentCommandInternal(
         cfg,
         provider,
         model,
+        runId,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride, runOptions) => {

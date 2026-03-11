@@ -463,6 +463,18 @@ describe("gateway server sessions", () => {
     expect(spawnedPatched.ok).toBe(true);
     expect(spawnedPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
 
+    const acpPatched = await rpcReq<{
+      ok: true;
+      entry: { spawnedBy?: string; spawnDepth?: number };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:acp:child",
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+    });
+    expect(acpPatched.ok).toBe(true);
+    expect(acpPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
+    expect(acpPatched.payload?.entry.spawnDepth).toBe(1);
+
     const spawnedPatchedInvalidKey = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:main",
       spawnedBy: "agent:main:main",
@@ -575,6 +587,43 @@ describe("gateway server sessions", () => {
     const entry = await getMainPreviewEntry(ws);
     expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(entry?.items[1]?.text).toContain("call weather");
+
+    ws.close();
+  });
+
+  test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
+    await createSessionStoreDir();
+    testState.agentConfig = {
+      model: {
+        primary: "openai/gpt-test-a",
+      },
+    };
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-stale-model",
+          updatedAt: Date.now(),
+          modelProvider: "qwencode",
+          model: "qwen3.5-plus-2026-02-15",
+          contextTokens: 123456,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string; modelProvider?: string; model?: string; contextTokens?: number };
+    }>(ws, "sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:main:main");
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-a");
+    expect(reset.payload?.entry.contextTokens).toBeUndefined();
 
     ws.close();
   });
