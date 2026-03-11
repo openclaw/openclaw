@@ -483,7 +483,20 @@ export async function runReplyAgent(params: {
     // insufficient API credits): without this guard, systemSent=true
     // would be persisted before the system prompt was actually delivered,
     // causing all subsequent sessions to skip re-sending it (#41462).
-    if (sessionKey && storePath && activeSessionEntry?.systemSent !== true) {
+    // Additionally, skip persistence when the run returned only error
+    // payloads (provider failures surfaced as error payloads still
+    // produce runOutcome.kind !== "final").
+    const hasMetaError = Boolean(runResult.meta?.error);
+    const hasNonErrorPayload = payloadArray.some(
+      (p) => !p.isError && Boolean(p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
+    );
+    if (
+      sessionKey &&
+      storePath &&
+      activeSessionEntry?.systemSent !== true &&
+      !hasMetaError &&
+      hasNonErrorPayload
+    ) {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
