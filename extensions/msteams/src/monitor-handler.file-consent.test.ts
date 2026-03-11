@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
+import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
 import { getPendingUploadFs, storePendingUploadFs } from "./pending-uploads-fs.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
@@ -11,6 +13,14 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const fileConsentMockState = vi.hoisted(() => ({
   uploadToConsentUrl: vi.fn(),
+  hookRunner: {
+    hasHooks: vi.fn(),
+    runChannelDeleted: vi.fn(),
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/hook-runtime", () => ({
+  getGlobalHookRunner: () => fileConsentMockState.hookRunner,
 }));
 
 vi.mock("./monitor-handler/message-handler.js", () => ({
@@ -61,6 +71,50 @@ const log = {
   info: vi.fn(),
   error: vi.fn(),
 };
+
+function createActivityHandler(): MSTeamsActivityHandler {
+  let handler: MSTeamsActivityHandler;
+  handler = {
+    onMessage: () => handler,
+    onMembersAdded: () => handler,
+    onReactionsAdded: () => handler,
+    onReactionsRemoved: () => handler,
+    run: async () => {},
+  };
+  return handler;
+}
+
+function createDeps(): MSTeamsMessageHandlerDeps {
+  return {
+    cfg: {} as MSTeamsMessageHandlerDeps["cfg"],
+    runtime: {
+      error: vi.fn(),
+    } as unknown as MSTeamsMessageHandlerDeps["runtime"],
+    appId: "test-app-id",
+    adapter: {
+      continueConversation: async () => {},
+      process: async () => {},
+    },
+    tokenProvider: {
+      getAccessToken: async () => "token",
+    },
+    textLimit: 4000,
+    mediaMaxBytes: 8 * 1024 * 1024,
+    conversationStore: {
+      upsert: async () => {},
+      get: async () => null,
+      list: async () => [],
+      remove: async () => false,
+      findByUserId: async () => null,
+    },
+    pollStore: {
+      createPoll: async () => {},
+      getPoll: async () => null,
+      recordVote: async () => null,
+    },
+    log,
+  };
+}
 
 function createInvokeContext(params: {
   conversationId: string;
@@ -141,6 +195,9 @@ describe("msteams file consent invoke authz", () => {
     vi.clearAllMocks();
     fileConsentMockState.uploadToConsentUrl.mockReset();
     fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
+    fileConsentMockState.hookRunner.hasHooks.mockReset();
+    fileConsentMockState.hookRunner.runChannelDeleted.mockReset();
+    fileConsentMockState.hookRunner.hasHooks.mockReturnValue(false);
   });
 
   it("uploads when invoke conversation matches pending upload conversation", async () => {
@@ -301,6 +358,70 @@ describe("msteams file consent invoke authz", () => {
       contentType: "text/plain",
     });
     expect(sendActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards Teams channelDeleted conversationUpdate events to plugin hooks", async () => {
+    const deps = createDeps();
+    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
+    fileConsentMockState.hookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "channel_deleted",
+    );
+
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    await handler.run?.({
+      activity: {
+        type: "conversationUpdate",
+        conversation: { id: "19:team-runtime@thread.tacv2", tenantId: "tenant-1" },
+        channelData: {
+          eventType: "channelDeleted",
+          tenant: { id: "tenant-1" },
+          team: {
+            id: "19:team-runtime@thread.tacv2",
+            aadGroupId: "00000000-0000-0000-0000-000000000123",
+            name: "Ops",
+          },
+          channel: {
+            id: "19:deleted-channel@thread.tacv2",
+            name: "alerts",
+          },
+        },
+      },
+      sendActivity,
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext);
+
+    expect(fileConsentMockState.hookRunner.runChannelDeleted).toHaveBeenCalledWith(
+      {
+        conversationId: "19:deleted-channel@thread.tacv2",
+        timestamp: expect.any(Number),
+        metadata: {
+          provider: "msteams",
+          eventType: "channelDeleted",
+          tenantId: "tenant-1",
+          teamId: "00000000-0000-0000-0000-000000000123",
+          teamRuntimeId: "19:team-runtime@thread.tacv2",
+          teamName: "Ops",
+          channelId: "19:deleted-channel@thread.tacv2",
+          channelName: "alerts",
+        },
+      },
+      {
+        channelId: "msteams",
+        conversationId: "19:deleted-channel@thread.tacv2",
+      },
+    );
+    expect(deps.log.info).toHaveBeenCalledWith("msteams channelDeleted event", {
+      rawConversationId: "19:team-runtime@thread.tacv2",
+      emittedConversationId: "19:deleted-channel@thread.tacv2",
+      activityChannelId: undefined,
+      deletedChannelId: "19:deleted-channel@thread.tacv2",
+      deletedChannelName: "alerts",
+      teamAadGroupId: "00000000-0000-0000-0000-000000000123",
+      teamRuntimeId: "19:team-runtime@thread.tacv2",
+      teamName: "Ops",
+      tenantId: "tenant-1",
+      hasChannelDeletedHooks: true,
+    });
   });
 });
 

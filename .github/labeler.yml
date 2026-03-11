@@ -273,6 +273,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
+"extensions: msteams-channel-archive":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/msteams-channel-archive/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,0 +1,23 @@
+{
+  "id": "msteams-channel-archive",
+  "channels": ["msteams"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cleanup": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "intervalMinutes": {
+            "type": "number",
+            "minimum": 5
+          }
+        }
+      }
+    }
+  }
+}

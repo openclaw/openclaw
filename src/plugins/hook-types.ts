@@ -24,6 +24,7 @@ import type {
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookChannelDeletedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -60,6 +61,7 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookChannelDeletedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -84,6 +86,7 @@ export type PluginHookName =
   | "before_reset"
   | "inbound_claim"
   | "message_received"
+  | "channel_deleted"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -121,6 +124,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_reset",
   "inbound_claim",
   "message_received",
+  "channel_deleted",
   "message_sending",
   "message_sent",
   "before_tool_call",
@@ -855,6 +859,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  channel_deleted: (
+    event: PluginHookChannelDeletedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
   message_sending: (

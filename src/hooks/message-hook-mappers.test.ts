@@ -149,7 +149,16 @@ describe("message hook mappers", () => {
       parentSpanId: "3333333333333333",
     };
     const canonical = {
-      ...deriveInboundMessageHookContext(makeInboundCtx({ TopicName: "Deployments" })),
+      ...deriveInboundMessageHookContext(
+        makeInboundCtx({
+          TopicName: "Deployments",
+          ReplyToId: "reply-1",
+          RootMessageId: "root-1",
+          ChatType: "channel",
+          NativeChannelId: "native-channel-1",
+          ProviderMetadata: { tenantId: "tenant-1", teamId: "team-1" },
+        }),
+      ),
       runId: "run-1",
       trace,
       callDepth: 2,
@@ -191,7 +200,12 @@ describe("message hook mappers", () => {
         messageId: "msg-1",
         senderName: "User One",
         threadId: 42,
+        replyToId: "reply-1",
+        rootMessageId: "root-1",
         topicName: "Deployments",
+        chatType: "channel",
+        nativeChannelId: "native-channel-1",
+        providerMetadata: { tenantId: "tenant-1", teamId: "team-1" },
       }),
     });
     expect(receivedEvent.trace).not.toBe(trace);
@@ -208,7 +222,12 @@ describe("message hook mappers", () => {
       metadata: expect.objectContaining({
         senderUsername: "userone",
         senderE164: "+15551234567",
+        replyToId: "reply-1",
+        rootMessageId: "root-1",
         topicName: "Deployments",
+        chatType: "channel",
+        nativeChannelId: "native-channel-1",
+        providerMetadata: { tenantId: "tenant-1", teamId: "team-1" },
       }),
     });
   });
