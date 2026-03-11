@@ -174,7 +174,7 @@ describe("nodes-cli coverage", () => {
     expect(invoke?.params?.command).toBe("system.run");
     expect(invoke?.params?.params).toEqual({
       command: ["echo", "hi"],
-      rawCommand: null,
+      rawCommand: "echo hi",
       cwd: "/tmp",
       env: { FOO: "bar" },
       timeoutMs: 1200,
@@ -186,11 +186,11 @@ describe("nodes-cli coverage", () => {
     });
     expect(invoke?.params?.timeoutMs).toBe(5000);
     const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
     expect(approval?.params?.["systemRunPlan"]).toEqual({
       argv: ["echo", "hi"],
       cwd: "/tmp",
-      rawCommand: null,
+      commandText: "echo hi",
+      commandPreview: null,
       agentId: "main",
       sessionKey: null,
     });
@@ -213,18 +213,18 @@ describe("nodes-cli coverage", () => {
     expect(invoke?.params?.command).toBe("system.run");
     expect(invoke?.params?.params).toMatchObject({
       command: ["/bin/sh", "-lc", "echo hi"],
-      rawCommand: "echo hi",
+      rawCommand: '/bin/sh -lc "echo hi"',
       agentId: "main",
       approved: true,
       approvalDecision: "allow-once",
       runId: expect.any(String),
     });
     const approval = getApprovalRequestCall();
-    expect(approval?.params?.["commandArgv"]).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(approval?.params?.["systemRunPlan"]).toEqual({
       argv: ["/bin/sh", "-lc", "echo hi"],
       cwd: null,
-      rawCommand: "echo hi",
+      commandText: '/bin/sh -lc "echo hi"',
+      commandPreview: "echo hi",
       agentId: "main",
       sessionKey: null,
     });
