@@ -6,6 +6,7 @@ import {
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchGeminiUsage,
+  fetchKilocodeUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
@@ -95,6 +96,8 @@ async function fetchProviderUsageSnapshotFallback(params: {
         params.timeoutMs,
         params.fetchFn,
       );
+    case "kilocode":
+      return await fetchKilocodeUsage(params.auth.token, params.timeoutMs, params.fetchFn);
     case "zai":
       return await fetchZaiUsage(params.auth.token, params.timeoutMs, params.fetchFn);
     case "minimax":

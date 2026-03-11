@@ -21,6 +21,7 @@ export type UsageProviderId =
   | "anthropic"
   | "github-copilot"
   | "google-gemini-cli"
+  | "kilocode"
   | "minimax"
   | "openai-codex"
   | "xiaomi"
