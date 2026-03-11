@@ -129,7 +129,8 @@ export function createRateLimitRetryStreamWrapper(
         }
         const retryAfterMs = parseRetryAfterMs(err);
         const backoffMs = computeBackoff(RATE_LIMIT_RETRY_POLICY, retryCount + 1);
-        const delayMs = retryAfterMs ?? backoffMs;
+        const rawDelayMs = retryAfterMs ?? backoffMs;
+        const delayMs = Math.min(rawDelayMs, RATE_LIMIT_RETRY_POLICY.maxMs);
         await sleepWithAbort(delayMs, abortSignal);
         return attempt(retryCount + 1);
       }
