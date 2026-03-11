@@ -416,6 +416,62 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   return { removed, scanned };
 }
 
+const ARCHIVE_SIZE_THRESHOLD = 512 * 1024; // 512 KB
+const ARCHIVE_KEEP_TAIL_LINES = 30;
+
+/**
+ * If a transcript file exceeds ARCHIVE_SIZE_THRESHOLD, move old entries to an
+ * archive sidecar and keep only the last ARCHIVE_KEEP_TAIL_LINES in the main file.
+ * Returns the archive path if archival occurred, null otherwise.
+ */
+export async function archiveOldTranscriptMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): Promise<string | null> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return null;
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return null;
+  }
+  if (stat.size < ARCHIVE_SIZE_THRESHOLD) {
+    return null;
+  }
+
+  try {
+    const content = await fs.promises.readFile(filePath, "utf-8");
+    const allLines = content.split(/\r?\n/);
+    // Keep only non-blank lines for counting, but preserve raw lines for rewriting.
+    const nonBlankIndices: number[] = [];
+    for (let i = 0; i < allLines.length; i++) {
+      if (allLines[i].trim()) {
+        nonBlankIndices.push(i);
+      }
+    }
+    if (nonBlankIndices.length <= ARCHIVE_KEEP_TAIL_LINES) {
+      return null;
+    }
+
+    const splitAt = nonBlankIndices[nonBlankIndices.length - ARCHIVE_KEEP_TAIL_LINES];
+    const archiveLines = allLines.slice(0, splitAt);
+    const keepLines = allLines.slice(splitAt);
+
+    const archivePath = `${filePath}.archive.${formatSessionArchiveTimestamp()}`;
+    await fs.promises.writeFile(archivePath, archiveLines.join("\n") + "\n", "utf-8");
+    await fs.promises.writeFile(filePath, keepLines.join("\n"), "utf-8");
+    return archivePath;
+  } catch {
+    return null;
+  }
+}
+
 export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,

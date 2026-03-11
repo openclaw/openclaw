@@ -51,6 +51,7 @@ import {
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
+  archiveOldTranscriptMessages,
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
@@ -832,6 +833,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       hasMore,
       oldestCursor,
     });
+
+    // Non-blocking: archive old transcript entries if the file is large.
+    if (sessionId && storePath) {
+      archiveOldTranscriptMessages(sessionId, storePath, entry?.sessionFile).catch(() => {
+        /* best-effort */
+      });
+    }
   },
   "chat.abort": ({ params, respond, context }) => {
     if (!validateChatAbortParams(params)) {
