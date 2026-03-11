@@ -10,6 +10,7 @@ const resolveApiKeyForProfile = vi.hoisted(() => vi.fn());
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => null));
 const updateAuthProfileStoreWithLock = vi.hoisted(() => vi.fn(async () => null));
 const buildVllmProvider = vi.hoisted(() => vi.fn());
+const resolveConfiguredSecretInputString = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
@@ -24,6 +25,10 @@ vi.mock("../agents/auth-profiles/store.js", () => ({
 
 vi.mock("../agents/models-config.providers.discovery.js", () => ({
   buildVllmProvider,
+}));
+
+vi.mock("../gateway/resolve-configured-secret-input-string.js", () => ({
+  resolveConfiguredSecretInputString,
 }));
 
 function makeModel(id: string): ModelDefinitionConfig {
@@ -52,6 +57,7 @@ describe("promptAndConfigureVllm", () => {
       apiKey: "stored-vllm-key", // pragma: allowlist secret
       provider: "vllm",
     });
+    resolveConfiguredSecretInputString.mockResolvedValue({});
     buildVllmProvider.mockResolvedValue({
       baseUrl: "http://127.0.0.1:8000/v1",
       api: "openai-completions",
@@ -211,6 +217,9 @@ describe("promptAndConfigureVllm", () => {
   });
 
   it("allows blank API keys when an existing endpoint is backed by a SecretRef", async () => {
+    resolveConfiguredSecretInputString.mockResolvedValue({
+      value: "resolved-secret-ref-key", // pragma: allowlist secret
+    });
     buildVllmProvider.mockResolvedValue({
       baseUrl: "http://gpu-box:8000/v1",
       api: "openai-completions",
@@ -253,10 +262,24 @@ describe("promptAndConfigureVllm", () => {
       throw new Error("Expected a configured vLLM result");
     }
     expect(text.mock.calls[1]?.[0]?.message).toContain("blank to keep current");
+    expect(buildVllmProvider).toHaveBeenCalledWith({
+      baseUrl: "http://gpu-box:8000/v1",
+      apiKey: "resolved-secret-ref-key", // pragma: allowlist secret
+    });
     expect(result.config.models?.providers?.vllm?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "VLLM_API_KEY",
+    });
+    expect(resolveConfiguredSecretInputString).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+      value: {
+        source: "env",
+        provider: "default",
+        id: "VLLM_API_KEY",
+      },
+      path: "models.providers.vllm.apiKey",
     });
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });

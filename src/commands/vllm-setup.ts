@@ -11,6 +11,7 @@ import { buildVllmProvider } from "../agents/models-config.providers.discovery.j
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { hasConfiguredSecretInput, type SecretInput } from "../config/types.secrets.js";
+import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
@@ -422,6 +423,16 @@ async function configureEndpoint(params: {
     },
   });
   const apiKey = String(apiKeyRaw ?? "").trim();
+  const configuredScanApiKey = params.existing?.configuredApiKey
+    ? ((
+        await resolveConfiguredSecretInputString({
+          config: params.cfg,
+          env: process.env,
+          value: params.existing.configuredApiKey,
+          path: `models.providers.${providerKey}.apiKey`,
+        })
+      ).value ?? resolveConfiguredScanApiKey(params.existing.configuredApiKey))
+    : undefined;
   const scanApiKey =
     apiKey ||
     (await resolveStoredApiKey({
@@ -430,7 +441,7 @@ async function configureEndpoint(params: {
       authStore,
       profileId: params.existing?.profileId,
     })) ||
-    resolveConfiguredScanApiKey(params.existing?.configuredApiKey);
+    configuredScanApiKey;
 
   const progress = params.prompter.progress("Scanning vLLM models...");
   const discoveredProvider = await buildVllmProvider({
