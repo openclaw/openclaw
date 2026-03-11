@@ -138,12 +138,15 @@ export function resolveEffectiveBlockStreamingConfig(params: {
     idleMs: coalescingIdleMs,
     joiner:
       coalescingDefaults?.joiner ??
-      (chunking.breakPreference === "sentence"
+      (resolveChunkMode(params.cfg, normalizeChunkProvider(params.provider), params.accountId) ===
+      "newline"
         ? " "
-        : chunking.breakPreference === "newline"
-          ? "\n"
-          : "\n\n"),
-    flushOnEnqueue: coalescingDefaults?.flushOnEnqueue ?? chunking.flushOnParagraph === true,
+        : chunking.breakPreference === "sentence"
+          ? " "
+          : chunking.breakPreference === "newline"
+            ? "\n"
+            : "\n\n"),
+    flushOnEnqueue: coalescingDefaults?.flushOnEnqueue ?? false,
   };
 
   return { chunking, coalescing };
@@ -196,15 +199,10 @@ export function resolveBlockStreamingCoalescing(
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
   },
-  opts?: { chunkMode?: "length" | "newline" },
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
   const providerConfigKey = providerKey;
-
-  // Resolve the outbound chunkMode so the coalescer can flush on paragraph boundaries
-  // when chunkMode="newline", matching the delivery-time splitting behavior.
-  const chunkMode = opts?.chunkMode ?? resolveChunkMode(cfg, providerConfigKey, accountId);
-
+  const chunkMode = resolveChunkMode(cfg, providerConfigKey, accountId);
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
     ? getChannelDock(providerId)?.outbound?.textChunkLimit
@@ -240,12 +238,19 @@ export function resolveBlockStreamingCoalescing(
     ),
   );
   const preference = chunking?.breakPreference ?? "paragraph";
-  const joiner = preference === "sentence" ? " " : preference === "newline" ? "\n" : "\n\n";
+  const joiner =
+    chunkMode === "newline"
+      ? " "
+      : preference === "sentence"
+        ? " "
+        : preference === "newline"
+          ? "\n"
+          : "\n\n";
   return {
     minChars,
     maxChars,
     idleMs,
     joiner,
-    flushOnEnqueue: chunkMode === "newline",
+    flushOnEnqueue: false,
   };
 }
