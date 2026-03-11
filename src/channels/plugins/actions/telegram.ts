@@ -107,6 +107,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("createForumTopic")) {
       actions.add("topic-create");
     }
+    if (isEnabled("dice", false)) {
+      actions.add("dice");
+    }
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -275,6 +278,28 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           name,
           iconColor: iconColor ?? undefined,
           iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "dice") {
+      const to =
+        readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
+      const emoji = readStringParam(params, "emoji");
+      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      return await handleTelegramAction(
+        {
+          action: "sendDice",
+          to,
+          emoji: emoji ?? undefined,
+          replyToMessageId: replyToMessageId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
+          silent: silent ? "true" : undefined,
           accountId: accountId ?? undefined,
         },
         cfg,

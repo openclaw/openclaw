@@ -17,6 +17,12 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
+const sendDiceTelegram = vi.fn(async () => ({
+  messageId: "999",
+  chatId: "123",
+  emoji: "🎲",
+  value: 4,
+}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const editMessageTelegram = vi.fn(async () => ({
   ok: true,
@@ -38,6 +44,7 @@ vi.mock("../../telegram/send.js", () => ({
   sendPollTelegram: (...args: Parameters<typeof sendPollTelegram>) => sendPollTelegram(...args),
   sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
     sendStickerTelegram(...args),
+  sendDiceTelegram: (...args: Parameters<typeof sendDiceTelegram>) => sendDiceTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
   editMessageTelegram: (...args: Parameters<typeof editMessageTelegram>) =>
@@ -103,6 +110,7 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
+    sendDiceTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     editMessageTelegram.mockClear();
     createForumTopicTelegram.mockClear();
@@ -226,6 +234,62 @@ describe("handleTelegramAction", () => {
     expect(sendStickerTelegram).toHaveBeenCalledWith(
       "123",
       "sticker",
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("rejects dice actions when disabled by default", async () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendDice",
+          to: "123",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/dice actions are disabled/i);
+    expect(sendDiceTelegram).not.toHaveBeenCalled();
+  });
+
+  it("sends dice when enabled", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { dice: true } } },
+    } as OpenClawConfig;
+    const result = await handleTelegramAction(
+      {
+        action: "sendDice",
+        to: "123",
+        emoji: "🎰",
+      },
+      cfg,
+    );
+    expect(sendDiceTelegram).toHaveBeenCalledWith(
+      "123",
+      "🎰",
+      expect.objectContaining({ token: "tok" }),
+    );
+    const first = result.content[0];
+    const parsed = JSON.parse("text" in first ? first.text : "");
+    expect(parsed.ok).toBe(true);
+    expect(parsed.emoji).toBe("🎲");
+    expect(parsed.value).toBe(4);
+  });
+
+  it("sends dice with default emoji when none specified", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { dice: true } } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "sendDice",
+        to: "123",
+      },
+      cfg,
+    );
+    expect(sendDiceTelegram).toHaveBeenCalledWith(
+      "123",
+      "🎲",
       expect.objectContaining({ token: "tok" }),
     );
   });
