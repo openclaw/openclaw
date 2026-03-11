@@ -119,24 +119,31 @@ describe("connectGateway", () => {
     gatewayClientInstances.length = 0;
   });
 
-  it("ignores stale client onGap callbacks after reconnect", () => {
+  it("treats seq gaps as soft warnings and ignores stale client callbacks", () => {
     const host = createHost();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    try {
+      connectGateway(host);
+      const firstClient = gatewayClientInstances[0];
+      expect(firstClient).toBeDefined();
 
-    connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+      connectGateway(host);
+      const secondClient = gatewayClientInstances[1];
+      expect(secondClient).toBeDefined();
 
-    firstClient.emitGap(10, 13);
-    expect(host.lastError).toBeNull();
+      firstClient.emitGap(10, 13);
+      expect(host.lastError).toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
 
-    secondClient.emitGap(20, 24);
-    expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
-    );
+      secondClient.emitGap(20, 24);
+      expect(host.lastError).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[gateway] seq gap: expected 20, got 24 (continuing with latest state)",
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {

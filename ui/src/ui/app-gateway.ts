@@ -259,8 +259,12 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
-      host.lastErrorCode = null;
+      // Sequence gaps can happen during high-churn chat flows like attachment
+      // uploads. The client already advances lastSeq, so treat them as a soft
+      // resync hint instead of blocking the whole UI with a fatal banner.
+      console.warn(
+        `[gateway] seq gap: expected ${expected}, got ${received} (continuing with latest state)`,
+      );
     },
   });
   host.client = client;
