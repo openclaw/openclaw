@@ -120,6 +120,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "modelstudio",
+    label: "Alibaba Cloud Model Studio",
+    hint: "Coding Plan API key (CN / Global)",
+    choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -296,6 +302,17 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Highspeed",
     hint: "Official fast tier",
+  },
+  { value: "qianfan-api-key", label: "Qianfan API key" },
+  {
+    value: "modelstudio-api-key-cn",
+    label: "Coding Plan API Key for China (subscription)",
+    hint: "Endpoint: coding.dashscope.aliyuncs.com",
+  },
+  {
+    value: "modelstudio-api-key",
+    label: "Coding Plan API Key for Global/Intl (subscription)",
+    hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

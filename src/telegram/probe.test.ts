@@ -1,14 +1,28 @@
-import { type Mock, describe, expect, it, vi } from "vitest";
+import { afterEach, type Mock, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { probeTelegram } from "./probe.js";
+import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
+
+const resolveTelegramFetch = vi.hoisted(() => vi.fn());
+const makeProxyFetch = vi.hoisted(() => vi.fn());
+
+vi.mock("./fetch.js", () => ({
+  resolveTelegramFetch,
+}));
+
+vi.mock("./proxy.js", () => ({
+  makeProxyFetch,
+}));
 
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
   const timeoutMs = 5000;
+  const originalFetch = global.fetch;
 
   const installFetchMock = (): Mock => {
     const fetchMock = vi.fn();
     global.fetch = withFetchPreconnect(fetchMock);
+    resolveTelegramFetch.mockImplementation((proxyFetch?: typeof fetch) => proxyFetch ?? fetch);
+    makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
     return fetchMock;
   };
 
@@ -40,6 +54,19 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock).toHaveBeenCalledTimes(expectedCalls);
     expect(result.bot?.username).toBe("test_bot");
   }
+
+  afterEach(() => {
+    resetTelegramProbeFetcherCacheForTests();
+    resolveTelegramFetch.mockReset();
+    makeProxyFetch.mockReset();
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+    if (originalFetch) {
+      global.fetch = originalFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
 
   it.each([
     {
@@ -95,6 +122,35 @@ describe("probeTelegram retry logic", () => {
     }
   });
 
+  it("respects timeout budget across retries", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new Error("Request aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("Request aborted")), {
+          once: true,
+        });
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchMock as unknown as typeof fetch);
+    resolveTelegramFetch.mockImplementation((proxyFetch?: typeof fetch) => proxyFetch ?? fetch);
+    makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
+    vi.useFakeTimers();
+    try {
+      const probePromise = probeTelegram(`${token}-budget`, 500);
+      await vi.advanceTimersByTimeAsync(600);
+      const result = await probePromise;
+
+      expect(result.ok).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("should NOT retry if getMe returns a 401 Unauthorized", async () => {
     const fetchMock = installFetchMock();
     const mockResponse = {
@@ -113,5 +169,107 @@ describe("probeTelegram retry logic", () => {
     expect(result.status).toBe(401);
     expect(result.error).toBe("Unauthorized");
     expect(fetchMock).toHaveBeenCalledTimes(1); // Should not retry
+  });
+
+  it("uses resolver-scoped Telegram fetch with probe network options", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+
+    await probeTelegram(token, timeoutMs, {
+      proxyUrl: "http://127.0.0.1:8888",
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(makeProxyFetch).toHaveBeenCalledWith("http://127.0.0.1:8888");
+    expect(resolveTelegramFetch).toHaveBeenCalledWith(fetchMock, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+  });
+
+  it("reuses probe fetcher across repeated probes for the same account transport settings", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache`, timeoutMs, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache`, timeoutMs, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse probe fetcher cache when network settings differ", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache-variant`, timeoutMs, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache-variant`, timeoutMs, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses probe fetcher cache across token rotation when accountId is stable", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-old`, timeoutMs, {
+      accountId: "main",
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-new`, timeoutMs, {
+      accountId: "main",
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
   });
 });
