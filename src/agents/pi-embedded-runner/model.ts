@@ -219,19 +219,22 @@ export function resolveModelWithRegistry(params: {
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  // Only create inline model if explicitly configured in providerConfig.models
-  if (configuredModel) {
+  const hasProviderTransportOverrides =
+    Boolean(providerConfig?.baseUrl) || Boolean(providerConfig?.api) || Boolean(providerHeaders);
+  // Preserve provider-level fallback for configured custom/proxy providers with explicit
+  // transport settings, while still requiring explicit model entries for plain provider configs.
+  if (configuredModel || hasProviderTransportOverrides) {
     return normalizeResolvedModel({
       provider,
       model: {
         id: modelId,
         name: modelId,
-        api: providerConfig?.api ?? "openai-responses",
+        api: configuredModel?.api ?? providerConfig?.api ?? "openai-responses",
         provider,
         baseUrl: providerConfig?.baseUrl,
         reasoning: configuredModel?.reasoning ?? false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        input: configuredModel?.input ?? ["text"],
+        cost: configuredModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow:
           configuredModel?.contextWindow ??
           providerConfig?.models?.[0]?.contextWindow ??

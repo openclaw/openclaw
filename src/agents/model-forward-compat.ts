@@ -33,6 +33,10 @@ const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
 const XAI_GROK_4_PREFIX = "grok-4";
 const XAI_GROK_4_TEMPLATE_IDS = ["grok-4-1-fast"] as const;
 
+function inferXaiGrokReasoning(modelId: string): boolean {
+  return modelId.toLowerCase().includes("reasoning");
+}
+
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not yet in pi-ai's built-in
 // google-gemini-cli catalog. Clone the gemini-3-pro/flash-preview template so users
 // don't get "Unknown model" errors when Google releases a new minor version.
@@ -357,7 +361,7 @@ function resolveXaiGrokForwardCompatModel(
         ...template,
         id: trimmed,
         name: trimmed,
-        reasoning: true,
+        reasoning: template.reasoning ?? inferXaiGrokReasoning(trimmed),
       } as Model<Api>);
     }
   }
@@ -369,7 +373,7 @@ function resolveXaiGrokForwardCompatModel(
     api: "openai-completions",
     provider: normalizedProvider,
     baseUrl: "https://api.x.ai/v1",
-    reasoning: true,
+    reasoning: inferXaiGrokReasoning(trimmed),
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_TOKENS,
