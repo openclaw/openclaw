@@ -124,6 +124,11 @@ function isToolResultErrorMessage(msg: AgentMessage, toolUseId: string): boolean
 /**
  * Extract tool call metadata from a flat message array.
  * We pair assistant tool call blocks with their subsequent tool results.
+ *
+ * Note: this monitor reads persisted session transcripts, which currently keep
+ * provider-native tool call blocks. `extractToolCallsFromAssistant` handles the
+ * stored assistant shapes we persist today; normalized runner-only variants are
+ * not expected in the JSONL history yet.
  */
 function extractToolCalls(messages: AgentMessage[], afterIndex: number): ToolCallEntry[] {
   const entries: ToolCallEntry[] = [];
