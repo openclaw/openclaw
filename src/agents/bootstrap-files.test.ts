@@ -138,6 +138,52 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(path.basename(soul?.path ?? "")).toBe("SOUL.test2.md");
     expect(soul?.content).toBe("test2 soul");
   });
+
+  it("parses routed agent session keys for channel/account-specific SOUL", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "default soul", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.test2.md"), "test2 soul", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:telegram:test2:direct:123456789",
+      config: {
+        channels: {
+          telegram: {
+            accounts: {
+              test2: { token: "x", soulFile: "SOUL.test2.md" },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const soul = files.find((file) => file.name === "SOUL.md");
+    expect(path.basename(soul?.path ?? "")).toBe("SOUL.test2.md");
+    expect(soul?.content).toBe("test2 soul");
+  });
+
+  it("uses top-level channel soulFile when account map is absent", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "default soul", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.slack.md"), "slack soul", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:C123",
+      config: {
+        channels: {
+          slack: {
+            soulFile: "SOUL.slack.md",
+          },
+        },
+      } as never,
+    });
+
+    const soul = files.find((file) => file.name === "SOUL.md");
+    expect(path.basename(soul?.path ?? "")).toBe("SOUL.slack.md");
+    expect(soul?.content).toBe("slack soul");
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {

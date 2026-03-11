@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -25,12 +26,13 @@ function extractChannelInfoFromSessionKey(sessionKey?: string): {
   if (!sessionKey?.trim()) {
     return {};
   }
-  const parts = sessionKey.split(":");
-  if (parts.length < 2) {
+  const parsedAgentKey = parseAgentSessionKey(sessionKey);
+  const parts = (parsedAgentKey?.rest ?? sessionKey).split(":").filter(Boolean);
+  if (parts.length < 1) {
     return {};
   }
-  const channel = parts[0];
-  const accountId = parts[1];
+  const channel = parts[0]?.trim().toLowerCase();
+  const accountIdCandidate = parts[1]?.trim().toLowerCase();
   // Validate channel is a known channel
   const validChannels = [
     "telegram",
@@ -45,9 +47,12 @@ function extractChannelInfoFromSessionKey(sessionKey?: string): {
     "msteams",
     "irc",
   ];
-  if (!validChannels.includes(channel)) {
+  if (!channel || !validChannels.includes(channel)) {
     return {};
   }
+  const routeTokens = new Set(["main", "direct", "dm", "group", "channel", "thread", "topic"]);
+  const accountId =
+    accountIdCandidate && !routeTokens.has(accountIdCandidate) ? accountIdCandidate : undefined;
   return { channel, accountId };
 }
 
@@ -60,16 +65,23 @@ function resolveSoulFileFromConfig(params: {
   accountId?: string;
 }): string | undefined {
   const { config, channel, accountId } = params;
-  if (!config || !channel || !accountId) {
+  if (!config || !channel) {
     return undefined;
   }
   const channelConfig = config.channels?.[channel as keyof typeof config.channels] as
-    | { accounts?: Record<string, { soulFile?: string }> }
+    | { soulFile?: string; accounts?: Record<string, { soulFile?: string }> }
     | undefined;
-  if (!channelConfig?.accounts) {
+  if (!channelConfig) {
     return undefined;
   }
-  return channelConfig.accounts[accountId]?.soulFile;
+  const accountSoulFile = accountId
+    ? (channelConfig.accounts as Record<string, { soulFile?: string }> | undefined)?.[accountId]
+        ?.soulFile
+    : undefined;
+  if (accountSoulFile) {
+    return accountSoulFile;
+  }
+  return channelConfig.soulFile;
 }
 
 export type BootstrapContextMode = "full" | "lightweight";
