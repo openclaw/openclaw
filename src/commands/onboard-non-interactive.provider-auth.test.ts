@@ -463,11 +463,9 @@ describe("onboard (non-interactive): provider auth", () => {
             models?: Record<string, { params?: Record<string, unknown> }>;
           }
         | undefined;
-      expect(defaultsWithModels?.models?.["azure-openai-responses/gpt-5.4"]?.params).toMatchObject(
-        {
-          azureApiVersion: "2025-04-01-preview",
-        },
-      );
+      expect(defaultsWithModels?.models?.["azure-openai-responses/gpt-5.4"]?.params).toMatchObject({
+        azureApiVersion: "2025-04-01-preview",
+      });
       await expectApiKeyProfile({
         profileId: "azure-openai-responses:default",
         provider: "azure-openai-responses",
@@ -548,11 +546,9 @@ describe("onboard (non-interactive): provider auth", () => {
             models?: Record<string, { params?: Record<string, unknown> }>;
           }
         | undefined;
-      expect(defaultsWithModels?.models?.["azure-openai-responses/gpt-5.4"]?.params).toMatchObject(
-        {
-          azureApiVersion: "2025-04-01-preview",
-        },
-      );
+      expect(defaultsWithModels?.models?.["azure-openai-responses/gpt-5.4"]?.params).toMatchObject({
+        azureApiVersion: "2025-04-01-preview",
+      });
     });
   });
 
