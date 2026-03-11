@@ -5,7 +5,13 @@ import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import { createWaSocket, flushCredsSaveQueue, formatError, logoutWeb, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  flushCredsSaveQueue,
+  formatError,
+  logoutWeb,
+  waitForWaConnection,
+} from "./session.js";
 
 export async function loginWeb(
   verbose: boolean,

@@ -317,6 +317,10 @@ export async function waitForWebLogin(
       return { connected: true, message };
     }
 
-    return { connected: false, message: "Login ended without a connection.", qrDataUrl: login.qrDataUrl };
+    return {
+      connected: false,
+      message: "Login ended without a connection.",
+      qrDataUrl: login.qrDataUrl,
+    };
   }
 }
