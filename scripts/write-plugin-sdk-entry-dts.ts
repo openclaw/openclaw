@@ -47,6 +47,7 @@ const entrypoints = [
   "tlon",
   "twitch",
   "voice-call",
+  "xiaohongshu",
   "zalo",
   "zalouser",
   "account-id",

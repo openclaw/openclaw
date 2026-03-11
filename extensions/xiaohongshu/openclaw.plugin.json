@@ -1,0 +1,16 @@
+{
+  "id": "xiaohongshu",
+  "name": "Xiaohongshu",
+  "description": "Xiaohongshu (RED) note search, reading, and interaction tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cookie": {
+        "type": "string",
+        "description": "XHS web cookie string (a1=xxx; web_session=xxx; ...)"
+      }
+    },
+    "required": []
+  }
+}

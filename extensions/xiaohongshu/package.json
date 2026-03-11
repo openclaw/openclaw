@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/xiaohongshu",
+  "version": "2026.3.9",
+  "private": true,
+  "description": "Xiaohongshu (RED) note search, reading, and interaction tools",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "node-tls-client": "^2.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

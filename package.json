@@ -196,6 +196,10 @@
       "types": "./dist/plugin-sdk/voice-call.d.ts",
       "default": "./dist/plugin-sdk/voice-call.js"
     },
+    "./plugin-sdk/xiaohongshu": {
+      "types": "./dist/plugin-sdk/xiaohongshu.d.ts",
+      "default": "./dist/plugin-sdk/xiaohongshu.js"
+    },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
       "default": "./dist/plugin-sdk/zalo.js"
