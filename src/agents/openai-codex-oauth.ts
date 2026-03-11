@@ -323,13 +323,14 @@ export async function loginOpenAICodexOAuthFlow(
 ): Promise<OAuthCredentials> {
   const { verifier, state, url } = await createAuthorizationFlow(options.originator);
   const server = await startLocalOAuthServer(state);
-  await options.onAuth({
-    url,
-    instructions: "A browser window should open. Complete login to finish.",
-  });
 
   let code: string | undefined;
   try {
+    await options.onAuth({
+      url,
+      instructions: "A browser window should open. Complete login to finish.",
+    });
+
     if (options.onManualCodeInput) {
       let manualCode: string | undefined;
       let manualError: Error | undefined;

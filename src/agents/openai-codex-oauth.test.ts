@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -88,6 +89,31 @@ describe("loginOpenAICodexOAuthFlow", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("closes the localhost callback server when onAuth fails", async () => {
+    await expect(
+      loginOpenAICodexOAuthFlow({
+        onAuth: async () => {
+          throw new Error("openUrl failed");
+        },
+        onPrompt: async () => "unused",
+      }),
+    ).rejects.toThrow("openUrl failed");
+
+    await new Promise<void>((resolve, reject) => {
+      const probe = createServer();
+      probe.once("error", reject);
+      probe.listen(1455, "127.0.0.1", () => {
+        probe.close((closeError) => {
+          if (closeError) {
+            reject(closeError);
+            return;
+          }
+          resolve();
+        });
+      });
+    });
   });
 
   it("does not wait for localhost callback when manual input is already available", async () => {
