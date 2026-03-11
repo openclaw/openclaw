@@ -99,6 +99,11 @@ function normalizeDir(value?: string | null) {
   return path.resolve(trimmed);
 }
 
+function resolveStableGlobalUpdateCwd(pkgRoot: string): string {
+  const parentDir = path.dirname(pkgRoot);
+  return parentDir === pkgRoot ? os.homedir() : parentDir;
+}
+
 function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
   const normalized = path.resolve(argv1);
   const parts = normalized.split(path.sep);
@@ -861,6 +866,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const globalUpdateCwd = resolveStableGlobalUpdateCwd(pkgRoot);
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
@@ -874,7 +880,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       runCommand,
       name: "global update",
       argv: globalInstallArgs(globalManager, spec),
-      cwd: pkgRoot,
+      cwd: globalUpdateCwd,
       timeoutMs,
       progress,
       stepIndex: 0,
@@ -890,7 +896,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           runCommand,
           name: "global update (omit optional)",
           argv: fallbackArgv,
-          cwd: pkgRoot,
+          cwd: globalUpdateCwd,
           timeoutMs,
           progress,
           stepIndex: 0,

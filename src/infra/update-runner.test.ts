@@ -156,12 +156,12 @@ describe("runGatewayUpdate", () => {
   }
 
   async function runWithCommand(
-    runCommand: (argv: string[]) => Promise<CommandResult>,
+    runCommand: (argv: string[], options?: { cwd?: string }) => Promise<CommandResult>,
     options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
   ) {
     return runGatewayUpdate({
       cwd: options?.cwd ?? tempDir,
-      runCommand: async (argv, _runOptions) => runCommand(argv),
+      runCommand: async (argv, runOptions) => runCommand(argv, { cwd: runOptions.cwd }),
       timeoutMs: 5000,
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
@@ -169,7 +169,7 @@ describe("runGatewayUpdate", () => {
   }
 
   async function runWithRunner(
-    runner: (argv: string[]) => Promise<CommandResult>,
+    runner: (argv: string[], options?: { cwd?: string }) => Promise<CommandResult>,
     options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
   ) {
     return runWithCommand(runner, options);
@@ -417,6 +417,40 @@ describe("runGatewayUpdate", () => {
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
+  });
+
+  it("runs global npm updates from the stable global root instead of the package dir", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const installCwds: string[] = [];
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+      },
+    });
+
+    const result = await runWithCommand(
+      async (argv, options) => {
+        if (argv.join(" ") === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
+          installCwds.push(options?.cwd ?? "");
+        }
+        return runCommand(argv, options);
+      },
+      { cwd: pkgRoot },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.steps[0]?.cwd).toBe(nodeModules);
+    expect(installCwds).toEqual([nodeModules]);
   });
 
   it("cleans stale npm rename dirs before global update", async () => {
