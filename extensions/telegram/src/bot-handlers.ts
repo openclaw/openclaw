@@ -1781,48 +1781,74 @@ export const registerTelegramHandlers = ({
             const botUsername = event.ctx.me?.username?.toLowerCase();
             const botId = event.ctx.me?.id;
             const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-            // Mirror the implicit-mention logic from resolveTelegramInboundBody:
-            // a reply to a (non-service) bot message counts as an implicit mention,
-            // matching the normal (non-drain) message processing path.
-            const replyFromId = event.msg.reply_to_message?.from?.id;
-            const replyToBotMessage = botId != null && replyFromId === botId;
-            const isReplyToServiceMessage =
-              replyToBotMessage && isTelegramForumServiceMessage(event.msg.reply_to_message);
-            const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
-            const messageText = event.msg.text ?? event.msg.caption ?? "";
-            const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
-            const hasAnyMention = entities.some((e) => e.type === "mention");
-            const explicitlyMentioned = botUsername ? hasBotMention(event.msg, botUsername) : false;
-            const wasMentioned = matchesMentionWithExplicit({
-              text: messageText,
-              mentionRegexes,
-              explicit: {
+
+            // Voice preflight: mirror the audio-preflight path from resolveTelegramInboundBody.
+            // In normal processing, a voice-only group message with requireMention=true is
+            // transcribed before mention checking so that a spoken "@bot" can satisfy the gate.
+            // At drain time we cannot transcribe — defer the check to replay by letting the
+            // message through unconditionally when audio preflight would normally apply.
+            const drainHasAudio = Boolean(event.msg.voice ?? event.msg.audio);
+            const drainHasUserText = Boolean(event.msg.text ?? event.msg.caption);
+            const drainDisableAudioPreflight =
+              (topicConfig?.disableAudioPreflight ??
+                (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+            const drainNeedsPreflightTranscription =
+              drainHasAudio &&
+              !drainHasUserText &&
+              mentionRegexes.length > 0 &&
+              !drainDisableAudioPreflight;
+            if (drainNeedsPreflightTranscription) {
+              // Cannot transcribe at drain time — pass through so that replay can do
+              // the audio preflight and apply the mention gate with the transcript.
+              logVerbose(
+                `Drain: deferring mention check for voice-only message in group ${event.chatId} (audio preflight needed)`,
+              );
+            } else {
+              // Mirror the implicit-mention logic from resolveTelegramInboundBody:
+              // a reply to a (non-service) bot message counts as an implicit mention,
+              // matching the normal (non-drain) message processing path.
+              const replyFromId = event.msg.reply_to_message?.from?.id;
+              const replyToBotMessage = botId != null && replyFromId === botId;
+              const isReplyToServiceMessage =
+                replyToBotMessage && isTelegramForumServiceMessage(event.msg.reply_to_message);
+              const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
+              const messageText = event.msg.text ?? event.msg.caption ?? "";
+              const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
+              const hasAnyMention = entities.some((e) => e.type === "mention");
+              const explicitlyMentioned = botUsername
+                ? hasBotMention(event.msg, botUsername)
+                : false;
+              const wasMentioned = matchesMentionWithExplicit({
+                text: messageText,
+                mentionRegexes,
+                explicit: {
+                  hasAnyMention,
+                  isExplicitlyMentioned: explicitlyMentioned,
+                  canResolveExplicit: Boolean(botUsername),
+                },
+              });
+              // Use resolveMentionGatingWithBypass so that slash commands (e.g. /status)
+              // bypass the mention gate even when the bot is not mentioned — matching the
+              // command bypass path in the normal (non-drain) message processing flow.
+              // The sender has already passed group access checks above, so commandAuthorized=true.
+              const hasControlCommandInMessage = hasControlCommand(messageText, cfg, {
+                botUsername,
+              });
+              const mentionGate = resolveMentionGatingWithBypass({
+                isGroup: true,
+                requireMention: true,
+                canDetectMention,
+                wasMentioned,
+                implicitMention,
                 hasAnyMention,
-                isExplicitlyMentioned: explicitlyMentioned,
-                canResolveExplicit: Boolean(botUsername),
-              },
-            });
-            // Use resolveMentionGatingWithBypass so that slash commands (e.g. /status)
-            // bypass the mention gate even when the bot is not mentioned — matching the
-            // command bypass path in the normal (non-drain) message processing flow.
-            // The sender has already passed group access checks above, so commandAuthorized=true.
-            const hasControlCommandInMessage = hasControlCommand(messageText, cfg, {
-              botUsername,
-            });
-            const mentionGate = resolveMentionGatingWithBypass({
-              isGroup: true,
-              requireMention: true,
-              canDetectMention,
-              wasMentioned,
-              implicitMention,
-              hasAnyMention,
-              allowTextCommands: true,
-              hasControlCommand: hasControlCommandInMessage,
-              commandAuthorized: true, // sender passed group access checks above
-            });
-            if (mentionGate.shouldSkip) {
-              logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
-              return;
+                allowTextCommands: true,
+                hasControlCommand: hasControlCommandInMessage,
+                commandAuthorized: true, // sender passed group access checks above
+              });
+              if (mentionGate.shouldSkip) {
+                logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
+                return;
+              }
             }
           }
         }

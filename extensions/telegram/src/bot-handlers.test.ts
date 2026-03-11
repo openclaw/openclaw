@@ -75,6 +75,30 @@ function makeGroupMsgCtx(params: {
   };
 }
 
+function makeGroupVoiceMsgCtx(params: {
+  fromId?: number;
+  botId?: number;
+  botUsername?: string;
+  caption?: string;
+  disableAudioPreflight?: boolean;
+}) {
+  return {
+    message: {
+      chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+      from: { id: params.fromId ?? 99999, username: "testuser" },
+      date: 1736380800,
+      message_id: 43,
+      voice: { file_id: "voice-file-id-001", duration: 5, mime_type: "audio/ogg" },
+      ...(params.caption !== undefined ? { caption: params.caption } : {}),
+    },
+    me: {
+      id: params.botId ?? 7777,
+      username: params.botUsername ?? "openclaw_bot",
+    },
+    getFile: async () => ({ download: async () => new Uint8Array() }),
+  };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe("drain-time mention gating", () => {
@@ -152,5 +176,76 @@ describe("drain-time mention gating", () => {
     await handler(makeGroupMsgCtx({ text: "/status" }));
 
     expect(writePendingInbound).not.toHaveBeenCalled();
+  });
+});
+
+describe("drain-time voice mention preflight", () => {
+  beforeEach(() => {
+    onSpy.mockReset();
+    writePendingInbound.mockReset();
+    isGatewayDraining.mockReturnValue(true);
+    // mentionPatterns are required so that mentionRegexes.length > 0, which
+    // mirrors the needsPreflightTranscription condition from bot-message-context.body.ts:
+    // audio preflight only runs when there are patterns to match in the transcript.
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: {
+            "*": { requireMention: true, allowFrom: ["*"] },
+          },
+        },
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["openclaw"],
+        },
+      },
+    });
+  });
+
+  it("queues voice-only group message even when bot is not mentioned (audio preflight deferred)", async () => {
+    // A voice-only message in a group with requireMention=true has no text/caption
+    // to check for a mention at drain time. The mention check must be deferred to
+    // replay time so the audio can be transcribed first.
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message");
+
+    await handler(makeGroupVoiceMsgCtx({}));
+
+    expect(writePendingInbound).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops regular text group message without mention (gate still enforced for text)", async () => {
+    // Text messages still go through the normal mention gate — only audio-only is bypassed.
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message");
+
+    await handler(makeGroupMsgCtx({ text: "no mention here" }));
+
+    expect(writePendingInbound).not.toHaveBeenCalled();
+  });
+
+  it("voice message with caption is NOT bypassed (caption can be checked for mentions directly)", async () => {
+    // If the voice message has a caption, the caption text is available for mention
+    // checking at drain time — no audio preflight is needed, so the gate applies.
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message");
+
+    // Caption present but does not mention the bot
+    await handler(makeGroupVoiceMsgCtx({ caption: "listen to this" }));
+
+    expect(writePendingInbound).not.toHaveBeenCalled();
+  });
+
+  it("voice message with caption that mentions the bot IS queued", async () => {
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message");
+
+    // Caption explicitly mentions the bot
+    await handler(makeGroupVoiceMsgCtx({ caption: "@openclaw_bot check this out" }));
+
+    expect(writePendingInbound).toHaveBeenCalledTimes(1);
   });
 });
