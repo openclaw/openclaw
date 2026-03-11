@@ -96,7 +96,6 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
-        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
             enabled: z.boolean().optional(),
