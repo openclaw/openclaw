@@ -327,7 +327,7 @@ export const usageStylesPart3 = `
     justify-content: space-between;
     gap: 8px;
   }
-  .mono {
+  .context-breakdown-item .mono {
     max-width: 80%;
     white-space: nowrap;
     overflow: hidden;
