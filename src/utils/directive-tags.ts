@@ -16,12 +16,37 @@ type InlineDirectiveParseOptions = {
 
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
+const DIRECTIVE_WHITESPACE_MARKER = "\u0000";
 
 function normalizeDirectiveWhitespace(text: string): string {
   return text
     .replace(/[ \t]+/g, " ")
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .trim();
+}
+
+function normalizeDirectiveWhitespaceAfterTagRemoval(text: string): string {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const cleanedLines = lines.map((line) => {
+    if (!line.includes(DIRECTIVE_WHITESPACE_MARKER)) {
+      return line;
+    }
+    const normalized = line
+      .replace(new RegExp(`^[ \\t]*${DIRECTIVE_WHITESPACE_MARKER}[ \\t]*`), "")
+      .replace(new RegExp(`[ \\t]*${DIRECTIVE_WHITESPACE_MARKER}[ \\t]*$`), "")
+      .replace(new RegExp(`[ \\t]*${DIRECTIVE_WHITESPACE_MARKER}[ \\t]*`, "g"), " ")
+      .trimEnd();
+    return normalized.trim() === "" ? "" : normalized;
+  });
+
+  while (cleanedLines[0]?.trim() === "") {
+    cleanedLines.shift();
+  }
+  while (cleanedLines.at(-1)?.trim() === "") {
+    cleanedLines.pop();
+  }
+
+  return cleanedLines.join("\n");
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -116,7 +141,7 @@ export function parseInlineDirectives(
   cleaned = cleaned.replace(AUDIO_TAG_RE, (match) => {
     audioAsVoice = true;
     hasAudioTag = true;
-    return stripAudioTag ? " " : match;
+    return stripAudioTag ? DIRECTIVE_WHITESPACE_MARKER : match;
   });
 
   cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined) => {
@@ -129,10 +154,12 @@ export function parseInlineDirectives(
         lastExplicitId = id;
       }
     }
-    return stripReplyTags ? " " : match;
+    return stripReplyTags ? DIRECTIVE_WHITESPACE_MARKER : match;
   });
 
-  cleaned = normalizeDirectiveWhitespace(cleaned);
+  cleaned = cleaned.includes(DIRECTIVE_WHITESPACE_MARKER)
+    ? normalizeDirectiveWhitespaceAfterTagRemoval(cleaned)
+    : normalizeDirectiveWhitespace(cleaned);
 
   const replyToId =
     lastExplicitId ?? (sawCurrent ? currentMessageId?.trim() || undefined : undefined);
