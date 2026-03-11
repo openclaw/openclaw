@@ -59,6 +59,21 @@
   background: transparent;
 }
 
+/* Opt all chat content out of scroll anchoring so the browser
+   only anchors to our explicit sentinel element at the bottom. */
+.chat-thread > * {
+  overflow-anchor: none;
+}
+
+/* Sentinel element: sole anchor candidate for CSS overflow-anchor.
+   Keeps the viewport pinned to the bottom during streaming without
+   any JS scroll management.  Safari lacks overflow-anchor support;
+   we fall back to IntersectionObserver-based scroll in JS. */
+.chat-scroll-anchor {
+  overflow-anchor: auto;
+  height: 1px;
+}
+
 /* Focus mode exit button */
 .chat-focus-exit {
   position: absolute;

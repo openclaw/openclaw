@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import {
+  handleChatScroll,
+  initChatScrollObserver,
+  scheduleChatScroll,
+  resetChatScroll,
+  teardownChatScrollObserver,
+} from "./app-scroll.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Minimal ScrollHost stub for unit tests. */
 function createScrollHost(
   overrides: {
     scrollHeight?: number;
@@ -28,7 +33,6 @@ function createScrollHost(
     style: { overflowY } as unknown as CSSStyleDeclaration,
   };
 
-  // Make getComputedStyle return the overflowY value
   vi.spyOn(window, "getComputedStyle").mockReturnValue({
     overflowY,
   } as unknown as CSSStyleDeclaration);
@@ -38,7 +42,7 @@ function createScrollHost(
     querySelector: vi.fn().mockReturnValue(container),
     style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
     chatScrollFrame: null as number | null,
-    chatScrollTimeout: null as number | null,
+    chatScrollObserver: null as IntersectionObserver | null,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatNewMessagesBelow: false,
@@ -50,56 +54,25 @@ function createScrollHost(
   return { host, container };
 }
 
-function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight: number) {
-  return {
-    currentTarget: { scrollHeight, scrollTop, clientHeight },
-  } as unknown as Event;
-}
-
 /* ------------------------------------------------------------------ */
-/*  handleChatScroll – threshold tests                                 */
+/*  handleChatScroll – clears indicator when at bottom                 */
 /* ------------------------------------------------------------------ */
 
 describe("handleChatScroll", () => {
-  it("sets chatUserNearBottom=true when within the 450px threshold", () => {
+  it("clears chatNewMessagesBelow when user is at bottom", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1600 - 400 = 0 → clearly near bottom
-    const event = createScrollEvent(2000, 1600, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(true);
+    host.chatUserNearBottom = true;
+    host.chatNewMessagesBelow = true;
+    handleChatScroll(host, new Event("scroll"));
+    expect(host.chatNewMessagesBelow).toBe(false);
   });
 
-  it("sets chatUserNearBottom=true when distance is just under threshold", () => {
+  it("does not clear chatNewMessagesBelow when user is scrolled up", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1151 - 400 = 449 → just under threshold
-    const event = createScrollEvent(2000, 1151, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(true);
-  });
-
-  it("sets chatUserNearBottom=false when distance is exactly at threshold", () => {
-    const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1150 - 400 = 450 → at threshold (uses strict <)
-    const event = createScrollEvent(2000, 1150, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(false);
-  });
-
-  it("sets chatUserNearBottom=false when scrolled well above threshold", () => {
-    const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 500 - 400 = 1100 → way above threshold
-    const event = createScrollEvent(2000, 500, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(false);
-  });
-
-  it("sets chatUserNearBottom=false when user scrolled up past one long message (>200px <450px)", () => {
-    const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1250 - 400 = 350 → old threshold would say "near", new says "near"
-    // distanceFromBottom = 2000 - 1100 - 400 = 500 → old threshold would say "not near", new also "not near"
-    const event = createScrollEvent(2000, 1100, 400);
-    handleChatScroll(host, event);
-    expect(host.chatUserNearBottom).toBe(false);
+    host.chatUserNearBottom = false;
+    host.chatNewMessagesBelow = true;
+    handleChatScroll(host, new Event("scroll"));
+    expect(host.chatNewMessagesBelow).toBe(true);
   });
 });
 
@@ -127,7 +100,6 @@ describe("scheduleChatScroll", () => {
       scrollTop: 1600,
       clientHeight: 400,
     });
-    // distanceFromBottom = 2000 - 1600 - 400 = 0 → near bottom
     host.chatUserNearBottom = true;
 
     scheduleChatScroll(host);
@@ -142,7 +114,6 @@ describe("scheduleChatScroll", () => {
       scrollTop: 500,
       clientHeight: 400,
     });
-    // distanceFromBottom = 2000 - 500 - 400 = 1100 → not near bottom
     host.chatUserNearBottom = false;
     const originalScrollTop = container.scrollTop;
 
@@ -158,15 +129,13 @@ describe("scheduleChatScroll", () => {
       scrollTop: 500,
       clientHeight: 400,
     });
-    // User has scrolled up — chatUserNearBottom is false
     host.chatUserNearBottom = false;
-    host.chatHasAutoScrolled = true; // Already past initial load
+    host.chatHasAutoScrolled = true;
     const originalScrollTop = container.scrollTop;
 
     scheduleChatScroll(host, true);
     await host.updateComplete;
 
-    // force=true should still NOT override explicit user scroll-up after initial load
     expect(container.scrollTop).toBe(originalScrollTop);
   });
 
@@ -177,12 +146,11 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
-    host.chatHasAutoScrolled = false; // Initial load
+    host.chatHasAutoScrolled = false;
 
     scheduleChatScroll(host, true);
     await host.updateComplete;
 
-    // On initial load, force should work regardless
     expect(container.scrollTop).toBe(container.scrollHeight);
   });
 
@@ -231,7 +199,6 @@ describe("streaming scroll behavior", () => {
     host.chatHasAutoScrolled = true;
     const originalScrollTop = container.scrollTop;
 
-    // Simulate rapid streaming token updates
     scheduleChatScroll(host);
     scheduleChatScroll(host);
     scheduleChatScroll(host);
@@ -249,11 +216,64 @@ describe("streaming scroll behavior", () => {
     host.chatUserNearBottom = true;
     host.chatHasAutoScrolled = true;
 
-    // Simulate streaming
     scheduleChatScroll(host);
     await host.updateComplete;
 
     expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  IntersectionObserver init/teardown                                  */
+/* ------------------------------------------------------------------ */
+
+describe("initChatScrollObserver", () => {
+  it("creates an IntersectionObserver on the sentinel", () => {
+    const sentinel = document.createElement("div");
+    const container = document.createElement("div");
+    const host = {
+      updateComplete: Promise.resolve(),
+      querySelector: vi.fn((sel: string) => (sel === ".chat-scroll-anchor" ? sentinel : container)),
+      style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
+      chatScrollFrame: null as number | null,
+      chatScrollObserver: null as IntersectionObserver | null,
+      chatHasAutoScrolled: false,
+      chatUserNearBottom: true,
+      chatNewMessagesBelow: false,
+      logsScrollFrame: null as number | null,
+      logsAtBottom: true,
+      topbarObserver: null as ResizeObserver | null,
+    };
+
+    initChatScrollObserver(host);
+    expect(host.chatScrollObserver).not.toBeNull();
+    expect(host.chatScrollObserver).toBeInstanceOf(IntersectionObserver);
+  });
+
+  it("disconnects on teardown", () => {
+    const sentinel = document.createElement("div");
+    const container = document.createElement("div");
+    const host = {
+      updateComplete: Promise.resolve(),
+      querySelector: vi.fn((sel: string) => (sel === ".chat-scroll-anchor" ? sentinel : container)),
+      style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
+      chatScrollFrame: null as number | null,
+      chatScrollObserver: null as IntersectionObserver | null,
+      chatHasAutoScrolled: false,
+      chatUserNearBottom: true,
+      chatNewMessagesBelow: false,
+      logsScrollFrame: null as number | null,
+      logsAtBottom: true,
+      topbarObserver: null as ResizeObserver | null,
+    };
+
+    initChatScrollObserver(host);
+    const observer = host.chatScrollObserver!;
+    const disconnectSpy = vi.spyOn(observer, "disconnect");
+
+    teardownChatScrollObserver(host);
+    expect(disconnectSpy).toHaveBeenCalled();
+    expect(host.chatScrollObserver).toBeNull();
   });
 });
 
