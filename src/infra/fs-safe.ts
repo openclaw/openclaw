@@ -5,9 +5,9 @@ import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pipeline } from "node:stream/promises";
 import { logWarn } from "../logger.js";
 import { sameFileIdentity } from "./file-identity.js";
+import { runPinnedWriteHelper } from "./fs-pinned-write-helper.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
 import {
@@ -332,13 +332,13 @@ async function writeTempFileForAtomicReplace(params: {
 async function verifyAtomicWriteResult(params: {
   rootDir: string;
   targetPath: string;
-  expectedStat: Stats;
+  expectedIdentity: { dev: number | bigint; ino: number | bigint };
 }): Promise<void> {
   const rootReal = await fs.realpath(params.rootDir);
   const rootWithSep = ensureTrailingSep(rootReal);
   const opened = await openVerifiedLocalFile(params.targetPath, { rejectHardlinks: true });
   try {
-    if (!sameFileIdentity(opened.stat, params.expectedStat)) {
+    if (!sameFileIdentity(opened.stat, params.expectedIdentity)) {
       throw new SafeOpenError("path-mismatch", "path changed during write");
     }
     if (!isPathInside(rootWithSep, opened.realPath)) {
@@ -551,6 +551,195 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
+  if (process.platform === "win32") {
+    await writeFileWithinRootLegacy(params);
+    return;
+  }
+
+  const pinned = await resolvePinnedWriteTargetWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+  });
+
+  const identity = await runPinnedWriteHelper({
+    rootPath: pinned.rootReal,
+    relativeParentPath: pinned.relativeParentPath,
+    basename: pinned.basename,
+    mkdir: params.mkdir !== false,
+    mode: pinned.mode,
+    input: {
+      kind: "buffer",
+      data: params.data,
+      encoding: params.encoding,
+    },
+  }).catch((error) => {
+    throw normalizePinnedWriteError(error);
+  });
+
+  try {
+    await verifyAtomicWriteResult({
+      rootDir: params.rootDir,
+      targetPath: pinned.targetPath,
+      expectedIdentity: identity,
+    });
+  } catch (err) {
+    emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
+    throw err;
+  }
+}
+
+export async function copyFileWithinRoot(params: {
+  sourcePath: string;
+  rootDir: string;
+  relativePath: string;
+  maxBytes?: number;
+  mkdir?: boolean;
+  rejectSourceHardlinks?: boolean;
+}): Promise<void> {
+  const source = await openVerifiedLocalFile(params.sourcePath, {
+    rejectHardlinks: params.rejectSourceHardlinks,
+  });
+  if (params.maxBytes !== undefined && source.stat.size > params.maxBytes) {
+    await source.handle.close().catch(() => {});
+    throw new SafeOpenError(
+      "too-large",
+      `file exceeds limit of ${params.maxBytes} bytes (got ${source.stat.size})`,
+    );
+  }
+
+  try {
+    if (process.platform === "win32") {
+      await copyFileWithinRootLegacy(params, source);
+      return;
+    }
+
+    const pinned = await resolvePinnedWriteTargetWithinRoot({
+      rootDir: params.rootDir,
+      relativePath: params.relativePath,
+    });
+    const sourceStream = source.handle.createReadStream();
+    const identity = await runPinnedWriteHelper({
+      rootPath: pinned.rootReal,
+      relativeParentPath: pinned.relativeParentPath,
+      basename: pinned.basename,
+      mkdir: params.mkdir !== false,
+      mode: pinned.mode,
+      input: {
+        kind: "stream",
+        stream: sourceStream,
+      },
+    }).catch((error) => {
+      throw normalizePinnedWriteError(error);
+    });
+    try {
+      await verifyAtomicWriteResult({
+        rootDir: params.rootDir,
+        targetPath: pinned.targetPath,
+        expectedIdentity: identity,
+      });
+    } catch (err) {
+      emitWriteBoundaryWarning(`post-copy verification failed: ${String(err)}`);
+      throw err;
+    }
+  } finally {
+    await source.handle.close().catch(() => {});
+  }
+}
+
+export async function writeFileFromPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  sourcePath: string;
+  mkdir?: boolean;
+}): Promise<void> {
+  await copyFileWithinRoot({
+    sourcePath: params.sourcePath,
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    mkdir: params.mkdir,
+    rejectSourceHardlinks: true,
+  });
+}
+
+async function resolvePinnedWriteTargetWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+}): Promise<{
+  rootReal: string;
+  targetPath: string;
+  relativeParentPath: string;
+  basename: string;
+  mode: number;
+}> {
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: resolved,
+      rootPath: rootReal,
+      boundaryLabel: "root",
+    });
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+  }
+
+  const relativeResolved = path.relative(rootReal, resolved);
+  if (relativeResolved.startsWith("..") || path.isAbsolute(relativeResolved)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const relativePosix = relativeResolved
+    ? relativeResolved.split(path.sep).join(path.posix.sep)
+    : "";
+  const basename = path.posix.basename(relativePosix);
+  if (!basename || basename === "." || basename === "/") {
+    throw new SafeOpenError("invalid-path", "invalid target path");
+  }
+  let mode = 0o600;
+  try {
+    const opened = await openFileWithinRoot({
+      rootDir: params.rootDir,
+      relativePath: params.relativePath,
+      rejectHardlinks: true,
+    });
+    try {
+      mode = opened.stat.mode & 0o777;
+      if (!isPathInside(rootWithSep, opened.realPath)) {
+        throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+      }
+    } finally {
+      await opened.handle.close().catch(() => {});
+    }
+  } catch (err) {
+    if (!(err instanceof SafeOpenError) || err.code !== "not-found") {
+      throw err;
+    }
+  }
+
+  return {
+    rootReal,
+    targetPath: resolved,
+    relativeParentPath:
+      path.posix.dirname(relativePosix) === "." ? "" : path.posix.dirname(relativePosix),
+    basename,
+    mode: mode || 0o600,
+  };
+}
+
+function normalizePinnedWriteError(error: unknown): Error {
+  if (error instanceof SafeOpenError) {
+    return error;
+  }
+  return new SafeOpenError("invalid-path", "path is not a regular file under root", {
+    cause: error instanceof Error ? error : undefined,
+  });
+}
+
+async function writeFileWithinRootLegacy(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+}): Promise<void> {
   const target = await openWritableFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
@@ -575,7 +764,7 @@ export async function writeFileWithinRoot(params: {
       await verifyAtomicWriteResult({
         rootDir: params.rootDir,
         targetPath: destinationPath,
-        expectedStat: writtenStat,
+        expectedIdentity: writtenStat,
       });
     } catch (err) {
       emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
@@ -588,25 +777,17 @@ export async function writeFileWithinRoot(params: {
   }
 }
 
-export async function copyFileWithinRoot(params: {
-  sourcePath: string;
-  rootDir: string;
-  relativePath: string;
-  maxBytes?: number;
-  mkdir?: boolean;
-  rejectSourceHardlinks?: boolean;
-}): Promise<void> {
-  const source = await openVerifiedLocalFile(params.sourcePath, {
-    rejectHardlinks: params.rejectSourceHardlinks,
-  });
-  if (params.maxBytes !== undefined && source.stat.size > params.maxBytes) {
-    await source.handle.close().catch(() => {});
-    throw new SafeOpenError(
-      "too-large",
-      `file exceeds limit of ${params.maxBytes} bytes (got ${source.stat.size})`,
-    );
-  }
-
+async function copyFileWithinRootLegacy(
+  params: {
+    sourcePath: string;
+    rootDir: string;
+    relativePath: string;
+    maxBytes?: number;
+    mkdir?: boolean;
+    rejectSourceHardlinks?: boolean;
+  },
+  source: SafeOpenResult,
+): Promise<void> {
   let target: SafeWritableOpenResult | null = null;
   let sourceClosedByStream = false;
   let targetClosedByUs = false;
@@ -635,7 +816,9 @@ export async function copyFileWithinRoot(params: {
     targetStream.once("close", () => {
       tempClosedByStream = true;
     });
-    await pipeline(sourceStream, targetStream);
+    await import("node:stream/promises").then(({ pipeline }) =>
+      pipeline(sourceStream, targetStream),
+    );
     const writtenStat = await fs.stat(tempPath);
     if (!tempClosedByStream) {
       await tempHandle.close().catch(() => {});
@@ -648,7 +831,7 @@ export async function copyFileWithinRoot(params: {
       await verifyAtomicWriteResult({
         rootDir: params.rootDir,
         targetPath: destinationPath,
-        expectedStat: writtenStat,
+        expectedIdentity: writtenStat,
       });
     } catch (err) {
       emitWriteBoundaryWarning(`post-copy verification failed: ${String(err)}`);
@@ -673,19 +856,4 @@ export async function copyFileWithinRoot(params: {
       await target.handle.close().catch(() => {});
     }
   }
-}
-
-export async function writeFileFromPathWithinRoot(params: {
-  rootDir: string;
-  relativePath: string;
-  sourcePath: string;
-  mkdir?: boolean;
-}): Promise<void> {
-  await copyFileWithinRoot({
-    sourcePath: params.sourcePath,
-    rootDir: params.rootDir,
-    relativePath: params.relativePath,
-    mkdir: params.mkdir,
-    rejectSourceHardlinks: true,
-  });
 }
