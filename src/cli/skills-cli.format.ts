@@ -1,5 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -39,7 +39,7 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
 }
 
 function formatSkillName(skill: SkillStatusEntry): string {
-  const emoji = skill.emoji ?? "📦";
+  const emoji = (skill.emoji ?? "📦").replaceAll("\uFE0E", "\uFE0F");
   return `${emoji} ${theme.command(skill.name)}`;
 }
 
@@ -95,7 +95,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   }
 
   const eligible = skills.filter((s) => s.eligible);
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
   const rows = skills.map((skill) => {
     const missing = formatSkillMissingSummary(skill);
     return {
@@ -109,7 +109,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
 
   const columns = [
     { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Skill", header: "Skill", minWidth: 18, flex: true },
+    { key: "Skill", header: "Skill", minWidth: 22 },
     { key: "Description", header: "Description", minWidth: 24, flex: true },
     { key: "Source", header: "Source", minWidth: 10 },
   ];
