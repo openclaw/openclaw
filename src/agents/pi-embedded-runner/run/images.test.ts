@@ -253,6 +253,41 @@ describe("loadImageFromRef", () => {
   });
 });
 
+  it("loads image outside workspace when path is inside allowedExternalDirs", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-allowed-external-"));
+    try {
+      const inboundDir = path.join(tmpDir, "inbound");
+      await fs.mkdir(inboundDir, { recursive: true });
+      const imagePath = path.join(inboundDir, "discord-attachment.png");
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+      const workspaceDir = path.join(tmpDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      const image = await loadImageFromRef(
+        {
+          raw: imagePath,
+          type: "path",
+          resolved: imagePath,
+        },
+        workspaceDir,
+        {
+          workspaceOnly: true,
+          allowedExternalDirs: [inboundDir],
+        },
+      );
+
+      expect(image).not.toBeNull();
+      expect(image?.type).toBe("image");
+      expect(image?.data.length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("detectAndLoadPromptImages", () => {
   it("returns no images for non-vision models even when existing images are provided", async () => {
     const result = await detectAndLoadPromptImages({
