@@ -198,6 +198,39 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     const effectiveDmAllowFrom = access.effectiveAllowFrom;
 
+    // Build conversation reference for proactive replies.
+    // Constructed before the pairing early-return so it can be persisted for
+    // first-DM pairing requests — without this, --notify cannot deliver the
+    // approval message because no conversation reference exists yet.
+    const agent = activity.recipient;
+    const conversationRef: StoredConversationReference = {
+      activityId: activity.id,
+      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+      agent,
+      bot: agent ? { id: agent.id, name: agent.name } : undefined,
+      conversation: {
+        id: conversationId,
+        conversationType,
+        tenantId: conversation?.tenantId,
+      },
+      teamId,
+      channelId: activity.channelId,
+      serviceUrl: activity.serviceUrl,
+      locale: activity.locale,
+    };
+    let conversationRefPersisted = false;
+    const persistConversationRef = () => {
+      if (conversationRefPersisted) {
+        return;
+      }
+      conversationRefPersisted = true;
+      conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+        log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
+        });
+      });
+    };
+
     if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
       if (access.reason === "dmPolicy=disabled") {
         log.debug?.("dropping dm (dms disabled)");
@@ -210,6 +243,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
       });
       if (access.decision === "pairing") {
+        // Persist conversation reference before early return so --notify
+        // can deliver the approval message to this first-DM user.
+        persistConversationRef();
         const request = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName },
@@ -317,28 +353,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    // Build conversation reference for proactive replies.
-    const agent = activity.recipient;
-    const conversationRef: StoredConversationReference = {
-      activityId: activity.id,
-      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
-      agent,
-      bot: agent ? { id: agent.id, name: agent.name } : undefined,
-      conversation: {
-        id: conversationId,
-        conversationType,
-        tenantId: conversation?.tenantId,
-      },
-      teamId,
-      channelId: activity.channelId,
-      serviceUrl: activity.serviceUrl,
-      locale: activity.locale,
-    };
-    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
-      log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
-      });
-    });
+    persistConversationRef();
 
     const pollVote = extractMSTeamsPollVote(activity);
     if (pollVote) {
