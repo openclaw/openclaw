@@ -433,7 +433,7 @@ export function buildOpenrouterProvider(): ProviderConfig {
   };
 }
 
-const AINFT_BASE_URL = "https://chat.ainft.com/webapi/";
+const AINFT_BASE_URL = "https://api.ainft.com/v1/";
 const AINFT_DEFAULT_MODEL_ID = "gpt-5.2";
 const AINFT_DEFAULT_CONTEXT_WINDOW = 200000;
 const AINFT_DEFAULT_MAX_TOKENS = 8192;
