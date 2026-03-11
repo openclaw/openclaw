@@ -83,6 +83,38 @@ describe("renderTable", () => {
     }
   });
 
+  it("trims leading spaces on wrapped ANSI-colored continuation lines", () => {
+    const out = renderTable({
+      width: 113,
+      columns: [
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Skill", header: "Skill", minWidth: 18, flex: true },
+        { key: "Description", header: "Description", minWidth: 24, flex: true },
+        { key: "Source", header: "Source", minWidth: 10 },
+      ],
+      rows: [
+        {
+          Status: "✓ ready",
+          Skill: "🌤️ weather",
+          Description:
+            `\x1b[2mGet current weather and forecasts via wttr.in or Open-Meteo. ` +
+            `Use when: user asks about weather, temperature, or forecasts for any location.` +
+            `\x1b[0m`,
+          Source: "openclaw-bundled",
+        },
+      ],
+    });
+
+    const lines = out
+      .trimEnd()
+      .split("\n")
+      .filter((line) => line.includes("Use when"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("\u001b[2mUse when");
+    expect(lines[0]).not.toContain("│  Use when");
+    expect(lines[0]).not.toContain("│ \x1b[2m Use when");
+  });
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,
