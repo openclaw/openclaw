@@ -254,6 +254,39 @@ describe("resolveAnnounceTarget", () => {
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });
+
+  it("falls back to the spawnedBy parent target when child delivery target is incomplete", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:discord:channel:1481113713137287248",
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:1481113713137287248",
+            accountId: "default",
+          },
+        },
+        {
+          key: "agent:main:subagent:b6f3f7d7-aea3-4049-8c0d-03e10199b974",
+          spawnedBy: "agent:main:discord:channel:1481113713137287248",
+          deliveryContext: {
+            channel: "discord",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:subagent:b6f3f7d7-aea3-4049-8c0d-03e10199b974",
+      displayKey: "agent:main:subagent:b6f3f7d7-aea3-4049-8c0d-03e10199b974",
+    });
+
+    expect(target).toEqual({
+      channel: "discord",
+      to: "channel:1481113713137287248",
+      accountId: "default",
+    });
+  });
 });
 
 describe("sessions_list gating", () => {
