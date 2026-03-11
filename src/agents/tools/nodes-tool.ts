@@ -20,7 +20,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
@@ -100,6 +100,25 @@ function extractPairingRequestId(message: string): string | null {
   }
   const value = (match[1] ?? "").trim();
   return value.length > 0 ? value : null;
+}
+
+function resolveExecPolicyForNodeRun(params: { config?: OpenClawConfig; agentId?: string }): {
+  security?: string;
+  ask?: string;
+} {
+  const globalExec = params.config?.tools?.exec;
+  const agentExec =
+    params.config && params.agentId
+      ? resolveAgentConfig(params.config, params.agentId)?.tools?.exec
+      : undefined;
+  return {
+    security: agentExec?.security ?? globalExec?.security,
+    ask: agentExec?.ask ?? globalExec?.ask,
+  };
+}
+
+function shouldAutoApproveNodeRun(policy: { security?: string; ask?: string }): boolean {
+  return policy.security === "full" && policy.ask === "off";
 }
 
 // Flattened schema: runtime validates per-action requirements.
@@ -672,6 +691,69 @@ export function createNodesTool(options?: {
               agentId: prepared.plan.agentId ?? agentId,
               sessionKey: prepared.plan.sessionKey ?? sessionKey,
             };
+            const APPROVAL_TIMEOUT_MS = 120_000;
+
+            const invokeWithApproval = async (params: {
+              approvalId: string;
+              approvalDecision: "allow-once" | "allow-always";
+            }) => {
+              return await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+                nodeId,
+                command: "system.run",
+                params: {
+                  ...runParams,
+                  runId: params.approvalId,
+                  approved: true,
+                  approvalDecision: params.approvalDecision,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              });
+            };
+
+            const execPolicy = resolveExecPolicyForNodeRun({
+              config: options?.config,
+              agentId,
+            });
+            if (shouldAutoApproveNodeRun(execPolicy)) {
+              try {
+                const approvalId = crypto.randomUUID();
+                await callGatewayTool(
+                  "exec.approval.request",
+                  { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
+                  {
+                    id: approvalId,
+                    command: prepared.cmdText,
+                    commandArgv: prepared.plan.argv,
+                    systemRunPlan: prepared.plan,
+                    cwd: prepared.plan.cwd ?? cwd,
+                    nodeId,
+                    host: "node",
+                    security: "full",
+                    ask: "off",
+                    agentId: prepared.plan.agentId ?? agentId,
+                    sessionKey: prepared.plan.sessionKey ?? sessionKey,
+                    turnSourceChannel,
+                    turnSourceTo,
+                    turnSourceAccountId,
+                    turnSourceThreadId,
+                    timeoutMs: APPROVAL_TIMEOUT_MS,
+                    twoPhase: true,
+                  },
+                );
+                await callGatewayTool("exec.approval.resolve", gatewayOpts, {
+                  id: approvalId,
+                  decision: "allow-once",
+                });
+                const raw = await invokeWithApproval({
+                  approvalId,
+                  approvalDecision: "allow-once",
+                });
+                return jsonResult(raw?.payload ?? {});
+              } catch {
+                // Fall back to the standard approval workflow if pre-resolve fails.
+              }
+            }
 
             // First attempt without approval flags.
             try {
@@ -692,7 +774,6 @@ export function createNodesTool(options?: {
 
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
-            const APPROVAL_TIMEOUT_MS = 120_000;
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",
@@ -732,17 +813,9 @@ export function createNodesTool(options?: {
             }
 
             // Retry with the approval decision.
-            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "system.run",
-              params: {
-                ...runParams,
-                runId: approvalId,
-                approved: true,
-                approvalDecision,
-              },
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: crypto.randomUUID(),
+            const raw = await invokeWithApproval({
+              approvalId,
+              approvalDecision,
             });
             return jsonResult(raw?.payload ?? {});
           }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -130,5 +131,75 @@ describe("createNodesTool screen_record duration guardrails", () => {
       agentId: "main",
     });
     expect(prepareCall?.params).not.toHaveProperty("rawCommand");
+  });
+
+  it("auto-resolves allow-once for run when tools.exec is full/off", async () => {
+    nodeUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, payload) => {
+      if (method === "node.invoke" && payload?.command === "system.run.prepare") {
+        return {
+          payload: {
+            cmdText: "echo hi",
+            plan: {
+              argv: ["echo", "hi"],
+              cwd: null,
+              rawCommand: "echo hi",
+              agentId: null,
+              sessionKey: null,
+            },
+          },
+        };
+      }
+      if (method === "exec.approval.request") {
+        return {
+          status: "accepted",
+          id: payload?.id,
+        };
+      }
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
+      }
+      if (method === "node.invoke" && payload?.command === "system.run") {
+        if (payload?.params?.approved !== true) {
+          throw new Error("SYSTEM_RUN_DENIED: approval required");
+        }
+        return { payload: { ok: true } };
+      }
+      throw new Error(`unexpected call: ${method}`);
+    });
+    const tool = createNodesTool({
+      config: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const result = await tool.execute("call-2", {
+      action: "run",
+      node: "macbook",
+      command: ["echo", "hi"],
+    });
+
+    expect(result.details).toEqual({ ok: true });
+    const firstRunCall = gatewayMocks.callGatewayTool.mock.calls.find(
+      (call) => call[0] === "node.invoke" && call[2]?.command === "system.run",
+    )?.[2];
+    expect(firstRunCall).toBeTruthy();
+    expect(firstRunCall?.params?.approved).toBe(true);
+    expect(firstRunCall?.params?.approvalDecision).toBe("allow-once");
+    expect(firstRunCall?.params?.runId).toBeTruthy();
+    const approvalRequestCall = gatewayMocks.callGatewayTool.mock.calls.find(
+      (call) => call[0] === "exec.approval.request",
+    )?.[2];
+    expect(approvalRequestCall?.twoPhase).toBe(true);
   });
 });
