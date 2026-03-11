@@ -1,5 +1,6 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -12,6 +13,8 @@ import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { clearSessionModelFields } from "../config/sessions/store.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
@@ -59,6 +62,37 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+  }
+
+  // Clear persisted model fields from all sessions on startup.
+  // This ensures sessions use the current default model config after a gateway restart,
+  // fixing the case where config changes trigger a full restart (not hot reload) and
+  // the hot-reload path's resetSessionModels action is skipped.
+  // See: PR #41649 code review feedback.
+  try {
+    const agentIds = listAgentIds(params.cfg);
+    let totalCleared = 0;
+    for (const agentId of agentIds) {
+      try {
+        const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+        const cleared = await clearSessionModelFields(storePath);
+        totalCleared += cleared;
+      } catch (err) {
+        // Session store may not exist yet for some agents — ignore ENOENT.
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          params.log.warn(
+            `failed to clear session models for agent ${agentId} on startup: ${String(err)}`,
+          );
+        }
+      }
+    }
+    if (totalCleared > 0) {
+      params.log.warn(
+        `cleared persisted model from ${totalCleared} session(s) on startup to use current default model`,
+      );
+    }
+  } catch (err) {
+    params.log.warn(`session model cleanup failed on startup: ${String(err)}`);
   }
 
   // Start OpenClaw browser control server (unless disabled via config).
