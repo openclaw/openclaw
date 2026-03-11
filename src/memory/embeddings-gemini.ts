@@ -24,6 +24,12 @@ export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
 };
+
+// Module-level rate limiter: serializes ALL Gemini embedding requests across
+// all provider instances (multiple agents sharing the same API key).
+// 1.2s between requests ≈ 50 RPM, well under free-tier 100 RPM limit.
+let geminiEmbedRateLimitQueue: Promise<void> = Promise.resolve();
+const GEMINI_EMBED_DELAY_MS = 1200;
 function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
   const trimmed = resolveMemorySecretInputString({
     value: remoteApiKey,
@@ -118,25 +124,56 @@ export async function createGeminiEmbeddingProvider(
     return payload.embedding?.values ?? [];
   };
 
+  const GEMINI_QUEUE_ITEM_TIMEOUT_MS = 30_000;
+
+  const rateLimitedBatch = async (texts: string[]): Promise<number[][]> => {
+    return new Promise((resolve, reject) => {
+      geminiEmbedRateLimitQueue = geminiEmbedRateLimitQueue.then(async () => {
+        // Per-item timeout prevents a stuck request from blocking the entire queue.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), GEMINI_QUEUE_ITEM_TIMEOUT_MS);
+        try {
+          const requests = texts.map((text) => ({
+            model: client.modelPath,
+            content: { parts: [{ text }] },
+            taskType: "RETRIEVAL_DOCUMENT",
+          }));
+          debugEmbeddingsLog("gemini rate-limited batch: sending", {
+            texts: texts.length,
+            totalChars: texts.reduce((sum, t) => sum + t.length, 0),
+          });
+          const payload = await executeWithApiKeyRotation({
+            provider: "google",
+            apiKeys: client.apiKeys,
+            execute: (apiKey) => fetchWithGeminiAuth(apiKey, batchUrl, { requests }),
+          });
+          const embeddings = Array.isArray(payload.embeddings) ? payload.embeddings : [];
+          debugEmbeddingsLog("gemini rate-limited batch: success", {
+            texts: texts.length,
+            embeddingsReturned: embeddings.length,
+            dims: embeddings[0]?.values?.length ?? 0,
+          });
+          resolve(texts.map((_, index) => embeddings[index]?.values ?? []));
+        } catch (err) {
+          debugEmbeddingsLog("gemini rate-limited batch: failed", {
+            texts: texts.length,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          reject(err);
+        } finally {
+          clearTimeout(timer);
+        }
+        await new Promise((r) => setTimeout(r, GEMINI_EMBED_DELAY_MS));
+      });
+    });
+  };
+
   const embedBatch = async (texts: string[]): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
-    const requests = texts.map((text) => ({
-      model: client.modelPath,
-      content: { parts: [{ text }] },
-      taskType: "RETRIEVAL_DOCUMENT",
-    }));
-    const payload = await executeWithApiKeyRotation({
-      provider: "google",
-      apiKeys: client.apiKeys,
-      execute: (apiKey) =>
-        fetchWithGeminiAuth(apiKey, batchUrl, {
-          requests,
-        }),
-    });
-    const embeddings = Array.isArray(payload.embeddings) ? payload.embeddings : [];
-    return texts.map((_, index) => embeddings[index]?.values ?? []);
+    debugEmbeddingsLog("gemini embedBatch called", { texts: texts.length });
+    return rateLimitedBatch(texts);
   };
 
   return {

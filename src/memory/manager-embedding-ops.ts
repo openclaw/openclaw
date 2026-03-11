@@ -26,9 +26,9 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
-const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
-const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+const EMBEDDING_RETRY_MAX_ATTEMPTS = 8;
+const EMBEDDING_RETRY_BASE_DELAY_MS = 2000;
+const EMBEDDING_RETRY_MAX_DELAY_MS = 15000;
 const BATCH_FAILURE_LIMIT = 2;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
@@ -186,21 +186,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = this.buildEmbeddingBatches(missingChunks);
-    const toCache: Array<{ hash: string; embedding: number[] }> = [];
     let cursor = 0;
     for (const batch of batches) {
       const batchEmbeddings = await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchCache: Array<{ hash: string; embedding: number[] }> = [];
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
         if (item) {
           embeddings[item.index] = embedding;
-          toCache.push({ hash: item.chunk.hash, embedding });
+          batchCache.push({ hash: item.chunk.hash, embedding });
         }
       }
+      // Save immediately after each successful batch
+      this.upsertEmbeddingCache(batchCache);
+      log.debug("memory embeddings: batch cached", {
+        batchIndex: batches.indexOf(batch) + 1,
+        totalBatches: batches.length,
+        chunksCached: batchCache.length,
+        cursorAfter: cursor + batch.length,
+      });
       cursor += batch.length;
     }
-    this.upsertEmbeddingCache(toCache);
     return embeddings;
   }
 
