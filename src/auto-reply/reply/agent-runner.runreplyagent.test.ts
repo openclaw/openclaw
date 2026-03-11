@@ -1284,6 +1284,95 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("resets the session after timeout errors", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-timeout";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "All models failed (3): openai-codex/gpt-5.3-codex: LLM request timed out.",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("timed out"),
+      });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
+      expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(sessionStore.main.sessionId).not.toBe(sessionId);
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
+    });
+  });
+
+  it("resets the session after timeout errors surfaced in meta.error", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-timeout-meta";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "timed out", isError: true }],
+        meta: {
+          durationMs: 1,
+          error: {
+            kind: "timeout",
+            message: "All models failed (3): openai-codex/gpt-5.3-codex: LLM request timed out.",
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("timed out"),
+      });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
+      expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(sessionStore.main.sessionId).not.toBe(sessionId);
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
+    });
+  });
+
   it("resets corrupted Gemini sessions and deletes transcripts", async () => {
     await withTempStateDir(async (stateDir) => {
       const { storePath, sessionEntry, sessionStore, transcriptPath } =
@@ -1406,6 +1495,24 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     expect(res).toMatchObject({
       text: expect.not.stringContaining("400"),
+    });
+  });
+
+  it("returns friendly message for timeout errors when session reset is unavailable", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error("All models failed (3): openai-codex/gpt-5.3-codex: LLM request timed out.");
+    });
+
+    const { run } = createMinimalRun({
+      sessionKey: "",
+    });
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("timed out"),
+    });
+    expect(res).toMatchObject({
+      text: expect.not.stringContaining("Agent failed before reply"),
     });
   });
 

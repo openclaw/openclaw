@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
+import { isTimeoutError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -90,6 +91,7 @@ export async function runAgentTurnWithFallback(params: {
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+  resetSessionAfterTimeout: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
@@ -98,6 +100,10 @@ export async function runAgentTurnWithFallback(params: {
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+  const TIMEOUT_RESET_REPLY_TEXT =
+    "⏱️ The last request timed out. I've reset the conversation to a fresh session - please send it again.";
+  const TIMEOUT_RETRY_FALLBACK_TEXT =
+    "⏱️ The last request timed out. Please try again or use /new to start a fresh session.";
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -124,6 +130,7 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
+  let didResetAfterTimeout = false;
   let didRetryTransientHttpError = false;
 
   while (true) {
@@ -468,6 +475,20 @@ export async function runAgentTurnWithFallback(params: {
           };
         }
       }
+      if (
+        embeddedError &&
+        isTimeoutError(embeddedError.message) &&
+        !didResetAfterTimeout &&
+        (await params.resetSessionAfterTimeout(embeddedError.message))
+      ) {
+        didResetAfterTimeout = true;
+        return {
+          kind: "final",
+          payload: {
+            text: TIMEOUT_RESET_REPLY_TEXT,
+          },
+        };
+      }
 
       break;
     } catch (err) {
@@ -476,6 +497,7 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isTimeoutFailure = isTimeoutError(err);
       const isTransientHttp = isTransientHttpError(message);
 
       if (
@@ -501,6 +523,19 @@ export async function runAgentTurnWithFallback(params: {
             },
           };
         }
+      }
+      if (
+        isTimeoutFailure &&
+        !didResetAfterTimeout &&
+        (await params.resetSessionAfterTimeout(message))
+      ) {
+        didResetAfterTimeout = true;
+        return {
+          kind: "final",
+          payload: {
+            text: TIMEOUT_RESET_REPLY_TEXT,
+          },
+        };
       }
 
       // Auto-recover from Gemini session corruption by resetting the session
@@ -572,7 +607,9 @@ export async function runAgentTurnWithFallback(params: {
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isTimeoutFailure
+            ? TIMEOUT_RETRY_FALLBACK_TEXT
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",

@@ -362,6 +362,12 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  const resetSessionAfterTimeout = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "timeout",
+      buildLogMessage: (nextSessionId) =>
+        `Request timed out (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+    });
   try {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
@@ -380,6 +386,7 @@ export async function runReplyAgent(params: {
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
+      resetSessionAfterTimeout,
       isHeartbeat,
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
