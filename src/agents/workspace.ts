@@ -479,13 +479,20 @@ async function resolveMemoryBootstrapEntries(
     return entries;
   }
 
+  // Dedupe by file identity (dev:ino) to handle case-insensitive filesystems
+  // where MEMORY.md and memory.md resolve to the same inode.
   const seen = new Set<string>();
   const deduped: Array<{ name: WorkspaceBootstrapFileName; filePath: string }> = [];
   for (const entry of entries) {
     let key = entry.filePath;
     try {
-      key = await fs.realpath(entry.filePath);
-    } catch {}
+      const stat = await fs.stat(entry.filePath);
+      key = `${stat.dev}:${stat.ino}`;
+    } catch {
+      try {
+        key = await fs.realpath(entry.filePath);
+      } catch {}
+    }
     if (seen.has(key)) {
       continue;
     }

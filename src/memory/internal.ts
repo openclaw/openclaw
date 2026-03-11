@@ -129,13 +129,20 @@ export async function listMemoryFiles(
   if (result.length <= 1) {
     return result;
   }
+  // Dedupe by file identity (dev:ino) to handle case-insensitive filesystems
+  // where MEMORY.md and memory.md resolve to the same inode.
   const seen = new Set<string>();
   const deduped: string[] = [];
   for (const entry of result) {
     let key = entry;
     try {
-      key = await fs.realpath(entry);
-    } catch {}
+      const stat = await fs.stat(entry);
+      key = `${stat.dev}:${stat.ino}`;
+    } catch {
+      try {
+        key = await fs.realpath(entry);
+      } catch {}
+    }
     if (seen.has(key)) {
       continue;
     }

@@ -131,6 +131,30 @@ describe("listMemoryFiles", () => {
     const memoryMatches = files.filter((file) => file.endsWith("MEMORY.md"));
     expect(memoryMatches).toHaveLength(1);
   });
+
+  it("dedupes MEMORY.md and memory.md when they share the same inode (case-insensitive FS)", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Memory");
+
+    // Check if the filesystem is case-insensitive by seeing if memory.md
+    // resolves to the same inode as MEMORY.md.
+    const upperPath = path.join(tmpDir, "MEMORY.md");
+    const lowerPath = path.join(tmpDir, "memory.md");
+    let caseInsensitive = false;
+    try {
+      const upperStat = await fs.stat(upperPath);
+      const lowerStat = await fs.stat(lowerPath);
+      caseInsensitive = upperStat.ino === lowerStat.ino && upperStat.dev === lowerStat.dev;
+    } catch {}
+
+    if (!caseInsensitive) {
+      // On case-sensitive FS, both variants are independent files — skip.
+      return;
+    }
+    const files = await listMemoryFiles(tmpDir);
+    const memoryMatches = files.filter((f) => f.endsWith("MEMORY.md") || f.endsWith("memory.md"));
+    expect(memoryMatches).toHaveLength(1);
+  });
 });
 
 describe("buildFileEntry", () => {
