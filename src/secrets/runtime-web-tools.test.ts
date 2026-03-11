@@ -296,7 +296,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("auto-detects minimax using auth profile oauth when env/config keys are missing", async () => {
-    vi.spyOn(authProfiles, "ensureAuthProfileStore").mockReturnValue({
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
       version: 1,
       profiles: {
         "minimax-portal:default": {
@@ -308,11 +308,11 @@ describe("runtime web tools resolution", () => {
         },
       },
       order: {},
-    } as unknown as ReturnType<typeof authProfiles.ensureAuthProfileStore>);
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
     vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
       provider === "minimax-portal" ? ["minimax-portal:default"] : [],
     );
-    vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
+    const resolveApiKeySpy = vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
       apiKey: "profile-oauth-token", // pragma: allowlist secret
       provider: "minimax-portal",
     });
@@ -334,6 +334,11 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBe("minimax");
     expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
+    expect(resolveApiKeySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: {},
+      }),
+    );
   });
 
   it("treats configured provider as primary and falls back to next available provider", async () => {

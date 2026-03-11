@@ -1,6 +1,6 @@
 import {
-  ensureAuthProfileStore,
   listProfilesForProvider,
+  loadAuthProfileStoreForSecretsRuntime,
   resolveApiKeyForProfile,
 } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -360,11 +360,9 @@ async function resolveMinimaxApiKeyFromAuthProfiles(params: {
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
 }): Promise<string | undefined> {
-  let store: ReturnType<typeof ensureAuthProfileStore>;
+  let store: ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
   try {
-    store = ensureAuthProfileStore(params.context.env.OPENCLAW_AGENT_DIR, {
-      allowKeychainPrompt: false,
-    });
+    store = loadAuthProfileStoreForSecretsRuntime(params.context.env.OPENCLAW_AGENT_DIR);
   } catch {
     return undefined;
   }
@@ -383,6 +381,7 @@ async function resolveMinimaxApiKeyFromAuthProfiles(params: {
           store,
           profileId,
           agentDir: params.context.env.OPENCLAW_AGENT_DIR,
+          env: params.context.env,
         });
         const value = normalizeSecretInput(resolved?.apiKey);
         if (value) {

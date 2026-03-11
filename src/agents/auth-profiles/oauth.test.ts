@@ -399,4 +399,70 @@ describe("resolveApiKeyForProfile secret refs", () => {
       }
     }
   });
+
+  it("uses explicit runtime env for keyRef resolution", async () => {
+    const profileId = "openai:runtime-env";
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-process-env"; // pragma: allowlist secret
+    try {
+      const result = await resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "api_key"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+        },
+        profileId,
+        env: {
+          OPENAI_API_KEY: "sk-runtime-env", // pragma: allowlist secret
+        },
+      });
+      expect(result).toEqual({
+        apiKey: "sk-runtime-env", // pragma: allowlist secret
+        provider: "openai",
+        email: undefined,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
+
+  it("does not fall back to process.env when explicit runtime env is provided", async () => {
+    const profileId = "openai:runtime-env-empty";
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-process-env"; // pragma: allowlist secret
+    try {
+      const result = await resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "api_key"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+        },
+        profileId,
+        env: {},
+      });
+      expect(result).toBeNull();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
 });
