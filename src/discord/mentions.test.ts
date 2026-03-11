@@ -44,6 +44,30 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("ping <@123456789> and <@123456789>");
   });
 
+  it("rewrites unicode handles in multilingual text", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "2233445566",
+      handles: ["张三"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("你好@张三，收到请回复。", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("你好<@2233445566>，收到请回复。");
+  });
+
+  it("does not rewrite email addresses", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("email a@alice.com and ping @alice", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("email a@alice.com and ping <@123456789>");
+  });
+
   it("preserves unknown mentions and reserved mentions", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",

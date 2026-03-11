@@ -1,7 +1,8 @@
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
-const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
+// Avoid matching common email local-part patterns while allowing mentions in CJK text (e.g. "你好@张三").
+const MENTION_CANDIDATE_PATTERN = /(?<![A-Za-z0-9._%+-])@([\p{L}\p{N}_.-]{2,32}(?:#[0-9]{4})?)/gu;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
@@ -42,7 +43,7 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
   if (!text.includes("@")) {
     return text;
   }
-  return text.replace(MENTION_CANDIDATE_PATTERN, (match, prefix, rawHandle) => {
+  return text.replace(MENTION_CANDIDATE_PATTERN, (match, rawHandle) => {
     const handle = String(rawHandle ?? "").trim();
     if (!handle) {
       return match;
@@ -58,7 +59,7 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
     if (!userId) {
       return match;
     }
-    return `${String(prefix ?? "")}${formatMention({ userId })}`;
+    return formatMention({ userId });
   });
 }
 
