@@ -175,13 +175,11 @@ function createOccurrenceAwareResolver(mode: ToolCallIdMode): {
   const resolveToolResultId = (id: string): string => {
     const pending = pendingByRawId.get(id);
     if (pending && pending.length > 0) {
-      const next = pending.shift() ?? "";
+      const next = pending.shift()!;
       if (pending.length === 0) {
         pendingByRawId.delete(id);
       }
-      if (next) {
-        return next;
-      }
+      return next;
     }
 
     const occurrence = (orphanToolResultOccurrences.get(id) ?? 0) + 1;
@@ -240,9 +238,14 @@ function rewriteToolResultIds(params: {
       : undefined;
   const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
   const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
+  const sharedRawId =
+    toolCallId && toolUseIdStr && toolCallId === toolUseIdStr ? toolCallId : undefined;
 
-  const nextToolCallId = toolCallId ? params.resolveId(toolCallId) : undefined;
-  const nextToolUseId = toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined;
+  const sharedResolvedId = sharedRawId ? params.resolveId(sharedRawId) : undefined;
+  const nextToolCallId =
+    sharedResolvedId ?? (toolCallId ? params.resolveId(toolCallId) : undefined);
+  const nextToolUseId =
+    sharedResolvedId ?? (toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined);
 
   if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
     return params.message;
