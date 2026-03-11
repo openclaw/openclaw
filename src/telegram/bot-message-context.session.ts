@@ -33,6 +33,7 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramForumTopicName } from "./forum-service-message.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 
 export async function buildTelegramInboundContextPayload(params: {
@@ -120,6 +121,11 @@ export async function buildTelegramInboundContextPayload(params: {
       }]\n`
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+  const forumTopicName =
+    resolvedThreadId != null && isForum ? resolveTelegramForumTopicName(msg) : undefined;
+  const threadLabel = forumTopicName
+    ? ["Telegram", msg.chat.title?.trim(), forumTopicName].filter(Boolean).join(" : ")
+    : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
@@ -241,6 +247,7 @@ export async function buildTelegramInboundContextPayload(params: {
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     MessageThreadId: threadSpec.id,
+    ThreadLabel: threadLabel,
     IsForum: isForum,
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,

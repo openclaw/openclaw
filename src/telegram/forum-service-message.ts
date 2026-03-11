@@ -21,3 +21,26 @@ export function isTelegramForumServiceMessage(msg: unknown): boolean {
   const record = msg as Record<string, unknown>;
   return TELEGRAM_FORUM_SERVICE_FIELDS.some((field) => record[field] != null);
 }
+
+function readTelegramForumTopicName(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as { name?: unknown }).name;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function resolveTelegramForumTopicName(msg: unknown): string | undefined {
+  if (!msg || typeof msg !== "object") {
+    return undefined;
+  }
+  const record = msg as Record<string, unknown>;
+  return (
+    readTelegramForumTopicName(record.forum_topic_created) ??
+    readTelegramForumTopicName(record.forum_topic_edited)
+  );
+}

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
-import { TELEGRAM_FORUM_SERVICE_FIELDS } from "./forum-service-message.js";
+import {
+  resolveTelegramForumTopicName,
+  TELEGRAM_FORUM_SERVICE_FIELDS,
+} from "./forum-service-message.js";
 
 describe("buildTelegramMessageContext implicitMention forum service messages", () => {
   /**
@@ -61,6 +64,19 @@ describe("buildTelegramMessageContext implicitMention forum service messages", (
     // With requireMention and no explicit @mention, the message should be
     // skipped (null) because implicitMention should NOT fire.
     expect(ctx).toBeNull();
+  });
+
+  it("extracts forum topic names from service messages", async () => {
+    expect(
+      resolveTelegramForumTopicName({
+        forum_topic_created: { name: "Build Updates", icon_color: 0x6fb9f0 },
+      }),
+    ).toBe("Build Updates");
+    expect(
+      resolveTelegramForumTopicName({
+        forum_topic_edited: { name: "Roadmap", icon_custom_emoji_id: "123" },
+      }),
+    ).toBe("Roadmap");
   });
 
   it.each(TELEGRAM_FORUM_SERVICE_FIELDS)(

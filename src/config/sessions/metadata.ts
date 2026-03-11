@@ -167,6 +167,10 @@ export function deriveSessionMetaPatch(params: {
   if (mergedOrigin) {
     patch.origin = mergedOrigin;
   }
+  const threadLabel = params.ctx.ThreadLabel?.trim();
+  if (threadLabel) {
+    patch.displayName = threadLabel;
+  }
 
   return Object.keys(patch).length > 0 ? patch : null;
 }

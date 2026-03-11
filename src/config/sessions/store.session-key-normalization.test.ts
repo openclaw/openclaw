@@ -145,4 +145,27 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(1111);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
+
+  it("persists inbound thread labels as display names", async () => {
+    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:77";
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        From: "telegram:group:-1001234567890:topic:77",
+        To: "telegram:-1001234567890",
+        SessionKey: sessionKey,
+        OriginatingTo: "telegram:-1001234567890:topic:77",
+        GroupSubject: "Forum Group",
+        ThreadLabel: "Telegram : Forum Group : Build Updates",
+      },
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.displayName).toBe("Telegram : Forum Group : Build Updates");
+  });
 });
