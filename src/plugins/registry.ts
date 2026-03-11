@@ -10,6 +10,7 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
+import { RESERVED_CHANNEL_IDS } from "../utils/message-channel.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
@@ -427,6 +428,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "channel registration missing id",
+      });
+      return;
+    }
+    if (RESERVED_CHANNEL_IDS.has(id.toLowerCase())) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel id "${id}" is reserved for internal OpenClaw routing and cannot be registered by a plugin`,
       });
       return;
     }

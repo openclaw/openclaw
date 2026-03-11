@@ -31,6 +31,7 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { RESERVED_CHANNEL_IDS } from "../utils/message-channel.js";
 import {
   loadPluginManifest,
   resolvePackageExtensionEntries,
@@ -94,13 +95,6 @@ function encodePluginInstallDirName(pluginId: string): string {
   // with valid unscoped ids that happen to match the hashed slug.
   return `@${safePathSegmentHashed(trimmed)}`;
 }
-
-/**
- * Channel IDs that are reserved for internal OpenClaw routing and must never
- * be used as plugin identifiers. Claiming one of these would silently shadow
- * a sentinel value and break cross-session message delivery.
- */
-const RESERVED_CHANNEL_IDS = new Set(["inter_session", "webchat"]);
 
 function validatePluginId(pluginId: string): string | null {
   const trimmed = pluginId.trim();
