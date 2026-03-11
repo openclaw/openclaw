@@ -622,6 +622,7 @@ describe("buildAgentSystemPrompt", () => {
         node: "v20",
         model: "anthropic/claude",
         defaultModel: "anthropic/claude-opus-4-5",
+        contextPercent: 45,
       },
       "telegram",
       ["inlineButtons"],
@@ -635,6 +636,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("node=v20");
     expect(line).toContain("model=anthropic/claude");
     expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).toContain("context=45%");
     expect(line).toContain("channel=telegram");
     expect(line).toContain("capabilities=inlineButtons");
     expect(line).toContain("thinking=low");

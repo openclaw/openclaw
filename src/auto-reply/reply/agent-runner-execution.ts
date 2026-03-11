@@ -57,6 +57,25 @@ export type RuntimeFallbackAttempt = {
   code?: string;
 };
 
+function resolveRuntimeContextPercent(entry: SessionEntry | undefined): number | undefined {
+  if (!entry || entry.totalTokensFresh === false) {
+    return undefined;
+  }
+  const totalTokens = entry.totalTokens;
+  const contextTokens = entry.contextTokens;
+  if (
+    typeof totalTokens !== "number" ||
+    !Number.isFinite(totalTokens) ||
+    totalTokens < 0 ||
+    typeof contextTokens !== "number" ||
+    !Number.isFinite(contextTokens) ||
+    contextTokens <= 0
+  ) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(999, Math.round((totalTokens / contextTokens) * 100)));
+}
+
 export type AgentRunLoopResult =
   | {
       kind: "success";
@@ -318,6 +337,7 @@ export async function runAgentTurnWithFallback(params: {
             model,
             runId,
             authProfile,
+            contextPercent: resolveRuntimeContextPercent(params.getActiveSessionEntry()),
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           });
           return (async () => {

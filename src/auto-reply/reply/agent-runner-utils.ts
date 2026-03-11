@@ -174,6 +174,7 @@ export function buildEmbeddedRunBaseParams(params: {
   model: string;
   runId: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
+  contextPercent?: number;
   allowTransientCooldownProbe?: boolean;
 }) {
   return {
@@ -188,6 +189,7 @@ export function buildEmbeddedRunBaseParams(params: {
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
     provider: params.provider,
     model: params.model,
+    contextPercent: params.contextPercent,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
     verboseLevel: params.run.verboseLevel,

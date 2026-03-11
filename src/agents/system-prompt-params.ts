@@ -17,6 +17,7 @@ export type RuntimeInfoInput = {
   node: string;
   model: string;
   defaultModel?: string;
+  contextPercent?: number;
   shell?: string;
   channel?: string;
   capabilities?: string[];

@@ -697,6 +697,7 @@ export function buildRuntimeLine(
     node?: string;
     model?: string;
     defaultModel?: string;
+    contextPercent?: number;
     shell?: string;
     repoRoot?: string;
   },
@@ -716,6 +717,7 @@ export function buildRuntimeLine(
     runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
     runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
+    typeof runtimeInfo?.contextPercent === "number" ? `context=${runtimeInfo.contextPercent}%` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel
