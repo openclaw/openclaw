@@ -1,13 +1,20 @@
 {
-  "globs": ["docs/**/*.md", "docs/**/*.mdx", "README.md"],
-  "ignores": ["docs/zh-CN/**", "docs/.i18n/**", "docs/reference/templates/**", "**/.local/**"],
+  "globs": [
+    "docs/**/*.md",
+    "docs/**/*.mdx",
+    "README.md"
+  ],
+  "ignores": [
+    "docs/zh-Hans/**",
+    "docs/.i18n/**",
+    "docs/reference/templates/**",
+    "**/.local/**"
+  ],
   "config": {
     "default": true,
-
     "MD013": false,
     "MD025": false,
     "MD029": false,
-
     "MD033": {
       "allowed_elements": [
         "Note",
@@ -43,7 +50,6 @@
         "Check",
       ],
     },
-
     "MD036": false,
     "MD040": false,
     "MD041": false,
