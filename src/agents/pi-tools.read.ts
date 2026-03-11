@@ -573,10 +573,8 @@ function createSandboxLsOperations(params: SandboxToolParams) {
         isDirectory: () => stat.type === "directory",
       };
     },
-    readdir: async (absolutePath: string) => {
-      const resolved = params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root });
-      return await fs.readdir(resolved.hostPath);
-    },
+    readdir: (absolutePath: string) =>
+      params.bridge.readdir({ filePath: absolutePath, cwd: params.root }),
   } as const;
 }
 

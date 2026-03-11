@@ -12,6 +12,10 @@ export function createSandboxFsBridgeFromResolver(
       const target = resolvePath(filePath, cwd);
       return fs.readFile(target.hostPath);
     },
+    readdir: async ({ filePath, cwd }) => {
+      const target = resolvePath(filePath, cwd);
+      return fs.readdir(target.hostPath);
+    },
     writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
       const target = resolvePath(filePath, cwd);
       if (mkdir) {

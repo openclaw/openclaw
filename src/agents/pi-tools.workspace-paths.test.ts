@@ -249,4 +249,31 @@ describe("sandboxed workspace paths", () => {
       });
     });
   });
+
+  it("routes sandbox ls directory reads through bridge.readdir", async () => {
+    await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
+      const marker = "bridge readdir blocked";
+      const hostBridge = createHostSandboxFsBridge(sandboxDir);
+      const sandbox = createPiToolsSandboxContext({
+        workspaceDir: sandboxDir,
+        workspaceAccess: "rw" as const,
+        fsBridge: {
+          ...hostBridge,
+          readdir: async () => {
+            throw new Error(marker);
+          },
+        },
+        tools: { allow: [], deny: [] },
+      });
+
+      const tools = createOpenClawCodingTools({ workspaceDir: sandboxDir, sandbox });
+      const lsTool = tools.find((tool) => tool.name === "ls");
+      expect(lsTool).toBeDefined();
+      if (!lsTool) {
+        throw new Error("ls tool missing");
+      }
+
+      await expect(lsTool.execute("sbx-ls-bridge-readdir", { path: "." })).rejects.toThrow(marker);
+    });
+  });
 });

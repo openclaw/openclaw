@@ -39,6 +39,7 @@ export type SandboxFsStat = {
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
   readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
+  readdir(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<string[]>;
   writeFile(params: {
     filePath: string;
     cwd?: string;
@@ -100,6 +101,19 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
     return this.readPinnedFile(target);
+  }
+
+  async readdir(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<string[]> {
+    const target = this.resolveResolvedPath(params);
+    await this.pathGuard.assertPathSafety(target, {
+      action: "list directories",
+      allowedType: "directory",
+    });
+    return await fs.promises.readdir(target.hostPath);
   }
 
   async writeFile(params: {

@@ -21,6 +21,7 @@ describe("Agent-specific tool filtering", () => {
       containerPath: "/workspace",
     }),
     readFile: async () => Buffer.from(""),
+    readdir: async () => [],
     writeFile: async () => {},
     mkdirp: async () => {},
     remove: async () => {},
