@@ -1,5 +1,5 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
+import { authorizeConfigWrite } from "../../channels/plugins/config-writes.js";
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
@@ -28,6 +28,7 @@ import { resolveSignalAccount } from "../../signal/accounts.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -585,16 +586,25 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const shouldTouchStore = parsed.target !== "config" && listPairingChannels().includes(channelId);
 
   if (shouldUpdateConfig) {
-    const allowWrites = resolveChannelConfigWrites({
+    const writeAuth = authorizeConfigWrite({
       cfg: params.cfg,
-      channelId,
-      accountId: params.ctx.AccountId,
+      origin: { channelId, accountId: params.ctx.AccountId },
+      targets: [{ channelId, accountId }],
+      allowBypass:
+        isInternalMessageChannel(params.command.channel) &&
+        params.ctx.GatewayClientScopes?.includes("operator.admin") === true,
     });
-    if (!allowWrites) {
-      const hint = `channels.${channelId}.configWrites=true`;
+    if (!writeAuth.allowed) {
+      const blocked = writeAuth.blockedScope?.scope;
+      const hint =
+        blocked?.channelId && blocked.accountId
+          ? `channels.${blocked.channelId}.accounts.${blocked.accountId}.configWrites=true`
+          : `channels.${blocked?.channelId ?? channelId}.configWrites=true`;
       return {
         shouldContinue: false,
-        reply: { text: `⚠️ Config writes are disabled for ${channelId}. Set ${hint} to enable.` },
+        reply: {
+          text: `⚠️ Config writes are disabled for ${blocked?.channelId ?? channelId}. Set ${hint} to enable.`,
+        },
       };
     }
 
