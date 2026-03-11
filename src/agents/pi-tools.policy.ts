@@ -249,8 +249,9 @@ function resolveImplicitProfileAlsoAllow(params: {
 }): string[] | undefined {
   const implicit = new Set<string>();
   if (
-    hasExplicitToolSection(params.agentTools?.exec) ||
-    hasExplicitToolSection(params.globalTools?.exec)
+    params.profileId !== "minimal" &&
+    (hasExplicitToolSection(params.agentTools?.exec) ||
+      hasExplicitToolSection(params.globalTools?.exec))
   ) {
     implicit.add("exec");
     implicit.add("process");
