@@ -1121,6 +1121,34 @@ describe("discord DM reaction handling", () => {
     }
     expect(routeArgs.peer).toEqual({ kind: "group", id: "channel-1" });
   });
+
+  it("reuses one route and one context key for triage reaction commands", async () => {
+    enqueueSystemEventSpy.mockClear();
+    resolveAgentRouteMock.mockClear();
+
+    const data = makeReactionEvent({ botAsAuthor: true, emojiName: "✅" });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
+
+    const firstCall = enqueueSystemEventSpy.mock.calls[0] as [
+      string,
+      { sessionKey: string; contextKey?: string },
+    ];
+    const secondCall = enqueueSystemEventSpy.mock.calls[1] as [
+      string,
+      { sessionKey: string; contextKey?: string },
+    ];
+
+    expect(firstCall[0]).toContain("Discord reaction added");
+    expect(secondCall[0]).toContain("Reaction command: accept (✅)");
+    expect(secondCall[1].sessionKey).toBe(firstCall[1].sessionKey);
+    expect(secondCall[1].contextKey).toBe(firstCall[1].contextKey);
+  });
 });
 
 describe("discord reaction notification modes", () => {

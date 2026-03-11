@@ -505,9 +505,8 @@ async function handleDiscordReactionEvent(
       reactionBase = { baseText, contextKey };
       return reactionBase;
     };
-    const emitReaction = (text: string, parentPeerId?: string) => {
-      const { contextKey } = resolveReactionBase();
-      const route = resolveAgentRoute({
+    const resolveReactionRoute = (parentPeerId?: string) =>
+      resolveAgentRoute({
         cfg: params.cfg,
         channel: "discord",
         accountId: params.accountId,
@@ -519,12 +518,20 @@ async function handleDiscordReactionEvent(
         },
         parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
       });
+    const emitReaction = (
+      text: string,
+      route: ReturnType<typeof resolveAgentRoute>,
+      contextKey: string,
+    ) => {
       enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
         contextKey,
       });
     };
-    const emitReactionCommand = (parentPeerId?: string) => {
+    const emitReactionCommand = (params: {
+      route: ReturnType<typeof resolveAgentRoute>;
+      contextKey: string;
+    }) => {
       if (action !== "added") {
         return;
       }
@@ -542,24 +549,11 @@ async function handleDiscordReactionEvent(
       if (!reactionCommand) {
         return;
       }
-      const { contextKey } = resolveReactionBase();
-      const route = resolveAgentRoute({
-        cfg: params.cfg,
-        channel: "discord",
-        accountId: params.accountId,
-        guildId: data.guild_id ?? undefined,
-        memberRoleIds,
-        peer: {
-          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-          id: isDirectMessage ? user.id : data.channel_id,
-        },
-        parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
-      });
       enqueueSystemEvent(
         `Reaction command: ${reactionCommand} (${emojiLabel}) for message ${data.message_id}`,
         {
-          sessionKey: route.sessionKey,
-          contextKey: `${contextKey}:cmd:${reactionCommand}`,
+          sessionKey: params.route.sessionKey,
+          contextKey: params.contextKey,
         },
       );
     };
@@ -577,11 +571,15 @@ async function handleDiscordReactionEvent(
         allowlist: guildInfo?.users,
         allowNameMatching: params.allowNameMatching,
       });
-    const emitReactionWithAuthor = (message: { author?: User } | null) => {
+    const emitReactionWithAuthor = (
+      message: { author?: User } | null,
+      route: ReturnType<typeof resolveAgentRoute>,
+      contextKey: string,
+    ) => {
       const { baseText } = resolveReactionBase();
       const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      emitReaction(text, parentId);
+      emitReaction(text, route, contextKey);
     };
     const loadThreadParentInfo = async () => {
       if (!parentId) {
@@ -643,9 +641,10 @@ async function handleDiscordReactionEvent(
           }
         }
 
-        const { baseText } = resolveReactionBase();
-        emitReaction(baseText, parentId);
-        emitReactionCommand(parentId);
+        const route = resolveReactionRoute(parentId);
+        const { baseText, contextKey } = resolveReactionBase();
+        emitReaction(baseText, route, contextKey);
+        emitReactionCommand({ route, contextKey });
         return;
       }
 
@@ -663,8 +662,10 @@ async function handleDiscordReactionEvent(
         return;
       }
 
-      emitReactionWithAuthor(message);
-      emitReactionCommand(parentId);
+      const route = resolveReactionRoute(parentId);
+      const { contextKey } = resolveReactionBase();
+      emitReactionWithAuthor(message, route, contextKey);
+      emitReactionCommand({ route, contextKey });
       return;
     }
 
@@ -702,9 +703,10 @@ async function handleDiscordReactionEvent(
         }
       }
 
-      const { baseText } = resolveReactionBase();
-      emitReaction(baseText, parentId);
-      emitReactionCommand(parentId);
+      const route = resolveReactionRoute(parentId);
+      const { baseText, contextKey } = resolveReactionBase();
+      emitReaction(baseText, route, contextKey);
+      emitReactionCommand({ route, contextKey });
       return;
     }
 
@@ -715,8 +717,10 @@ async function handleDiscordReactionEvent(
       return;
     }
 
-    emitReactionWithAuthor(message);
-    emitReactionCommand(parentId);
+    const route = resolveReactionRoute(parentId);
+    const { contextKey } = resolveReactionBase();
+    emitReactionWithAuthor(message, route, contextKey);
+    emitReactionCommand({ route, contextKey });
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }

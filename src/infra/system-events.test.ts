@@ -3,7 +3,12 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  isSystemEventContextChanged,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -54,6 +59,23 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("keeps the previous context key when a duplicate event is skipped", () => {
+    const sessionKey = "agent:main:test-context-duplicate";
+
+    enqueueSystemEvent("Node connected", {
+      sessionKey,
+      contextKey: "presence:node:a",
+    });
+    const duplicate = enqueueSystemEvent("Node connected", {
+      sessionKey,
+      contextKey: "presence:node:b",
+    });
+
+    expect(duplicate).toBe(false);
+    expect(isSystemEventContextChanged(sessionKey, "presence:node:a")).toBe(false);
+    expect(isSystemEventContextChanged(sessionKey, "presence:node:b")).toBe(true);
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {

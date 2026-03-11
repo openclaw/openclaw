@@ -66,11 +66,11 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     return false;
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
-  entry.lastContextKey = normalizedContextKey;
   if (entry.lastText === cleaned) {
     return false;
   } // skip consecutive duplicates
   entry.lastText = cleaned;
+  entry.lastContextKey = normalizedContextKey;
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
