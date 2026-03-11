@@ -376,10 +376,10 @@ export async function compactEmbeddedPiSessionDirect(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    // In sandboxed non-rw sessions, skill files live inside the sandbox workspace
-    // (synced by syncSkillsToWorkspace), not at host paths. The pre-built snapshot
-    // prompt contains host-compacted paths (~/...) that are unreachable from inside
-    // the sandbox, so we skip the snapshot and rebuild from the sandbox workspace.
+    // In sandboxed non-rw sessions, skill files are synced into the sandbox
+    // workspace but the pre-built snapshot prompt contains host-compacted paths
+    // (~/...) that are unreachable inside the container. When sandboxed, skip
+    // the snapshot and rebuild the prompt with container-relative paths.
     const isSandboxedNonRw = sandbox?.enabled && sandbox.workspaceAccess !== "rw";
     const effectiveSnapshot = isSandboxedNonRw ? undefined : params.skillsSnapshot;
 
@@ -402,6 +402,7 @@ export async function compactEmbeddedPiSessionDirect(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      containerSkillsPrefix: isSandboxedNonRw ? sandbox.containerWorkdir : undefined,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
