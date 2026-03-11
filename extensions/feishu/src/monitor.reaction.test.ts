@@ -593,8 +593,9 @@ describe("Feishu inbound debounce regressions", () => {
     setDedupPassThroughMocks();
 
     let releaseBlocked: (() => void) | undefined;
-    handleFeishuMessageMock.mockImplementation(async (params: { event?: FeishuMessageEvent }) => {
-      if (params.event?.message.message_id !== "om_blocked") {
+    handleFeishuMessageMock.mockImplementation(async (params) => {
+      const event = (params as { event?: FeishuMessageEvent } | undefined)?.event;
+      if (event?.message.message_id !== "om_blocked") {
         return;
       }
       await new Promise<void>((resolve) => {
