@@ -71,13 +71,17 @@ export function formatUsageSummaryLine(
   opts?: { now?: number; maxProviders?: number },
 ): string | null {
   const providers = summary.providers
-    .filter((entry) => entry.windows.length > 0 && !entry.error)
+    .filter((entry) => !entry.error && (entry.windows.length > 0 || entry.plan))
     .slice(0, opts?.maxProviders ?? summary.providers.length);
   if (providers.length === 0) {
     return null;
   }
 
   const parts = providers.map((entry) => {
+    // Plan-only providers (e.g. credit-balance APIs with no quota windows)
+    if (entry.windows.length === 0) {
+      return `${entry.displayName} ${entry.plan}`;
+    }
     const window = entry.windows.reduce((best, next) =>
       next.usedPercent > best.usedPercent ? next : best,
     );
@@ -99,7 +103,10 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
       continue;
     }
     if (entry.windows.length === 0) {
-      lines.push(`  ${entry.displayName}${planSuffix}: no data`);
+      // If the plan field carries the data (e.g. credit balance), it's already
+      // shown via planSuffix — don't append ": no data" in that case.
+      const suffix = entry.plan ? "" : ": no data";
+      lines.push(`  ${entry.displayName}${planSuffix}${suffix}`);
       continue;
     }
     lines.push(`  ${entry.displayName}${planSuffix}`);
