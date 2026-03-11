@@ -161,7 +161,6 @@ export const MessagesSchema = z
         enabled: z.boolean().optional(),
         emojis: z
           .object({
-            listening: z.string().optional(),
             thinking: z.string().optional(),
             tool: z.string().optional(),
             coding: z.string().optional(),

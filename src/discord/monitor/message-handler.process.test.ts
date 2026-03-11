@@ -304,7 +304,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     const ctx = await createBaseContext();
     // oxlint-disable-next-line typescript/no-explicit-any
-    const runPromise = runProcessDiscordMessage(ctx);
+    const runPromise = processDiscordMessage(ctx as any);
 
     await vi.advanceTimersByTimeAsync(30_001);
     releaseDispatch();
@@ -344,56 +344,6 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain("🟦");
     expect(emojis).toContain("🏁");
-  });
-
-  it("shows listening reaction for inbound audio before dispatch completes", async () => {
-    let releaseDispatch!: () => void;
-    const dispatchGate = new Promise<void>((resolve) => {
-      releaseDispatch = resolve;
-    });
-    dispatchInboundMessage.mockImplementationOnce(async () => {
-      await dispatchGate;
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createBaseContext({
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          statusReactions: {
-            emojis: { listening: "🎙️" },
-            timing: { debounceMs: 0 },
-          },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      message: {
-        id: "m1",
-        channelId: "c1",
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            id: "att-1",
-            url: "https://invalid.local/voice.ogg",
-            filename: "voice.ogg",
-            size: 12,
-            content_type: "audio/ogg",
-          },
-        ],
-      },
-      discordRestFetch: vi.fn(async () => {
-        throw new Error("fetch blocked in test");
-      }),
-    });
-
-    const runPromise = runProcessDiscordMessage(ctx);
-
-    await vi.waitFor(() => {
-      expect(getReactionEmojis()).toContain("🎙️");
-    });
-
-    releaseDispatch();
-    await runPromise;
   });
 
   it("clears status reactions when dispatch aborts and removeAckAfterReply is enabled", async () => {

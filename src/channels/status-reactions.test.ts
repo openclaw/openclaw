@@ -134,15 +134,6 @@ describe("createStatusReactionController", () => {
     expect(calls).toContainEqual({ method: "set", emoji: "👀" });
   });
 
-  it("should call setReaction with listening emoji immediately", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setListening();
-    await vi.runAllTimersAsync();
-
-    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.listening });
-  });
-
   it("should debounce setThinking and eventually call adapter", async () => {
     const { calls, controller } = createEnabledController();
 
