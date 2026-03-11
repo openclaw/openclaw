@@ -134,6 +134,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Keep the first defined override so higher-priority hooks win.
     modelOverride: acc?.modelOverride ?? next.modelOverride,
     providerOverride: acc?.providerOverride ?? next.providerOverride,
+    thinkingLevelOverride: acc?.thinkingLevelOverride ?? next.thinkingLevelOverride,
   });
 
   const mergeBeforePromptBuild = (

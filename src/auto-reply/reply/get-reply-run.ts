@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { resolveAdaptiveThinking } from "../../agents/adaptive-thinking/index.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import {
@@ -8,6 +7,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { resolveThinkingLevelOverride } from "../../agents/thinking-override.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
@@ -201,7 +201,6 @@ export async function runPreparedReply(
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
-    modelState,
     provider,
     model,
     perMessageQueueMode,
@@ -388,23 +387,20 @@ export async function runPreparedReply(
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
   if (!resolvedThinkLevel) {
-    const adaptiveResolution = await resolveAdaptiveThinking({
+    resolvedThinkLevel = await resolveThinkingLevelOverride({
       cfg,
       provider,
       model,
+      prompt: prefixedBodyBase,
       explicitOverride: undefined,
       sessionOverride: sessionEntry?.thinkingLevel
         ? normalizeThinkLevel(sessionEntry.thinkingLevel)
         : undefined,
-      currentMessage: prefixedBodyBase,
       recentMessages: [threadHistoryBody ?? "", threadStarterBody ?? ""].filter(Boolean),
       attachmentCount: hasMediaAttachment ? 1 : 0,
       catalog: undefined,
-      config: agentCfg?.adaptiveThinking,
       logger: (line) => logVerbose(line),
     });
-    resolvedThinkLevel =
-      adaptiveResolution.thinkingLevel ?? (await modelState.resolveDefaultThinkingLevel());
   }
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;

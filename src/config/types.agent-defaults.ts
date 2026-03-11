@@ -185,14 +185,6 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
-  /** Automatic per-turn thinking selection when no explicit override is present. */
-  adaptiveThinking?: {
-    enabled?: boolean;
-    confidenceThreshold?: number;
-    timeoutMs?: number;
-    evaluatorModel?: string;
-    recentMessages?: number;
-  };
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

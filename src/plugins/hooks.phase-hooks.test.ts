@@ -34,12 +34,22 @@ describe("phase hooks merger", () => {
   });
 
   it("before_model_resolve keeps higher-priority override values", async () => {
-    addTypedHook(registry, "before_model_resolve", "low", () => ({ modelOverride: "gpt-4o" }), 1);
+    addTypedHook(
+      registry,
+      "before_model_resolve",
+      "low",
+      () => ({ modelOverride: "gpt-4o", thinkingLevelOverride: "low" }),
+      1,
+    );
     addTypedHook(
       registry,
       "before_model_resolve",
       "high",
-      () => ({ modelOverride: "llama3.3:8b", providerOverride: "ollama" }),
+      () => ({
+        modelOverride: "llama3.3:8b",
+        providerOverride: "ollama",
+        thinkingLevelOverride: "medium",
+      }),
       10,
     );
 
@@ -48,6 +58,7 @@ describe("phase hooks merger", () => {
 
     expect(result?.modelOverride).toBe("llama3.3:8b");
     expect(result?.providerOverride).toBe("ollama");
+    expect(result?.thinkingLevelOverride).toBe("medium");
   });
 
   it("before_prompt_build concatenates prependContext and preserves systemPrompt precedence", async () => {

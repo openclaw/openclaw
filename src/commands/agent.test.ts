@@ -8,6 +8,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resolveThinkingLevelOverride } from "../agents/thinking-override.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -41,6 +42,28 @@ vi.mock("../agents/skills.js", () => ({
 vi.mock("../agents/skills/refresh.js", () => ({
   getSkillsSnapshotVersion: vi.fn(() => 0),
 }));
+
+vi.mock("../agents/thinking-override.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/thinking-override.js")>();
+  return {
+    ...actual,
+    resolveThinkingLevelOverride: vi.fn(async (params) => {
+      if (params.explicitOverride) {
+        return params.explicitOverride;
+      }
+      if (params.sessionOverride) {
+        return params.sessionOverride;
+      }
+      const resolved = modelSelectionModule.resolveThinkingDefault({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        catalog: params.catalog,
+      });
+      return resolved;
+    }),
+  };
+});
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -858,12 +881,11 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses adaptive thinking when no explicit or session override is present", async () => {
+  it("uses plugin thinking override when no explicit or session override is present", async () => {
+    vi.mocked(resolveThinkingLevelOverride).mockResolvedValueOnce("medium");
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store, {
-        adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 },
-      });
+      mockConfig(home, store);
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
           id: "claude-opus-4-5",
@@ -882,18 +904,19 @@ describe("agentCommand", () => {
     });
   });
 
-  it("raises thinking for debugging tasks when adaptive thinking is enabled", async () => {
+  it("applies raised plugin thinking for debugging tasks", async () => {
+    vi.mocked(resolveThinkingLevelOverride).mockResolvedValueOnce("medium");
     const callArgs = await runEmbeddedWithTempConfig({
       args: { message: "Debug this failing test and inspect the repo files", to: "+1333" },
       agentOverrides: {
         thinkingDefault: "low",
-        adaptiveThinking: { enabled: true },
       },
     });
     expect(callArgs?.thinkLevel).toBe("medium");
   });
 
-  it("keeps explicit thinking override above adaptive thinking", async () => {
+  it("keeps explicit thinking override above plugin override", async () => {
+    vi.mocked(resolveThinkingLevelOverride).mockResolvedValueOnce("high");
     const callArgs = await runEmbeddedWithTempConfig({
       args: {
         message: "Debug this failing test and inspect the repo files",
@@ -902,7 +925,6 @@ describe("agentCommand", () => {
       },
       agentOverrides: {
         thinkingDefault: "low",
-        adaptiveThinking: { enabled: true },
       },
     });
     expect(callArgs?.thinkLevel).toBe("high");

@@ -410,6 +410,20 @@ export type PluginHookAgentContext = {
 export type PluginHookBeforeModelResolveEvent = {
   /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
+  /** Resolved provider for this run before plugin overrides. */
+  provider?: string;
+  /** Resolved model for this run before plugin overrides. */
+  model?: string;
+  /** Current default thinking level after model/provider config resolution. */
+  currentThinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  /** Explicit one-shot/user override when present. */
+  explicitThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  /** Persisted session override when present. */
+  sessionThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  /** Recent message bodies made available for lightweight per-run policy decisions. */
+  recentMessages?: string[];
+  /** Count of inbound attachments associated with this run. */
+  attachmentCount?: number;
 };
 
 export type PluginHookBeforeModelResolveResult = {
@@ -417,6 +431,8 @@ export type PluginHookBeforeModelResolveResult = {
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "ollama" */
   providerOverride?: string;
+  /** Override the resolved thinking level for this run. */
+  thinkingLevelOverride?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 };
 
 // before_prompt_build hook

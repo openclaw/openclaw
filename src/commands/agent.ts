@@ -7,7 +7,6 @@ import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
-import { resolveAdaptiveThinking } from "../agents/adaptive-thinking/index.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -41,6 +40,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
+import { resolveThinkingLevelOverride } from "../agents/thinking-override.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
@@ -1024,20 +1024,18 @@ async function agentCommandInternal(
         modelCatalog = await loadModelCatalog({ config: cfg });
         catalogForThinking = modelCatalog;
       }
-      const adaptiveResolution = await resolveAdaptiveThinking({
+      resolvedThinkLevel = await resolveThinkingLevelOverride({
         cfg,
         provider,
         model,
+        prompt: body,
         explicitOverride: thinkOnce ?? thinkOverride,
         sessionOverride: persistedThinking,
-        currentMessage: body,
         recentMessages: [],
         attachmentCount: opts.images?.length ?? 0,
         catalog: catalogForThinking,
-        config: agentCfg?.adaptiveThinking,
         logger: (line) => log.debug(line),
       });
-      resolvedThinkLevel = adaptiveResolution.thinkingLevel;
     }
     if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);

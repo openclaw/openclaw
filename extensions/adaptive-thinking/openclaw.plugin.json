@@ -1,0 +1,25 @@
+{
+  "id": "adaptive-thinking",
+  "name": "Adaptive Thinking",
+  "description": "Per-run thinking override plugin that adapts reasoning level from turn context.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "confidenceThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.7 },
+      "recentMessages": { "type": "integer", "minimum": 0, "default": 3 }
+    }
+  },
+  "uiHints": {
+    "enabled": { "label": "Enable Adaptive Thinking" },
+    "confidenceThreshold": {
+      "label": "Confidence Threshold",
+      "help": "Only apply plugin-selected thinking when confidence meets this threshold."
+    },
+    "recentMessages": {
+      "label": "Recent Messages",
+      "help": "How many recent messages to inspect for context signals."
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThinkingLevelOverride } from "../../agents/thinking-override.js";
 import { runPreparedReply } from "./get-reply-run.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -10,6 +11,13 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
+}));
+
+vi.mock("../../agents/thinking-override.js", () => ({
+  resolveThinkingLevelOverride: vi.fn(
+    async ({ sessionOverride, cfg }) =>
+      sessionOverride ?? cfg?.agents?.defaults?.thinkingDefault ?? "off",
+  ),
 }));
 
 vi.mock("../../config/sessions.js", () => ({
@@ -208,7 +216,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
-  it("uses adaptive thinking when there is no inline or session override", async () => {
+  it("uses plugin thinking override when there is no inline or session override", async () => {
+    vi.mocked(resolveThinkingLevelOverride).mockResolvedValueOnce("medium");
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -231,11 +240,9 @@ describe("runPreparedReply media-only handling", () => {
         cfg: {
           session: {},
           channels: {},
-          agents: { defaults: { adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 } } },
+          agents: { defaults: { thinkingDefault: "off" } },
         },
-        agentCfg: {
-          adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 },
-        },
+        agentCfg: {},
       }),
     );
 

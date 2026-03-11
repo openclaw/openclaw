@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resolveThinkingLevelOverride } from "../agents/thinking-override.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -14,6 +15,26 @@ import {
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
+
+vi.mock("../agents/thinking-override.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/thinking-override.js")>();
+  return {
+    ...actual,
+    resolveThinkingLevelOverride: vi.fn(async (params) => {
+      if (params.sessionOverride) {
+        return params.sessionOverride;
+      }
+      return (
+        (await import("../agents/model-selection.js")).resolveThinkingDefault({
+          cfg: params.cfg,
+          provider: params.provider,
+          model: params.model,
+          catalog: params.catalog,
+        }) ?? "off"
+      );
+    }),
+  };
+});
 
 function makeDeps(): CliDeps {
   return {
@@ -524,7 +545,8 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("uses adaptive thinking for debugging cron turns when enabled", async () => {
+  it("uses plugin thinking override for debugging cron turns", async () => {
+    vi.mocked(resolveThinkingLevelOverride).mockResolvedValueOnce("medium");
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
@@ -536,9 +558,6 @@ describe("runCronIsolatedAgentTurn", () => {
       ]);
 
       await runCronTurn(home, {
-        cfgOverrides: {
-          agents: { defaults: { adaptiveThinking: { enabled: true } } },
-        },
         jobPayload: {
           kind: "agentTurn",
           message: "debug this failing test and inspect the repo files",
@@ -552,7 +571,8 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("uses adaptive thinking for cron turns when no job or hook override is present", async () => {
+  it("uses plugin thinking override for cron turns when no job or hook override is present", async () => {
+    vi.mocked(resolveThinkingLevelOverride).mockResolvedValueOnce("medium");
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
@@ -564,13 +584,6 @@ describe("runCronIsolatedAgentTurn", () => {
       ]);
 
       await runCronTurn(home, {
-        cfgOverrides: {
-          agents: {
-            defaults: {
-              adaptiveThinking: { enabled: true, confidenceThreshold: 0.8 },
-            },
-          },
-        },
         jobPayload: {
           kind: "agentTurn",
           message: "debug this failing test in the TypeScript repo",

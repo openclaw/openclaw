@@ -144,16 +144,6 @@ export const AgentDefaultsSchema = z
         z.literal("adaptive"),
       ])
       .optional(),
-    adaptiveThinking: z
-      .object({
-        enabled: z.boolean().optional(),
-        confidenceThreshold: z.number().min(0).max(1).optional(),
-        timeoutMs: z.number().int().positive().optional(),
-        evaluatorModel: z.string().optional(),
-        recentMessages: z.number().int().nonnegative().optional(),
-      })
-      .strict()
-      .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

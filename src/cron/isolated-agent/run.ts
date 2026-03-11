@@ -1,4 +1,3 @@
-import { resolveAdaptiveThinking } from "../../agents/adaptive-thinking/index.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -29,6 +28,7 @@ import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
 } from "../../agents/subagent-registry.js";
+import { resolveThinkingLevelOverride } from "../../agents/thinking-override.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -415,18 +415,16 @@ export async function runCronIsolatedAgentTurn(params: {
   );
   let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
-    const adaptiveResolution = await resolveAdaptiveThinking({
+    thinkLevel = await resolveThinkingLevelOverride({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
+      prompt: params.message,
       sessionOverride: sessionThink,
-      currentMessage: params.message,
       recentMessages: [],
       attachmentCount: 0,
       catalog: await loadCatalog(),
-      config: cfgWithAgentDefaults.agents?.defaults?.adaptiveThinking,
     });
-    thinkLevel = adaptiveResolution.thinkingLevel;
   }
   if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     logWarn(
