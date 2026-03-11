@@ -51,6 +51,20 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts tavily provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "tavily",
+        providerConfig: {
+          apiKey: "tvly-test-key", // pragma: allowlist secret
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts brave llm-context mode config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
@@ -91,6 +105,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.TAVILY_API_KEY;
   });
 
   afterEach(() => {
@@ -115,6 +130,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {
     process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("auto-detects tavily when only TAVILY_API_KEY is set", () => {
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("tavily");
   });
 
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {
@@ -147,21 +167,37 @@ describe("web search provider auto-detection", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("brave");
   });
 
-  it("gemini wins over grok, kimi, and perplexity when brave unavailable", () => {
+  it("gemini wins over grok, kimi, tavily, and perplexity when brave unavailable", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("gemini");
   });
 
-  it("grok wins over kimi and perplexity when brave and gemini unavailable", () => {
+  it("grok wins over kimi, tavily, and perplexity when brave and gemini unavailable", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("grok");
+  });
+
+  it("kimi wins over tavily and perplexity when brave, gemini, and grok unavailable", () => {
+    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
+    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("tavily wins over perplexity when both available", () => {
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
+    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("tavily");
   });
 
   it("explicit provider always wins regardless of keys", () => {
