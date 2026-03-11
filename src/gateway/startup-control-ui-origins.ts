@@ -8,8 +8,13 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
   writeConfig: (config: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
+  bindOverride?: GatewayNonLoopbackBindMode;
+  defaultPort?: number;
 }): Promise<OpenClawConfig> {
-  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config);
+  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
+    bindOverride: params.bindOverride,
+    defaultPort: params.defaultPort,
+  });
   if (!seeded.seededOrigins || !seeded.bind) {
     return params.config;
   }
