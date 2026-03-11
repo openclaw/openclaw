@@ -95,6 +95,27 @@ describe("folder-backed snapshot backup commands", () => {
     expect(await fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf8")).toBe("# soul\n");
   });
 
+  it("lists snapshots without encryption key configured", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+
+    // Push a snapshot first (requires key).
+    const pushed = await backupPushCommand(runtime, {}, { nowMs: Date.UTC(2026, 2, 10) });
+    expect(pushed.snapshotId).toContain("snap_");
+
+    // Remove the encryption key from config, keeping only target.
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ backup: { target: targetDir } }),
+      "utf8",
+    );
+
+    // Listing should succeed even without encryption key.
+    const listed = await backupListCommand(runtime, {});
+    expect(listed.installationId).toBe(pushed.installationId);
+    expect(listed.snapshots).toHaveLength(1);
+    expect(listed.snapshots[0]?.snapshotId).toBe(pushed.snapshotId);
+  });
+
   it("emits a single JSON payload when snapshot push runs with --json", async () => {
     await backupPushCommand(runtime, { json: true }, { nowMs: Date.UTC(2026, 2, 10) });
 

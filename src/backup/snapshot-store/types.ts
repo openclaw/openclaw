@@ -181,6 +181,11 @@ export type BackupSnapshotListEntry = Pick<
   ciphertextBytes: number;
 };
 
+/** Read-only store interface for listing snapshots without decryption. */
+export type BackupSnapshotListStore = {
+  listSnapshots(params: { installationId: string }): Promise<BackupSnapshotEnvelope[]>;
+};
+
 export type BackupSnapshotStore = {
   uploadSnapshot(params: {
     installationId: string;

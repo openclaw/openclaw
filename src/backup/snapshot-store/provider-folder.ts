@@ -3,11 +3,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import type { ResolvedSnapshotStoreConfig } from "./config.js";
+import type { ResolvedSnapshotStoreConfig, ResolvedSnapshotStoreTargetConfig } from "./config.js";
 import { isValidInstallationId } from "./installation-id.js";
 import {
   parseBackupSnapshotEnvelope,
   type BackupSnapshotEnvelope,
+  type BackupSnapshotListStore,
   type BackupSnapshotStore,
 } from "./types.js";
 
@@ -77,6 +78,45 @@ async function readEnvelopeFile(filePath: string): Promise<BackupSnapshotEnvelop
   return parseBackupSnapshotEnvelope(raw);
 }
 
+async function listSnapshotsFromDir(
+  targetDir: string,
+  params: { installationId: string },
+): Promise<BackupSnapshotEnvelope[]> {
+  const root = installationRoot(targetDir, params.installationId);
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(root);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  const envelopes = entries.filter((entry) => entry.endsWith(".envelope.json")).toSorted();
+  const listed = await Promise.all(
+    envelopes.map(async (entry) => {
+      const filePath = path.join(root, entry);
+      let raw: string;
+      try {
+        raw = await fs.readFile(filePath, "utf8");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      }
+      try {
+        return parseBackupSnapshotEnvelope(raw);
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return listed.filter((entry): entry is BackupSnapshotEnvelope => entry !== undefined);
+}
+
 export function createFolderSnapshotStore(
   config: ResolvedSnapshotStoreConfig,
 ): BackupSnapshotStore {
@@ -93,39 +133,7 @@ export function createFolderSnapshotStore(
     },
 
     async listSnapshots(params) {
-      const root = installationRoot(config.targetDir, params.installationId);
-      let entries: string[] = [];
-      try {
-        entries = await fs.readdir(root);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException | undefined)?.code;
-        if (code === "ENOENT") {
-          return [];
-        }
-        throw error;
-      }
-      const envelopes = entries.filter((entry) => entry.endsWith(".envelope.json")).toSorted();
-      const listed = await Promise.all(
-        envelopes.map(async (entry) => {
-          const filePath = path.join(root, entry);
-          let raw: string;
-          try {
-            raw = await fs.readFile(filePath, "utf8");
-          } catch (error) {
-            const code = (error as NodeJS.ErrnoException | undefined)?.code;
-            if (code === "ENOENT") {
-              return undefined;
-            }
-            throw error;
-          }
-          try {
-            return parseBackupSnapshotEnvelope(raw);
-          } catch {
-            return undefined;
-          }
-        }),
-      );
-      return listed.filter((entry): entry is BackupSnapshotEnvelope => entry !== undefined);
+      return listSnapshotsFromDir(config.targetDir, params);
     },
 
     async downloadSnapshot(params) {
@@ -144,6 +152,17 @@ export function createFolderSnapshotStore(
       await fs.copyFile(storedEnvelopePath, params.envelopeOutputPath);
       await fs.copyFile(storedPayloadPath, params.payloadOutputPath);
       return envelope;
+    },
+  };
+}
+
+/** Create a list-only store that does not require an encryption key. */
+export function createFolderSnapshotListStore(
+  config: ResolvedSnapshotStoreTargetConfig,
+): BackupSnapshotListStore {
+  return {
+    async listSnapshots(params) {
+      return listSnapshotsFromDir(config.targetDir, params);
     },
   };
 }

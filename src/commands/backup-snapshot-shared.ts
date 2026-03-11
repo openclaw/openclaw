@@ -4,13 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import {
   resolveSnapshotStoreConfig,
+  resolveSnapshotStoreTargetConfig,
   type ResolvedSnapshotStoreConfig,
+  type ResolvedSnapshotStoreTargetConfig,
 } from "../backup/snapshot-store/config.js";
 import { resolveInstallationId } from "../backup/snapshot-store/installation-id.js";
-import { createSnapshotStore } from "../backup/snapshot-store/provider.js";
+import { createSnapshotStore, createSnapshotListStore } from "../backup/snapshot-store/provider.js";
 import type {
   BackupSnapshotEnvelope,
   BackupSnapshotListEntry,
+  BackupSnapshotListStore,
   BackupSnapshotStore,
 } from "../backup/snapshot-store/types.js";
 import { resolveStateDir, readConfigFileSnapshot } from "../config/config.js";
@@ -38,11 +41,42 @@ export async function loadResolvedSnapshotBackup(params: { env?: NodeJS.ProcessE
   };
 }
 
+/**
+ * Resolve only the backup target directory and state dir, without requiring
+ * the encryption key. Used by read-only commands (e.g. backup list) that
+ * only read envelope metadata.
+ */
+export async function loadResolvedSnapshotBackupTarget(params: {
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  snapshotStore: ResolvedSnapshotStoreTargetConfig;
+  stateDir: string;
+}> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    throw new Error("Config is invalid. Backup snapshot commands require a valid config file.");
+  }
+  return {
+    snapshotStore: await resolveSnapshotStoreTargetConfig({
+      config: snapshot.config,
+      env: params.env ?? process.env,
+    }),
+    stateDir: resolveStateDir(params.env ?? process.env),
+  };
+}
+
 export async function resolveSnapshotStore(params: {
   snapshotStore: ResolvedSnapshotStoreConfig;
   deps?: BackupSnapshotDeps;
 }): Promise<BackupSnapshotStore> {
   return params.deps?.storage ?? createSnapshotStore(params.snapshotStore);
+}
+
+export async function resolveSnapshotListStore(params: {
+  snapshotStore: ResolvedSnapshotStoreTargetConfig;
+  deps?: BackupSnapshotDeps;
+}): Promise<BackupSnapshotListStore> {
+  return params.deps?.storage ?? createSnapshotListStore(params.snapshotStore);
 }
 
 export async function resolveCurrentInstallationId(params: {

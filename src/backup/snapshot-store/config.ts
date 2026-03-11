@@ -12,6 +12,11 @@ export type ResolvedSnapshotStoreConfig = {
   encryptionKey: string;
 };
 
+/** Target-only config for read-only operations that do not need decryption. */
+export type ResolvedSnapshotStoreTargetConfig = {
+  targetDir: string;
+};
+
 async function canonicalizePathForContainment(inputPath: string): Promise<string> {
   const resolved = path.resolve(inputPath);
   const suffix: string[] = [];
@@ -39,23 +44,18 @@ function resolveConfiguredBackupSection(cfg: OpenClawConfig): NonNullable<Backup
   return backup;
 }
 
-export async function resolveSnapshotStoreConfig(params: {
+/**
+ * Resolve and validate the backup target directory from config.
+ * Shared by both full config resolution and target-only resolution.
+ */
+async function resolveValidatedTargetDir(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<ResolvedSnapshotStoreConfig> {
+}): Promise<string> {
   const backup = resolveConfiguredBackupSection(params.config);
   const target = backup.target;
   if (!target) {
     throw new Error("backup.target is not configured.");
-  }
-  const encryptionKey = await resolveSecretInputString({
-    config: params.config,
-    value: backup.encryption?.key,
-    env: params.env,
-    normalize: (value) => normalizeSecretInputString(value)?.trim() || undefined,
-  });
-  if (!encryptionKey) {
-    throw new Error("backup.encryption.key is required.");
   }
 
   const targetDir = await canonicalizePathForContainment(resolveUserPath(target));
@@ -70,8 +70,37 @@ export async function resolveSnapshotStoreConfig(params: {
     }
   }
 
-  return {
-    targetDir,
-    encryptionKey,
-  };
+  return targetDir;
+}
+
+export async function resolveSnapshotStoreConfig(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<ResolvedSnapshotStoreConfig> {
+  const backup = resolveConfiguredBackupSection(params.config);
+  const encryptionKey = await resolveSecretInputString({
+    config: params.config,
+    value: backup.encryption?.key,
+    env: params.env,
+    normalize: (value) => normalizeSecretInputString(value)?.trim() || undefined,
+  });
+  if (!encryptionKey) {
+    throw new Error("backup.encryption.key is required.");
+  }
+
+  const targetDir = await resolveValidatedTargetDir(params);
+  return { targetDir, encryptionKey };
+}
+
+/**
+ * Resolve only the target directory, skipping encryption key validation.
+ * Used by read-only operations (e.g. listing snapshots) that only need
+ * envelope metadata from disk and never perform decryption.
+ */
+export async function resolveSnapshotStoreTargetConfig(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<ResolvedSnapshotStoreTargetConfig> {
+  const targetDir = await resolveValidatedTargetDir(params);
+  return { targetDir };
 }

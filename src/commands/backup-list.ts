@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  loadResolvedSnapshotBackup,
-  resolveSnapshotStore,
+  loadResolvedSnapshotBackupTarget,
+  resolveSnapshotListStore,
   resolveCurrentInstallationId,
   toSnapshotListEntry,
   type BackupSnapshotDeps,
@@ -21,7 +21,7 @@ export async function backupListCommand(
   opts: BackupListOptions,
   deps?: BackupSnapshotDeps,
 ): Promise<BackupListResult> {
-  const { snapshotStore, stateDir } = await loadResolvedSnapshotBackup({});
+  const { snapshotStore, stateDir } = await loadResolvedSnapshotBackupTarget({});
   const installationId = await resolveCurrentInstallationId({
     stateDir,
     createIfMissing: false,
@@ -32,7 +32,7 @@ export async function backupListCommand(
     return empty;
   }
 
-  const storage = await resolveSnapshotStore({ snapshotStore, deps });
+  const storage = await resolveSnapshotListStore({ snapshotStore, deps });
   const snapshots = (await storage.listSnapshots({ installationId }))
     .map(toSnapshotListEntry)
     .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
