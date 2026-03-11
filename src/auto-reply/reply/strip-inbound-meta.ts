@@ -129,9 +129,15 @@ export function stripInboundMetadata(text: string): string {
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;
-  let strippedMetadata = false; // Track if we actually stripped any metadata
-  let hasNewFormatMarker = false; // Track if metadata contains _sep marker
   let jsonLines: string[] = []; // Collect JSON lines for structural parsing
+
+  // Track if we stripped metadata from the START of the message (not from middle)
+  // and if that leading metadata contains the _sep marker.
+  // Only leading metadata should trigger separator stripping to prevent
+  // corrupting user content that happens to start with the separator pattern
+  // when the message also contains a quoted metadata block later.
+  let hasLeadingMetadataWithSep = false;
+  let seenUserContent = false; // Have we output any non-metadata content yet?
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -147,11 +153,11 @@ export function stripInboundMetadata(text: string): string {
       const next = lines[i + 1];
       if (next?.trim() !== "```json") {
         result.push(line);
+        seenUserContent = true;
         continue;
       }
       inMetaBlock = true;
       inFencedJson = false;
-      strippedMetadata = true; // We're entering a metadata block
       continue;
     }
 
@@ -168,8 +174,15 @@ export function stripInboundMetadata(text: string): string {
           if (jsonText) {
             try {
               const parsed = JSON.parse(jsonText);
-              if (parsed && typeof parsed === "object" && "_sep" in parsed) {
-                hasNewFormatMarker = true;
+              // Only set the marker if this is LEADING metadata (no user content seen yet)
+              // and the parsed JSON contains the _sep field
+              if (
+                !seenUserContent &&
+                parsed &&
+                typeof parsed === "object" &&
+                "_sep" in parsed
+              ) {
+                hasLeadingMetadataWithSep = true;
               }
             } catch {
               // Invalid JSON - ignore
@@ -188,15 +201,20 @@ export function stripInboundMetadata(text: string): string {
       }
       // Unexpected non-blank line outside a fence — treat as user content.
       inMetaBlock = false;
+      result.push(line);
+      seenUserContent = true;
+      continue;
     }
 
     result.push(line);
+    seenUserContent = true;
   }
 
-  // Only strip the separator if we actually stripped metadata AND the metadata
-  // contains the new format marker (_sep). This prevents corrupting legacy user
-  // content that happens to start with the separator pattern.
-  if (strippedMetadata && hasNewFormatMarker) {
+  // Only strip the separator if we stripped LEADING metadata with the _sep marker.
+  // This prevents corrupting user content that:
+  // 1. Starts with the separator pattern AND
+  // 2. Contains a quoted metadata block with _sep in the middle
+  if (hasLeadingMetadataWithSep) {
     // Skip any leading blank lines before checking for separator.
     // The metadata blocks end with a blank line, so after stripping metadata
     // we may have leading blanks before the "---" separator.
