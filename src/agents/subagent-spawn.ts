@@ -422,9 +422,8 @@ export async function spawnSubagentDirect(
 
   // Normalize workspace path (~/ expansion, relative-to-absolute, null byte stripping)
   // to ensure session metadata matches the real execution directory.
-  const normalizedTargetWorkspace = targetAgentConfig?.workspace
-    ? stripNullBytes(resolveUserPath(targetAgentConfig.workspace.trim()))
-    : undefined;
+  const trimmed = targetAgentConfig?.workspace?.trim();
+  const normalizedTargetWorkspace = trimmed ? stripNullBytes(resolveUserPath(trimmed)) : undefined;
 
   const spawnDepthPatchError = await patchChildSession({
     spawnDepth: childDepth,
