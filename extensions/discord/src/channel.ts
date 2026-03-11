@@ -49,7 +49,9 @@ const discordMessageActions: ChannelMessageActionAdapter = {
   handleAction: async (ctx) => {
     const ma = getDiscordRuntime().channel.discord.messageActions;
     if (!ma?.handleAction) {
-      throw new Error("Discord message actions not available");
+      throw new Error(
+        "Discord message actions not available. Ensure Discord is properly configured and the gateway is running.",
+      );
     }
     return ma.handleAction(ctx);
   },
