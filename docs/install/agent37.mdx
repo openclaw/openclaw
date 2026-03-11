@@ -2,46 +2,52 @@
 title: Deploy on Agent37
 ---
 
-Deploy OpenClaw on Agent37 with managed hosting and finish setup in your browser.
-Agent37 provisions an isolated OpenClaw instance for you, including HTTPS and terminal
-access, so you can skip VM setup and go straight to OpenClaw.
+Deploy OpenClaw on Agent37 with managed hosting and start using it from the Agent37
+dashboard. Agent37 provisions the instance for you, so there is no separate OpenClaw
+server setup flow to complete.
 
 ## How to get started
 
 1. Open [Agent37 OpenClaw](https://www.agent37.com/openclaw).
 2. Sign up or log in to Agent37.
-3. Choose a plan and complete checkout.
-4. Wait for your instance to finish provisioning. Agent37 says access is typically ready
-   in about 30 to 60 seconds.
-5. Open the instance URL shown in your Agent37 dashboard.
-6. Complete the OpenClaw setup flow at `/setup`.
-7. Open the Control UI at `/openclaw`.
+3. Go to the [Agent37 dashboard](https://www.agent37.com/dashboard).
+4. Click **Create Bot** to launch a new OpenClaw instance.
+5. Wait about a minute for the bot to finish provisioning.
+6. In the bot row, click **Web Chat** to start chatting.
+7. Click **Terminal** any time you want shell access to that instance.
 
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- HTTPS-enabled public URL
-- Web setup wizard at `/setup`
-- Full terminal or shell access from the Agent37 dashboard
+- Agent37 dashboard with one-click bot launch
+- `Web Chat` button for immediate access
+- `Terminal` button for shell access to the running instance
 - Managed shared infrastructure, so you do not need to provision your own VM
 
-## Setup flow
+## Dashboard flow
 
-1. Open the URL for your instance from the Agent37 dashboard.
-2. Visit `/setup` on that URL.
-3. If your instance prompts for a setup password, use the password configured for that instance.
-4. Choose a model or auth provider and paste your key.
-5. Optional: add Telegram, Discord, Slack, or other channel tokens.
-6. Click **Run setup**.
-7. Open the Control UI at `/openclaw`.
+After the instance is created, Agent37 shows it in the dashboard with actions such as:
+
+- **Manage** for instance controls
+- **Web Chat** to open the hosted chat UI
+- **Terminal** to open a shell in the bot's machine
+
+That means the practical setup flow is just:
+
+1. Sign up.
+2. Open the dashboard.
+3. Launch the bot.
+4. Wait about one minute.
+5. Click **Web Chat** and use OpenClaw.
 
 ## Terminal access
 
-Agent37 includes terminal access for your OpenClaw instance. That gives you a path to:
+The **Terminal** button opens shell access to the running machine for that bot. That gives
+you a path to:
 
 - inspect logs
 - run `openclaw` CLI commands
-- approve device pairings if needed
+- make manual changes inside the instance if you want them
 - export data before migrating away from Agent37
 
 ## Backup and migration
@@ -50,7 +56,7 @@ OpenClaw's standard backup export is available at:
 
 - `https://<your-agent37-instance>/setup/export`
 
-Use the instance URL from the Agent37 dashboard in place of `<your-agent37-instance>`.
+Use the hosted URL for your bot in place of `<your-agent37-instance>`.
 This lets you move your state and workspace to another OpenClaw host later.
 
 ## Notes
