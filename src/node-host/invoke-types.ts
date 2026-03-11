@@ -10,6 +10,8 @@ export type SystemRunParams = {
   needsScreenRecording?: boolean | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  security?: string | null;
+  ask?: string | null;
   approved?: boolean | null;
   approvalDecision?: string | null;
   runId?: string | null;

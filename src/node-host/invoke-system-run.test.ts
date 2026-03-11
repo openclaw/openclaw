@@ -318,6 +318,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     cwd?: string;
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
+    forwardedSecurity?: "deny" | "full" | "allowlist";
+    forwardedAsk?: "off" | "on-miss" | "always";
     approved?: boolean;
     runCommand?: HandleSystemRunInvokeOptions["runCommand"];
     runViaMacAppExecHost?: HandleSystemRunInvokeOptions["runViaMacAppExecHost"];
@@ -373,14 +375,26 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd: params.cwd,
         approved: params.approved ?? false,
         sessionKey: "agent:main:main",
+        security: params.forwardedSecurity,
+        ask: params.forwardedAsk,
       },
       skillBins: {
         current: params.skillBinsCurrent ?? (async () => []),
       },
       execHostEnforced: false,
       execHostFallbackAllowed: true,
-      resolveExecSecurity: () => params.security ?? "full",
-      resolveExecAsk: () => params.ask ?? "off",
+      resolveExecSecurity: (value) => {
+        if (value === "deny" || value === "allowlist" || value === "full") {
+          return value;
+        }
+        return params.security ?? "full";
+      },
+      resolveExecAsk: (value) => {
+        if (value === "off" || value === "on-miss" || value === "always") {
+          return value;
+        }
+        return params.ask ?? "off";
+      },
       isCmdExeInvocation: () => false,
       sanitizeEnv: () => undefined,
       runCommand,
@@ -407,6 +421,24 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     expect(runViaMacAppExecHost).not.toHaveBeenCalled();
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expectInvokeOk(sendInvokeResult, { payloadContains: "local-ok" });
+  });
+
+  it("honors forwarded security/ask policy over node-host defaults", async () => {
+    const { runCommand, sendNodeEvent, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "allowlist",
+      ask: "on-miss",
+      forwardedSecurity: "full",
+      forwardedAsk: "off",
+    });
+
+    expect(sendNodeEvent).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "exec.denied",
+      expect.objectContaining({ reason: "approval-required" }),
+    );
     expect(runCommand).toHaveBeenCalledTimes(1);
     expectInvokeOk(sendInvokeResult, { payloadContains: "local-ok" });
   });

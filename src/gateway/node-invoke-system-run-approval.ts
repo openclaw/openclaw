@@ -1,3 +1,6 @@
+import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { loadConfig } from "../config/config.js";
+import { normalizeExecAsk, normalizeExecSecurity } from "../infra/exec-approvals.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
@@ -20,6 +23,8 @@ type SystemRunParamsLike = {
   needsScreenRecording?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  security?: unknown;
+  ask?: unknown;
   approved?: unknown;
   approvalDecision?: unknown;
   runId?: unknown;
@@ -88,6 +93,30 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
   return next;
 }
 
+function applyGatewayExecPolicy(next: Record<string, unknown>): void {
+  const agentId = normalizeString(next.agentId);
+  const cfg = loadConfig();
+  const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
+  const security =
+    normalizeExecSecurity(
+      typeof agentExec?.security === "string"
+        ? agentExec.security
+        : typeof cfg.tools?.exec?.security === "string"
+          ? cfg.tools.exec.security
+          : undefined,
+    ) ?? "deny";
+  const ask =
+    normalizeExecAsk(
+      typeof agentExec?.ask === "string"
+        ? agentExec.ask
+        : typeof cfg.tools?.exec?.ask === "string"
+          ? cfg.tools.exec.ask
+          : undefined,
+    ) ?? "on-miss";
+  next.security = security;
+  next.ask = ask;
+}
+
 /**
  * Gate `system.run` approval flags (`approved`, `approvalDecision`) behind a real
  * `exec.approval.*` record. This prevents users with only `operator.write` from
@@ -115,6 +144,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   // Always strip control fields from user input. If the override is allowed,
   // we re-add trusted fields based on the gateway approval record.
   const next: Record<string, unknown> = pickSystemRunParams(obj);
+  applyGatewayExecPolicy(next);
 
   if (!wantsApprovalOverride) {
     const cmdTextResolution = resolveSystemRunCommandRequest({
@@ -265,6 +295,9 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   if (!approvalMatch.ok) {
     return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }
+
+  // Re-apply policy in case runtime context rewrote agentId/session-bound fields.
+  applyGatewayExecPolicy(next);
 
   // Normal path: enforce the decision recorded by the gateway.
   if (snapshot.decision === "allow-once") {

@@ -78,6 +78,8 @@ type SystemRunParsePhase = {
   cwd: string | undefined;
   timeoutMs: number | undefined;
   needsScreenRecording: boolean;
+  security: string | undefined;
+  ask: string | undefined;
   approved: boolean;
   suppressNotifyOnExit: boolean;
 };
@@ -241,6 +243,8 @@ async function parseSystemRunPhase(
     cwd: opts.params.cwd?.trim() || undefined,
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
+    security: typeof opts.params.security === "string" ? opts.params.security : undefined,
+    ask: typeof opts.params.ask === "string" ? opts.params.ask : undefined,
     approved: opts.params.approved === true,
     suppressNotifyOnExit,
   };
@@ -255,9 +259,9 @@ async function evaluateSystemRunPolicyPhase(
     ? resolveAgentConfig(cfg, parsed.agentId)?.tools?.exec
     : undefined;
   const configuredSecurity = opts.resolveExecSecurity(
-    agentExec?.security ?? cfg.tools?.exec?.security,
+    parsed.security ?? agentExec?.security ?? cfg.tools?.exec?.security,
   );
-  const configuredAsk = opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
+  const configuredAsk = opts.resolveExecAsk(parsed.ask ?? agentExec?.ask ?? cfg.tools?.exec?.ask);
   const approvals = resolveExecApprovals(parsed.agentId, {
     security: configuredSecurity,
     ask: configuredAsk,

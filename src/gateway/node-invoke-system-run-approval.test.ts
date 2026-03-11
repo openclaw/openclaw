@@ -363,6 +363,24 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(result);
   });
 
+  test("injects gateway-resolved exec policy for non-approval system.run calls", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+      },
+      nodeId: "node-1",
+      client,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const params = result.params as Record<string, unknown>;
+    expect(["deny", "allowlist", "full"]).toContain(params.security);
+    expect(["off", "on-miss", "always"]).toContain(params.ask);
+  });
+
   test("consumes allow-once approvals and blocks same runId replay", async () => {
     const approvalManager = new ExecApprovalManager();
     const runId = "approval-replay-1";
