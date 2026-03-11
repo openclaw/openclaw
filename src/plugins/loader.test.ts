@@ -429,13 +429,22 @@ function expectPluginSourcePrecedence(
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
-  const loaded = entries.find((entry) => entry.status === "loaded");
-  const overridden = entries.find((entry) => entry.status === "disabled");
+  expect(entries, scenario.label).toHaveLength(1);
+  const loaded = entries[0];
   expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
-  expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
-  if (scenario.expectedDisabledError) {
-    expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
-  }
+  expect(loaded?.status, scenario.label).toBe("loaded");
+  const expectedWarning =
+    scenario.expectedDisabledError ??
+    `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
+  expect(
+    registry.diagnostics.some(
+      (diag) =>
+        diag.level === "warn" &&
+        diag.pluginId === scenario.pluginId &&
+        diag.message.includes(expectedWarning),
+    ),
+    scenario.label,
+  ).toBe(true);
 }
 
 function expectPluginOriginAndStatus(params: {
