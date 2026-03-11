@@ -381,6 +381,100 @@ describe("promptAndConfigureVllm", () => {
     );
   });
 
+  it("allocates vllm-2 when a differently cased managed key already exists", async () => {
+    buildVllmProvider.mockResolvedValue({
+      baseUrl: "http://gpu-b:8000/v1",
+      api: "openai-completions",
+      models: [makeModel("model-c")],
+    });
+
+    const select = vi.fn().mockResolvedValueOnce("__add_endpoint__");
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("http://gpu-b:8000/v1")
+      .mockResolvedValueOnce("sk-vllm-b"); // pragma: allowlist secret
+    const multiselect = vi.fn().mockResolvedValue(["model-c"]);
+    const prompter = makePrompter({ select, text: text as never, multiselect });
+    const config = {
+      models: {
+        providers: {
+          VLLM: {
+            baseUrl: "http://gpu-a:8000/v1",
+            api: "openai-completions",
+            models: [makeModel("model-a")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptAndConfigureVllm({
+      cfg: config,
+      prompter,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result.modelRef).toBe("vllm-2/model-c");
+    expect(result.config.models?.providers?.VLLM).toBeDefined();
+    expect(result.config.models?.providers?.["vllm-2"]).toBeDefined();
+  });
+
+  it("matches stored vLLM auth profiles case-insensitively", async () => {
+    ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "vllm:default": {
+          type: "api_key",
+          provider: "vllm",
+          key: "stored-vllm-key", // pragma: allowlist secret
+          metadata: { kind: "vllm", baseUrl: "http://gpu-box:8000/v1" },
+        },
+      },
+    });
+    buildVllmProvider.mockResolvedValue({
+      baseUrl: "http://gpu-box:8000/v1",
+      api: "openai-completions",
+      models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+    });
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__manage_endpoint__")
+      .mockResolvedValueOnce("VLLM")
+      .mockResolvedValueOnce("__endpoint_update__");
+    const text = vi.fn().mockResolvedValueOnce("http://gpu-box:8000/v1").mockResolvedValueOnce("");
+    const multiselect = vi.fn().mockResolvedValue(["meta-llama/Meta-Llama-3-8B-Instruct"]);
+    const prompter = makePrompter({ select, text: text as never, multiselect });
+    const config = {
+      models: {
+        providers: {
+          VLLM: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            models: [makeModel("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptAndConfigureVllm({
+      cfg: config,
+      prompter,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(text.mock.calls[1]?.[0]?.message).toContain("blank to keep current");
+    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "vllm:default",
+      }),
+    );
+    expect(buildVllmProvider).toHaveBeenCalledWith({
+      baseUrl: "http://gpu-box:8000/v1",
+      apiKey: "stored-vllm-key", // pragma: allowlist secret
+    });
+    expect(result.modelRef).toBe("VLLM/meta-llama/Meta-Llama-3-8B-Instruct");
+  });
+
   it("lets the user exit after deleting the last vLLM endpoint", async () => {
     ensureAuthProfileStore.mockReturnValue({
       version: 1,

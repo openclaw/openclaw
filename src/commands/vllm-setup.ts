@@ -60,6 +60,11 @@ function isManagedVllmProviderKey(key: string): boolean {
   return normalized === "vllm" || normalized.startsWith("vllm-");
 }
 
+function normalizeManagedVllmProviderKey(key: string): string | undefined {
+  const normalized = key.trim().toLowerCase();
+  return isManagedVllmProviderKey(normalized) ? normalized : undefined;
+}
+
 function createManualModelDefinition(id: string): ModelDefinitionConfig {
   return {
     id,
@@ -120,8 +125,12 @@ function collectManagedVllmProviders(params: {
     ) {
       continue;
     }
-    if (!profileInfo.has(credential.provider)) {
-      profileInfo.set(credential.provider, { profileId, credential });
+    const normalizedProviderKey = normalizeManagedVllmProviderKey(credential.provider);
+    if (!normalizedProviderKey) {
+      continue;
+    }
+    if (!profileInfo.has(normalizedProviderKey)) {
+      profileInfo.set(normalizedProviderKey, { profileId, credential });
     }
   }
 
@@ -130,10 +139,16 @@ function collectManagedVllmProviders(params: {
       if (!provider?.baseUrl?.trim()) {
         return false;
       }
-      return isManagedVllmProviderKey(providerKey) || profileInfo.has(providerKey);
+      const normalizedProviderKey = normalizeManagedVllmProviderKey(providerKey);
+      return (
+        Boolean(normalizedProviderKey && profileInfo.has(normalizedProviderKey)) ||
+        isManagedVllmProviderKey(providerKey)
+      );
     })
     .map(([providerKey, provider]) => {
-      const matchedProfile = profileInfo.get(providerKey);
+      const matchedProfile = profileInfo.get(
+        normalizeManagedVllmProviderKey(providerKey) ?? providerKey,
+      );
       return {
         providerKey,
         profileId: matchedProfile?.profileId,
@@ -152,7 +167,9 @@ function buildEndpointHint(entry: ManagedVllmProvider): string {
 }
 
 function generateNextVllmProviderKey(existingKeys: Iterable<string>): string {
-  const used = new Set(Array.from(existingKeys, (value) => value.trim()).filter(Boolean));
+  const used = new Set(
+    Array.from(existingKeys, (value) => normalizeManagedVllmProviderKey(value)).filter(Boolean),
+  );
   if (!used.has("vllm")) {
     return "vllm";
   }
