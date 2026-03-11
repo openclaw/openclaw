@@ -48,6 +48,7 @@ pnpm openclaw executorch setup --backend metal
 
 - required model files (`model*.pte`, `preprocessor.pte`, `tekken.json`)
 - runtime library (`libvoxtral_realtime_runtime.*`) when present in the same HF repo
+- on macOS + `--backend metal`, Talk Mode streaming model/preprocessor assets
 
 ### Step E: Verify setup
 
@@ -132,7 +133,7 @@ Recommended runtime artifact names:
 
 Recommended placement:
 
-- Put runtime binary at repo root (same level as `model*.pte`, `preprocessor.pte`, `tekken.json`)
+- Put runtime binaries at repo root (same level as `model*.pte`, `preprocessor*.pte`, `tekken.json`)
 
 After upload, users only run:
 
@@ -247,23 +248,31 @@ pnpm openclaw config set plugins.entries.executorch.enabled true
 pnpm openclaw gateway restart
 ```
 
-After enabling, `pnpm openclaw plugins info executorch` should show disabled with a hint to enable (no Error line).
+Before enabling, `pnpm openclaw plugins info executorch` should show disabled with a hint to enable (no Error line). After enabling and restarting, it should no longer show as disabled.
 
 ### Mac app build: Swift 6 Sendable errors in ExecuTorchSTTBridge
 
 The macOS app’s ExecuTorch STT bridge lives in `apps/macos/Sources/OpenClaw/ExecuTorchSTTBridge.swift`. Under Swift 6 strict concurrency it can fail with “sending value of non-Sendable type” or “passing closure as a 'sending' parameter” when:
 
-- Using `Task { await self?.logStatus(...) }` (or similar) from `DispatchQueue` callbacks.
-- Passing closures that capture `continuation` or local `finish`/`didFinish` into concurrent contexts.
-- Using the `AVAudioConverter` input callback with a mutable `consumed` flag or non-Sendable `AVAudioPCMBuffer`.
+- Passing non-Sendable C runtime/session holders across queue boundaries.
+- Capturing actor state directly from C callback trampolines or audio tap callbacks.
+- Using the `AVAudioConverter` input callback with mutable local state without synchronization.
 
-Fixes applied in this repo: `@preconcurrency import AVFoundation`; capture actor as `let ref = self` and use `ref` in `Task`; `ContinuationHolder` + `FinishState` for Sendable-safe resume/finish; lock around the converter’s single-use `consumed` flag. If you patch the bridge yourself, keep those patterns.
+Fixes applied in this repo: `@preconcurrency import AVFoundation`; isolate C runtime/session behind Sendable-safe wrappers; hop back to the actor using `Task`; lock around the converter’s single-use `consumed` flag.
 
 ### Talk Mode (Mac) vs CLI vs web
 
-- **Mac app**: Menubar → Talk Mode; STT backend can be ExecuTorch (`voxtral_realtime_runner`). No equivalent in the web UI.
+- **Mac app**: Menubar → Talk Mode; STT backend can be ExecuTorch (embedded runtime, no subprocess). No equivalent in the web UI.
 - **CLI**: Use `pnpm openclaw executorch voice-agent` or `pnpm openclaw executorch transcribe <file>` for realtime or file transcription. This uses the extension’s embedded runtime path.
 - **Web**: No Talk Mode; use the CLI for ExecuTorch transcription.
+
+To prep Mac Talk Mode in one command:
+
+```bash
+pnpm openclaw executorch setup --backend metal
+```
+
+This command now fetches the runtime + streaming model assets used by the macOS app.
 
 ### Gateway must be restarted after enabling plugin
 
@@ -302,5 +311,5 @@ huggingface-cli download younghan-meta/Voxtral-Mini-4B-Realtime-2602-ExecuTorch-
 
 ## 11) macOS Talk Mode Note
 
-The macOS app Talk Mode currently uses `voxtral_realtime_runner` for streaming STT.
-The OpenClaw extension path (`pnpm openclaw executorch ...`) uses embedded runtime.
+The macOS app Talk Mode now uses the embedded ExecuTorch runtime via the Voxtral C API (no `voxtral_realtime_runner` subprocess).
+The OpenClaw extension path (`pnpm openclaw executorch ...`) also uses embedded runtime.

@@ -32,13 +32,93 @@ const MODEL_REPO_BY_BACKEND: Partial<Record<RunnerBackend, string>> = {
   xnnpack: "younghan-meta/Voxtral-Mini-4B-Realtime-2602-ExecuTorch-XNNPACK",
 };
 
-const REQUIRED_SETUP_FILES: Record<RunnerBackend, string[]> = {
-  metal: ["model-metal-fpa4w.pte", "preprocessor.pte", "tekken.json"],
-  xnnpack: ["model-xnnpack-8da4w.pte", "preprocessor.pte", "tekken.json"],
-  cuda: ["model.pte", "preprocessor.pte", "tekken.json", "aoti_cuda_blob.ptd"],
+type SetupFileGroup = {
+  label: string;
+  candidates: string[];
+};
+
+const REQUIRED_SETUP_FILE_GROUPS: Record<RunnerBackend, SetupFileGroup[]> = {
+  metal: [
+    {
+      label: "model",
+      candidates: [
+        "model-metal-fpa4w.pte",
+        "model-metal-fpa4w-streaming.pte",
+        "model-metal-int4.pte",
+        "model-metal-int4-streaming.pte",
+        "model.pte",
+        "model-streaming.pte",
+      ],
+    },
+    {
+      label: "preprocessor",
+      candidates: ["preprocessor.pte", "preprocessor-streaming.pte"],
+    },
+    {
+      label: "tokenizer",
+      candidates: ["tekken.json"],
+    },
+  ],
+  xnnpack: [
+    {
+      label: "model",
+      candidates: [
+        "model-xnnpack-8da4w.pte",
+        "model-xnnpack-8da4w-streaming.pte",
+        "model.pte",
+        "model-streaming.pte",
+      ],
+    },
+    {
+      label: "preprocessor",
+      candidates: ["preprocessor.pte", "preprocessor-streaming.pte"],
+    },
+    {
+      label: "tokenizer",
+      candidates: ["tekken.json"],
+    },
+  ],
+  cuda: [
+    {
+      label: "model",
+      candidates: [
+        "model-cuda.pte",
+        "model-cuda-streaming.pte",
+        "model.pte",
+        "model-streaming.pte",
+      ],
+    },
+    {
+      label: "preprocessor",
+      candidates: ["preprocessor.pte", "preprocessor-streaming.pte"],
+    },
+    {
+      label: "tokenizer",
+      candidates: ["tekken.json"],
+    },
+    {
+      label: "CUDA data file",
+      candidates: ["aoti_cuda_blob.ptd"],
+    },
+  ],
 };
 
 const RUNTIME_REPO_BY_BACKEND = MODEL_REPO_BY_BACKEND;
+
+const MAC_TALK_MODE_FILE_GROUPS: SetupFileGroup[] = [
+  {
+    label: "Talk Mode streaming model",
+    candidates: [
+      "model-metal-fpa4w-streaming.pte",
+      "model-metal-int4-streaming.pte",
+      "model-streaming.pte",
+    ],
+  },
+  {
+    label: "Talk Mode preprocessor",
+    candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
+  },
+];
 
 function createRunner(options: ExecuTorchCliOptions): RunnerManager {
   return new RunnerManager({
@@ -213,7 +293,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
       if (!repo) {
         logger.warn("[setup] CUDA model bundle is not configured yet in this plugin.");
         logger.warn(
-          `[setup] Please place files manually in ${targetDir}: ${REQUIRED_SETUP_FILES.cuda.join(", ")}`,
+          `[setup] Please place files manually in ${targetDir}: ${REQUIRED_SETUP_FILE_GROUPS.cuda.flatMap((group) => group.candidates).join(", ")}`,
         );
         return;
       }
@@ -223,57 +303,124 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
 
       await fs.mkdir(targetDir, { recursive: true });
 
-      try {
-        const required = [...REQUIRED_SETUP_FILES[backend]];
-        await execFileAsync("hf", ["download", repo, ...required, "--local-dir", targetDir], {
-          timeout: 600_000,
-        });
-
-        logger.info("[setup] Download complete. Verifying files...");
-        const missing: string[] = [];
-
-        for (const file of required) {
-          try {
-            await fs.access(path.join(targetDir, file));
-          } catch {
-            missing.push(file);
-          }
+      const fileExists = async (filePath: string): Promise<boolean> => {
+        try {
+          await fs.access(filePath);
+          return true;
+        } catch {
+          return false;
         }
+      };
 
-        if (missing.length > 0) {
-          logger.error(`[setup] Missing files after download: ${missing.join(", ")}`);
-        } else {
-          logger.info("[setup] All model files verified. ExecuTorch is ready.");
-          logger.info(`[setup] Model directory: ${targetDir}`);
-          logger.info(`[setup] Runtime target path: ${options.runtimeLibraryPath}`);
+      const ensureGroup = async ({
+        label,
+        candidates,
+        localDir,
+        sourceRepo,
+        required,
+        makeExecutable,
+      }: {
+        label: string;
+        candidates: string[];
+        localDir: string;
+        sourceRepo: string;
+        required: boolean;
+        makeExecutable?: boolean;
+      }): Promise<string | null> => {
+        await fs.mkdir(localDir, { recursive: true });
 
-          if (runtimeRepo) {
-            logger.info(
-              `[setup] Attempting runtime library download from: huggingface.co/${runtimeRepo}`,
-            );
-            await fs.mkdir(runtimeDir, { recursive: true });
-            try {
-              await execFileAsync(
-                "hf",
-                ["download", runtimeRepo, runtimeFile, "--local-dir", runtimeDir],
-                { timeout: 600_000 },
-              );
-              await fs.access(options.runtimeLibraryPath);
-              logger.info(`[setup] Runtime library downloaded: ${options.runtimeLibraryPath}`);
-            } catch (runtimeErr) {
-              logger.warn(
-                `[setup] Runtime library not found in model repo (${runtimeFile}). ` +
-                  `Fallback: build/copy it manually to ${options.runtimeLibraryPath}. ` +
-                  `Details: ${runtimeErr instanceof Error ? runtimeErr.message : String(runtimeErr)}`,
-              );
+        for (const candidate of candidates) {
+          const localPath = path.join(localDir, candidate);
+          if (await fileExists(localPath)) {
+            if (makeExecutable) {
+              await fs.chmod(localPath, 0o755);
             }
-          } else {
-            logger.warn(
-              `[setup] No runtime repo configured for backend=${backend}. ` +
-                `Please place runtime library at ${options.runtimeLibraryPath}.`,
-            );
+            logger.info(`[setup] ${label}: ${candidate} (already present)`);
+            return localPath;
           }
         }
+
+        const errors: string[] = [];
+        for (const candidate of candidates) {
+          try {
+            await execFileAsync(
+              "hf",
+              ["download", sourceRepo, candidate, "--local-dir", localDir],
+              {
+                timeout: 600_000,
+              },
+            );
+            const localPath = path.join(localDir, candidate);
+            if (!(await fileExists(localPath))) {
+              throw new Error("download reported success but file is missing");
+            }
+            if (makeExecutable) {
+              await fs.chmod(localPath, 0o755);
+            }
+            logger.info(`[setup] ${label}: ${candidate}`);
+            return localPath;
+          } catch (error) {
+            errors.push(error instanceof Error ? error.message : String(error));
+          }
+        }
+
+        const details = errors.length > 0 ? ` Last error: ${errors[errors.length - 1]}` : "";
+        const message =
+          `${label} not found. Tried: ${candidates.join(", ")} from huggingface.co/${sourceRepo}.` +
+          details;
+        if (required) {
+          throw new Error(message);
+        }
+        logger.warn(`[setup] Optional ${message}`);
+        return null;
+      };
+
+      try {
+        for (const group of REQUIRED_SETUP_FILE_GROUPS[backend]) {
+          await ensureGroup({
+            label: group.label,
+            candidates: group.candidates,
+            localDir: targetDir,
+            sourceRepo: repo,
+            required: true,
+          });
+        }
+        logger.info("[setup] Core model files verified.");
+        logger.info(`[setup] Model directory: ${targetDir}`);
+
+        const runtimeSourceRepo = runtimeRepo ?? repo;
+        if (runtimeSourceRepo) {
+          await ensureGroup({
+            label: "runtime library",
+            candidates: [runtimeFile],
+            localDir: runtimeDir,
+            sourceRepo: runtimeSourceRepo,
+            required: false,
+          });
+          if (await fileExists(options.runtimeLibraryPath)) {
+            logger.info(`[setup] Runtime library path: ${options.runtimeLibraryPath}`);
+          }
+        } else {
+          logger.warn(
+            `[setup] No runtime repo configured for backend=${backend}. ` +
+              `Please place runtime library at ${options.runtimeLibraryPath}.`,
+          );
+        }
+
+        if (backend === "metal" && os.platform() === "darwin") {
+          logger.info("[setup] Preparing macOS Talk Mode assets...");
+          for (const group of MAC_TALK_MODE_FILE_GROUPS) {
+            await ensureGroup({
+              label: group.label,
+              candidates: group.candidates,
+              localDir: targetDir,
+              sourceRepo: repo,
+              required: true,
+            });
+          }
+        }
+
+        logger.info("[setup] Setup complete.");
       } catch (err) {
         logger.error(
           `[setup] Download failed: ${err instanceof Error ? err.message : String(err)}`,

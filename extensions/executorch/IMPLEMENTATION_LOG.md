@@ -366,3 +366,77 @@ npx openclaw executorch transcribe ~/path/to/audio.wav
 3. Optionally submit PR to ExecuTorch repo to:
    - Add `voxtral_realtime_runtime` target to Makefile workflow
    - Fix libomp RPATH for macOS builds
+
+---
+
+## Handoff Update — 2026-03-11 (Embedded Talk Mode Runtime Migration)
+
+### Scope and motivation
+
+Migrated macOS Talk Mode STT from subprocess execution (`voxtral_realtime_runner`) to embedded runtime calls via Voxtral C API so Talk Mode and CLI both use the same embedded runtime model path.
+
+This update was made because local mac app end-to-end verification is not available on this laptop, so the handoff is documented for continuation on another machine.
+
+### Changed files
+
+- `apps/macos/Sources/OpenClaw/ExecuTorchRuntimeFFI.swift` (new)
+  - Added runtime FFI loader using `dlopen`/`dlsym` for:
+    - `vxrt_runner_create`
+    - `vxrt_runner_create_streaming_session`
+    - `vxrt_session_feed_audio`
+    - `vxrt_session_flush`
+    - destroy/error APIs
+  - Added streaming controller wrapper and token callback bridge.
+- `apps/macos/Sources/OpenClaw/ExecuTorchSTTBridge.swift`
+  - Removed `Process`/stdin/stdout runner lifecycle.
+  - Added embedded runtime lifecycle (`loadModel`, streaming session create/feed/flush/destroy).
+  - Kept mic capture + AVAudioConverter path and now feeds float samples directly to runtime session.
+  - Runtime library lookup now uses:
+    - `OPENCLAW_EXECUTORCH_RUNTIME_LIBRARY` if set
+    - app bundled `libvoxtral_realtime_runtime.dylib`
+    - fallback `~/.openclaw/lib/libvoxtral_realtime_runtime.dylib`
+- `extensions/executorch/src/cli.ts`
+  - `setup --backend metal` no longer requires/downloads `voxtral_realtime_runner`.
+  - Setup still ensures Talk Mode streaming model/preprocessor assets are present.
+- `extensions/executorch/README.md`
+  - Updated docs to reflect embedded-runtime Talk Mode (no subprocess runner requirement).
+- `.cursor/rules/executorch-cross-device-handoff.mdc` (new)
+  - Added persistent rule for cross-device handoff logging discipline.
+
+### Verification run and results
+
+- `xcrun swiftc -typecheck ... ExecuTorchRuntimeFFI.swift ExecuTorchSTTBridge.swift` -> **PASS**
+- `pnpm openclaw executorch setup --backend metal` -> **PASS**
+- `pnpm openclaw executorch status` -> **PASS**
+- `pnpm openclaw executorch transcribe ~/executorch/obama_short20.wav` -> **FAIL in this environment**
+  - Failure: Metal device initialization (`ETMetalStream: Failed to create Metal device`)
+  - Interpretation: environment/device/runtime access issue on this laptop/session, not a compile-level regression in the migration itself.
+
+### Known blockers and assumptions
+
+- Real macOS app Talk Mode end-to-end was **not** validated here due local environment limitations.
+- Current validation confirms compile/typecheck and CLI setup/status paths, but not full app runtime behavior under menu-bar Talk Mode.
+
+### Follow-up commands for next agent/laptop
+
+```bash
+# 1) Pull latest branch and install deps
+cd /Users/younghan/project/openclaw
+pnpm install
+
+# 2) Ensure runtime/model assets are present
+pnpm openclaw executorch setup --backend metal
+pnpm openclaw executorch status
+
+# 3) Build/run mac app locally and test Talk Mode
+./scripts/package-mac-app.sh
+open dist/OpenClaw.app
+
+# 4) Force Talk Mode STT backend to ExecuTorch
+defaults write ai.openclaw.mac openclaw.talkSttBackend executorch
+
+# 5) Relaunch app and verify:
+#    - Talk Mode loads embedded runtime
+#    - no subprocess runner launch
+#    - transcript tokens arrive while speaking
+```

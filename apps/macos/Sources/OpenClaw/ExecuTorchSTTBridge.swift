@@ -1,51 +1,14 @@
 @preconcurrency import AVFoundation
-import Accelerate
 import Foundation
 import OSLog
 
-/// Thread-safe holder so a single continuation can be resumed once from any thread (Sendable-safe).
-private final class ContinuationHolder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var resumed = false
-    private let continuation: CheckedContinuation<Void, Error>
-    init(_ c: CheckedContinuation<Void, Error>) { continuation = c }
-    func resume() {
-        lock.lock()
-        defer { lock.unlock() }
-        if !resumed { resumed = true; continuation.resume() }
-    }
-    func resume(throwing e: Error) {
-        lock.lock()
-        defer { lock.unlock() }
-        if !resumed { resumed = true; continuation.resume(throwing: e) }
-    }
-}
-
-/// Thread-safe “finish once” state so DispatchQueue closures can call finish/didFinish in a Sendable-safe way.
-private final class FinishState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var finished = false
-    func finish(_ action: @Sendable () -> Void) {
-        lock.lock()
-        if finished { lock.unlock(); return }
-        finished = true
-        lock.unlock()
-        action()
-    }
-    func didFinish() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return finished
-    }
-}
-
-/// Swift actor that bridges to the ExecuTorch `voxtral_realtime_runner` binary
-/// for on-device speech-to-text. Adapted from VoxtralRealtimeApp's RunnerBridge
-/// and AudioEngine pattern.
+/// Swift actor that bridges Talk Mode directly to the embedded ExecuTorch runtime
+/// through Voxtral's C API (no subprocess runner).
 ///
-/// Audio pipeline: Mic → AVAudioEngine → 16 kHz mono f32le → runner stdin → transcript tokens on stdout
+/// Audio pipeline: Mic -> AVAudioEngine -> 16kHz mono float -> streaming session feed -> tokens callback
 actor ExecuTorchSTTBridge {
     static let shared = ExecuTorchSTTBridge()
+
     private static let modelCandidates = [
         "model-metal-fpa4w-streaming.pte",
         "model-metal-int4-streaming.pte",
@@ -66,8 +29,9 @@ actor ExecuTorchSTTBridge {
         case error(String)
     }
 
-    private var process: Process?
-    private var stdinPipe: Pipe?
+    private var runtime: VxrtRuntimeHandle?
+    private var runner: VxrtRunnerRef?
+    private var streamingController: VxrtStreamingController?
     private var audioEngine: AVAudioEngine?
     private var state: State = .idle
     private var transcriptBuffer = ""
@@ -85,15 +49,21 @@ actor ExecuTorchSTTBridge {
 
     // MARK: - Configuration
 
-    private var runnerPath: String {
+    private var runtimeLibraryPath: String {
+        if let envPath = ProcessInfo.processInfo.environment["OPENCLAW_EXECUTORCH_RUNTIME_LIBRARY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !envPath.isEmpty
+        {
+            return (envPath as NSString).expandingTildeInPath
+        }
         if let bundled = Bundle.main.resourcePath {
-            let bundledRunner = "\(bundled)/voxtral_realtime_runner"
-            if FileManager.default.fileExists(atPath: bundledRunner) {
-                return bundledRunner
+            let bundledRuntime = "\(bundled)/libvoxtral_realtime_runtime.dylib"
+            if FileManager.default.fileExists(atPath: bundledRuntime) {
+                return bundledRuntime
             }
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.openclaw/bin/voxtral_realtime_runner"
+        return "\(home)/.openclaw/lib/libvoxtral_realtime_runtime.dylib"
     }
 
     private var modelDir: String {
@@ -114,7 +84,9 @@ actor ExecuTorchSTTBridge {
         }
         return "\(modelDir)/model-metal-fpa4w-streaming.pte"
     }
+
     var tokenizerPath: String { "\(modelDir)/tekken.json" }
+
     var preprocessorPath: String {
         if let resolved = Self.resolveExistingPath(in: modelDir, candidates: Self.preprocessorCandidates) {
             return resolved
@@ -127,22 +99,19 @@ actor ExecuTorchSTTBridge {
     func checkAvailability() -> (available: Bool, missing: [String]) {
         var missing: [String] = []
         let paths = [
-            ("Runner", runnerPath),
+            ("Runtime", runtimeLibraryPath),
             ("Model", modelPath),
             ("Tokenizer", tokenizerPath),
             ("Preprocessor", preprocessorPath),
         ]
-        for (label, path) in paths {
-            if !FileManager.default.fileExists(atPath: path) {
-                missing.append("\(label): \(path)")
-            }
+        for (label, path) in paths where !FileManager.default.fileExists(atPath: path) {
+            missing.append("\(label): \(path)")
         }
         return (missing.isEmpty, missing)
     }
 
-    // MARK: - Runner Lifecycle
+    // MARK: - Runtime Lifecycle
 
-    /// Launch the runner and wait for the model to load (~30s first time).
     func loadModel() async throws {
         guard case .idle = state else {
             if case .ready = state { return }
@@ -158,152 +127,73 @@ actor ExecuTorchSTTBridge {
         }
 
         state = .loading
-        logger.info("Launching voxtral_realtime_runner...")
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        let stdinPipe = Pipe()
-        self.stdinPipe = stdinPipe
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: runnerPath)
-        proc.arguments = [
-            "--model_path", modelPath,
-            "--tokenizer_path", tokenizerPath,
-            "--preprocessor_path", preprocessorPath,
-            "--mic",
-        ]
-
-        var env = ProcessInfo.processInfo.environment
-        if let resources = Bundle.main.resourcePath {
-            let existing = env["DYLD_LIBRARY_PATH"] ?? ""
-            env["DYLD_LIBRARY_PATH"] = existing.isEmpty ? resources : "\(resources):\(existing)"
-        }
-        proc.environment = env
-        proc.standardInput = stdinPipe
-        proc.standardOutput = stdoutPipe
-        proc.standardError = stderrPipe
-        self.process = proc
-
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let ref = self
-            let handle = stderrPipe.fileHandleForReading
-            while true {
-                let data = handle.availableData
-                if data.isEmpty { break }
-                if let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .newlines), !text.isEmpty {
-                    Task { await ref?.logStatus(text) }
-                }
-            }
-        }
-
-        proc.terminationHandler = { [weak self] process in
-            let code = process.terminationStatus
-            Task { await self?.handleTermination(code: code) }
-        }
-
+        logger.info("Loading embedded ExecuTorch runtime...")
         do {
-            try proc.run()
-            logger.info("Runner started (pid: \(proc.processIdentifier))")
+            let runtime = try VxrtRuntimeHandle.load(libraryPath: runtimeLibraryPath)
+            let runner = try runtime.createRunner(
+                modelPath: modelPath,
+                tokenizerPath: tokenizerPath,
+                preprocessorPath: preprocessorPath,
+                warmup: true)
+            self.runtime = runtime
+            self.runner = runner
+            self.setReady()
         } catch {
-            state = .error(error.localizedDescription)
-            throw ExecuTorchError.launchFailed(error.localizedDescription)
-        }
-
-        try await waitForModelReady(stdout: stdoutPipe)
-    }
-
-    private func waitForModelReady(stdout: Pipe) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let holder = ContinuationHolder(continuation)
-            let state = FinishState()
-
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let ref = self
-                let handle = stdout.fileHandleForReading
-                while true {
-                    let data = handle.availableData
-                    if data.isEmpty { break }
-
-                    guard let text = String(data: data, encoding: .utf8) else { continue }
-
-                    if text.contains("Listening") {
-                        state.finish {
-                            Task { await ref?.setReady() }
-                            holder.resume()
-                        }
-
-                        let remainder = text
-                            .replacingOccurrences(of: "Listening (Ctrl+C to stop)...", with: "")
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !remainder.isEmpty {
-                            Task { await ref?.handleToken(remainder) }
-                        }
-                        continue
-                    }
-
-                    if state.didFinish() {
-                        let cleaned = Self.cleanRunnerOutput(text)
-                        if !cleaned.isEmpty {
-                            Task { await ref?.handleToken(cleaned) }
-                        }
-                    }
-                }
-
-                state.finish {
-                    Task { await ref?.setError("Runner exited before model became ready") }
-                    holder.resume(throwing: ExecuTorchError.launchFailed(
-                        "Runner exited before model became ready"))
-                }
-            }
-
-            DispatchQueue.global().asyncAfter(deadline: .now() + 120) { [weak self] in
-                guard let ref = self else { return }
-                state.finish {
-                    Task { await ref.setError("Model load timed out") }
-                    holder.resume(throwing: ExecuTorchError.modelLoadTimeout)
-                }
-            }
+            let message = error.localizedDescription
+            self.state = .error(message)
+            self.runner = nil
+            self.runtime = nil
+            throw error
         }
     }
 
     // MARK: - Audio Capture
 
-    /// Start capturing audio from the microphone and streaming to the runner.
     func startListening(onTranscript: @escaping (String, Bool) -> Void) throws {
         guard case .ready = state else {
             throw ExecuTorchError.notReady
         }
-        guard let stdinPipe else {
+        guard let runtime, let runner else {
             throw ExecuTorchError.notReady
         }
 
         self.onTranscript = onTranscript
+        let bridge = self
+        let controller = try runtime.createStreamingController(
+            runner: runner,
+            onToken: { [weak bridge] piece in
+                guard let bridge else { return }
+                Task { await bridge.handleToken(piece) }
+            },
+            onError: { [weak bridge] message in
+                guard let bridge else { return }
+                Task { await bridge.handleStreamingError(message) }
+            })
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let hwFormat = inputNode.outputFormat(forBus: 0)
-
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            controller.stop(flush: false)
             throw ExecuTorchError.microphoneNotAvailable
         }
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: 16000,
+            sampleRate: 16_000,
             channels: 1,
-            interleaved: false
-        ) else {
+            interleaved: false)
+        else {
+            controller.stop(flush: false)
             throw ExecuTorchError.audioConversionFailed
         }
 
         guard let converter = AVAudioConverter(from: hwFormat, to: targetFormat) else {
+            controller.stop(flush: false)
             throw ExecuTorchError.audioConversionFailed
         }
 
-        let sampleRateRatio = 16000.0 / hwFormat.sampleRate
-        let handle = stdinPipe.fileHandleForWriting
-
+        let sampleRateRatio = 16_000.0 / hwFormat.sampleRate
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { buffer, _ in
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * sampleRateRatio) + 1
             guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
@@ -324,109 +214,89 @@ actor ExecuTorchSTTBridge {
                 return nil
             }
 
-            guard converted.frameLength > 0, let channelData = converted.floatChannelData else { return }
-
-            let frameCount = Int(converted.frameLength)
-            let samples = channelData[0]
-            let byteCount = frameCount * MemoryLayout<Float>.size
-            let data = Data(bytes: samples, count: byteCount)
-
-            do {
-                try handle.write(contentsOf: data)
-            } catch {
-                // Pipe may be broken if runner exited
+            guard
+                converted.frameLength > 0,
+                let channelData = converted.floatChannelData
+            else {
+                return
             }
+            let frameCount = Int(converted.frameLength)
+            let sampleSlice = UnsafeBufferPointer(start: channelData[0], count: frameCount)
+            controller.enqueue(samples: Array(sampleSlice))
         }
 
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            controller.stop(flush: false)
+            throw ExecuTorchError.launchFailed("Audio engine start failed: \(error.localizedDescription)")
+        }
+
         self.audioEngine = engine
-        state = .listening
-        logger.info("ExecuTorch STT listening")
+        self.streamingController = controller
+        self.state = .listening
+        logger.info("ExecuTorch STT listening (embedded runtime)")
     }
 
-    /// Stop capturing audio but keep the runner alive.
     func stopListening() {
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine?.stop()
-        audioEngine = nil
-        onTranscript = nil
-        if case .listening = state {
-            state = .ready
+        self.audioEngine?.inputNode.removeTap(onBus: 0)
+        self.audioEngine?.stop()
+        self.audioEngine = nil
+
+        self.streamingController?.stop(flush: true)
+        self.streamingController = nil
+        self.onTranscript = nil
+
+        if case .listening = self.state {
+            self.state = .ready
         }
         logger.info("ExecuTorch STT stopped listening")
     }
 
-    /// Full shutdown — stops audio and kills the runner process.
     func shutdown() {
-        stopListening()
-
-        stdinPipe?.fileHandleForWriting.closeFile()
-        stdinPipe = nil
-
-        if let proc = process, proc.isRunning {
-            proc.interrupt()
-            proc.waitUntilExit()
+        self.stopListening()
+        if let runtime, let runner {
+            runtime.destroyRunner(runner)
         }
-        process = nil
-        state = .idle
-        transcriptBuffer = ""
+        self.runner = nil
+        self.runtime = nil
+        self.state = .idle
+        self.transcriptBuffer = ""
         logger.info("ExecuTorch STT shutdown")
     }
 
     // MARK: - Private
 
     private func setReady() {
-        state = .ready
+        self.state = .ready
         logger.info("ExecuTorch model loaded — ready")
     }
 
     private func setError(_ message: String) {
-        state = .error(message)
+        self.state = .error(message)
         logger.error("ExecuTorch error: \(message, privacy: .public)")
     }
 
-    private func logStatus(_ text: String) {
-        logger.info("ExecuTorch: \(text, privacy: .public)")
-    }
-
-    private func handleTermination(code: Int32) {
-        stdinPipe = nil
-        process = nil
-        if case .loading = state {
-            state = .error("Runner exited during model load (code \(code))")
-            logger.error("ExecuTorch runner exited during model load (code: \(code))")
-        } else if case .listening = state {
-            state = .idle
-        } else if case .ready = state {
-            state = .idle
-        }
-        logger.info("ExecuTorch runner exited (code: \(code))")
+    private func handleStreamingError(_ message: String) {
+        self.audioEngine?.inputNode.removeTap(onBus: 0)
+        self.audioEngine?.stop()
+        self.audioEngine = nil
+        self.streamingController?.stop(flush: false)
+        self.streamingController = nil
+        self.onTranscript = nil
+        self.setError(message)
     }
 
     private func handleToken(_ token: String) {
-        transcriptBuffer += token
-        onTranscript?(token, false)
+        self.transcriptBuffer += token
+        self.onTranscript?(token, false)
     }
 
     func getAndClearTranscript() -> String {
         let result = transcriptBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         transcriptBuffer = ""
         return result
-    }
-
-    private static func cleanRunnerOutput(_ text: String) -> String {
-        var cleaned = text
-        // Strip PyTorchObserver stats
-        if cleaned.contains("PyTorchObserver") {
-            cleaned = cleaned
-                .components(separatedBy: "\n")
-                .filter { !$0.contains("PyTorchObserver") }
-                .joined(separator: "\n")
-        }
-        // Strip ANSI escape codes
-        cleaned = cleaned.replacingOccurrences(
-            of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
-        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func resolveExistingPath(in dir: String, candidates: [String]) -> String? {
@@ -445,7 +315,6 @@ actor ExecuTorchSTTBridge {
 enum ExecuTorchError: Error, LocalizedError {
     case filesNotFound(String)
     case launchFailed(String)
-    case modelLoadTimeout
     case notReady
     case alreadyRunning
     case microphoneNotAvailable
@@ -454,10 +323,9 @@ enum ExecuTorchError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .filesNotFound(let detail): return "ExecuTorch files not found: \(detail)"
-        case .launchFailed(let detail): return "Failed to launch runner: \(detail)"
-        case .modelLoadTimeout: return "Model load timed out (>120s)"
-        case .notReady: return "Runner not ready"
-        case .alreadyRunning: return "Runner already running"
+        case .launchFailed(let detail): return "Failed to launch runtime: \(detail)"
+        case .notReady: return "Runtime not ready"
+        case .alreadyRunning: return "Runtime already running"
         case .microphoneNotAvailable: return "No microphone available"
         case .audioConversionFailed: return "Audio format conversion failed"
         }
