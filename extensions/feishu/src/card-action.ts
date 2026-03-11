@@ -38,11 +38,11 @@ export async function handleFeishuCardAction(params: {
   const actionValue = event.action.value;
   const { option, options, form_value } = event.action;
   let content = "";
-  if (form_value && Object.keys(form_value).length > 0) {
+  if (form_value !== undefined) {
     content = JSON.stringify({ ...actionValue, form_value });
-  } else if (options && options.length > 0) {
+  } else if (options !== undefined) {
     content = JSON.stringify({ ...actionValue, options });
-  } else if (option) {
+  } else if (option !== undefined) {
     content = JSON.stringify({ ...actionValue, option });
   } else if (typeof actionValue === "object" && actionValue !== null) {
     if ("text" in actionValue && typeof actionValue.text === "string") {
