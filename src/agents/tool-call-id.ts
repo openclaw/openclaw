@@ -146,7 +146,7 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
 
 function rewriteAssistantToolCallIds(params: {
   message: Extract<AgentMessage, { role: "assistant" }>;
-  resolve: (id: string) => string;
+  resolveToolCallId: (id: string) => string;
 }): Extract<AgentMessage, { role: "assistant" }> {
   const content = params.message.content;
   if (!Array.isArray(content)) {
@@ -168,7 +168,7 @@ function rewriteAssistantToolCallIds(params: {
     ) {
       return block;
     }
-    const nextId = params.resolve(id);
+    const nextId = params.resolveToolCallId(id);
     if (nextId === id) {
       return block;
     }
@@ -184,7 +184,7 @@ function rewriteAssistantToolCallIds(params: {
 
 function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
-  resolve: (id: string) => string;
+  resolveToolResultId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
   const toolCallId =
     typeof params.message.toolCallId === "string" && params.message.toolCallId
@@ -193,8 +193,19 @@ function rewriteToolResultIds(params: {
   const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
   const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
 
-  const nextToolCallId = toolCallId ? params.resolve(toolCallId) : undefined;
-  const nextToolUseId = toolUseIdStr ? params.resolve(toolUseIdStr) : undefined;
+  const resolvedIds = new Map<string, string>();
+  const resolveWithinMessage = (id: string) => {
+    const existing = resolvedIds.get(id);
+    if (existing) {
+      return existing;
+    }
+    const next = params.resolveToolResultId(id);
+    resolvedIds.set(id, next);
+    return next;
+  };
+
+  const nextToolCallId = toolCallId ? resolveWithinMessage(toolCallId) : undefined;
+  const nextToolUseId = toolUseIdStr ? resolveWithinMessage(toolUseIdStr) : undefined;
 
   if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
     return params.message;
@@ -219,18 +230,39 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
 ): AgentMessage[] {
   // Strict mode: only [a-zA-Z0-9]
   // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
-  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`).
-  // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.
-  const map = new Map<string, string>();
+  // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `ab`), and some
+  // OpenAI-compatible providers also reject transcripts that reuse the same raw tool call id
+  // across different assistant/toolResult pairs. Track occurrences per raw id and rewrite
+  // each logical pair to its own unique sanitized id while preserving assistant/result pairing.
   const used = new Set<string>();
+  const toolCallOccurrenceByRawId = new Map<string, number>();
+  const pendingToolCallIdsByRawId = new Map<string, string[]>();
 
-  const resolve = (id: string) => {
-    const existing = map.get(id);
-    if (existing) {
-      return existing;
+  const resolveAssistantToolCallId = (id: string) => {
+    const occurrence = (toolCallOccurrenceByRawId.get(id) ?? 0) + 1;
+    toolCallOccurrenceByRawId.set(id, occurrence);
+    const next = makeUniqueToolId({
+      id: occurrence === 1 ? id : `${id}#${occurrence}`,
+      used,
+      mode,
+    });
+    used.add(next);
+    const queue = pendingToolCallIdsByRawId.get(id) ?? [];
+    queue.push(next);
+    pendingToolCallIdsByRawId.set(id, queue);
+    return next;
+  };
+
+  const resolveToolResultId = (id: string) => {
+    const queue = pendingToolCallIdsByRawId.get(id);
+    const paired = queue?.shift();
+    if (queue && queue.length === 0) {
+      pendingToolCallIdsByRawId.delete(id);
+    }
+    if (paired) {
+      return paired;
     }
     const next = makeUniqueToolId({ id, used, mode });
-    map.set(id, next);
     used.add(next);
     return next;
   };
@@ -244,7 +276,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "assistant") {
       const next = rewriteAssistantToolCallIds({
         message: msg as Extract<AgentMessage, { role: "assistant" }>,
-        resolve,
+        resolveToolCallId: resolveAssistantToolCallId,
       });
       if (next !== msg) {
         changed = true;
@@ -254,7 +286,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "toolResult") {
       const next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
-        resolve,
+        resolveToolResultId,
       });
       if (next !== msg) {
         changed = true;

@@ -141,6 +141,49 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(aId.length).toBeLessThanOrEqual(40);
       expect(bId.length).toBeLessThanOrEqual(40);
     });
+
+    it("rewrites repeated raw tool call ids across turns into distinct paired ids", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "write:202", name: "write", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "write:202",
+          toolName: "write",
+          content: [{ type: "text", text: "first" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "write:202", name: "write", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "write:202",
+          toolName: "write",
+          content: [{ type: "text", text: "second" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
+      expect(out).not.toBe(input);
+
+      const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const secondAssistant = out[2] as Extract<AgentMessage, { role: "assistant" }>;
+      const firstToolCall = firstAssistant.content[0] as { id?: string };
+      const secondToolCall = secondAssistant.content[0] as { id?: string };
+      const firstId = firstToolCall.id as string;
+      const secondId = secondToolCall.id as string;
+
+      expect(firstId).toBe("write202");
+      expect(secondId).not.toBe(firstId);
+      expect(isValidCloudCodeAssistToolId(firstId, "strict")).toBe(true);
+      expect(isValidCloudCodeAssistToolId(secondId, "strict")).toBe(true);
+
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(firstId);
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(secondId);
+    });
   });
 
   describe("strict mode (alphanumeric only)", () => {
