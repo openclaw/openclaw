@@ -2139,6 +2139,74 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("returns collection-scoped qmd paths when session exports live under the workspace qmd directory", async () => {
+    workspaceDir = path.join(stateDir, "agents", agentId);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        const payload = args.includes(`sessions-${agentId}`)
+          ? [{ docid: "s1", score: 0.9, snippet: "@@ -1,1\nsession hit" }]
+          : [];
+        emitAndClose(child, "stdout", JSON.stringify(payload));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const exportPath = path.join(stateDir, "agents", agentId, "qmd", "sessions", "session-1.md");
+    await fs.mkdir(path.dirname(exportPath), { recursive: true });
+    await fs.writeFile(exportPath, "# Session 1\n\nhello", "utf-8");
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (_query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (arg === "s1") {
+            return [{ collection: `sessions-${agentId}`, path: "session-1.md" }];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+
+    const results = await manager.search("hello", {
+      maxResults: 1,
+      sessionKey: "agent:main:discord:dm:u123",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toBe(`qmd/sessions-${agentId}/session-1.md`);
+
+    const readBack = await manager.readFile({ relPath: results[0].path });
+    expect(readBack).toEqual({
+      text: "# Session 1\n\nhello",
+      path: `qmd/sessions-${agentId}/session-1.md`,
+    });
+
+    await manager.close();
+  });
+
   it("reads only requested line ranges without loading the whole file", async () => {
     const readFileSpy = vi.spyOn(fs, "readFile");
     const text = Array.from({ length: 50 }, (_, index) => `line-${index + 1}`).join("\n");
