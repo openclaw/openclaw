@@ -56,6 +56,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
   return {
     ...actual,
+    getOAuthProviders: () => [],
     complete: async (model: { api: string; provider: string; id: string }) => {
       if (model.id === "mock-error") {
         return buildAssistantErrorMessage(model);
