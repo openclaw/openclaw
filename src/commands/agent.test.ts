@@ -689,6 +689,218 @@ describe("agentCommand", () => {
     });
   });
 
+  it("per-turn --model override applies correct provider and model to the run", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:model-once": {
+          sessionId: "session-model-once",
+          updatedAt: Date.now(),
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:model-once",
+          modelOverrideOnce: "openai/gpt-4.1-mini",
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("openai", "gpt-4.1-mini");
+    });
+  });
+
+  it("per-turn --model override does not clear session authProfileOverride on cross-provider use", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:auth-keep": {
+          sessionId: "session-auth-keep",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+          authProfileOverride: "profile-anthropic",
+          authProfileOverrideSource: "user",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      const { ensureAuthProfileStore: ensureAuthProfileStoreMock } =
+        await import("../agents/auth-profiles.js");
+      vi.mocked(ensureAuthProfileStoreMock).mockReturnValueOnce({
+        version: 1,
+        profiles: {
+          "profile-anthropic": { provider: "anthropic" },
+        },
+      } as ReturnType<typeof ensureAuthProfileStoreMock>);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:auth-keep",
+          modelOverrideOnce: "openai/gpt-4.1-mini",
+        },
+        runtime,
+      );
+
+      // Per-turn override should use the requested model
+      expectLastRunProviderModel("openai", "gpt-4.1-mini");
+
+      // But the session's auth profile should NOT be cleared
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { authProfileOverride?: string; authProfileOverrideSource?: string }
+      >;
+      const entry = saved["agent:main:subagent:auth-keep"];
+      expect(entry?.authProfileOverride).toBe("profile-anthropic");
+      expect(entry?.authProfileOverrideSource).toBe("user");
+    });
+  });
+
+  it("per-turn --model override throws on invalid model id", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:bad-model": {
+          sessionId: "session-bad-model",
+          updatedAt: Date.now(),
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+      ]);
+
+      await expect(
+        agentCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:main:subagent:bad-model",
+            modelOverrideOnce: "///invalid///",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(/Invalid --model value/);
+    });
+  });
+
+  it("per-turn --model override throws on disallowed model", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:disallowed": {
+          sessionId: "session-disallowed",
+          updatedAt: Date.now(),
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      await expect(
+        agentCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:main:subagent:disallowed",
+            modelOverrideOnce: "openai/gpt-4.1-mini",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(/not allowed/);
+    });
+  });
+
+  it("per-turn --model override does not persist to session store", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:no-persist": {
+          sessionId: "session-no-persist",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:no-persist",
+          modelOverrideOnce: "openai/gpt-4.1-mini",
+        },
+        runtime,
+      );
+
+      // Run used the override
+      expectLastRunProviderModel("openai", "gpt-4.1-mini");
+
+      // But session store still has the original model
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { providerOverride?: string; modelOverride?: string }
+      >;
+      const entry = saved["agent:main:subagent:no-persist"];
+      expect(entry?.providerOverride).toBe("anthropic");
+      expect(entry?.modelOverride).toBe("claude-opus-4-5");
+    });
+  });
+
   it("keeps explicit sessionKey even when sessionId exists elsewhere", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

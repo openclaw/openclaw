@@ -1002,6 +1002,12 @@ async function agentCommandInternal(
       }
     }
 
+    // Snapshot the session's resolved provider BEFORE the per-turn override
+    // mutates it. This is used for auth profile reconciliation below so that
+    // a transient --model override doesn't permanently clear the session's
+    // auth profile when it happens to use a different provider.
+    const providerForAuthReconciliation = provider;
+
     // Per-turn model override from CLI --model flag.
     // This is intentionally NOT persisted to the session store — it applies
     // to the current turn only, following the same pattern as --thinking.
@@ -1030,7 +1036,7 @@ async function agentCommandInternal(
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== provider) {
+        if (!profile || profile.provider !== providerForAuthReconciliation) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
