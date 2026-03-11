@@ -50,10 +50,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
-      args:
-        - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN:-}
-        - GATEWAY_ALLOWED_ORIGINS=${GATEWAY_ALLOWED_ORIGINS:-}
-        - GATEWAY_DEFAULT_MODEL=${GATEWAY_DEFAULT_MODEL:-}
     container_name: finclaw-gateway
     restart: always
     ports:
@@ -65,6 +61,10 @@ services:
       - NODE_ENV=production
       - GATEWAY_PORT=18789
       - REDIS_URL=redis://redis:6379
+      # Gateway 配置 (entrypoint.sh 运行时生成 openfinclaw.json)
+      - GATEWAY_AUTH_TOKEN=${GATEWAY_AUTH_TOKEN:-finclaw-dev}
+      - GATEWAY_ALLOWED_ORIGINS=${GATEWAY_ALLOWED_ORIGINS:-http://localhost:18789}
+      - GATEWAY_DEFAULT_MODEL=${GATEWAY_DEFAULT_MODEL:-}
       # LLM 配置
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}

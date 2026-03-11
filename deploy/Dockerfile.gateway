@@ -72,27 +72,17 @@ COPY docs/reference/templates/ ./docs/reference/templates/
 # 复制 CLI 入口 (OpenFinClaw 品牌)
 COPY openfinclaw.mjs ./
 
-# Gateway 配置参数 — 通过 .env → compose build.args 注入
-ARG GATEWAY_AUTH_TOKEN=finclaw-dev
-ARG GATEWAY_ALLOWED_ORIGINS=http://localhost:18789
-ARG GATEWAY_DEFAULT_MODEL=
-
-# 创建最小化配置文件
-# GATEWAY_ALLOWED_ORIGINS: 逗号分隔 → JSON 数组
-# GATEWAY_DEFAULT_MODEL: 可选, 设置后覆盖内置默认模型
-RUN mkdir -p /root/.openfinclaw && \
-    ORIGINS_JSON=$(echo "${GATEWAY_ALLOWED_ORIGINS}" | sed 's/,/","/g' | sed 's/^/["/' | sed 's/$/"]/' ) && \
-    if [ -n "${GATEWAY_DEFAULT_MODEL}" ]; then \
-      AGENTS_JSON=",\"agents\":{\"defaults\":{\"model\":{\"primary\":\"${GATEWAY_DEFAULT_MODEL}\"}}}"; \
-    else \
-      AGENTS_JSON=""; \
-    fi && \
-    printf '{"gateway":{"mode":"local","bind":"lan","trustedProxies":["172.16.0.0/12","10.0.0.0/8"],"auth":{"mode":"token","token":"%s"},"controlUi":{"allowedOrigins":%s,"dangerouslyAllowHostHeaderOriginFallback":true,"allowInsecureAuth":true}},"plugins":{"slots":{"memory":"none"}}%s}\n' \
-    "${GATEWAY_AUTH_TOKEN}" "${ORIGINS_JSON}" "${AGENTS_JSON}" > /root/.openfinclaw/openfinclaw.json
-
-# 暴露端口 (实际端口由 GATEWAY_PORT 环境变量控制)
+# Gateway 配置参数 — 通过 .env / compose environment 注入
+# 配置在容器启动时由 entrypoint.sh 生成，避免 volume 持久化旧配置
+ENV GATEWAY_AUTH_TOKEN=finclaw-dev
+ENV GATEWAY_ALLOWED_ORIGINS=http://localhost:18789
+ENV GATEWAY_DEFAULT_MODEL=
 ENV GATEWAY_PORT=18789
+
 EXPOSE ${GATEWAY_PORT}
 
-# 启动命令 — Gateway 绑定 LAN (容器网络需要)
-CMD ["sh", "-c", "node dist/index.js gateway --bind lan --port $GATEWAY_PORT"]
+# 复制启动脚本 — 每次启动重新生成配置 + 启动 gateway
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
