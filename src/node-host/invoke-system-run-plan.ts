@@ -746,7 +746,7 @@ export function buildSystemRunApprovalPlan(params: {
   const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
     argv: hardening.argv,
     cwd: hardening.cwd,
-    shellCommand: command.shellCommand,
+    shellCommand: command.shellPayload,
   });
   if (!mutableFileOperand.ok) {
     return { ok: false, message: mutableFileOperand.message };
