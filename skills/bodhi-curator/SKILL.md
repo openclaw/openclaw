@@ -133,6 +133,28 @@ Special cases:
 - Images captured with `visual` tag added.
 - Voice notes captured with `voice` tag added.
 - Recipes get `recipe` + `nutrition` tags.
+- Nodes with people mentioned get `social` tag added.
+
+## People and Social Context
+
+When a node mentions other people, extract their names or roles into the `people` field. Also infer `social_context`.
+
+**People extraction:**
+- Named individuals: "talked to Dr. Martinez", "my coach said" → `["Dr. Martinez"]`, `["coach"]`
+- Roles without names: "my partner", "a friend" → `["partner"]`, `["friend"]`
+- Groups: "the team", "family dinner" → `["team"]`, `["family"]`
+- Max 20 entries. First-name or title+name only. Never fabricate.
+
+**Social context inference:**
+
+| Value | When |
+|-------|------|
+| `solo` | No people mentioned, or explicitly alone |
+| `social` | Friends, family, social group activity |
+| `professional` | Work colleagues, doctor, trainer, coach, therapist |
+| `intimate` | Partner, close family member, best friend |
+
+When no people are mentioned and context is clearly solo, omit both fields (default). Only set `social_context` when `people` is non-empty or context makes it obvious.
 
 ## Execution
 

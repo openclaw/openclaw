@@ -138,6 +138,22 @@
       "type": "string",
       "enum": ["wellness", "fitness", "health", "mental-health", "cognitive"],
       "description": "Primary wellness domain. Set by Curator based on content analysis. Used by Distiller for grouping and Surveyor for cross-domain bridge detection."
+    },
+    "people": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "maxItems": 20,
+      "uniqueItems": true,
+      "description": "People mentioned in this node (names, handles, roles). Extracted by Curator. Used by Surveyor to detect social bridges and relational patterns across nodes."
+    },
+    "social_context": {
+      "type": "string",
+      "enum": ["solo", "social", "professional", "intimate"],
+      "description": "Social context of the observation. solo = alone, social = friends/family, professional = work/healthcare, intimate = close relationship. Inferred by Curator from content when people are present."
     }
   }
 }

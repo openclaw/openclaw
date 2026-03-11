@@ -6,10 +6,29 @@
     "defaults": {
       "model": "anthropic/claude-sonnet-4-6",
       "workspace": "~/.openclaw/workspace",
-      "thinkingDefault": "medium",
+      "thinkingDefault": "low",
       "timeoutSeconds": 300,
-      "heartbeat": { "every": "0m" }
+      "heartbeat": { "every": "0m" },
+      "models": {
+        "anthropic/claude-sonnet-4-6": {
+          "params": { "cacheRetention": "short" }
+        },
+        "anthropic/claude-haiku-4-5": {
+          "params": { "cacheRetention": "short" }
+        },
+        "anthropic/claude-opus-4-6": {
+          "params": { "cacheRetention": "short" }
+        }
+      }
     }
+  },
+
+  "budget": {
+    "dailyDollars": 2.00,
+    "weeklyDollars": 10.00,
+    "alertAt": 0.80,
+    "hardStop": true,
+    "persistPath": "~/.openclaw/budget-state.json"
   },
 
   "channels": {
@@ -21,7 +40,16 @@
 
   "skills": {
     "load": {
-      "extraDirs": ["skills/bodhi-curator", "skills/bodhi-enricher", "skills/bodhi-distiller", "skills/bodhi-surveyor", "skills/bodhi-janitor"],
+      "extraDirs": [
+        "skills/bodhi-curator",
+        "skills/bodhi-enricher",
+        "skills/bodhi-distiller",
+        "skills/bodhi-surveyor",
+        "skills/bodhi-janitor",
+        "skills/bodhi-budget",
+        "skills/bodhi-pm",
+        "skills/bodhi-model-switch"
+      ],
       "watch": false
     }
   },

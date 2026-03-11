@@ -32,6 +32,7 @@ class EdgeType(str, Enum):
     PROMOTES = "promotes"
     RELATES = "relates"
     PRECEDES = "precedes"
+    SOCIAL_BRIDGE = "social_bridge"  # nodes sharing people or social context across domains
 
 
 @dataclass
@@ -65,6 +66,10 @@ class Node:
     media_ref: Optional[str] = None
     domain: Optional[str] = None
 
+    # Social context fields — set by Curator when people are mentioned
+    people: Optional[list[str]] = None
+    social_context: Optional[str] = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Node":
         """Construct a Node from a raw dict (e.g. parsed from JSON)."""
@@ -96,6 +101,8 @@ class Node:
             media_type=data.get("media_type"),
             media_ref=data.get("media_ref"),
             domain=data.get("domain"),
+            people=data.get("people"),
+            social_context=data.get("social_context"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,6 +137,8 @@ class Node:
             ("media_type", self.media_type),
             ("media_ref", self.media_ref),
             ("domain", self.domain),
+            ("people", self.people),
+            ("social_context", self.social_context),
         ]
 
         for key, val in optional_fields:
