@@ -8,6 +8,12 @@ import {
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
+const unhandledRejectionsInstallKey = Symbol.for("openclaw.unhandled-rejections.installed");
+
+type UnhandledRejectionsInstallState = {
+  installed: boolean;
+};
+
 const handlers = new Set<UnhandledRejectionHandler>();
 
 const FATAL_ERROR_CODES = new Set([
@@ -217,6 +223,13 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
+  const globalState = globalThis as typeof globalThis & {
+    [unhandledRejectionsInstallKey]?: UnhandledRejectionsInstallState;
+  };
+  if (globalState[unhandledRejectionsInstallKey]?.installed) {
+    return;
+  }
+
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
@@ -252,4 +265,8 @@ export function installUnhandledRejectionHandler(): void {
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
     process.exit(1);
   });
+
+  globalState[unhandledRejectionsInstallKey] = {
+    installed: true,
+  };
 }
