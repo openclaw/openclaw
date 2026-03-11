@@ -454,6 +454,107 @@ function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean
   return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
 }
 
+function collectSessionStorePaths(rootDir: string): string[] {
+  const pending = [rootDir];
+  const stores: string[] = [];
+
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    for (const entry of safeReadDir(currentDir)) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name === "sessions.json") {
+        stores.push(entryPath);
+      }
+    }
+  }
+
+  return stores;
+}
+
+function rewriteSessionFilePathForStateDirMigration(
+  sessionFile: string | undefined,
+  legacyDir: string,
+  targetDir: string,
+): string | null {
+  const trimmed = sessionFile?.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return null;
+  }
+  const absoluteSessionFile = path.normalize(trimmed);
+  if (!isWithinDir(legacyDir, absoluteSessionFile)) {
+    return null;
+  }
+  const relativeSessionFile = path.relative(legacyDir, absoluteSessionFile);
+  if (
+    !relativeSessionFile ||
+    relativeSessionFile === "." ||
+    relativeSessionFile.startsWith(`..${path.sep}`) ||
+    relativeSessionFile === ".." ||
+    path.isAbsolute(relativeSessionFile)
+  ) {
+    return null;
+  }
+  return path.join(targetDir, relativeSessionFile);
+}
+
+async function rewriteMigratedSessionStorePaths(params: {
+  legacyDir: string;
+  targetDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const sessionStorePaths = Array.from(
+    new Set(
+      [path.join(params.targetDir, "agents"), path.join(params.targetDir, "sessions")].flatMap(
+        (rootDir) => collectSessionStorePaths(rootDir),
+      ),
+    ),
+  );
+
+  for (const storePath of sessionStorePaths) {
+    const parsed = readSessionStoreJson5(storePath);
+    if (!parsed.ok) {
+      warnings.push(`Skipping unreadable migrated sessions store: ${storePath}`);
+      continue;
+    }
+
+    const rewrittenStore: Record<string, SessionEntry> = {};
+    let rewrittenCount = 0;
+    for (const [key, entry] of Object.entries(parsed.store)) {
+      const normalizedEntry = normalizeSessionEntry(entry);
+      if (!normalizedEntry) {
+        continue;
+      }
+      const rewrittenSessionFile = rewriteSessionFilePathForStateDirMigration(
+        normalizedEntry.sessionFile,
+        params.legacyDir,
+        params.targetDir,
+      );
+      if (rewrittenSessionFile && rewrittenSessionFile !== normalizedEntry.sessionFile) {
+        normalizedEntry.sessionFile = rewrittenSessionFile;
+        rewrittenCount += 1;
+      }
+      rewrittenStore[key] = normalizedEntry;
+    }
+
+    if (rewrittenCount === 0) {
+      continue;
+    }
+
+    await saveSessionStore(storePath, rewrittenStore, { skipMaintenance: true });
+    changes.push(`Rewrote ${rewrittenCount} migrated sessionFile path(s) in ${storePath}`);
+  }
+
+  return { changes, warnings };
+}
+
 export async function autoMigrateLegacyStateDir(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -593,9 +694,24 @@ export async function autoMigrateLegacyStateDir(params: {
         warnings.push(
           `Rollback failed; set OPENCLAW_STATE_DIR=${targetDir} to avoid split state: ${String(rollbackErr)}`,
         );
+        const rewritten = await rewriteMigratedSessionStorePaths({
+          legacyDir: legacyDir ?? targetDir,
+          targetDir,
+        });
+        changes.push(...rewritten.changes);
+        warnings.push(...rewritten.warnings);
         changes.push(`State dir: ${legacyDir ?? "unknown"} → ${targetDir}`);
       }
     }
+  }
+
+  if (legacyDir) {
+    const rewritten = await rewriteMigratedSessionStorePaths({
+      legacyDir,
+      targetDir,
+    });
+    changes.push(...rewritten.changes);
+    warnings.push(...rewritten.warnings);
   }
 
   return { migrated: changes.length > 0, skipped: false, changes, warnings };
