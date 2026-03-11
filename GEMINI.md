@@ -1,6 +1,6 @@
-# CLAUDE.md — OpenClaw Gateway (clawdbot)
+# GEMINI.md — OpenClaw Gateway (clawdbot)
 
-Repo boot instructions for Claude Code. Treat this file as a thin adapter into the shared docs.
+Repo boot instructions for Gemini workflows. Treat this file as a thin adapter into the shared docs.
 
 ## Start Here
 
@@ -16,15 +16,14 @@ See `docs/project-context.md` for the shared command set.
 ## Docs Discovery
 
 Key starting points:
+
 - `docs/project-context.md`
 - `docs/contributor/ai-tooling.md`
 - `docs/concepts/context.md`
 - `docs/concepts/multi-agent.md`
 - `docs/start/docs-directory.md`
 
-## Claude-Specific Notes
+## Gemini-Specific Notes
 
-- Keep `CLAUDE.md` concise; durable detail belongs in `docs/`.
-- Claude Code session memory lives under `~/.claude/projects/`.
-- Repo-root adapters are different from runtime workspace templates under `docs/reference/`.
-- For local or generic LLM consumers, the neutral starting point is `docs/project-context.md`.
+- Keep `GEMINI.md` concise; durable detail belongs in `docs/`.
+- If your Gemini workflow does not auto-load root files, start with `docs/project-context.md`.
