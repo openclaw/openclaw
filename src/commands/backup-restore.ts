@@ -1015,16 +1015,16 @@ async function chmodIfPresent(
   require: "file" | "dir",
 ): Promise<void> {
   try {
-    const st = await fs.lstat(targetPath);
-    if (st.isSymbolicLink()) {
-      return;
-    }
+    // Use stat (not lstat) so symlinks are followed and permissions are
+    // applied to the real target file/directory.
+    const st = await fs.stat(targetPath);
     if (require === "file" && !st.isFile()) {
       return;
     }
     if (require === "dir" && !st.isDirectory()) {
       return;
     }
+    // fs.chmod follows symlinks by default, so this hardens the real target.
     await fs.chmod(targetPath, mode);
   } catch {
     // Best-effort hardening only.
