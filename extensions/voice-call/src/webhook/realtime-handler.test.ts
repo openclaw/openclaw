@@ -5,6 +5,12 @@ import type { CallRecord } from "../types.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
+/** Extract the stream token from a TwiML body string. */
+function extractStreamToken(twiml: string): string | null {
+  const match = twiml.match(/\?token=([^"&\s]+)/);
+  return match?.[1] ?? null;
+}
+
 // Minimal realtime config used across tests
 const baseRealtimeConfig = {
   enabled: true,
@@ -93,7 +99,7 @@ describe("RealtimeCallHandler", () => {
       expect(payload.headers?.["Content-Type"]).toBe("text/xml");
       expect(payload.body).toContain("<Connect>");
       expect(payload.body).toContain("<Stream");
-      expect(payload.body).toContain('url="wss://gateway.ts.net/voice/stream/realtime"');
+      expect(payload.body).toContain("wss://gateway.ts.net/voice/stream/realtime?token=");
     });
 
     it("falls back to localhost when no host header is present", () => {
@@ -106,7 +112,53 @@ describe("RealtimeCallHandler", () => {
       const req = makeRequest("/voice/webhook", "");
       const payload = handler.buildTwiMLPayload(req);
 
-      expect(payload.body).toContain("wss://localhost:8443/voice/stream/realtime");
+      expect(payload.body).toContain("wss://localhost:8443/voice/stream/realtime?token=");
+    });
+
+    it("embeds a unique token on each call", () => {
+      const handler = new RealtimeCallHandler(
+        baseRealtimeConfig,
+        makeManager(),
+        makeProvider(),
+        null,
+      );
+      const req = makeRequest("/voice/webhook", "host.example.com");
+      const token1 = extractStreamToken(handler.buildTwiMLPayload(req).body);
+      const token2 = extractStreamToken(handler.buildTwiMLPayload(req).body);
+      expect(token1).toBeTruthy();
+      expect(token2).toBeTruthy();
+      expect(token1).not.toBe(token2);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Stream token (nonce) validation
+  // ---------------------------------------------------------------------------
+
+  describe("stream token (nonce)", () => {
+    it("issueStreamToken + consumeStreamToken: valid token accepted once then rejected", () => {
+      const handler = new RealtimeCallHandler(
+        baseRealtimeConfig,
+        makeManager(),
+        makeProvider(),
+        null,
+      );
+      const issue = (handler as unknown as { issueStreamToken: () => string }).issueStreamToken;
+      const consume = (handler as unknown as { consumeStreamToken: (t: string) => boolean }).consumeStreamToken;
+      const token = issue.call(handler);
+      expect(consume.call(handler, token)).toBe(true);
+      expect(consume.call(handler, token)).toBe(false);
+    });
+
+    it("rejects unknown tokens", () => {
+      const handler = new RealtimeCallHandler(
+        baseRealtimeConfig,
+        makeManager(),
+        makeProvider(),
+        null,
+      );
+      const consume = (handler as unknown as { consumeStreamToken: (t: string) => boolean }).consumeStreamToken;
+      expect(consume.call(handler, "not-a-real-token")).toBe(false);
     });
   });
 

@@ -1,4 +1,5 @@
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { type WebSocket, Server as WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
@@ -23,8 +24,13 @@ export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
  * - Register each call with CallManager (appears in voice status/history)
  * - Route tool calls to registered handlers (Phase 5 tool framework)
  */
+/** How long (ms) a stream token remains valid after TwiML is issued. */
+const STREAM_TOKEN_TTL_MS = 30_000;
+
 export class RealtimeCallHandler {
   private toolHandlers = new Map<string, ToolHandlerFn>();
+  /** One-time tokens issued per TwiML response; consumed on WS upgrade. */
+  private pendingStreamTokens = new Map<string, number>();
 
   constructor(
     private config: VoiceCallRealtimeConfig,
@@ -37,9 +43,22 @@ export class RealtimeCallHandler {
 
   /**
    * Handle a WebSocket upgrade request from Twilio for a realtime media stream.
-   * Called from VoiceCallWebhookServer's upgrade handler when isRealtimeMode() is true.
+   * Called from VoiceCallWebhookServer's upgrade handler when isRealtimeWebSocketUpgrade() is true.
+   *
+   * Validates the one-time stream token embedded in the URL by buildTwiMLPayload before
+   * accepting the upgrade. This ensures the WS connection was preceded by a properly
+   * Twilio-signed POST webhook — the token is only issued after verifyWebhook passes.
    */
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    const url = new URL(request.url ?? "/", "wss://localhost");
+    const token = url.searchParams.get("token");
+    if (!token || !this.consumeStreamToken(token)) {
+      console.warn("[voice-call] Rejecting WS upgrade: missing or invalid stream token");
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
     const wss = new WebSocketServer({ noServer: true });
     wss.handleUpgrade(request, socket, head, (ws) => {
       let bridge: OpenAIRealtimeVoiceBridge | null = null;
@@ -81,12 +100,14 @@ export class RealtimeCallHandler {
   /**
    * Build the TwiML <Connect><Stream> response payload for a realtime call.
    * The WebSocket URL is derived from the incoming request host so no hostname
-   * is hardcoded.
+   * is hardcoded. A one-time stream token is embedded in the URL and validated
+   * by handleWebSocketUpgrade to prevent unauthenticated WS connections.
    */
   buildTwiMLPayload(req: http.IncomingMessage): WebhookResponsePayload {
     const host = req.headers.host || "localhost:8443";
-    const wsUrl = `wss://${host}/voice/stream/realtime`;
-    console.log(`[voice-call] Returning realtime TwiML with WebSocket: ${wsUrl}`);
+    const token = this.issueStreamToken();
+    const wsUrl = `wss://${host}/voice/stream/realtime?token=${token}`;
+    console.log(`[voice-call] Returning realtime TwiML with WebSocket: wss://${host}/voice/stream/realtime`);
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -115,6 +136,25 @@ export class RealtimeCallHandler {
   // ---------------------------------------------------------------------------
   // Private
   // ---------------------------------------------------------------------------
+
+  /** Generate a single-use stream token valid for STREAM_TOKEN_TTL_MS. */
+  private issueStreamToken(): string {
+    const token = randomUUID();
+    this.pendingStreamTokens.set(token, Date.now() + STREAM_TOKEN_TTL_MS);
+    // Evict expired tokens to prevent unbounded growth if calls are abandoned
+    for (const [t, expiry] of this.pendingStreamTokens) {
+      if (Date.now() > expiry) this.pendingStreamTokens.delete(t);
+    }
+    return token;
+  }
+
+  /** Consume a stream token. Returns true if valid and not yet used. */
+  private consumeStreamToken(token: string): boolean {
+    const expiry = this.pendingStreamTokens.get(token);
+    if (expiry === undefined) return false;
+    this.pendingStreamTokens.delete(token);
+    return Date.now() <= expiry;
+  }
 
   /**
    * Create and start the OpenAI Realtime bridge for a single call session.
