@@ -23,7 +23,7 @@ export type AnchoredSandboxEntry = {
   basename: string;
 };
 
-export type PinnedSandboxWriteEntry = {
+export type PinnedSandboxEntry = {
   mountRootPath: string;
   relativeParentPath: string;
   basename: string;
@@ -135,29 +135,21 @@ export class SandboxFsPathGuard {
   }
 
   async resolveAnchoredSandboxEntry(target: SandboxResolvedFsPath): Promise<AnchoredSandboxEntry> {
-    const basename = path.posix.basename(target.containerPath);
-    if (!basename || basename === "." || basename === "/") {
-      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
-    }
-    const parentPath = normalizeContainerPath(path.posix.dirname(target.containerPath));
+    const splitTarget = this.splitSandboxEntryTarget(target);
     const canonicalParentPath = await this.resolveCanonicalContainerPath({
-      containerPath: parentPath,
+      containerPath: splitTarget.parentPath,
       allowFinalSymlinkForUnlink: false,
     });
     return {
       canonicalParentPath,
-      basename,
+      basename: splitTarget.basename,
     };
   }
 
-  resolvePinnedWriteEntry(target: SandboxResolvedFsPath, action: string): PinnedSandboxWriteEntry {
-    const basename = path.posix.basename(target.containerPath);
-    if (!basename || basename === "." || basename === "/") {
-      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
-    }
-    const parentPath = normalizeContainerPath(path.posix.dirname(target.containerPath));
-    const mount = this.resolveRequiredMount(parentPath, action);
-    const relativeParentPath = path.posix.relative(mount.containerRoot, parentPath);
+  resolvePinnedMutationEntry(target: SandboxResolvedFsPath, action: string): PinnedSandboxEntry {
+    const splitTarget = this.splitSandboxEntryTarget(target);
+    const mount = this.resolveRequiredMount(splitTarget.parentPath, action);
+    const relativeParentPath = path.posix.relative(mount.containerRoot, splitTarget.parentPath);
     if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
@@ -166,6 +158,20 @@ export class SandboxFsPathGuard {
     return {
       mountRootPath: mount.containerRoot,
       relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
+      basename: splitTarget.basename,
+    };
+  }
+
+  private splitSandboxEntryTarget(target: SandboxResolvedFsPath): {
+    basename: string;
+    parentPath: string;
+  } {
+    const basename = path.posix.basename(target.containerPath);
+    if (!basename || basename === "." || basename === "/") {
+      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
+    }
+    return {
+      parentPath: normalizeContainerPath(path.posix.dirname(target.containerPath)),
       basename,
     };
   }
