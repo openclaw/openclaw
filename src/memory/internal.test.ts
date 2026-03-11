@@ -3,12 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
+import {
+  DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
+  type MemoryMultimodalSettings,
+} from "./multimodal.js";
 
 function setupTempDirLifecycle(prefix: string): () => string {
   let tmpDir = "";
@@ -38,6 +43,11 @@ describe("normalizeExtraMemoryPaths", () => {
 
 describe("listMemoryFiles", () => {
   const getTmpDir = setupTempDirLifecycle("memory-test-");
+  const multimodal: MemoryMultimodalSettings = {
+    enabled: true,
+    modalities: ["image", "audio"],
+    maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
+  };
 
   it("includes files from additional paths (directory)", async () => {
     const tmpDir = getTmpDir();
@@ -131,10 +141,29 @@ describe("listMemoryFiles", () => {
     const memoryMatches = files.filter((file) => file.endsWith("MEMORY.md"));
     expect(memoryMatches).toHaveLength(1);
   });
+
+  it("includes image and audio files from extra paths when multimodal is enabled", async () => {
+    const tmpDir = getTmpDir();
+    const extraDir = path.join(tmpDir, "media");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "diagram.png"), Buffer.from("png"));
+    await fs.writeFile(path.join(extraDir, "note.wav"), Buffer.from("wav"));
+    await fs.writeFile(path.join(extraDir, "ignore.bin"), Buffer.from("bin"));
+
+    const files = await listMemoryFiles(tmpDir, [extraDir], multimodal);
+    expect(files.some((file) => file.endsWith("diagram.png"))).toBe(true);
+    expect(files.some((file) => file.endsWith("note.wav"))).toBe(true);
+    expect(files.some((file) => file.endsWith("ignore.bin"))).toBe(false);
+  });
 });
 
 describe("buildFileEntry", () => {
   const getTmpDir = setupTempDirLifecycle("memory-build-entry-");
+  const multimodal: MemoryMultimodalSettings = {
+    enabled: true,
+    modalities: ["image", "audio"],
+    maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
+  };
 
   it("returns null when the file disappears before reading", async () => {
     const tmpDir = getTmpDir();
@@ -153,6 +182,37 @@ describe("buildFileEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry?.path).toBe("note.md");
     expect(entry?.size).toBeGreaterThan(0);
+  });
+
+  it("returns multimodal metadata for eligible image files", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "diagram.png");
+    await fs.writeFile(target, Buffer.from("png"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+
+    expect(entry).toMatchObject({
+      path: "diagram.png",
+      kind: "multimodal",
+      modality: "image",
+      mimeType: "image/png",
+      contentText: "Image file: diagram.png",
+    });
+  });
+
+  it("builds a multimodal chunk lazily for indexing", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "diagram.png");
+    await fs.writeFile(target, Buffer.from("png"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+    const built = await buildMultimodalChunkForIndexing(entry!);
+
+    expect(built?.chunk.embeddingInput?.parts).toEqual([
+      { type: "text", text: "Image file: diagram.png" },
+      expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
+    ]);
+    expect(built?.structuredInputBytes).toBeGreaterThan(0);
   });
 });
 
