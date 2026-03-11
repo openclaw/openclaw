@@ -17,6 +17,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
+import { canWriteAccountScopedSoulFile } from "./channel-soul-file-config.js";
 import type { ChannelChoice } from "./onboard-types.js";
 import {
   ensureOnboardingPluginInstalled,
@@ -755,7 +756,7 @@ export async function setupChannels(
 /**
  * Prompt for channel-specific SOUL files for configured channels.
  */
-async function maybeConfigureSoulFiles(params: {
+export async function maybeConfigureSoulFiles(params: {
   cfg: OpenClawConfig;
   selection: ChannelChoice[];
   prompter: WizardPrompter;
@@ -777,17 +778,23 @@ async function maybeConfigureSoulFiles(params: {
   }
 
   let next = cfg;
+  const unsupportedLabels: string[] = [];
 
   for (const channel of selection) {
-    const accountId = accountIdsByChannel.get(channel) ?? "default";
+    const accountId = accountIdsByChannel.get(channel) ?? DEFAULT_ACCOUNT_ID;
+    const accountLabel = accountId === DEFAULT_ACCOUNT_ID ? channel : `${channel}:${accountId}`;
+
+    if (!canWriteAccountScopedSoulFile({ channel, accountId })) {
+      unsupportedLabels.push(accountLabel);
+      continue;
+    }
+
     const plugin = getChannelPlugin(channel);
     const account = plugin?.config.resolveAccount(next, accountId) as
       | { soulFile?: string; name?: string }
       | undefined;
 
     const existingSoulFile = account?.soulFile;
-    const accountLabel = accountId === "default" ? channel : `${channel}:${accountId}`;
-
     const useCustomSoul = await prompter.confirm({
       message: `Use custom SOUL file for ${accountLabel}?${existingSoulFile ? ` (current: ${existingSoulFile})` : ""}`,
       initialValue: false,
@@ -797,7 +804,7 @@ async function maybeConfigureSoulFiles(params: {
       continue;
     }
 
-    const defaultSoulName = `SOUL.${accountId === "default" ? channel : accountId}.md`;
+    const defaultSoulName = `SOUL.${accountId === DEFAULT_ACCOUNT_ID ? channel : accountId}.md`;
     const soulFileName = await prompter.text({
       message: `SOUL filename for ${accountLabel}`,
       initialValue: existingSoulFile ?? defaultSoulName,
@@ -823,7 +830,6 @@ async function maybeConfigureSoulFiles(params: {
       continue;
     }
 
-    // Apply soulFile to config
     const channelConfig = next.channels?.[channel as keyof typeof next.channels] as
       | { accounts?: Record<string, unknown> }
       | undefined;
@@ -853,6 +859,16 @@ async function maybeConfigureSoulFiles(params: {
         "Create this file in your workspace directory with your custom personality.",
       ].join("\n"),
       `${accountLabel} SOUL configured`,
+    );
+  }
+
+  if (unsupportedLabels.length > 0) {
+    await prompter.note(
+      [
+        "Skipped SOUL file setup for channels that do not support account-scoped soulFile config:",
+        ...unsupportedLabels.map((label) => `- ${label}`),
+      ].join("\n"),
+      "Channel SOUL files",
     );
   }
 

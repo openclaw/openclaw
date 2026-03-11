@@ -11,6 +11,7 @@ import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.j
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { buildAgentSummaries } from "../agents.config.js";
+import { canWriteAccountScopedSoulFile } from "../channel-soul-file-config.js";
 import { setupChannels } from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
@@ -302,6 +303,14 @@ export async function channelsAddCommand(
 
   // Apply soulFile if specified
   if (opts.soul?.trim()) {
+    if (!canWriteAccountScopedSoulFile({ channel, accountId })) {
+      runtime.error(
+        `Channel ${channel} does not support account-scoped SOUL files via --soul in its current config shape.`,
+      );
+      runtime.exit(1);
+      return;
+    }
+
     const soulFile = opts.soul.trim();
     nextConfig = {
       ...nextConfig,

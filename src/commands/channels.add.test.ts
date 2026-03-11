@@ -1,4 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { msteamsPlugin } from "../../extensions/msteams/src/channel.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -92,5 +95,32 @@ describe("channelsAddCommand", () => {
         },
       },
     });
+  });
+
+  it("rejects --soul for channels without account-scoped soulFile support", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "msteams",
+        appId: "app-id",
+        appPassword: "secret",
+        soul: "SOUL.msteams.md",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Channel msteams does not support account-scoped SOUL files via --soul in its current config shape.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });
