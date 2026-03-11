@@ -969,6 +969,10 @@
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
     },
+    "./plugin-sdk/executorch": {
+      "types": "./dist/plugin-sdk/executorch.d.ts",
+      "default": "./dist/plugin-sdk/executorch.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },

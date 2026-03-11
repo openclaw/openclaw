@@ -14,6 +14,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     webSearchProviders: [],
+    mediaProviders: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},
     httpRoutes: [],

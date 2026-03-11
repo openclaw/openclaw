@@ -221,6 +221,7 @@
   "webhook-request-guards",
   "webhook-path",
   "web-media",
+  "executorch",
   "voice-call",
   "volcengine",
   "whatsapp-auth-presence",
