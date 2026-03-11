@@ -1389,9 +1389,11 @@ export async function runEmbeddedAttempt(
       // Outermost wrapper: transparently retry on HTTP 429 (rate limit) before
       // the error propagates to the agent loop / run loop. Applied to all
       // providers — the wrapper is a no-op for non-429 errors.
+      // Use runAbortController.signal (not params.abortSignal) so that the
+      // backoff sleep is interrupted by both timeout and user-triggered abort.
       activeSession.agent.streamFn = createRateLimitRetryStreamWrapper(
         activeSession.agent.streamFn,
-        params.abortSignal,
+        runAbortController.signal,
       );
 
       try {
