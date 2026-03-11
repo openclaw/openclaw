@@ -203,7 +203,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("does not merge configured models for providers that are not opted in", async () => {
+  it("merges configured models for any provider, not just kilocode", async () => {
     mockSingleOpenAiCatalogModel();
 
     const result = await loadModelCatalog({
@@ -232,7 +232,7 @@ describe("loadModelCatalog", () => {
 
     expect(
       result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
@@ -310,7 +310,7 @@ describe("loadModelCatalog", () => {
 
   it("enriches existing catalog entry with configured input capabilities", async () => {
     // Simulate: Pi SDK returns anthropic/claude-opus-4-6 without input field,
-    // config provides input: ["text", "image"] ï¿½ should enrich the existing entry.
+    // config provides input: ["text", "image"] Ã¯Â¿Â½ should enrich the existing entry.
     const result = await loadModelCatalog({
       useCache: false,
       config: {
@@ -339,7 +339,7 @@ describe("loadModelCatalog", () => {
     const matches = result.filter(
       (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-4-6",
     );
-    // Should not duplicate ï¿½ should be exactly 1 entry
+    // Should not duplicate Ã¯Â¿Â½ should be exactly 1 entry
     expect(matches.length).toBeLessThanOrEqual(1);
     // If present, should have image input
     if (matches.length === 1) {
