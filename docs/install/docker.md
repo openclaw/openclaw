@@ -384,10 +384,9 @@ If you need Playwright to install system deps, rebuild the image with
 
 4. **Persist Playwright browser downloads**:
 
-- Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
-  `docker-compose.yml`.
-- Ensure `/home/node` persists via `OPENCLAW_HOME_VOLUME`, or mount
-  `/home/node/.cache/ms-playwright` via `OPENCLAW_EXTRA_MOUNTS`.
+- Set `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright` (the default in this image) in
+  `docker-compose.yml` if you need to override it, or just mount it.
+- Mount a volume to `/opt/playwright` via `OPENCLAW_EXTRA_MOUNTS`.
 
 ### Permissions + EACCES
 
