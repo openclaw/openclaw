@@ -71,7 +71,7 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
 export function startWhatsAppQrPoll(state: ChannelsState) {
   stopWhatsAppQrPoll();
   const myGeneration = ++qrPollGeneration;
-  (async () => {
+  void (async () => {
     while (
       myGeneration === qrPollGeneration &&
       state.client &&
