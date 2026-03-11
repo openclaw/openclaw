@@ -93,7 +93,7 @@ const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
-const APPROVAL_SLUG_LENGTH = 8;
+const APPROVAL_SLUG_LENGTH = 36;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),

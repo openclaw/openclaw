@@ -248,7 +248,18 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   lines.push(
     "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
   );
-  lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
+  lines.push("");
+  lines.push("```");
+  lines.push(`/approve ${request.id} allow-once`);
+  lines.push("```");
+  lines.push("");
+  lines.push("```");
+  lines.push(`/approve ${request.id} allow-always`);
+  lines.push("```");
+  lines.push("");
+  lines.push("```");
+  lines.push(`/approve ${request.id} deny`);
+  lines.push("```");
   return lines.join("\n");
 }
 
@@ -376,7 +387,7 @@ function buildRequestPayloadForTarget(
   if (channel === "telegram") {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: request.id,
-      approvalSlug: request.id.slice(0, 8),
+      approvalSlug: request.id,
       approvalCommandId: request.id,
       command: resolveExecApprovalCommandDisplay(request.request).commandText,
       cwd: request.request.cwd ?? undefined,

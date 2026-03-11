@@ -19,6 +19,14 @@ export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
+  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
+    if (typeof context.hasExecApprovalClients === "function") {
+      return context.hasExecApprovalClients();
+    }
+    // Fail closed when no operator-scope probe is available.
+    return false;
+  };
+
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -91,10 +99,6 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      if (!effectiveCommandText) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
-        return;
-      }
       if (
         host === "node" &&
         (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
@@ -126,8 +130,7 @@ export function createExecApprovalHandlers(
       }
       const request = {
         command: effectiveCommandText,
-        commandPreview: host === "node" ? undefined : approvalContext.commandPreview,
-        commandArgv: host === "node" ? undefined : effectiveCommandArgv,
+        commandArgv: effectiveCommandArgv,
         envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
@@ -175,11 +178,10 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      const hasExecApprovalClients = context.hasExecApprovalClients?.() ?? false;
-      let forwarded = false;
+      let forwardedToTargets = false;
       if (opts?.forwarder) {
         try {
-          forwarded = await opts.forwarder.handleRequested({
+          forwardedToTargets = await opts.forwarder.handleRequested({
             id: record.id,
             request: record.request,
             createdAtMs: record.createdAtMs,
@@ -190,19 +192,8 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasExecApprovalClients && !forwarded) {
-        manager.expire(record.id, "no-approval-route");
-        respond(
-          true,
-          {
-            id: record.id,
-            decision: null,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          },
-          undefined,
-        );
-        return;
+      if (!hasApprovalClients(context) && !forwardedToTargets) {
+        manager.expire(record.id, "auto-expire:no-approver-clients");
       }
 
       // Only send immediate "accepted" response when twoPhase is requested.
@@ -284,48 +275,38 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const resolvedId = manager.lookupPendingId(p.id);
-      if (resolvedId.kind === "none") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
-        );
-        return;
-      }
-      if (resolvedId.kind === "ambiguous") {
-        const candidates = resolvedId.ids.slice(0, 3).join(", ");
-        const remainder = resolvedId.ids.length > 3 ? ` (+${resolvedId.ids.length - 3} more)` : "";
+      const match = manager.findByIdOrPrefix(p.id);
+      if (match === "ambiguous") {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `ambiguous approval id prefix; matches: ${candidates}${remainder}. Use the full id.`,
+            "ambiguous approval id prefix — use more characters",
           ),
         );
         return;
       }
-      const approvalId = resolvedId.id;
-      const snapshot = manager.getSnapshot(approvalId);
+      if (!match) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      const resolvedId = match.id;
+      const snapshot = manager.getSnapshot(resolvedId);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
+      const ok = manager.resolve(resolvedId, decision, resolvedBy ?? null);
       if (!ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: resolvedId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: approvalId,
+          id: resolvedId,
           decision,
           resolvedBy,
           ts: Date.now(),
