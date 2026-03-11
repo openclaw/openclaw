@@ -993,6 +993,10 @@ describe("handleCommands /allowlist", () => {
         },
       },
     } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
     const params = buildPolicyParams("/allowlist add dm --account work --config 789", cfg, {
       AccountId: "default",
       Provider: "telegram",
