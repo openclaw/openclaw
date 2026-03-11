@@ -39,9 +39,21 @@ struct MacNodeBrowserProxyTests {
         #expect(tabs[0]["id"] as? String == "tab-1")
     }
 
-    // Regression test: POST body with nested AnyCodable must not crash with __SwiftValue
+    // Regression test: nested POST bodies must serialize without __SwiftValue crashes.
     @Test func postRequestSerializesNestedBodyWithoutCrash() async throws {
-        var capturedBody: Data?
+        actor BodyCapture {
+            private var body: Data?
+
+            func set(_ body: Data?) {
+                self.body = body
+            }
+
+            func get() -> Data? {
+                self.body
+            }
+        }
+
+        let capturedBody = BodyCapture()
         let proxy = MacNodeBrowserProxy(
             endpointProvider: {
                 MacNodeBrowserProxy.Endpoint(
@@ -50,7 +62,7 @@ struct MacNodeBrowserProxyTests {
                     password: nil)
             },
             performRequest: { request in
-                capturedBody = request.httpBody
+                await capturedBody.set(request.httpBody)
                 let url = try #require(request.url)
                 let response = try #require(
                     HTTPURLResponse(
@@ -64,7 +76,7 @@ struct MacNodeBrowserProxyTests {
         _ = try await proxy.request(
             paramsJSON: #"{"method":"POST","path":"/action","body":{"nested":{"key":"val"},"arr":[1,2]}}"#)
 
-        let bodyData = try #require(capturedBody)
+        let bodyData = try #require(await capturedBody.get())
         let parsed = try #require(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
         let nested = try #require(parsed["nested"] as? [String: Any])
         #expect(nested["key"] as? String == "val")
