@@ -56,10 +56,7 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
  * not user-facing content.  Inline occurrences like `"😄 NO_REPLY"` are left to
  * {@link stripSilentToken} so the non-token text can still be delivered.
  */
-export function isSilentTokenOnOwnLine(
-  text: string,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
+export function isSilentTokenOnOwnLine(text: string, token: string = SILENT_REPLY_TOKEN): boolean {
   if (!text) {
     return false;
   }
