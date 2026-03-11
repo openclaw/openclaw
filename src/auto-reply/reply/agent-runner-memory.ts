@@ -457,7 +457,9 @@ export async function runMemoryFlushIfNeeded(params: {
     params.followupRun.run.sessionId,
     entry ?? params.sessionEntry,
     params.storePath,
-    params.agentId,
+    // Derive agentId from sessionKey so non-default agents resolve
+    // transcripts from the correct sessions directory (#34222).
+    params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
   );
   let contextHashBeforeFlush: string | undefined;
   if (sessionFilePath) {
@@ -551,7 +553,11 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end" && !evt.data?.willRetry) {
+              // Mirror the subscriber logic in handleAutoCompactionEnd: a compaction
+              // is considered complete when it produced a result and was not aborted,
+              // even when willRetry=true (overflow recovery — the compaction itself
+              // succeeded and context was trimmed). (#34222)
+              if (phase === "end" && evt.data?.hasResult && !evt.data?.wasAborted) {
                 memoryCompactionCompleted = true;
               }
             }
