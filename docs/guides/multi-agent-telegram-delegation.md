@@ -1,5 +1,5 @@
 ---
-summary: "How to wire multi-agent delegation correctly — session keys, tools, and the Manager → Worker → QA pattern."
+summary: "How to wire multi-agent delegation correctly: session keys, tools, and the Manager to Worker to QA pattern."
 title: Multi-Agent Telegram Delegation
 read_when:
   - Your agents aren't talking to each other
@@ -13,7 +13,7 @@ status: active
 
 So your agents won't talk to each other. You've tried `sessions_spawn`, you've tried the `message` tool, nothing works. This guide explains why, and how to wire it correctly.
 
-These are hard-won discoveries from production fleet debugging — not theory.
+These are hard-won discoveries from production fleet debugging, not theory.
 
 ---
 
@@ -63,7 +63,7 @@ Manager agents that need to coordinate teams should run as **top-level persisten
 
 ---
 
-## The Manager → Worker → QA Pattern
+## The Manager to Worker to QA Pattern
 
 This is the standard delegation pattern for a multi-agent fleet:
 
@@ -152,7 +152,7 @@ sessions_send(
 
 Check whether you're using the `message` tool or `sessions_send`. The `message` tool sends a Telegram message — the agent sees it in the chat log but does **not** process it as a new task. Use `sessions_send` with the correct `sessionKey`.
 
-### "sessions_spawn fails inside my agent"
+### sessions_spawn Fails Inside My Agent
 
 Your agent is running as a subagent. Subagents don't have session tools. The agent that needs to spawn others must be a **persistent top-level session**. Check whether it was originally spawned with `sessions_spawn` — if so, restructure so it runs persistently and is tasked via `sessions_send`.
 
@@ -164,7 +164,7 @@ Persistent sessions follow `agent:<agent-id>:main`. The `agent-id` is defined in
 
 Escalate to the orchestrator. Send a `sessions_send` to Babbage's session with the subject "QA ESCALATION: [task]" and include Ralph's notes from all 3 rounds. Don't keep looping — 3 rejections means the task needs human judgment.
 
-### "The completion event never arrived"
+### The Completion Event Never Arrived
 
 Push-based completion events arrive as inbound messages after `sessions_spawn`. Do **not** poll with `sessions_list`, `sessions_history`, or `exec sleep` — just wait. If a completion event arrives after you've already sent your final reply, respond with `NO_REPLY` (a bare signal to the runtime that tells it to suppress the duplicate delivery — it is not a message sent to any user or agent).
 
