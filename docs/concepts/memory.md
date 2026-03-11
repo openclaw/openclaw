@@ -284,8 +284,45 @@ Notes:
 
 - Paths can be absolute or workspace-relative.
 - Directories are scanned recursively for `.md` files.
-- Only Markdown files are indexed.
+- By default, only Markdown files are indexed.
+- If `memorySearch.multimodal.enabled = true`, OpenClaw also indexes supported image/audio files under `extraPaths` only. Default memory roots (`MEMORY.md`, `memory.md`, `memory/**/*.md`) stay Markdown-only.
 - Symlinks are ignored (files or directories).
+
+### Multimodal memory files (Gemini image + audio)
+
+OpenClaw can index image and audio files from `memorySearch.extraPaths` when using Gemini embedding 2:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: ["assets/reference", "voice-notes"],
+      multimodal: {
+        enabled: true,
+        modalities: ["image", "audio"], // or ["all"]
+        maxFileBytes: 10000000
+      },
+      remote: {
+        apiKey: "YOUR_GEMINI_API_KEY"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- Multimodal memory is currently supported only for `gemini-embedding-2-preview`.
+- Multimodal indexing applies only to files discovered through `memorySearch.extraPaths`.
+- Supported modalities in this phase: image and audio.
+- `memorySearch.fallback` must stay `"none"` while multimodal memory is enabled.
+- Matching image/audio file bytes are uploaded to the configured Gemini embedding endpoint during indexing.
+- Supported image extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`.
+- Supported audio extensions: `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.flac`.
+- Search queries remain text, but Gemini can compare those text queries against indexed image/audio embeddings.
+- `memory_get` still reads Markdown only; binary files are searchable but not returned as raw file contents.
 
 ### Gemini embeddings (native)
 
