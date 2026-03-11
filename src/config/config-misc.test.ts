@@ -315,6 +315,7 @@ describe("model compat config schema", () => {
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,
                   requiresMistralToolIds: false,
+                  requiresOpenAiAnthropicToolPayload: true,
                 },
               },
             ],
