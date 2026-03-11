@@ -1,7 +1,27 @@
 import type { RequestClient } from "@buape/carbon";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createDiscordRestClient } from "./client.js";
+
+const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
+  undiciFetchMock: vi.fn(),
+  proxyAgentSpy: vi.fn(),
+}));
+
+vi.mock("undici", () => {
+  class ProxyAgent {
+    proxyUrl: string;
+    constructor(proxyUrl: string) {
+      this.proxyUrl = proxyUrl;
+      proxyAgentSpy(proxyUrl);
+    }
+  }
+  return {
+    ProxyAgent,
+    EnvHttpProxyAgent: class {},
+    fetch: undiciFetchMock,
+  };
+});
 
 describe("createDiscordRestClient", () => {
   const fakeRest = {} as RequestClient;
@@ -87,5 +107,38 @@ describe("createDiscordRestClient", () => {
         cfg,
       ),
     ).toThrow(/unresolved SecretRef/i);
+  });
+
+  it("routes Discord REST requests through configured proxy", async () => {
+    undiciFetchMock.mockClear().mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    proxyAgentSpy.mockClear();
+
+    const cfg = {
+      channels: {
+        discord: {
+          proxy: "http://proxy.test:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = createDiscordRestClient(
+      {
+        token: "Bot explicit-token",
+      },
+      cfg,
+    );
+
+    await result.rest.get("/oauth2/applications/@me");
+
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(undiciFetchMock).toHaveBeenCalledWith(
+      "https://discord.com/api/oauth2/applications/@me",
+      expect.objectContaining({
+        method: "GET",
+        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+      }),
+    );
+    const requestInit = undiciFetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((requestInit?.headers as Headers).get("Authorization")).toBe("Bot explicit-token");
   });
 });

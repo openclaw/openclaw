@@ -9,6 +9,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { normalizeDiscordToken } from "./token.js";
+import { ProxyDiscordRequestClient } from "./proxy-rest-client.js";
 
 export type DiscordClientOpts = {
   cfg?: ReturnType<typeof loadConfig>;
@@ -29,8 +30,15 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+function resolveRest(params: { token: string; rest?: RequestClient; proxy?: string }) {
+  if (params.rest) {
+    return params.rest;
+  }
+  const proxy = params.proxy?.trim();
+  if (proxy) {
+    return new ProxyDiscordRequestClient(params.token, proxy);
+  }
+  return new RequestClient(params.token);
 }
 
 function resolveAccountWithoutToken(params: {
@@ -66,7 +74,7 @@ export function createDiscordRestClient(
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveRest({ token, rest: opts.rest, proxy: account.config.proxy });
   return { token, rest, account };
 }
 
