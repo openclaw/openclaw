@@ -200,6 +200,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
+      // Drop every state for runs we already finalized locally. Allowing delayed
+      // aborted/error/final events through would re-run cleanup and duplicate UI updates.
       return;
     }
     noteSessionRun(evt.runId);
