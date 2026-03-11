@@ -198,4 +198,28 @@ describe("session binding service", () => {
       placements: [],
     });
   });
+
+  it("shares adapter and service state through globalThis", () => {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      capabilities: {
+        placements: ["current"],
+      },
+      bind: async (input) => createRecord(input),
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      unbind: async () => [],
+    });
+
+    const globalAdapters = Reflect.get(
+      globalThis,
+      "__openclawSessionBindingAdaptersByChannelAccount",
+    );
+    const globalService = Reflect.get(globalThis, "__openclawSessionBindingService");
+
+    expect(globalAdapters).toBeInstanceOf(Map);
+    expect((globalAdapters as Map<string, unknown>).has("discord:default")).toBe(true);
+    expect(globalService).toBe(getSessionBindingService());
+  });
 });

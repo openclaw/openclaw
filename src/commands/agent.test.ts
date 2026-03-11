@@ -437,6 +437,40 @@ describe("agentCommand", () => {
     });
   });
 
+  it("hydrates telegram topic routing from persisted session delivery context on session resume", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:telegram:group:-100123:topic:55": {
+          sessionId: "session-telegram-topic",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:-100123",
+            accountId: "default",
+            threadId: 55,
+          },
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand({ message: "resume me", sessionId: "session-telegram-topic" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs).toEqual(
+        expect.objectContaining({
+          sessionId: "session-telegram-topic",
+          messageChannel: "telegram",
+          agentAccountId: "default",
+          messageTo: "telegram:-100123",
+          messageThreadId: "55",
+          currentChannelId: "telegram:-100123",
+          currentThreadTs: "55",
+        }),
+      );
+    });
+  });
+
   it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
     await withCrossAgentResumeFixture(async ({ sessionKey }) => {
       const callArgs = getLastEmbeddedCall();

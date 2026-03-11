@@ -145,7 +145,27 @@ function resolveAdapterCapabilities(
   };
 }
 
-const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
+type SessionBindingGlobalScope = typeof globalThis & {
+  __openclawSessionBindingAdaptersByChannelAccount?: Map<string, SessionBindingAdapter>;
+  __openclawSessionBindingService?: SessionBindingService;
+};
+
+function resolveGlobalScope(): SessionBindingGlobalScope {
+  return globalThis as SessionBindingGlobalScope;
+}
+
+function resolveGlobalSessionBindingAdapters() {
+  const scope = resolveGlobalScope();
+  const existing = scope.__openclawSessionBindingAdaptersByChannelAccount;
+  if (existing instanceof Map) {
+    return existing;
+  }
+  const created = new Map<string, SessionBindingAdapter>();
+  scope.__openclawSessionBindingAdaptersByChannelAccount = created;
+  return created;
+}
+
+const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalSessionBindingAdapters();
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const key = toAdapterKey({
@@ -309,10 +329,19 @@ function createDefaultSessionBindingService(): SessionBindingService {
   };
 }
 
-const DEFAULT_SESSION_BINDING_SERVICE = createDefaultSessionBindingService();
+function resolveGlobalSessionBindingService(): SessionBindingService {
+  const scope = resolveGlobalScope();
+  const existing = scope.__openclawSessionBindingService;
+  if (existing && typeof existing === "object") {
+    return existing;
+  }
+  const created = createDefaultSessionBindingService();
+  scope.__openclawSessionBindingService = created;
+  return created;
+}
 
 export function getSessionBindingService(): SessionBindingService {
-  return DEFAULT_SESSION_BINDING_SERVICE;
+  return resolveGlobalSessionBindingService();
 }
 
 export const __testing = {
