@@ -30,9 +30,15 @@ const SENSITIVE_KEY_RE =
 const MAX_STRING_LEN = 2_000;
 const MAX_ARRAY_ITEMS = 20;
 const MAX_OBJ_DEPTH = 5;
+const MAX_DEPTH_EXCEEDED = "[max depth exceeded]";
+const UNKNOWN_TOOL_ERROR = "unknown tool error";
+const UNSERIALIZABLE_TOOL_ERROR = "[unserializable tool error]";
 
 function redactValue(value: unknown, depth: number): unknown {
-  if (depth > MAX_OBJ_DEPTH || value === null || value === undefined) {
+  if (depth > MAX_OBJ_DEPTH) {
+    return MAX_DEPTH_EXCEEDED;
+  }
+  if (value === null || value === undefined) {
     return value;
   }
   if (typeof value === "string") {
@@ -72,6 +78,17 @@ export function truncateString(str: string, maxLen: number): string {
     return str;
   }
   return `${str.slice(0, maxLen)}…[truncated]`;
+}
+
+function formatToolError(result: unknown): string {
+  if (typeof result === "string") {
+    return truncateString(result, 500);
+  }
+  try {
+    return truncateString(JSON.stringify(redactPayload(result ?? UNKNOWN_TOOL_ERROR)), 500);
+  } catch {
+    return UNSERIALIZABLE_TOOL_ERROR;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,24 +238,20 @@ export function initializeLangfuseAgentHooks(): void {
       if (!record) {
         return;
       }
-      spans.delete(toolCallId);
-      if (spans.size === 0) {
-        openToolSpansByRun.delete(runId);
-      }
       const durationMs = Date.now() - record.startedAt;
       const isError = evt.data.isError === true;
       const result = evt.data.result;
       if (isError) {
-        const errText =
-          typeof result === "string"
-            ? result
-            : JSON.stringify(result ?? "unknown tool error").slice(0, 500);
-        record.handle.captureError(errText, { toolCallId, runId, durationMs });
+        record.handle.captureError(formatToolError(result), { toolCallId, runId, durationMs });
       } else {
         record.handle.end({
           output: redactPayload(result),
           metadata: { toolCallId, durationMs },
         });
+      }
+      spans.delete(toolCallId);
+      if (spans.size === 0) {
+        openToolSpansByRun.delete(runId);
       }
     }
   });
