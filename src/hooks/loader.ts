@@ -421,14 +421,15 @@ function createSharedHookHandler(params: {
   handler: InternalHookHandler;
   overriddenWorkspaces?: ReadonlyMap<string, ReadonlySet<string>>;
 }): InternalHookHandler {
-  if (!params.overriddenWorkspaces || params.overriddenWorkspaces.size === 0) {
+  const overriddenWorkspaces = params.overriddenWorkspaces;
+  if (!overriddenWorkspaces || overriddenWorkspaces.size === 0) {
     return params.handler;
   }
 
   return async (event) => {
     const eventWorkspaceDir = resolveEventWorkspaceDir(event, params.cfg);
     if (isGatewayStartupEvent(event)) {
-      const hasStartupOverride = Array.from(params.overriddenWorkspaces.values()).some(
+      const hasStartupOverride = Array.from(overriddenWorkspaces.values()).some(
         (events) => events.has("gateway") || events.has("gateway:startup"),
       );
       if (hasStartupOverride) {
@@ -438,7 +439,7 @@ function createSharedHookHandler(params: {
       return;
     }
 
-    if (eventWorkspaceDir && params.overriddenWorkspaces?.has(eventWorkspaceDir)) {
+    if (eventWorkspaceDir && overriddenWorkspaces.has(eventWorkspaceDir)) {
       return;
     }
     await params.handler(event);
