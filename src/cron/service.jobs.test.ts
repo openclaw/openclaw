@@ -214,6 +214,53 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["openai/gpt-4o", "anthropic/claude-haiku-4-5"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.fallbacks).toEqual(["openai/gpt-4o", "anthropic/claude-haiku-4-5"]);
+    }
+  });
+
+  it("applies payload.fallbacks when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-sonnet-4-6"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.fallbacks).toEqual(["anthropic/claude-sonnet-4-6"]);
+    }
+  });
+
   it("rejects webhook delivery without a valid http(s) target URL", () => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
     const cases = [
