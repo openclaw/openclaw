@@ -63,7 +63,13 @@ const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
-const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+const BUILTIN_ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+
+function resolveAllowedFileNames(cfg: ReturnType<typeof loadConfig>): Set<string> {
+  const extras = cfg.agents?.defaults?.extraWorkspaceFiles;
+  if (!extras || extras.length === 0) return BUILTIN_ALLOWED_FILE_NAMES;
+  return new Set([...BUILTIN_ALLOWED_FILE_NAMES, ...extras]);
+}
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
@@ -88,7 +94,8 @@ function resolveAgentWorkspaceFileOrRespondError(
   const name = (
     typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
   ).trim();
-  if (!ALLOWED_FILE_NAMES.has(name)) {
+  const allowedFiles = resolveAllowedFileNames(cfg);
+  if (!allowedFiles.has(name)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
   }
