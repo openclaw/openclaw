@@ -606,6 +606,45 @@ async function resolveCloudflareAiGatewayImplicitProvider(
   return undefined;
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
+
+function hasExplicitRemoteOllamaApiProvider(
+  explicitProviders: ImplicitProviderContext["explicitProviders"],
+): boolean {
+  if (!explicitProviders) {
+    return false;
+  }
+  for (const [providerId, provider] of Object.entries(explicitProviders)) {
+    if (!provider || providerId === "ollama") {
+      continue;
+    }
+    if ((provider.api ?? "").trim().toLowerCase() !== "ollama") {
+      continue;
+    }
+    const baseUrl = (provider.baseUrl ?? "").trim();
+    if (!baseUrl) {
+      continue;
+    }
+    try {
+      const parsed = new URL(baseUrl);
+      if (!isLoopbackHost(parsed.hostname)) {
+        return true;
+      }
+    } catch {
+      // Ignore malformed explicit base URLs here; validation happens elsewhere.
+    }
+  }
+  return false;
+}
+
 async function resolveOllamaImplicitProvider(
   ctx: ImplicitProviderContext,
 ): Promise<Record<string, ProviderConfig> | undefined> {
@@ -626,8 +665,13 @@ async function resolveOllamaImplicitProvider(
 
   const ollamaBaseUrl = explicitOllama?.baseUrl;
   const hasExplicitOllamaConfig = Boolean(explicitOllama);
+  const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(ctx.explicitProviders);
+  if (!hasExplicitOllamaConfig && hasRemoteOllamaApiProvider) {
+    return undefined;
+  }
+
   const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
-    quiet: !ollamaKey && !hasExplicitOllamaConfig,
+    quiet: !hasExplicitOllamaConfig,
   });
   if (ollamaProvider.models.length === 0 && !ollamaKey && !explicitOllama?.apiKey) {
     return undefined;

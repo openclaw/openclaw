@@ -154,6 +154,30 @@ const MATRIX_CASES: MatrixCase[] = [
       expect(providers?.ollama?.models).toHaveLength(1);
     },
   },
+  {
+    name: "skip implicit local ollama when explicit remote ollama-api provider exists",
+    env: { OLLAMA_API_KEY: "test-ollama-key" }, // pragma: allowlist secret
+    explicitProviders: {
+      "ollama-cloud": {
+        baseUrl: "https://ollama.com",
+        api: "ollama",
+        models: [
+          {
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+    assertProviders(providers) {
+      expect(providers?.ollama).toBeUndefined();
+    },
+  },
 ];
 
 describe("implicit provider resolution matrix", () => {
