@@ -474,6 +474,8 @@ export type ToolsConfig = {
       gemini?: {
         /** Gemini API key (defaults to GEMINI_API_KEY env var). */
         apiKey?: SecretInput;
+        /** Base URL override (defaults to "https://generativelanguage.googleapis.com/v1beta"). */
+        baseUrl?: string;
         /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
         model?: string;
       };
@@ -481,6 +483,8 @@ export type ToolsConfig = {
       grok?: {
         /** API key for xAI (defaults to XAI_API_KEY env var). */
         apiKey?: SecretInput;
+        /** Base URL for API requests (defaults to "https://api.x.ai/v1"). */
+        baseUrl?: string;
         /** Model to use (defaults to "grok-4-1-fast"). */
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
