@@ -687,7 +687,7 @@ export class AcpSessionManager {
                 event.message?.trim() || "ACP turn failed before completion.",
               );
             }
-            if (input.onEvent) {
+            if (input.onEvent && !combinedSignal.aborted) {
               await input.onEvent(event);
             }
           }

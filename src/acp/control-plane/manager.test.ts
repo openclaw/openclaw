@@ -1369,4 +1369,57 @@ describe("AcpSessionManager", () => {
     // (for Turn A only). Turn B's ghost execution is prevented by throwIfAborted.
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
+
+  it("does not dispatch late ACP events to onEvent after abort signal fires", async () => {
+    // Regression: withTimeout rejects as soon as its abort timer fires, but the
+    // ACP event generator can asynchronously yield additional events before the
+    // for-await loop observes the aborted signal. Without the combinedSignal
+    // gate on input.onEvent, those late events still dispatch — a race window
+    // that sends content after the caller has already timed out. refs #36860
+    const abortController = new AbortController();
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    // Simulate a generator that fires the abort mid-stream then yields a late event.
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield { type: "text_delta" as const, text: "early" };
+      // Fire the abort after the first event — simulating withTimeout() expiry.
+      abortController.abort();
+      // The generator yields one more event that should NOT be dispatched.
+      yield { type: "text_delta" as const, text: "late" };
+      yield { type: "done" as const };
+    });
+
+    const dispatchedTexts: string[] = [];
+    const manager = new AcpSessionManager();
+
+    await manager
+      .runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "hello",
+        mode: "prompt",
+        requestId: "r-race",
+        signal: abortController.signal,
+        onEvent: async (event) => {
+          if (event.type === "text_delta") {
+            dispatchedTexts.push(event.text ?? "");
+          }
+        },
+      })
+      .catch(() => {
+        // runTurn may reject because the signal aborted — that is expected.
+      });
+
+    // Only the event emitted before abort should have been dispatched.
+    expect(dispatchedTexts).toEqual(["early"]);
+  });
 });
