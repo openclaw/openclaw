@@ -559,6 +559,7 @@ export async function spawnSubagentDirect(
       config: cfg,
       requesterSessionKey: requesterInternalKey,
       explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
+      targetAgentId,
     }),
   });
 
