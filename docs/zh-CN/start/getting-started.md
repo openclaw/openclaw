@@ -198,6 +198,16 @@ openclaw message send --target +15555550123 --message "Hello from OpenClaw"
 提示：`openclaw status --all` 是最佳的可粘贴、只读调试报告。
 健康探测：`openclaw health`（或 `openclaw status --deep`）向运行中的 Gateway 网关请求健康快照。
 
+## 有用的环境变量
+
+如果你以服务账户运行 OpenClaw 或想要自定义配置/状态位置：
+
+- `OPENCLAW_HOME` 设置用于内部路径解析的主目录。
+- `OPENCLAW_STATE_DIR` 覆盖状态目录。
+- `OPENCLAW_CONFIG_PATH` 覆盖配置文件路径。
+
+完整环境变量参考：[环境变量](/help/environment)。
+
 ## 下一步（可选，但很棒）
 
 - macOS 菜单栏应用 + 语音唤醒：[macOS 应用](/platforms/macos)
