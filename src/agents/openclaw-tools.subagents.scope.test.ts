@@ -149,4 +149,97 @@ describe("openclaw-tools: subagents scope isolation", () => {
       }),
     ]);
   });
+
+  it("leaf subagents cannot kill even explicitly-owned child sessions", async () => {
+    const leafKey = "agent:main:subagent:leaf";
+    const childKey = `${leafKey}:subagent:child`;
+
+    writeStore(storePath, {
+      [leafKey]: {
+        sessionId: "leaf-session",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+      [childKey]: {
+        sessionId: "child-session",
+        updatedAt: Date.now(),
+        spawnedBy: leafKey,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    });
+
+    addSubagentRunForTests({
+      runId: "run-child",
+      childSessionKey: childKey,
+      controllerSessionKey: leafKey,
+      requesterSessionKey: leafKey,
+      requesterDisplayKey: leafKey,
+      task: "impossible child",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+    });
+
+    const tool = createSubagentsTool({ agentSessionKey: leafKey });
+    const result = await tool.execute("call-leaf-kill", {
+      action: "kill",
+      target: childKey,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "Leaf subagents cannot control other sessions.",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("leaf subagents cannot steer even explicitly-owned child sessions", async () => {
+    const leafKey = "agent:main:subagent:leaf";
+    const childKey = `${leafKey}:subagent:child`;
+
+    writeStore(storePath, {
+      [leafKey]: {
+        sessionId: "leaf-session",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+      [childKey]: {
+        sessionId: "child-session",
+        updatedAt: Date.now(),
+        spawnedBy: leafKey,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    });
+
+    addSubagentRunForTests({
+      runId: "run-child",
+      childSessionKey: childKey,
+      controllerSessionKey: leafKey,
+      requesterSessionKey: leafKey,
+      requesterDisplayKey: leafKey,
+      task: "impossible child",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+    });
+
+    const tool = createSubagentsTool({ agentSessionKey: leafKey });
+    const result = await tool.execute("call-leaf-steer", {
+      action: "steer",
+      target: childKey,
+      message: "continue",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "Leaf subagents cannot control other sessions.",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 });
