@@ -11,6 +11,14 @@ export function getProcessSupervisor(): ProcessSupervisor {
   return singleton;
 }
 
+/**
+ * Reset the process supervisor singleton. Intended for test isolation only.
+ * Allows tests to start with a fresh supervisor without cross-test state leakage.
+ */
+export function _resetProcessSupervisorForTest(): void {
+  singleton = null;
+}
+
 export { createProcessSupervisor } from "./supervisor.js";
 export type {
   ManagedRun,

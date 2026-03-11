@@ -70,6 +70,8 @@ type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
   onDisconnected?: () => void;
+  /** Timestamp (ms) of the last access to this connection. */
+  lastAccessedAt: number;
 };
 
 type PageState = {
@@ -116,8 +118,40 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 
+/**
+ * Trim an array to `max` items by removing the oldest entries in bulk.
+ * More efficient than calling .shift() one-at-a-time on every event:
+ * shift() is O(n) per call (reindexes the whole array), while a single
+ * splice of `overflow` items is O(n) once, batching the cost.
+ */
+function trimOldest<T>(arr: T[], max: number): void {
+  const overflow = arr.length - max;
+  if (overflow > 0) {
+    arr.splice(0, overflow);
+  }
+}
+
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
+
+/** Stale CDP connections are closed after 30 minutes of no access. */
+const CDP_CACHE_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * Prune CDP connection cache entries that haven't been accessed recently
+ * and whose browser is no longer connected.
+ */
+export function pruneStaleCdpConnections(nowMs: number = Date.now()): number {
+  let pruned = 0;
+  const cutoff = nowMs - CDP_CACHE_STALE_MS;
+  for (const [url, conn] of cachedByCdpUrl) {
+    if (conn.lastAccessedAt < cutoff && !conn.browser.isConnected()) {
+      cachedByCdpUrl.delete(url);
+      pruned += 1;
+    }
+  }
+  return pruned;
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -236,9 +270,7 @@ export function ensurePageState(page: Page): PageState {
         location: msg.location(),
       };
       state.console.push(entry);
-      if (state.console.length > MAX_CONSOLE_MESSAGES) {
-        state.console.shift();
-      }
+      trimOldest(state.console, MAX_CONSOLE_MESSAGES);
     });
     page.on("pageerror", (err: Error) => {
       state.errors.push({
@@ -247,9 +279,7 @@ export function ensurePageState(page: Page): PageState {
         stack: err?.stack ? String(err.stack) : undefined,
         timestamp: new Date().toISOString(),
       });
-      if (state.errors.length > MAX_PAGE_ERRORS) {
-        state.errors.shift();
-      }
+      trimOldest(state.errors, MAX_PAGE_ERRORS);
     });
     page.on("request", (req: Request) => {
       state.nextRequestId += 1;
@@ -262,9 +292,7 @@ export function ensurePageState(page: Page): PageState {
         url: req.url(),
         resourceType: req.resourceType(),
       });
-      if (state.requests.length > MAX_NETWORK_REQUESTS) {
-        state.requests.shift();
-      }
+      trimOldest(state.requests, MAX_NETWORK_REQUESTS);
     });
     page.on("response", (resp: Response) => {
       const req = resp.request();
@@ -333,6 +361,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
+    cached.lastAccessedAt = Date.now();
     return cached;
   }
   const connecting = connectingByCdpUrl.get(normalized);
@@ -358,7 +387,12 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
             cachedByCdpUrl.delete(normalized);
           }
         };
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          lastAccessedAt: Date.now(),
+        };
         cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
