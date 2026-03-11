@@ -13,6 +13,7 @@ import { buildTelegramExecApprovalButtons } from "../telegram/approval-buttons.j
 import { sendTypingTelegram } from "../telegram/send.js";
 import {
   isDeliverableMessageChannel,
+  isMarkdownCapableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
@@ -210,7 +211,7 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   return { inline: false, text: `${fence}\n${command}\n${fence}` };
 }
 
-function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+function buildRequestMessage(request: ExecApprovalRequest, nowMs: number, channel?: string) {
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const command = formatApprovalCommand(
     resolveExecApprovalCommandDisplay(request.request).commandText,
@@ -249,9 +250,11 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
     "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
   );
   lines.push("");
-  lines.push(`\`/approve ${request.id} allow-once\``);
-  lines.push(`\`/approve ${request.id} allow-always\``);
-  lines.push(`\`/approve ${request.id} deny\``);
+  const md = isMarkdownCapableMessageChannel(channel);
+  const wrap = (cmd: string) => (md ? `\`${cmd}\`` : cmd);
+  lines.push(wrap(`/approve ${request.id} allow-once`));
+  lines.push(wrap(`/approve ${request.id} allow-always`));
+  lines.push(wrap(`/approve ${request.id} deny`));
 
   return lines.join("\n");
 }
@@ -403,7 +406,7 @@ function buildRequestPayloadForTarget(
       },
     };
   }
-  return { text: buildRequestMessage(request, nowMsValue) };
+  return { text: buildRequestMessage(request, nowMsValue, channel) };
 }
 
 function resolveForwardTargets(params: {
