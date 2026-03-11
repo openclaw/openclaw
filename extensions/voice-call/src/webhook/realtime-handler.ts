@@ -10,14 +10,9 @@ import {
 } from "../providers/openai-realtime-voice.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { NormalizedEvent } from "../types.js";
+import type { WebhookResponsePayload } from "../webhook.js";
 
 export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
-
-type WebhookResponsePayload = {
-  statusCode: number;
-  body: string;
-  headers?: Record<string, string>;
-};
 
 /**
  * Handles inbound voice calls bridged directly to the OpenAI Realtime API.
