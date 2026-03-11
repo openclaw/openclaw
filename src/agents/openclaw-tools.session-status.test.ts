@@ -97,6 +97,14 @@ function getSessionStatusTool(agentSessionKey = "main") {
 }
 
 describe("session_status tool", () => {
+  it("documents natural-language model switching in the tool description", () => {
+    const tool = getSessionStatusTool();
+
+    expect(tool.description).toContain("switch models in natural language");
+    expect(tool.description).toContain("use local for this");
+    expect(tool.description).toContain("model=<alias or provider/model>");
+  });
+
   it("returns a status card for the current session", async () => {
     resetSessionStore({
       main: {

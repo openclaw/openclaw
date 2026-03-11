@@ -428,6 +428,7 @@ describe("buildAgentSystemPrompt", () => {
   it("includes model alias guidance when aliases are provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["session_status"],
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
         "- Sonnet: anthropic/claude-sonnet-4-5",
@@ -436,7 +437,21 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
+    expect(prompt).toContain(
+      "If the user asks to switch to a local, cheaper, or different model, call session_status with model=<alias or provider/model>; use model=default to reset.",
+    );
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+  });
+
+  it("documents natural-language model switching in the session_status tool summary", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["session_status"],
+    });
+
+    expect(prompt).toContain(
+      "- session_status: Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status) and when the user asks to switch this session to another model; set model=<alias or provider/model> for per-session overrides",
+    );
   });
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
