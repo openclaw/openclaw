@@ -213,6 +213,22 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("accepts sessionKey=current as an alias for main", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("main");
+  });
+
   it("resets per-session model override via model=default", async () => {
     resetSessionStore({
       main: {
