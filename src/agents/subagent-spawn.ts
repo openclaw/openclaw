@@ -553,14 +553,19 @@ export async function spawnSubagentDirect(
     agentGroupSpace: ctx.agentGroupSpace,
     workspaceDir: ctx.workspaceDir,
   });
+  // Prefer target agent's configured workspace to keep spawned metadata
+  // aligned with the actual execution cwd used by the child session.
+  const targetWorkspace = targetAgentConfig?.workspace?.trim();
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
-    workspaceDir: resolveSpawnedWorkspaceInheritance({
-      config: cfg,
-      requesterSessionKey: requesterInternalKey,
-      explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
-    }),
+    workspaceDir:
+      targetWorkspace ||
+      resolveSpawnedWorkspaceInheritance({
+        config: cfg,
+        requesterSessionKey: requesterInternalKey,
+        explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
+      }),
   });
 
   const childIdem = crypto.randomUUID();
