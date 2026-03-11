@@ -69,6 +69,10 @@ const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
+type PollingCycleBot = {
+  bot: TelegramBot;
+  getInFlightUpdates: () => number;
+};
 
 function normalizePersistedUpdateId(value: number | null): number | null {
   if (value === null) {
@@ -241,9 +245,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       );
     };
 
-    const createPollingBot = async (): Promise<TelegramBot | undefined> => {
+    const createPollingBot = async (): Promise<PollingCycleBot | undefined> => {
+      let inFlightUpdates = 0;
+      // Must be registered before bot.on(...) handlers so matched updates enter this guard.
+      const trackInFlightUpdates = async (_ctx: unknown, next: () => Promise<void>) => {
+        inFlightUpdates += 1;
+        try {
+          await next();
+        } finally {
+          inFlightUpdates -= 1;
+        }
+      };
       try {
-        return createTelegramBot({
+        const bot = createTelegramBot({
           token,
           runtime: opts.runtime,
           proxyFetch,
@@ -253,7 +267,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
             lastUpdateId,
             onUpdateId: persistUpdateId,
           },
+          preHandlerMiddlewares: [trackInFlightUpdates],
         });
+        return {
+          bot,
+          getInFlightUpdates: () => inFlightUpdates,
+        };
       } catch (err) {
         const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
           err,
@@ -298,29 +317,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     };
 
-    const runPollingCycle = async (bot: TelegramBot): Promise<"continue" | "exit"> => {
+    const runPollingCycle = async (pollingBot: PollingCycleBot): Promise<"continue" | "exit"> => {
+      const { bot } = pollingBot;
       // Confirm the persisted offset with Telegram so the runner (which starts
       // at offset 0) does not re-fetch already-processed updates on restart.
       await confirmPersistedOffset(bot);
 
       // Track getUpdates calls to detect polling stalls.
       let lastGetUpdatesAt = Date.now();
-      let inFlightUpdates = 0;
       bot.api.config.use((prev, method, payload, signal) => {
         if (method === "getUpdates") {
           lastGetUpdatesAt = Date.now();
         }
         return prev(method, payload, signal);
-      });
-      // Long-running update handlers can naturally pause getUpdates calls.
-      // Only treat missing getUpdates as a stall when nothing is being processed.
-      bot.use(async (_ctx, next) => {
-        inFlightUpdates += 1;
-        try {
-          await next();
-        } finally {
-          inFlightUpdates -= 1;
-        }
       });
 
       const runner = run(bot, runnerOptions);
@@ -354,7 +363,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           return;
         }
         const elapsed = Date.now() - lastGetUpdatesAt;
-        if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning() && inFlightUpdates === 0) {
+        if (
+          elapsed > POLL_STALL_THRESHOLD_MS &&
+          runner.isRunning() &&
+          pollingBot.getInFlightUpdates() === 0
+        ) {
           stalledRestart = true;
           log(
             `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
@@ -408,12 +421,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     };
 
     while (!opts.abortSignal?.aborted) {
-      const bot = await createPollingBot();
-      if (!bot) {
+      const pollingBot = await createPollingBot();
+      if (!pollingBot) {
         continue;
       }
 
-      const cleanupState = await ensureWebhookCleanup(bot);
+      const cleanupState = await ensureWebhookCleanup(pollingBot.bot);
       if (cleanupState === "retry") {
         continue;
       }
@@ -421,7 +434,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return;
       }
 
-      const state = await runPollingCycle(bot);
+      const state = await runPollingCycle(pollingBot);
       if (state === "exit") {
         return;
       }

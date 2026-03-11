@@ -1,6 +1,6 @@
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions } from "grammy";
+import type { ApiClientOptions, Context, MiddlewareFn } from "grammy";
 import { Bot } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
@@ -62,6 +62,7 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  preHandlerMiddlewares?: MiddlewareFn[];
 };
 
 export { getTelegramSequentialKey };
@@ -192,6 +193,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   bot.use(sequentialize(getTelegramSequentialKey));
+
+  for (const middleware of opts.preHandlerMiddlewares ?? []) {
+    bot.use(middleware);
+  }
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

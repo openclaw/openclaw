@@ -70,6 +70,9 @@ const { createdBotStops } = vi.hoisted(() => ({
 const { botMiddlewares } = vi.hoisted(() => ({
   botMiddlewares: [] as TelegramMiddleware[],
 }));
+const { createTelegramBotCallArgs } = vi.hoisted(() => ({
+  createTelegramBotCallArgs: [] as Array<{ preHandlerMiddlewares?: TelegramMiddleware[] }>,
+}));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
@@ -146,7 +149,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts?: { preHandlerMiddlewares?: TelegramMiddleware[] }) => {
+    createTelegramBotCallArgs.push(opts ?? {});
+    for (const middleware of opts?.preHandlerMiddlewares ?? []) {
+      botMiddlewares.push(middleware);
+    }
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -167,9 +174,7 @@ vi.mock("./bot.js", () => ({
     };
     return {
       on: vi.fn(),
-      use: vi.fn((middleware: TelegramMiddleware) => {
-        botMiddlewares.push(middleware);
-      }),
+      use: vi.fn(),
       api,
       me: { username: "mybot" },
       init: initSpy,
@@ -232,6 +237,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
     botMiddlewares.length = 0;
+    createTelegramBotCallArgs.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -559,6 +565,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
     expect(botMiddlewares.length).toBe(1);
+    expect(createTelegramBotCallArgs[0]?.preHandlerMiddlewares?.length).toBe(1);
 
     let releaseUpdate: (() => void) | undefined;
     const inFlightUpdate = Promise.resolve(
