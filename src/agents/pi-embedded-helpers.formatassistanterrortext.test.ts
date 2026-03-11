@@ -74,6 +74,20 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("unwraps Codex-prefixed raw API payloads", () => {
+    const msg = makeAssistantError(
+      'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("hides provider boilerplate for Codex server errors", () => {
+    const msg = makeAssistantError(
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID req_123 in your message."}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned a server error. Please try again in a moment.",
+    );
+  });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
     const result = formatAssistantErrorText(msg);
