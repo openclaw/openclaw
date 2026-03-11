@@ -30,6 +30,7 @@ export type SessionsProps = {
     },
   ) => void;
   onDelete: (key: string) => void;
+  onOpenSession: (key: string) => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -206,7 +207,14 @@ export function renderSessions(props: SessionsProps) {
                 <div class="muted">No sessions found.</div>
               `
             : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                renderRow(
+                  row,
+                  props.basePath,
+                  props.onPatch,
+                  props.onDelete,
+                  props.onOpenSession,
+                  props.loading,
+                ),
               )
         }
       </div>
@@ -219,6 +227,7 @@ function renderRow(
   basePath: string,
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
+  onOpenSession: SessionsProps["onOpenSession"],
   disabled: boolean,
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
@@ -244,7 +253,28 @@ function renderRow(
   return html`
     <div class="table-row">
       <div class="mono session-key-cell">
-        ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+        ${
+          canLink
+            ? html`<a
+              href=${chatUrl}
+              class="session-link"
+              @click=${(event: MouseEvent) => {
+                if (
+                  event.defaultPrevented ||
+                  event.button !== 0 ||
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                onOpenSession(row.key);
+              }}
+            >${row.key}</a>`
+            : row.key
+        }
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>
       <div>

@@ -79,6 +79,38 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("?session=main");
   });
 
+  it("opens session table links in-app without dropping in-memory token state", async () => {
+    const app = mountApp("/sessions");
+    await app.updateComplete;
+
+    app.applySettings({ ...app.settings, token: "abc123" });
+    app.sessionsResult = {
+      ts: Date.now(),
+      path: "(multiple)",
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:subagent:task-123",
+          kind: "direct",
+          updatedAt: Date.now(),
+        },
+      ],
+    };
+    await app.updateComplete;
+
+    const link = app.querySelector<HTMLAnchorElement>(".session-key-cell a.session-link");
+    expect(link).not.toBeNull();
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    await app.updateComplete;
+    expect(app.settings.token).toBe("abc123");
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("agent:main:subagent:task-123");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
+  });
+
   it("keeps chat and nav usable on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

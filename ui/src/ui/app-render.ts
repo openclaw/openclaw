@@ -447,6 +447,22 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSessionAndRefresh(state, key),
+                onOpenSession: (sessionKey) => {
+                  state.sessionKey = sessionKey;
+                  state.chatMessage = "";
+                  state.chatStream = null;
+                  state.chatStreamStartedAt = null;
+                  state.chatRunId = null;
+                  state.resetToolStream();
+                  state.resetChatScroll();
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey,
+                    lastActiveSessionKey: sessionKey,
+                  });
+                  void state.loadAssistantIdentity();
+                  state.setTab("chat");
+                },
               })
             : nothing
         }
