@@ -43,7 +43,7 @@ import {
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
+import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { isXaiProvider } from "./schema/clean-for-xai.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
@@ -53,8 +53,11 @@ import {
 } from "./tool-policy-pipeline.js";
 import {
   applyOwnerOnlyToolPolicy,
+  buildPluginToolGroups,
   collectExplicitAllowlist,
+  expandPluginGroups,
   mergeAlsoAllowPolicy,
+  normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -187,6 +190,38 @@ export function resolveToolLoopDetectionConfig(params: {
   };
 }
 
+/**
+ * Computes the sandbox step policy: when sandbox.tools.allow is non-empty,
+ * merges it with plugin-resolved names from explicit tools.alsoAllow (see #41757).
+ * Exported for tests so the merge path can be covered with explicit fixtures.
+ */
+export function computeSandboxStepPolicy(params: {
+  sandboxTools: SandboxToolPolicy | undefined;
+  explicitProfileAlsoAllow: string[] | undefined;
+  tools: AnyAgentTool[];
+  toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
+}): SandboxToolPolicy | undefined {
+  const { sandboxTools, explicitProfileAlsoAllow, tools, toolMeta } = params;
+  const sandboxAllow = sandboxTools?.allow;
+  if (!sandboxTools || !sandboxAllow || sandboxAllow.length === 0) {
+    return sandboxTools;
+  }
+  const pluginToolGroups = buildPluginToolGroups({ tools, toolMeta });
+  const expandedExplicitAlsoAllow = expandPluginGroups(explicitProfileAlsoAllow, pluginToolGroups);
+  const pluginToolNameSet = new Set(pluginToolGroups.all);
+  const pluginAllow =
+    expandedExplicitAlsoAllow && expandedExplicitAlsoAllow.length > 0
+      ? expandedExplicitAlsoAllow.filter((name) => pluginToolNameSet.has(normalizeToolName(name)))
+      : undefined;
+  if (!pluginAllow || pluginAllow.length === 0) {
+    return sandboxTools;
+  }
+  return {
+    allow: Array.from(new Set([...sandboxAllow, ...pluginAllow])),
+    deny: sandboxTools.deny,
+  };
+}
+
 export const __testing = {
   cleanToolSchemaForGemini,
   normalizeToolParams,
@@ -284,6 +319,7 @@ export function createOpenClawCodingTools(options?: {
     agentProviderPolicy,
     profile,
     providerProfile,
+    explicitProfileAlsoAllow,
     profileAlsoAllow,
     providerProfileAlsoAllow,
   } = resolveEffectiveToolPolicy({
@@ -569,6 +605,19 @@ export function createOpenClawCodingTools(options?: {
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  // Sandbox step: merge sandbox allow with the agent's explicit tools.alsoAllow entries
+  // (plugins, or explicitly re-exposed tools) so they are not dropped (see #41757).
+  // Sandbox deny still applies. Preserve sandbox semantics where an empty allowlist
+  // means "allow all" (sandbox/tool-policy.ts): only merge when sandbox.tools.allow
+  // is non-empty, and only with explicitProfileAlsoAllow (no implicit exec/fs exposure).
+  // Only compute plugin groups and expansion when sandbox is enabled and allow is non-empty.
+  const sandboxStepPolicy = computeSandboxStepPolicy({
+    sandboxTools: sandbox?.tools,
+    explicitProfileAlsoAllow,
+    tools: toolsByAuthorization,
+    toolMeta: (tool) => getPluginToolMeta(tool),
+  });
+
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -586,7 +635,7 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         agentId,
       }),
-      { policy: sandbox?.tools, label: "sandbox tools.allow" },
+      { policy: sandboxStepPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
