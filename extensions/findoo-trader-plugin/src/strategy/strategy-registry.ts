@@ -61,11 +61,60 @@ function hydrateDefinition(def: StrategyDefinition): StrategyDefinition {
 }
 
 /**
+ * Increment version string. Supports semver (x.y.z) and simple numeric versions.
+ */
+function incrementVersion(version: string): string {
+  const semverMatch = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (semverMatch) {
+    const [, major, minor, patch] = semverMatch;
+    return `${major}.${minor}.${Number(patch) + 1}`;
+  }
+  const numericMatch = version.match(/^(\d+)$/);
+  if (numericMatch) {
+    return String(Number(numericMatch[1]) + 1);
+  }
+  const doubleMatch = version.match(/^(\d+)\.(\d+)$/);
+  if (doubleMatch) {
+    return `${doubleMatch[1]}.${Number(doubleMatch[2]) + 1}`;
+  }
+  return version + ".1";
+}
+
+/**
+ * Deep compare two objects to detect changes.
+ * Only compares serializable fields (ignores functions like onBar/init/onDayEnd).
+ */
+function hasDefinitionChangeded(oldDef: StrategyDefinition, newDef: StrategyDefinition): boolean {
+  const oldSerializable = {
+    id: oldDef.id,
+    name: oldDef.name,
+    version: oldDef.version,
+    markets: oldDef.markets,
+    symbols: oldDef.symbols,
+    timeframes: oldDef.timeframes,
+    parameters: oldDef.parameters,
+    parameterRanges: oldDef.parameterRanges,
+  };
+  const newSerializable = {
+    id: newDef.id,
+    name: newDef.name,
+    version: newDef.version,
+    markets: newDef.markets,
+    symbols: newDef.symbols,
+    timeframes: newDef.timeframes,
+    parameters: newDef.parameters,
+    parameterRanges: newDef.parameterRanges,
+  };
+  return JSON.stringify(oldSerializable) !== JSON.stringify(newSerializable);
+}
+
+/**
  * Persistent strategy registry backed by a JSON file.
  * Stores strategy metadata, backtest results, and walk-forward results.
  */
 export class StrategyRegistry {
   private records: Map<string, StrategyRecord> = new Map();
+  private definitionSnapshots: Map<string, string> = new Map();
 
   constructor(private filePath: string) {
     this.load();
@@ -84,6 +133,7 @@ export class StrategyRegistry {
       updatedAt: now,
     };
     this.records.set(definition.id, record);
+    this.definitionSnapshots.set(definition.id, JSON.stringify(definition));
     this.save();
     return record;
   }
@@ -138,6 +188,21 @@ export class StrategyRegistry {
     this.save();
   }
 
+  /** Update the definition of a strategy. Increments version if definition changed. */
+  updateDefinition(id: string, definition: StrategyDefinition): void {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Strategy ${id} not found`);
+
+    const oldDefinition = record.definition;
+    if (hasDefinitionChangeded(oldDefinition, definition)) {
+      record.definition = definition;
+      record.version = incrementVersion(record.version);
+      record.updatedAt = Date.now();
+      this.definitionSnapshots.set(id, JSON.stringify(definition));
+      this.save();
+    }
+  }
+
   /** Persist current state to disk. */
   save(): void {
     const dir = dirname(this.filePath);
@@ -155,13 +220,16 @@ export class StrategyRegistry {
       const raw = readFileSync(this.filePath, "utf-8");
       const data = JSON.parse(raw) as StrategyRecord[];
       this.records.clear();
+      this.definitionSnapshots.clear();
       for (const record of data) {
         record.definition = hydrateDefinition(record.definition);
         this.records.set(record.id, record);
+        this.definitionSnapshots.set(record.id, JSON.stringify(record.definition));
       }
     } catch {
       // Corrupted file — start fresh
       this.records.clear();
+      this.definitionSnapshots.clear();
     }
   }
 }

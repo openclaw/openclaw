@@ -2,7 +2,13 @@
 name: fin-news-intel
 description: "Financial news intelligence - multi-source sentiment scoring, event impact analysis, historical analogies, and personalized portfolio-aware digests."
 metadata:
-  { "openclaw": { "emoji": "📰", "requires": { "extensions": ["fin-core", "fin-info-feed"] } } }
+  {
+    "openclaw":
+      {
+        "emoji": "📰",
+        "requires": { "extensions": ["findoo-trader-plugin", "findoo-datahub-plugin"] },
+      },
+  }
 ---
 
 # News Intelligence

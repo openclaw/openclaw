@@ -1,18 +1,7 @@
 ---
 name: fin-strategy-evolution
 description: "Strategy evolution and lifecycle — promote, demote, mutate parameters, cull underperformers, and manage the full L0-L3 pipeline."
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🧬",
-        "requires":
-          {
-            "extensions":
-              ["fin-core", "fin-strategy-engine", "fin-paper-trading", "fin-fund-manager"],
-          },
-      },
-  }
+metadata: { "openclaw": { "emoji": "🧬", "requires": { "extensions": ["findoo-trader-plugin"] } } }
 ---
 
 # Strategy Evolution Engine

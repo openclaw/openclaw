@@ -335,7 +335,32 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     maxPositionPct: riskConfig.maxPositionPct,
   };
 
-  return { ...mc, config, topStrategies, alertSummary, riskDetails };
+  // Pipeline breakdown by level (for Overview dashboard)
+  const pipeline = {
+    l0: strategies.filter((s) => s.level === "L0_INCUBATE").length,
+    l1: strategies.filter((s) => s.level === "L1_BACKTEST").length,
+    l2: strategies.filter((s) => s.level === "L2_PAPER").length,
+    l3: strategies.filter((s) => s.level === "L3_LIVE").length,
+    total: strategies.filter((s) => s.level !== "KILLED").length,
+  };
+
+  // Alpha Factory stats
+  const alphaFactoryService = runtime.services?.get?.("fin-alpha-factory") as
+    | { getStats?: () => Record<string, unknown> }
+    | undefined;
+  const alphaFactory = alphaFactoryService?.getStats?.() ?? {
+    running: false,
+    ideationCount: 0,
+    screeningPassed: 0,
+    screeningFailed: 0,
+    validationPassed: 0,
+    validationFailed: 0,
+    gcKilled: 0,
+    evolutionCycles: 0,
+    lastCycleAt: 0,
+  };
+
+  return { ...mc, config, topStrategies, alertSummary, riskDetails, pipeline, alphaFactory };
 }
 
 /** Gather strategy lab data (strategies + backtests + fund allocations). */
@@ -362,7 +387,12 @@ export function gatherStrategyLabData(deps: DataGatheringDeps) {
 // ── New gather functions for V2 dashboard tabs ──
 
 /** Gather Setting Tab data (exchanges, health, risk config, agent config, gates, notifications). */
-export function gatherSettingData(deps: DataGatheringDeps & { healthStore?: ExchangeHealthStore }) {
+export function gatherSettingData(
+  deps: DataGatheringDeps & {
+    healthStore?: ExchangeHealthStore;
+    pluginConfig?: Record<string, unknown>;
+  },
+) {
   const { registry, riskConfig, runtime, pluginEntries, healthStore } = deps;
 
   const exchanges = registry.listExchanges();
@@ -390,11 +420,23 @@ export function gatherSettingData(deps: DataGatheringDeps & { healthStore?: Exch
     l2l3: { minDays: 30, minSharpe: 1.5, maxDrawdown: -0.1, minWinRate: 0.5, minTrades: 50 },
   };
 
-  // Notification config (placeholder — no built-in notification service yet)
+  // Read real notification config from pluginConfig (falls back to env vars)
+  const nc = (deps.pluginConfig as Record<string, unknown> | undefined)?.notifications as
+    | Record<string, unknown>
+    | undefined;
+  const mask = (v?: string) => (v && v.length > 8 ? v.slice(0, 8) + "***" : v);
+  const tgChatId =
+    (nc?.telegramChatId as string | undefined) ?? process.env.FINDOO_TELEGRAM_CHAT_ID;
+  const tgBotToken =
+    (nc?.telegramBotToken as string | undefined) ??
+    process.env.FINDOO_TELEGRAM_BOT_TOKEN ??
+    process.env.TELEGRAM_BOT_TOKEN;
+  const dcWebhook = nc?.discordWebhookUrl as string | undefined;
+  const emailAddr = nc?.emailTo as string | undefined;
   const notifications: NotificationConfig = {
-    telegram: { enabled: false },
-    discord: { enabled: false },
-    email: { enabled: false },
+    telegram: { enabled: !!tgChatId, chatId: mask(tgChatId) },
+    discord: { enabled: !!dcWebhook, webhookUrl: mask(dcWebhook) },
+    email: { enabled: !!emailAddr, address: emailAddr },
   };
 
   const plugins = FINANCIAL_PLUGIN_IDS.map((id) => ({

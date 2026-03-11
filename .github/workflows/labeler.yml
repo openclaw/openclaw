@@ -213,6 +213,7 @@ jobs:
             }
 
             const activePrLimitLabel = "r: too-many-prs";
+            const activePrLimitOverrideLabel = "r: too-many-prs-override";
             const activePrLimit = 10;
             const labelColor = "B60205";
             const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
@@ -221,11 +222,36 @@ jobs:
               return;
             }
 
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+
             const labelNames = new Set(
-              (pullRequest.labels ?? [])
+              currentLabels
                 .map((label) => (typeof label === "string" ? label : label?.name))
                 .filter((name) => typeof name === "string"),
             );
+
+            if (labelNames.has(activePrLimitOverrideLabel)) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              return;
+            }
 
             const ensureLabelExists = async () => {
               try {

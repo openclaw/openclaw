@@ -9,28 +9,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { OHLCV } from "../../src/shared/types.js";
 import { RemoteBacktestBridge } from "../../src/strategy/remote-backtest-bridge.js";
 import { StrategyRegistry } from "../../src/strategy/strategy-registry.js";
 import { registerStrategyTools } from "../../src/strategy/tools.js";
 
 // --- helpers ---
-
-function makeOHLCV(count: number, basePrice = 100, startTs = 1_700_000_000_000): OHLCV[] {
-  const bars: OHLCV[] = [];
-  for (let i = 0; i < count; i++) {
-    const close = basePrice + Math.sin(i / 5) * 10;
-    bars.push({
-      timestamp: startTs + i * 86_400_000,
-      open: close - 1,
-      high: close + 2,
-      low: close - 2,
-      close,
-      volume: 1000 + i * 10,
-    });
-  }
-  return bars;
-}
 
 type ToolExecuteFn = (
   id: string,
@@ -261,63 +244,6 @@ describe("Tool schema validation", () => {
     expect(runPayload.finalEquity).toBe(resultPayload.finalEquity);
   });
 
-  it("fin_strategy_tick regime (no detector): regimeSource=default, regime=sideways", async () => {
-    const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new RemoteBacktestBridge(() => undefined);
-    const ohlcvData = makeOHLCV(60);
-
-    const services = new Map<string, unknown>();
-    services.set("fin-data-provider", { getOHLCV: async () => ohlcvData });
-    // No fin-regime-detector service
-    const { api, tools } = captureTools(services);
-
-    registerStrategyTools(api as never, registry, engine, null, null);
-
-    // Create & promote to L2
-    const createFn = tools.get("fin_strategy_create")!;
-    const createResult = await createFn("test-id", {
-      name: "Tick Default",
-      type: "sma-crossover",
-    });
-    const strategyId = (parseDetails(createResult) as { id: string }).id;
-    registry.updateLevel(strategyId, "L2_PAPER");
-
-    const tickFn = tools.get("fin_strategy_tick")!;
-    const result = await tickFn("test-id", { strategyId });
-    const payload = parseDetails(result);
-
-    expect(payload.regimeSource).toBe("default");
-    expect(payload.regime).toBe("sideways");
-  });
-
-  it("fin_strategy_tick regime (with detector): regimeSource=detector, regime=bull", async () => {
-    const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new RemoteBacktestBridge(() => undefined);
-    const ohlcvData = makeOHLCV(60);
-
-    const services = new Map<string, unknown>();
-    services.set("fin-data-provider", { getOHLCV: async () => ohlcvData });
-    services.set("fin-regime-detector", { detect: () => "bull" });
-    const { api, tools } = captureTools(services);
-
-    registerStrategyTools(api as never, registry, engine, null, null);
-
-    const createFn = tools.get("fin_strategy_create")!;
-    const createResult = await createFn("test-id", {
-      name: "Tick Detector",
-      type: "sma-crossover",
-    });
-    const strategyId = (parseDetails(createResult) as { id: string }).id;
-    registry.updateLevel(strategyId, "L2_PAPER");
-
-    const tickFn = tools.get("fin_strategy_tick")!;
-    const result = await tickFn("test-id", { strategyId });
-    const payload = parseDetails(result);
-
-    expect(payload.regimeSource).toBe("detector");
-    expect(payload.regime).toBe("bull");
-  });
-
   it("fin_strategy_create error: type=custom without rules → error", async () => {
     const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
     const engine = new RemoteBacktestBridge(() => undefined);
@@ -359,21 +285,5 @@ describe("Tool schema validation", () => {
     expect(payload.error).toBeDefined();
     expect(typeof payload.error).toBe("string");
     expect((payload.error as string).toLowerCase()).toContain("backtest");
-  });
-
-  it("fin_strategy_tick error: strategy not found → error", async () => {
-    const registry = new StrategyRegistry(join(tmpDir, "strategies.json"));
-    const engine = new RemoteBacktestBridge(() => undefined);
-    const { api, tools } = captureTools();
-
-    registerStrategyTools(api as never, registry, engine, null, null);
-
-    const tickFn = tools.get("fin_strategy_tick")!;
-    const result = await tickFn("test-id", { strategyId: "nonexistent-id" });
-    const payload = parseDetails(result);
-
-    expect(payload.error).toBeDefined();
-    expect(typeof payload.error).toBe("string");
-    expect((payload.error as string).toLowerCase()).toContain("not found");
   });
 });

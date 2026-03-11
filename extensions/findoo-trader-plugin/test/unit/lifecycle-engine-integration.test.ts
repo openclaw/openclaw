@@ -55,6 +55,7 @@ function createMockWakeBridge() {
     onSeedBacktestComplete: vi.fn(),
     onPromotionReady: vi.fn(),
     onApprovalNeeded: vi.fn(),
+    onLifecycleRecommendation: vi.fn(),
   };
 }
 
@@ -137,7 +138,7 @@ describe("L2 Integration — Real FundManager + PromotionPipeline", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("L1→L2 auto-promotes when real gates pass (sharpe/DD/trades/walkForward)", async () => {
+  it("L1→L2 recommends promotion when real gates pass (Agent-sovereign)", async () => {
     // Create strategy with data that satisfies all L1→L2 gates
     const record = registry.create({
       id: "real-s1",
@@ -156,18 +157,22 @@ describe("L2 Integration — Real FundManager + PromotionPipeline", () => {
     const result = await engine.runCycle();
     expect(result.promoted).toBe(1);
 
-    // Real registry should persist the change
+    // LifecycleEngine no longer auto-executes — it recommends to Agent
     const updated = registry.get("real-s1");
-    expect(updated?.level).toBe("L2_PAPER");
+    expect(updated?.level).toBe("L1_BACKTEST"); // unchanged — Agent must execute
 
-    // Real activityLog should record the promotion with gate reasons
-    const logs = activityLog.listRecent(10, "promotion");
-    expect(logs.length).toBeGreaterThanOrEqual(1);
-    expect(logs[0]!.strategyId).toBe("real-s1");
-    expect(logs[0]!.detail).toContain("L1_BACKTEST");
-    expect(logs[0]!.detail).toContain("L2_PAPER");
-    // The detail should include reasons from real PromotionPipeline
-    expect(logs[0]!.detail).toContain("Sharpe");
+    // Wake bridge should have been called with the recommendation
+    expect(wakeBridge.onLifecycleRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promotions: expect.arrayContaining([
+          expect.objectContaining({
+            strategyId: "real-s1",
+            from: "L1_BACKTEST",
+            to: "L2_PAPER",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("L1→L2 blocked when real gates fail (insufficient trades)", async () => {
@@ -265,8 +270,7 @@ describe("L2 Integration — LifecycleEngine + Real Stores", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("L1→L2 auto-promotion persists in real StrategyRegistry + ActivityLogStore", async () => {
-    // Create a real strategy at L1
+  it("L1→L2 recommendation sent via wake bridge (Agent-sovereign)", async () => {
     const record = registry.create({
       id: "int-s1",
       name: "Integration Strategy",
@@ -278,22 +282,7 @@ describe("L2 Integration — LifecycleEngine + Real Stores", () => {
       parameters: { fastPeriod: 10, slowPeriod: 30 },
     });
     registry.updateLevel(record.id, "L1_BACKTEST");
-    registry.updateBacktest(record.id, {
-      sharpe: 1.8,
-      maxDrawdown: -0.08,
-      totalTrades: 50,
-      winRate: 0.6,
-      profitFactor: 2.1,
-      expectancy: 0.02,
-      annualReturn: 0.25,
-    });
-    registry.updateWalkForward(record.id, {
-      passed: true,
-      ratio: 0.85,
-      threshold: 0.6,
-    });
 
-    // Mock fundManager to signal promotion eligibility for L1→L2
     fundManager.checkPromotion.mockImplementation((profile: { id: string; level: string }) => ({
       strategyId: profile.id,
       currentLevel: profile.level,
@@ -306,16 +295,15 @@ describe("L2 Integration — LifecycleEngine + Real Stores", () => {
     const result = await engine.runCycle();
     expect(result.promoted).toBe(1);
 
-    // Verify real registry persisted the level change
-    const updated = registry.get("int-s1");
-    expect(updated?.level).toBe("L2_PAPER");
+    // Registry should NOT be changed — Agent must execute the recommendation
+    expect(registry.get("int-s1")?.level).toBe("L1_BACKTEST");
 
-    // Verify real activityLog recorded the promotion
-    const logs = activityLog.listRecent(10, "promotion");
-    expect(logs.length).toBeGreaterThanOrEqual(1);
-    expect(logs[0]!.strategyId).toBe("int-s1");
-    expect(logs[0]!.detail).toContain("L1_BACKTEST");
-    expect(logs[0]!.detail).toContain("L2_PAPER");
+    // Wake bridge should have recommendation
+    expect(wakeBridge.onLifecycleRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promotions: [expect.objectContaining({ strategyId: "int-s1", to: "L2_PAPER" })],
+      }),
+    );
   });
 
   it("L2→L3 requires manual approval and does not auto-promote", async () => {
@@ -366,7 +354,7 @@ describe("L2 Integration — LifecycleEngine + Real Stores", () => {
     expect(approvalLogs.some((l) => l.action === "l3_promotion_approved")).toBe(true);
   });
 
-  it("demotion changes level and records activity", async () => {
+  it("demotion recommendation sent via wake bridge (Agent-sovereign)", async () => {
     const record = registry.create({
       id: "int-s3",
       name: "Struggling Strategy",
@@ -390,11 +378,15 @@ describe("L2 Integration — LifecycleEngine + Real Stores", () => {
     const result = await engine.runCycle();
     expect(result.demoted).toBe(1);
 
-    expect(registry.get("int-s3")?.level).toBe("L2_PAPER");
+    // Registry should NOT be changed — Agent must decide
+    expect(registry.get("int-s3")?.level).toBe("L3_LIVE");
 
-    const logs = activityLog.listRecent(10, "demotion");
-    expect(logs.length).toBeGreaterThanOrEqual(1);
-    expect(logs[0]!.strategyId).toBe("int-s3");
+    // Wake bridge should have demotion recommendation
+    expect(wakeBridge.onLifecycleRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        demotions: [expect.objectContaining({ strategyId: "int-s3", to: "L2_PAPER" })],
+      }),
+    );
   });
 
   it("engine stats accumulate across cycles", async () => {
@@ -424,7 +416,8 @@ describe("L2 Integration — LifecycleEngine + Real Stores", () => {
 
     const stats = engine.getStats();
     expect(stats.cycleCount).toBe(2);
-    expect(stats.promotionCount).toBeGreaterThanOrEqual(1);
+    // promotionCount stays 0 because LifecycleEngine no longer executes promotions
+    // (recommendations are sent via wake bridge, not counted in stats)
     expect(stats.lastCycleAt).toBeGreaterThan(0);
   });
 

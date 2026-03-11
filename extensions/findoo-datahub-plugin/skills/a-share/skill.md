@@ -92,7 +92,8 @@ user question about A-share stock
 ### Valuation Tree (A-share adapted)
 
 ```
-Step 1: fin_stock(fundamental/metrics) → pe_deducted (not headline PE)
+Step 1: fin_stock(fundamental/ratios) → dt_eps (扣非EPS)
+  → PE_deducted = price / dt_eps (手动计算，fundamental/metrics 对 A 股返回 204)
   ├─ pe_deducted < sector 50th pctl
   │   ├─ ROE>15% + OCF/NI>0.8 → undervalued candidate
   │   └─ ROE<8% or OCF/NI<0.5 → value trap warning
@@ -213,11 +214,12 @@ Three-signal resonance model:
 Signal 1: fin_stock(moneyflow/individual, symbol=X)
   → main force net inflow/outflow (institutional flow on single stock)
 
-Signal 2: fin_market(market/top_list, trade_date=D) + fin_market(market/top_inst)
+Signal 2: fin_market(market/top_list, date=YYYY-MM-DD) + fin_market(market/top_inst)
   → dragon-tiger list: which institutional seats are buying/selling
   → only triggered when stock hits unusual move thresholds
+  → ⚠️ 这些端点使用 `date` 参数（非 `trade_date`）
 
-Signal 3: fin_market(flow/hsgt_top10, trade_date=D)
+Signal 3: fin_market(flow/hsgt_top10, date=YYYY-MM-DD)
   → northbound (foreign) holdings change on target stock
 
 Cross-validation matrix:
@@ -252,6 +254,43 @@ Step 3: Cross-validate with capital flow
   ├─ RSI oversold + main inflow → bottom signal
   ├─ RSI overbought + main outflow → top signal
   └─ price down + main inflow → possible shakeout (accumulation)
+
+Step 4: Composite Signal Synthesis (买卖信号灯)
+  综合 RSI + MACD + 资金流 + 筹码结构 → 输出单一信号灯
+
+  输入:
+    T = technical score (RSI + MACD + 均线)
+    F = flow score (资金流 + 龙虎榜 + 北向)
+    C = chip score (股东增减 + 质押 + 回购)
+
+  技术面评分 T (-3 to +3):
+    RSI<30 = +1 | RSI>70 = -1 | 30-70 = 0
+    MACD 金叉 = +1 | 死叉 = -1 | 零轴上方 = +0.5
+    价格>MA20>MA60 = +1 | 价格<MA20<MA60 = -1
+
+  资金面评分 F (-3 to +3):
+    主力净流入 >5000万 = +1 | 净流出 >5000万 = -1
+    北向净买入 = +1 | 净卖出 = -1
+    龙虎榜机构净买 = +1 | 净卖 = -1
+
+  筹码面评分 C (-3 to +3):
+    股东人数下降 = +1 | 上升 = -1
+    质押率 <20% = +0.5 | >50% = -1
+    回购/增持 = +1 | 减持 = -1
+
+  综合信号 = T + F + C (范围 -9 to +9)
+    ├─ >= +5  → 买入信号 (强) — 建议关注支撑位加仓
+    ├─ +3~+4  → 买入信号 (弱) — 可小仓位试探
+    ├─ -2~+2  → 持有/观望 — 等待信号明确
+    ├─ -4~-3  → 卖出信号 (弱) — 减仓或收紧止损
+    └─ <= -5  → 卖出信号 (强) — 建议止损离场
+
+  输出格式:
+    信号灯: 买入(强)/买入(弱)/持有/卖出(弱)/卖出(强)
+    支撑位: MA60 / 近期低点 (取较高者)
+    阻力位: 近期高点 / 布林上轨 (取较低者)
+    建议止损: 支撑位下方 2-3% (主板) 或 3-5% (创业板/科创板)
+    置信度: 三维共振 (T/F/C 同向) = 高 | 二维共振 = 中 | 信号矛盾 = 低
 ```
 
 **A22 预计算技术因子:** `fin_stock(fundamental/stock_factor, symbol=X, limit=60)` → 含 MACD/KDJ/RSI/BOLL/CCI 预计算值，可替代 `fin_ta` 逐个计算。适用于快速技术面扫描。
@@ -304,5 +343,5 @@ Step 3: Cross-validate with capital flow
 ## References
 
 - Pledge tiers, lock-up rules, CAS vs IFRS differences, registration reform impacts — see Chip Analysis Tree and Policy-Driven Analysis Tree above
-- DCF/DDM/PE Band methodology — see Valuation Tree above; use `fundamental/metrics` + `fundamental/ratios` for inputs
+- DCF/DDM/PE Band methodology — see Valuation Tree above; use `fundamental/ratios` (dt_eps 计算 PE_deducted) for inputs
 - DuPont decomposition, industry benchmarks — derive from `fundamental/ratios` (ROE breakdown) + `fin_index(constituents)` for peer comparison

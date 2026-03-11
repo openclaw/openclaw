@@ -1,13 +1,21 @@
 import type { StrategyLevel } from "../shared/types.js";
 import type { StrategyProfile, PromotionCheck, DemotionCheck } from "./types.js";
 
+/** Optional Alpha Factory validation gate for enhanced promotion checks. */
+export interface AlphaFactoryGate {
+  /** If set, L1→L2 promotion requires validation orchestrator to pass. */
+  validationPassed?: (strategyId: string) => boolean;
+  /** If set, L2→L3 promotion requires alpha independence check to pass. */
+  independencePassed?: (strategyId: string) => boolean;
+}
+
 /**
  * Promotion and demotion pipeline for strategy lifecycle.
  *
  * Promotion thresholds:
  *   L0 → L1: Strategy definition is valid (always auto-promoted)
  *   L1 → L2: Walk-Forward passed, Sharpe ≥ 1.0, maxDD ≤ 25%, trades ≥ 100, 3+ regimes
- *   L2 → L3: Paper ≥ 30 days, ≥ 30 trades, Sharpe ≥ 0.5, DD ≤ 20%, backtest deviation ≤ 30%
+ *   L2 → L3: Paper ≥ 30 days, ≥ 30 trades, Sharpe ≥ 1.5, DD ≤ 20%, backtest deviation ≤ 30%
  *
  * Demotion triggers:
  *   L3 → L2: 3 consecutive loss days over limit / 7d Sharpe < 0
@@ -15,6 +23,13 @@ import type { StrategyProfile, PromotionCheck, DemotionCheck } from "./types.js"
  *   Any → KILLED: 3 consecutive periods in bottom 20% / cumulative loss > 40%
  */
 export class PromotionPipeline {
+  private alphaGate?: AlphaFactoryGate;
+
+  /** Set optional Alpha Factory validation gates. */
+  setAlphaFactoryGate(gate: AlphaFactoryGate): void {
+    this.alphaGate = gate;
+  }
+
   /** Check if a strategy is eligible for promotion. */
   checkPromotion(profile: StrategyProfile): PromotionCheck {
     const result: PromotionCheck = {
@@ -106,6 +121,15 @@ export class PromotionPipeline {
       }
     }
 
+    // Alpha Factory validation gate (optional)
+    if (result.blockers.length === 0 && this.alphaGate?.validationPassed) {
+      if (this.alphaGate.validationPassed(profile.id)) {
+        result.reasons.push("Alpha Factory validation passed");
+      } else {
+        result.blockers.push("Alpha Factory validation not passed");
+      }
+    }
+
     result.eligible = result.blockers.length === 0;
     return result;
   }
@@ -129,12 +153,12 @@ export class PromotionPipeline {
       result.blockers.push(`Paper trades only ${trades}, need ≥ 30`);
     }
 
-    // Paper Sharpe ≥ 0.5
+    // Paper Sharpe ≥ 1.5 (design spec: real-money gate requires proven edge)
     const paperSharpe = profile.paperMetrics?.rollingSharpe30d ?? 0;
-    if (paperSharpe >= 0.5) {
-      result.reasons.push(`Paper Sharpe ${paperSharpe.toFixed(2)} ≥ 0.5`);
+    if (paperSharpe >= 1.5) {
+      result.reasons.push(`Paper Sharpe ${paperSharpe.toFixed(2)} ≥ 1.5`);
     } else {
-      result.blockers.push(`Paper Sharpe ${paperSharpe.toFixed(2)} < 0.5`);
+      result.blockers.push(`Paper Sharpe ${paperSharpe.toFixed(2)} < 1.5`);
     }
 
     // Paper drawdown ≤ 20%
@@ -153,6 +177,15 @@ export class PromotionPipeline {
         result.reasons.push(`BT-Paper deviation ${deviation.toFixed(0)}% ≤ 30%`);
       } else {
         result.blockers.push(`BT-Paper deviation ${deviation.toFixed(0)}% > 30%`);
+      }
+    }
+
+    // Alpha Factory independence gate (optional)
+    if (result.blockers.length === 0 && this.alphaGate?.independencePassed) {
+      if (this.alphaGate.independencePassed(profile.id)) {
+        result.reasons.push("Alpha independence check passed");
+      } else {
+        result.blockers.push("Alpha independence check not passed");
       }
     }
 

@@ -169,20 +169,20 @@ describe("S12 — Promotion Gate Full Verification", () => {
 
   // ─── 5. L2→L3: exactly meets all thresholds ───
 
-  it("L2→L3: boundary pass (30 days, 30 trades, Sharpe=0.5, DD=20, dev~29%)", () => {
+  it("L2→L3: boundary pass (30 days, 30 trades, Sharpe=1.5, DD=20, dev~25%)", () => {
     const profile = makeProfile({
       level: "L2_PAPER",
       paperDaysActive: 30,
       paperTradeCount: 30,
-      backtest: makeBacktest({ sharpe: 0.7 }),
+      backtest: makeBacktest({ sharpe: 2.0 }),
       paperMetrics: makeDecayState({
-        rollingSharpe30d: 0.5,
+        rollingSharpe30d: 1.5,
         currentDrawdown: 20,
       }),
     });
     const result = ctx.services.fundManager.promotionPipeline.checkPromotion(profile);
 
-    // deviation = |0.7 - 0.5| / 0.7 * 100 ≈ 28.6% ≤ 30%
+    // deviation = |2.0 - 1.5| / 2.0 * 100 = 25% ≤ 30%
     expect(result.eligible).toBe(true);
     expect(result.targetLevel).toBe("L3_LIVE");
     expect(result.needsUserConfirmation).toBe(true);
@@ -196,9 +196,9 @@ describe("S12 — Promotion Gate Full Verification", () => {
       level: "L2_PAPER",
       paperDaysActive: 29,
       paperTradeCount: 30,
-      backtest: makeBacktest({ sharpe: 0.7 }),
+      backtest: makeBacktest({ sharpe: 2.0 }),
       paperMetrics: makeDecayState({
-        rollingSharpe30d: 0.5,
+        rollingSharpe30d: 1.5,
         currentDrawdown: 20,
       }),
     });
@@ -215,15 +215,15 @@ describe("S12 — Promotion Gate Full Verification", () => {
       level: "L2_PAPER",
       paperDaysActive: 30,
       paperTradeCount: 30,
-      backtest: makeBacktest({ sharpe: 1.0 }),
+      backtest: makeBacktest({ sharpe: 2.2 }),
       paperMetrics: makeDecayState({
-        rollingSharpe30d: 0.69,
+        rollingSharpe30d: 1.5,
         currentDrawdown: 10,
       }),
     });
     const result = ctx.services.fundManager.promotionPipeline.checkPromotion(profile);
 
-    // deviation = |1.0 - 0.69| / 1.0 * 100 = 31% > 30%
+    // deviation = |2.2 - 1.5| / 2.2 * 100 ≈ 31.8% > 30%
     expect(result.eligible).toBe(false);
     expect(result.blockers.some((b) => /deviation/i.test(b))).toBe(true);
   });

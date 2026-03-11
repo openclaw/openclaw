@@ -19,6 +19,10 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import { EvolutionScheduler } from "./src/alpha-factory/evolution-scheduler.js";
+import { GarbageCollector } from "./src/alpha-factory/garbage-collector.js";
+import { AlphaFactoryOrchestrator } from "./src/alpha-factory/orchestrator.js";
+import { ScreeningPipeline } from "./src/alpha-factory/screening-pipeline.js";
 import { resolveConfig } from "./src/config.js";
 import { ActivityLogStore } from "./src/core/activity-log-store.js";
 import { AgentEventSqliteStore } from "./src/core/agent-event-sqlite-store.js";
@@ -49,7 +53,9 @@ import { registerPackRoutes } from "./src/fund/routes-packs.js";
 import { registerFundRoutes } from "./src/fund/routes.js";
 import { registerFundTools } from "./src/fund/tools.js";
 import type { FundConfig } from "./src/fund/types.js";
+import { BatchHypothesisGenerator } from "./src/ideation/batch-generator.js";
 import { DeduplicationFilter } from "./src/ideation/dedup-filter.js";
+import { FailureFeedbackStore } from "./src/ideation/failure-feedback-store.js";
 import { IdeationEngine } from "./src/ideation/ideation-engine.js";
 import { IdeationScheduler } from "./src/ideation/ideation-scheduler.js";
 import { MarketScanner } from "./src/ideation/market-scanner.js";
@@ -108,6 +114,15 @@ export { MarketScanner } from "./src/ideation/market-scanner.js";
 export { IdeationEngine } from "./src/ideation/ideation-engine.js";
 export { IdeationScheduler } from "./src/ideation/ideation-scheduler.js";
 export { DeduplicationFilter } from "./src/ideation/dedup-filter.js";
+export { AlphaFactoryOrchestrator } from "./src/alpha-factory/orchestrator.js";
+export { ScreeningPipeline } from "./src/alpha-factory/screening-pipeline.js";
+export { ValidationOrchestrator } from "./src/alpha-factory/validation-orchestrator.js";
+export { EvolutionScheduler } from "./src/alpha-factory/evolution-scheduler.js";
+export { GarbageCollector } from "./src/alpha-factory/garbage-collector.js";
+export { GradualScaleIn } from "./src/alpha-factory/gradual-scale-in.js";
+export { CapacityEstimator } from "./src/alpha-factory/capacity-estimator.js";
+export { FailureFeedbackStore } from "./src/ideation/failure-feedback-store.js";
+export { BatchHypothesisGenerator } from "./src/ideation/batch-generator.js";
 export * from "./src/types.js";
 
 const findooTraderPlugin = {
@@ -288,6 +303,8 @@ const findooTraderPlugin = {
 
     // lifecycleEngine is created later — use a lazy reference
     const lifecycleRef: { engine?: InstanceType<typeof LifecycleEngine> } = {};
+    // GC is created later (Alpha Factory section) — lazy reference for lifecycle engine
+    const gcRef: { gc?: InstanceType<typeof GarbageCollector> } = {};
 
     // ideationScheduler is created later — use a lazy reference
     const ideationRef: { scheduler?: InstanceType<typeof IdeationScheduler> } = {};
@@ -429,6 +446,36 @@ const findooTraderPlugin = {
       perfStore,
       getRegistry,
       getPaper,
+      getDataProvider: () => {
+        try {
+          return runtime.services?.get?.("fin-data-provider") as Parameters<
+            typeof registerFundTools
+          >[1]["getDataProvider"] extends () => infer R
+            ? R extends undefined
+              ? never
+              : R
+            : never | undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      getLiveExecutor: () =>
+        liveExecutor as Parameters<
+          typeof registerFundTools
+        >[1]["getLiveExecutor"] extends () => infer R
+          ? R extends undefined
+            ? never
+            : R
+          : never,
+      getRegimeDetector: () => {
+        try {
+          return runtime.services?.get?.("fin-regime-detector") as
+            | { detect: (ohlcv: unknown[]) => string }
+            | undefined;
+        } catch {
+          return undefined;
+        }
+      },
     };
 
     // ── Register fund AI tools (7 tools) ──
@@ -480,6 +527,11 @@ const findooTraderPlugin = {
         liveHealthMonitor,
         liveReconciler,
         alertEngine,
+        garbageCollector: {
+          collect(profiles: Parameters<GarbageCollector["collect"]>[0]) {
+            return gcRef.gc?.collect(profiles) ?? { killed: [], reasons: new Map() };
+          },
+        },
         dataProvider: {
           async getTicker(symbol: string, market: string) {
             try {
@@ -599,6 +651,9 @@ const findooTraderPlugin = {
 
     const dedupFilter = new DeduplicationFilter(strategyRegistry);
 
+    // Create FailureFeedbackStore early so ideationScheduler can reference it
+    const failureFeedbackStore = new FailureFeedbackStore();
+
     const ideationEngine = new IdeationEngine({
       wakeBridge,
       activityLog,
@@ -626,6 +681,13 @@ const findooTraderPlugin = {
             return 20;
           }
         },
+        failureFeedbackResolver: () => {
+          try {
+            return failureFeedbackStore.getSummary();
+          } catch {
+            return "";
+          }
+        },
       },
       ideationConfig,
     );
@@ -644,6 +706,318 @@ const findooTraderPlugin = {
       wakeBridge,
     });
     setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
+
+    // ── Alpha Factory (S1-S6 pipeline) ──
+
+    const screeningPipeline = new ScreeningPipeline({
+      backtestService: {
+        async runBacktest(params: { strategyId: string; months?: number }) {
+          try {
+            const svc = runtime.services?.get?.("fin-remote-backtest") as
+              | { runBacktest?: (p: { strategyId: string; months?: number }) => Promise<unknown> }
+              | undefined;
+            return (await svc?.runBacktest?.(params)) as
+              | import("./src/shared/types.js").BacktestResult
+              | null;
+          } catch {
+            return null;
+          }
+        },
+      },
+    });
+
+    const garbageCollector = new GarbageCollector();
+    gcRef.gc = garbageCollector;
+
+    const evolutionScheduler = new EvolutionScheduler(
+      {
+        strategyRegistry,
+        evolutionEngineResolver: () => {
+          try {
+            const svc = runtime.services?.get?.("fin-evolution-engine");
+            return svc as
+              | { runRdavdCycle?: (id: string) => Promise<{ evolved: boolean; reason: string }> }
+              | undefined;
+          } catch {
+            return undefined;
+          }
+        },
+        paperEngine,
+        activityLog,
+        wakeBridge,
+      },
+      86_400_000, // 24h
+    );
+
+    const alphaFactory = new AlphaFactoryOrchestrator({
+      screeningPipeline,
+      evolutionScheduler,
+      garbageCollector,
+      activityLog,
+      onFailure: (strategyId, stage, reason) => {
+        const s = strategyRegistry.get(strategyId);
+        failureFeedbackStore.record({
+          templateId: s?.name ?? strategyId,
+          symbol: s?.definition?.symbols?.[0] ?? "unknown",
+          failStage: stage as "screening" | "validation" | "paper" | "gc",
+          failReason: reason,
+          parameters: s?.definition?.parameters ?? {},
+          timestamp: Date.now(),
+        });
+      },
+    });
+    alphaFactory.start();
+
+    api.registerService({
+      id: "fin-alpha-factory",
+      start: () => {},
+      instance: alphaFactory,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // Alpha Factory AI tools
+    api.registerTool({
+      name: "fin_alpha_factory_run",
+      description: "Trigger the Alpha Factory screening pipeline on specified strategies",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          strategyIds: {
+            type: "array" as const,
+            items: { type: "string" as const },
+            description: "Strategy IDs to screen",
+          },
+        },
+        required: ["strategyIds"],
+      },
+      handler: async (params: { strategyIds: string[] }) => {
+        const result = await alphaFactory.runScreening(params.strategyIds);
+        return { text: JSON.stringify(result, null, 2) };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    api.registerTool({
+      name: "fin_alpha_factory_status",
+      description: "Get Alpha Factory pipeline statistics (funnel data across all stages)",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        return { text: JSON.stringify(alphaFactory.getStats(), null, 2) };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    // ── Cron Integration (replaces setInterval for day-level schedulers) ──
+
+    // Shared cron job definitions for findoo day-level tasks
+    type CronJobDef = {
+      name: string;
+      schedule: { kind: "cron"; expr: string; tz?: string };
+      payload: { kind: "systemEvent"; text: string };
+    };
+
+    const cronJobDefs: CronJobDef[] = [
+      {
+        name: "findoo:daily-brief",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Morning brief time. Call fin_fund_status to get portfolio data, compose a brief summary, and send to user via message_send.",
+        },
+      },
+      {
+        name: "findoo:ideation-scan",
+        schedule: { kind: "cron", expr: "0 10 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Ideation scan time. Call fin_ideation_trigger to scan markets and generate strategy ideas.",
+        },
+      },
+      {
+        name: "findoo:evolution-check",
+        schedule: { kind: "cron", expr: "0 12 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Alpha decay check time. Call fin_evolution_scan to check for decaying strategies and decide on evolution.",
+        },
+      },
+      {
+        name: "findoo:evening-review",
+        schedule: { kind: "cron", expr: "0 18 * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Evening review time. Call fin_leaderboard and fin_list_promotions_ready, compose summary report.",
+        },
+      },
+      {
+        name: "findoo:weekly-rebalance",
+        schedule: { kind: "cron", expr: "0 10 * * 0" },
+        payload: {
+          kind: "systemEvent",
+          text: "[findoo-trader] Weekly rebalance time. Call fin_fund_rebalance to review 30-day L2 strategies, then fin_leaderboard for weekly report.",
+        },
+      },
+    ];
+
+    // Store cron reference for tools and HTTP routes
+    let cronRef:
+      | {
+          list: (...args: unknown[]) => Promise<unknown[]>;
+          add: (input: unknown) => Promise<unknown>;
+        }
+      | undefined;
+
+    // Helper: idempotently create findoo cron jobs
+    async function setupFindooCronJobs(cron: typeof cronRef): Promise<{
+      ok: boolean;
+      created: number;
+      existing: number;
+    }> {
+      if (!cron) return { ok: false, created: 0, existing: 0 };
+      const allJobs = (await cron.list()) as Array<{ name: string }>;
+      const findooJobs = allJobs.filter((j) => j.name.startsWith("findoo:"));
+      let created = 0;
+      for (const def of cronJobDefs) {
+        if (!findooJobs.some((j) => j.name === def.name)) {
+          await cron.add({
+            ...def,
+            enabled: true,
+            sessionTarget: "main",
+            wakeMode: "now",
+            delivery: { mode: "none" },
+          });
+          created++;
+        }
+      }
+      return { ok: true, created, existing: findooJobs.length };
+    }
+
+    // Gateway method: access CronService via context.cron
+    api.registerGatewayMethod("findoo-trader.cron.setup", async ({ context, respond }) => {
+      cronRef = context.cron;
+      const result = await setupFindooCronJobs(cronRef);
+      respond(true, result);
+    });
+
+    // Cron AI tools
+    api.registerTool({
+      name: "fin_cron_setup",
+      description:
+        "Initialize or check findoo cron jobs (daily brief, ideation, evolution, evening review, weekly rebalance)",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        if (!cronRef) {
+          return {
+            text: JSON.stringify({
+              error:
+                "Cron service not available yet. The gateway method has not been called. Try again after the first heartbeat.",
+            }),
+          };
+        }
+        const result = await setupFindooCronJobs(cronRef);
+        return { text: JSON.stringify(result, null, 2) };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    api.registerTool({
+      name: "fin_ideation_trigger",
+      description: "Trigger market ideation scan to discover new strategy opportunities",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        const result = await ideationScheduler.runCycle();
+        return {
+          text: JSON.stringify(
+            {
+              triggered: true,
+              symbolsScanned: result.snapshot.symbols.length,
+              created: result.created.length,
+              skippedDuplicates: result.skippedDuplicates.length,
+            },
+            null,
+            2,
+          ),
+        };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    api.registerTool({
+      name: "fin_evolution_scan",
+      description: "Scan L2/L3 strategies for alpha decay and recommend evolution",
+      parameters: { type: "object" as const, properties: {} },
+      handler: async () => {
+        const result = await evolutionScheduler.runCycle();
+        return {
+          text: JSON.stringify({ scanned: true, ...result }, null, 2),
+        };
+      },
+    } as Parameters<typeof api.registerTool>[0]);
+
+    // Cron HTTP routes for Dashboard
+    api.registerHttpRoute({
+      auth: "gateway",
+      method: "POST",
+      path: "/api/v1/finance/cron/setup",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        const result = await setupFindooCronJobs(cronRef);
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(result));
+      },
+    });
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/cron/status",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        if (!cronRef) {
+          httpRes.writeHead(200, { "Content-Type": "application/json" });
+          httpRes.end(JSON.stringify({ initialized: false, jobs: [] }));
+          return;
+        }
+        const allJobs = (await cronRef.list()) as Array<{ name: string }>;
+        const findooJobs = allJobs.filter((j) => j.name.startsWith("findoo:"));
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify({ initialized: true, jobs: findooJobs }));
+      },
+    });
+
+    // Alpha Factory HTTP routes
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/alpha-factory/stats",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(alphaFactory.getStats()));
+      },
+    });
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/alpha-factory/trigger",
+      method: "POST",
+      handler: async (req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        const ids = strategyRegistry.list().map((s) => s.id);
+        // runFullPipeline internally calls runScreening which triggers onFailure callback
+        const result = await alphaFactory.runFullPipeline(ids);
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(result));
+      },
+    });
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/alpha-factory/failures",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        httpRes.writeHead(200, { "Content-Type": "application/json" });
+        httpRes.end(
+          JSON.stringify({
+            summary: failureFeedbackStore.getSummary(),
+            recent: failureFeedbackStore.getRecentPatterns(20),
+          }),
+        );
+      },
+    });
 
     // ── Strategy Pack HTTP Routes ──
 
@@ -805,6 +1179,7 @@ const findooTraderPlugin = {
     // ── Daily Brief HTTP endpoint ──
 
     api.registerHttpRoute({
+      auth: "gateway",
       path: "/api/v1/finance/daily-brief",
       handler: async (_req: unknown, res: unknown) => {
         const httpRes = res as import("./src/types-http.js").HttpRes;
@@ -892,6 +1267,7 @@ const findooTraderPlugin = {
 
       // Register notification stats endpoint
       api.registerHttpRoute({
+        auth: "gateway",
         path: "/api/v1/finance/notifications/stats",
         handler: async (_req: unknown, res: unknown) => {
           const httpRes = res as import("./src/types-http.js").HttpRes;

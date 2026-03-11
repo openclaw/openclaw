@@ -10,7 +10,7 @@ CEX 行情 + CoinGecko 市场数据 + DefiLlama DeFi 数据，统一通过 `fin_
 
 > **数据边界:** DataHub 提供 CoinGecko + DefiLlama + CCXT 数据。链上原始数据（活跃地址、Gas、MVRV、NUPL、巨鲸追踪、交易所余额）不在覆盖范围，需 Glassnode / Nansen / Dune 等第三方服务。
 >
-> 详细分析框架、估值模型、风险矩阵 → `references/crypto-analysis.md`
+> 详细分析框架、估值模型、风险矩阵见下方 Analysis Patterns 和 Advanced Patterns 段落。
 
 ## Tools
 
@@ -43,39 +43,39 @@ Indicators: sma, ema, rsi, macd, bbands
 
 ### CEX Market Data (5)
 
-| endpoint              | Description            | Example                                                         |
-| --------------------- | ---------------------- | --------------------------------------------------------------- |
-| `market/ticker`       | Single ticker snapshot | `fin_crypto(endpoint="market/ticker", symbol="BTC/USDT")`       |
-| `market/tickers`      | All tickers            | `fin_crypto(endpoint="market/tickers")`                         |
-| `market/orderbook`    | Order book depth       | `fin_crypto(endpoint="market/orderbook", symbol="BTC/USDT")`    |
-| `market/trades`       | Recent trades          | `fin_crypto(endpoint="market/trades", symbol="BTC/USDT")`       |
-| `market/funding_rate` | Perpetual funding rate | `fin_crypto(endpoint="market/funding_rate", symbol="BTC/USDT")` |
+| endpoint              | Description            | Example                                                              |
+| --------------------- | ---------------------- | -------------------------------------------------------------------- |
+| `market/ticker`       | Single ticker snapshot | `fin_crypto(endpoint="market/ticker", symbol="BTC/USDT")`            |
+| `market/tickers`      | All tickers            | `fin_crypto(endpoint="market/tickers")`                              |
+| `market/orderbook`    | Order book depth       | `fin_crypto(endpoint="market/orderbook", symbol="BTC/USDT")`         |
+| `market/trades`       | Recent trades          | `fin_crypto(endpoint="market/trades", symbol="BTC/USDT")`            |
+| `market/funding_rate` | Perpetual funding rate | `fin_crypto(endpoint="market/funding_rate", symbol="BTC/USDT:USDT")` |
 
 ### CoinGecko Market Intelligence (6)
 
-| endpoint            | Description            | Example                                                    |
-| ------------------- | ---------------------- | ---------------------------------------------------------- |
-| `coin/market`       | Market cap ranking     | `fin_crypto(endpoint="coin/market", limit=20)`             |
-| `coin/historical`   | Coin historical data   | `fin_crypto(endpoint="coin/historical", symbol="bitcoin")` |
-| `coin/info`         | Coin detail info       | `fin_crypto(endpoint="coin/info", symbol="ethereum")`      |
-| `coin/categories`   | Category rankings      | `fin_crypto(endpoint="coin/categories")`                   |
-| `coin/trending`     | Trending / hot coins   | `fin_crypto(endpoint="coin/trending")`                     |
-| `coin/global_stats` | Global market overview | `fin_crypto(endpoint="coin/global_stats")`                 |
+| endpoint            | Description            | Example                                                                                                    |
+| ------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `coin/market`       | Market cap ranking     | `fin_crypto(endpoint="coin/market", limit=20)`                                                             |
+| `coin/historical`   | Coin historical data   | `fin_crypto(endpoint="coin/historical", symbol="bitcoin", start_date="2025-01-01", end_date="2026-03-07")` |
+| `coin/info`         | Coin detail info       | `fin_crypto(endpoint="coin/info", symbol="ethereum")`                                                      |
+| `coin/categories`   | Category rankings      | `fin_crypto(endpoint="coin/categories")`                                                                   |
+| `coin/trending`     | Trending / hot coins   | `fin_crypto(endpoint="coin/trending")`                                                                     |
+| `coin/global_stats` | Global market overview | `fin_crypto(endpoint="coin/global_stats")`                                                                 |
 
 ### DeFi Protocol Data — DefiLlama (10)
 
-| endpoint              | Description                 | Example                                                      |
-| --------------------- | --------------------------- | ------------------------------------------------------------ |
-| `defi/protocols`      | Protocol TVL ranking        | `fin_crypto(endpoint="defi/protocols", limit=20)`            |
-| `defi/tvl_historical` | Full TVL history            | `fin_crypto(endpoint="defi/tvl_historical")`                 |
-| `defi/protocol_tvl`   | Single protocol TVL history | `fin_crypto(endpoint="defi/protocol_tvl", symbol="aave")`    |
-| `defi/chains`         | Blockchain TVL comparison   | `fin_crypto(endpoint="defi/chains")`                         |
-| `defi/bridges`        | Cross-chain bridge volumes  | `fin_crypto(endpoint="defi/bridges")`                        |
-| `defi/yields`         | Yield farming opportunities | `fin_crypto(endpoint="defi/yields")`                         |
-| `defi/stablecoins`    | Stablecoin market data      | `fin_crypto(endpoint="defi/stablecoins")`                    |
-| `defi/fees`           | Protocol fees/revenue       | `fin_crypto(endpoint="defi/fees")`                           |
-| `defi/dex_volumes`    | DEX trading volumes         | `fin_crypto(endpoint="defi/dex_volumes")`                    |
-| `defi/coin_prices`    | DeFi token prices           | `fin_crypto(endpoint="defi/coin_prices", symbol="ethereum")` |
+| endpoint              | Description                 | Example                                                                                                             |
+| --------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `defi/protocols`      | Protocol TVL ranking        | `fin_crypto(endpoint="defi/protocols", limit=20)`                                                                   |
+| `defi/tvl_historical` | Full TVL history            | `fin_crypto(endpoint="defi/tvl_historical")`                                                                        |
+| `defi/protocol_tvl`   | Single protocol TVL history | `fin_crypto(endpoint="defi/protocol_tvl", symbol="aave")` ⚠️ API 需 `protocol` 参数，但 buildParams 映射为 `symbol` |
+| `defi/chains`         | Blockchain TVL comparison   | `fin_crypto(endpoint="defi/chains")`                                                                                |
+| `defi/bridges`        | Cross-chain bridge volumes  | `fin_crypto(endpoint="defi/bridges")`                                                                               |
+| `defi/yields`         | Yield farming opportunities | `fin_crypto(endpoint="defi/yields")`                                                                                |
+| `defi/stablecoins`    | Stablecoin market data      | `fin_crypto(endpoint="defi/stablecoins")`                                                                           |
+| `defi/fees`           | Protocol fees/revenue       | `fin_crypto(endpoint="defi/fees")`                                                                                  |
+| `defi/dex_volumes`    | DEX trading volumes         | `fin_crypto(endpoint="defi/dex_volumes")`                                                                           |
+| `defi/coin_prices`    | DeFi token prices           | `fin_crypto(endpoint="defi/coin_prices", symbol="ethereum")` ⚠️ API 需 `coins` 参数，但 buildParams 映射为 `symbol` |
 
 ## Analysis Patterns
 
@@ -99,7 +99,7 @@ Indicators: sma, ema, rsi, macd, bbands
 3. fin_crypto(defi/yields)                   → 当前 yield vs 历史中位
 4. fin_crypto(defi/stablecoins)              → 稳定币流入趋势
 → 估值: P/F = FDV / annualized_revenue; P/TVL = mcap / TVL
-→ 同赛道横向对比 (详见 references/crypto-analysis.md §1)
+→ 同赛道横向对比: 同类 protocol P/F + P/TVL 排名, TVL 趋势, fees 增长率
 ```
 
 ## Advanced Patterns
@@ -107,8 +107,10 @@ Indicators: sma, ema, rsi, macd, bbands
 ### BTC Dominance Cycle — Altseason 择时
 
 ```
-1. fin_crypto(coin/global_stats)                     → btc_dominance %
-2. fin_crypto(coin/historical, symbol="bitcoin")     → 30d dom 变化
+1. fin_crypto(coin/global_stats)                     → btc_dominance % (当前快照)
+2. 对比历史: 定期记录 global_stats 快照，计算 7d/30d dom 变化
+   ⚠️ coin/historical 不返回 dominance 历史数据，只能通过多次 global_stats 快照对比
+3. fin_crypto(coin/market, limit=20)                 → BTC 价格 + 涨跌幅辅助判断
 → dom↑ + BTC↑ = BTC season (减配山寨)
 → dom↓ + BTC↑ = Altseason (轮动 ETH→大盘→中小盘)
 → dom↓ + BTC↓ = 恐慌出逃 | dom↑ + BTC↓ = 山寨失血
@@ -211,9 +213,54 @@ fin_macro(treasury_us) + fin_crypto(coin/global_stats)
 | Protocol count  | defi/protocols   | New protocols joining  | Protocols leaving   |
 | Fee revenue     | defi/fees        | MoM growth > 10%       | Revenue declining   |
 
+## Contract Risk Calculator (Pure Math — Zero Data Dependency)
+
+合约交易风险计算，纯数学公式，无需额外数据端点。
+
+### Liquidation Price
+
+```
+Long:  Liq = entry × (1 - 1/leverage × (1 - maintenance_margin_rate))
+Short: Liq = entry × (1 + 1/leverage × (1 - maintenance_margin_rate))
+```
+
+常见 maintenance_margin_rate: Binance 0.4%, OKX 0.5%, Bybit 0.5%。
+
+**示例:** BTC $60,000 做多 20x，维持保证金率 0.5%
+→ Liq = 60000 × (1 - 1/20 × (1 - 0.005)) = 60000 × 0.95025 = **$57,015**
+
+### Risk Dashboard (用户提供 entry + leverage + position size)
+
+| 指标     | 公式                                          | 阈值                  |
+| -------- | --------------------------------------------- | --------------------- |
+| 爆仓距离 | \|entry - liq\| / entry × 100%                | <3% = 极高风险        |
+| 最大亏损 | position_size / leverage × (1 + fee_rate × 2) | 即保证金 + 双向手续费 |
+| 保证金率 | margin / position_value × 100%                | <维持保证金率 = 强平  |
+| 盈亏平衡 | entry ± entry × fee_rate × 2 × leverage       | 需覆盖开平手续费      |
+
+### 仓位管理建议
+
+| 杠杆倍数 | 爆仓距离 | 适用场景 | 建议仓位占比 |
+| -------- | -------- | -------- | ------------ |
+| 2-3x     | 33-50%   | 趋势跟踪 | ≤30% 总资金  |
+| 5-10x    | 10-20%   | 波段交易 | ≤15% 总资金  |
+| 20-50x   | 2-5%     | 极短线   | ≤5% 总资金   |
+| >50x     | <2%      | 赌博     | ⚠️ 不建议    |
+
+**多仓位综合风险:** 当用户持有多个合约仓位时，计算总保证金占用 / 账户净值 = 账户风险度。>70% = 需减仓；>85% = 连环爆仓风险。
+
+### 与现有数据结合
+
+```
+1. fin_crypto(market/ticker, symbol="BTC/USDT")      → 当前价格 vs 用户入场价
+2. fin_crypto(market/funding_rate, symbol="BTC/USDT") → funding 正/负判断持仓成本方向
+3. fin_data_regime(symbol="BTC/USDT", market="crypto") → 市场体制决定杠杆上限建议
+→ Bull regime: 最高建议 10x | Volatile/Crisis: 最高 3x | Bear: 建议纯现货
+```
+
 ## Data Notes
 
-- **CoinGecko**: ~30 req/min rate limit; coin ID uses slug (bitcoin, ethereum)
+- **CoinGecko**: ~30 req/min rate limit; coin ID uses slug (bitcoin, ethereum); `coin/historical` 和 `coin/info` 需传 coin_id (如 "bitcoin")，非交易对格式; `coin/historical` 需传 `start_date`/`end_date`（不支持 `limit`）
 - **DefiLlama**: No auth, ~10min refresh, high TVL data reliability
 - **CEX**: Via DataHub aggregation, 1-5min delay; OHLCV via CCXT lower latency
 - **Funding rate**: Settlement cycles vary by exchange (8h/4h), always note the period

@@ -17,6 +17,7 @@ export function registerStrategyRoutes(
 ): void {
   // GET /api/v1/finance/strategies -- List all strategies
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies",
     handler: async (_req: unknown, res: HttpRes) => {
       const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
@@ -32,6 +33,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/pause -- Pause a strategy
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/pause",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -75,6 +77,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/resume -- Resume a paused strategy
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/resume",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -104,6 +107,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/kill -- Kill a strategy
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/kill",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -148,6 +152,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/promote -- Promote a strategy to next level
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/promote",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
@@ -187,6 +192,35 @@ export function registerStrategyRoutes(
           return;
         }
 
+        // Gate check: delegate to FundManager/PromotionPipeline for L1→L2.
+        // L2→L3 is not gated here — it already requires human approval below.
+        if (nextLevel === "L2_PAPER") {
+          const fundManager = runtime.services?.get?.("fin-fund-manager") as
+            | {
+                checkPromotion?: (profile: Record<string, unknown>) => {
+                  eligible: boolean;
+                  blockers: string[];
+                };
+              }
+            | undefined;
+          if (fundManager?.checkPromotion) {
+            const profile = {
+              id: strategy.id,
+              level: strategy.level,
+              backtest: strategy.lastBacktest ?? null,
+              walkForward: strategy.lastWalkForward ?? null,
+              paperMetrics: null,
+              paperDaysActive: 0,
+              paperTradeCount: 0,
+            };
+            const check = fundManager.checkPromotion(profile);
+            if (!check.eligible) {
+              errorResponse(res, 400, `Promotion blocked: ${check.blockers.join("; ")}`);
+              return;
+            }
+          }
+        }
+
         // L3 requires approval — real money trading must be explicitly confirmed
         if (nextLevel === "L3_LIVE") {
           eventStore.addEvent({
@@ -218,6 +252,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/pause-all -- Pause all active strategies
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/pause-all",
     handler: async (_req: unknown, res: HttpRes) => {
       try {
@@ -254,6 +289,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/backtest-all -- Run backtests for all strategies
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/backtest-all",
     handler: async (_req: HttpReq, res: HttpRes) => {
       try {
@@ -334,6 +370,7 @@ export function registerStrategyRoutes(
 
   // GET /api/v1/finance/strategy-templates -- List built-in strategy templates
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategy-templates",
     handler: async (_req: unknown, res: HttpRes) => {
       jsonResponse(res, 200, { templates: STRATEGY_TEMPLATES });
@@ -342,6 +379,7 @@ export function registerStrategyRoutes(
 
   // POST /api/v1/finance/strategies/create -- Create L0 strategy from template
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/strategies/create",
     handler: async (req: HttpReq, res: HttpRes) => {
       try {

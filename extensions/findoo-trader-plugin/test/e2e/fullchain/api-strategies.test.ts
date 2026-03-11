@@ -145,6 +145,33 @@ describe("B4 — Strategy API full-chain", () => {
 
   // ── 7. POST promote L1→L2 → 200 ──
   it("POST /strategies/promote L1→L2 returns 200", async () => {
+    // Inject backtest + walk-forward to satisfy checkPromotion gate
+    ctx.services.strategyRegistry.updateBacktest(strategyId, {
+      strategyId,
+      totalReturn: 20,
+      sharpe: 1.5,
+      sortino: 2.0,
+      maxDrawdown: -10,
+      calmar: 2.0,
+      winRate: 0.65,
+      profitFactor: 2.0,
+      totalTrades: 150,
+      finalEquity: 12_000,
+      initialCapital: 10_000,
+      startDate: Date.now() - 90 * 86_400_000,
+      endDate: Date.now(),
+      trades: [],
+      equityCurve: [],
+      dailyReturns: [],
+    });
+    ctx.services.strategyRegistry.updateWalkForward(strategyId, {
+      passed: true,
+      ratio: 0.85,
+      threshold: 0.6,
+      inSampleSharpe: 1.8,
+      outOfSampleSharpe: 1.5,
+    });
+
     const { status, body } = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -187,6 +187,18 @@ export type LifecycleEngineDeps = {
   alertEngine?: AlertEngineLike;
   /** Optional data provider — fetches current prices for alert checks. */
   dataProvider?: DataProviderLike;
+  /** Optional garbage collector — kills strategies meeting multi-rule criteria. */
+  garbageCollector?: {
+    collect(
+      profiles: Array<{
+        id: string;
+        level: string;
+        paperMetrics?: { rollingSharpe7d: number; consecutiveLossDays: number };
+        paperDaysActive?: number;
+        paperTradeCount?: number;
+      }>,
+    ): { killed: string[]; reasons: Map<string, string> };
+  };
 };
 
 export type LifecycleEngineStats = {
@@ -271,32 +283,42 @@ export class LifecycleEngine {
       return { promoted, approvalsSent, demoted, errors };
     }
 
+    let profiles: ReturnType<FundManagerLike["buildProfiles"]> = [];
+
     try {
       const allRecords = strategyRegistry.list();
       const paperData = gatherPaperData(paperEngine);
-      const profiles = fundManager.buildProfiles(allRecords, paperData);
+      profiles = fundManager.buildProfiles(allRecords, paperData);
 
-      // ── 1. Check promotions ─────────────────────────────────
+      // ── 1. Check promotions — recommend to Agent, don't auto-execute ──
+      const promoRecommendations: Array<{
+        strategyId: string;
+        name: string;
+        from: string;
+        to: string;
+        reasons: string[];
+      }> = [];
+
       for (const profile of profiles) {
         try {
           const check = fundManager.checkPromotion(profile);
           if (!check.eligible || !check.targetLevel) continue;
 
           if (check.needsUserConfirmation) {
-            // L2→L3: require user approval
+            // L2→L3: still require user approval (unchanged)
             if (!this.pendingApprovals.has(profile.id)) {
               this.sendApprovalRequest(profile.id, profile.name, check);
               approvalsSent++;
             }
           } else {
-            // L1→L2 (or L0→L1): auto-promote
-            this.executePromotion(
-              profile.id,
-              profile.name,
-              check.currentLevel,
-              check.targetLevel,
-              check.reasons,
-            );
+            // L0→L1, L1→L2: recommend to Agent instead of auto-executing
+            promoRecommendations.push({
+              strategyId: profile.id,
+              name: profile.name,
+              from: check.currentLevel,
+              to: check.targetLevel,
+              reasons: check.reasons,
+            });
             promoted++;
           }
         } catch {
@@ -304,23 +326,39 @@ export class LifecycleEngine {
         }
       }
 
-      // ── 2. Check demotions ──────────────────────────────────
+      // ── 2. Check demotions — recommend to Agent ──
+      const demoRecommendations: Array<{
+        strategyId: string;
+        name: string;
+        from: string;
+        to: string;
+        reasons: string[];
+      }> = [];
+
       for (const profile of profiles) {
         try {
           const check = fundManager.checkDemotion(profile);
           if (!check.shouldDemote || !check.targetLevel) continue;
 
-          this.executeDemotion(
-            profile.id,
-            profile.name,
-            check.currentLevel,
-            check.targetLevel,
-            check.reasons,
-          );
+          demoRecommendations.push({
+            strategyId: profile.id,
+            name: profile.name,
+            from: check.currentLevel,
+            to: check.targetLevel,
+            reasons: check.reasons,
+          });
           demoted++;
         } catch {
           errors++;
         }
+      }
+
+      // Notify Agent of all recommended actions (Agent decides whether to execute)
+      if (promoRecommendations.length > 0 || demoRecommendations.length > 0) {
+        this.deps.wakeBridge.onLifecycleRecommendation({
+          promotions: promoRecommendations,
+          demotions: demoRecommendations,
+        });
       }
     } catch (err) {
       errors++;
@@ -329,6 +367,28 @@ export class LifecycleEngine {
         action: "lifecycle_cycle_error",
         detail: `Cycle error: ${err instanceof Error ? err.message : String(err)}`,
       });
+    }
+
+    // ── 2b. Garbage collection (optional Alpha Factory integration) ──
+    try {
+      if (this.deps.garbageCollector && profiles.length > 0) {
+        const gcResult = this.deps.garbageCollector.collect(
+          profiles as Parameters<
+            NonNullable<LifecycleEngineDeps["garbageCollector"]>["collect"]
+          >[0],
+        );
+        for (const sid of gcResult.killed) {
+          const rec = strategyRegistry.list().find((r) => r.id === sid);
+          if (rec && rec.level !== "KILLED") {
+            this.executeDemotion(sid, rec.name, rec.level, "KILLED", [
+              gcResult.reasons.get(sid) ?? "GC rule triggered",
+            ]);
+            demoted++;
+          }
+        }
+      }
+    } catch {
+      errors++;
     }
 
     // ── 3. L3 Live Health Monitor — circuit breaker ──

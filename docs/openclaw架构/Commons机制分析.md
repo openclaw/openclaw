@@ -76,15 +76,15 @@ commons/
 
 ### 3.2 支持 7 种条目类型
 
-| 类型 | 用途 |
-|------|------|
-| `skill` | AI 技能包（SKILL.md + 可选脚本） |
-| `strategy` | 交易策略（FEP 包） |
-| `connector` | 数据/交易所连接器 |
-| `persona` | Agent 人设 |
-| `workspace` | 工作空间模板 |
-| `knowledge-pack` | 知识包 |
-| `compliance-ruleset` | 合规规则集 |
+| 类型                 | 用途                             |
+| -------------------- | -------------------------------- |
+| `skill`              | AI 技能包（SKILL.md + 可选脚本） |
+| `strategy`           | 交易策略（FEP 包）               |
+| `connector`          | 数据/交易所连接器                |
+| `persona`            | Agent 人设                       |
+| `workspace`          | 工作空间模板                     |
+| `knowledge-pack`     | 知识包                           |
+| `compliance-ruleset` | 合规规则集                       |
 
 ### 3.3 注册表 API
 
@@ -149,48 +149,48 @@ FCS = Quality × 35% + Usage × 30% + Social × 20% + Freshness × 15%
 
 **通用质量**（适用所有类型）：
 
-| 指标 | 权重 | 说明 |
-|------|------|------|
-| hasTests | 25% | 有测试用例 |
-| hasDocumentation | 25% | 有文档 |
-| hasCIPassedRecently | 20% | CI 最近通过 |
-| lintScore | 15% | Lint 评分 0-100 |
-| typeCheckPasses | 15% | 类型检查通过 |
+| 指标                | 权重 | 说明            |
+| ------------------- | ---- | --------------- |
+| hasTests            | 25%  | 有测试用例      |
+| hasDocumentation    | 25%  | 有文档          |
+| hasCIPassedRecently | 20%  | CI 最近通过     |
+| lintScore           | 15%  | Lint 评分 0-100 |
+| typeCheckPasses     | 15%  | 类型检查通过    |
 
 **Strategy 类型加权**（质量权重 45%）：
 
-| 指标 | 权重 | 计算 |
-|------|------|------|
-| Sharpe Ratio | 40% | clamp(ratio/2.0, 0, 1) |
-| Max Drawdown | 30% | clamp(1 - maxDD/50, 0, 1) |
-| Win Rate | 15% | clamp(winRate/100, 0, 1) |
-| 通用质量 | 15% | 上述通用公式 |
+| 指标         | 权重 | 计算                      |
+| ------------ | ---- | ------------------------- |
+| Sharpe Ratio | 40%  | clamp(ratio/2.0, 0, 1)    |
+| Max Drawdown | 30%  | clamp(1 - maxDD/50, 0, 1) |
+| Win Rate     | 15%  | clamp(winRate/100, 0, 1)  |
+| 通用质量     | 15%  | 上述通用公式              |
 
 **Connector 类型加权**（质量权重 40%）：
 
-| 指标 | 权重 | 计算 |
-|------|------|------|
-| Uptime | 40% | clamp(uptime/100, 0, 1) |
-| Latency | 25% | clamp(1 - latency/2000, 0, 1) |
-| Error Rate | 20% | clamp(1 - errorRate, 0, 1) |
-| 通用质量 | 15% | 上述通用公式 |
+| 指标       | 权重 | 计算                          |
+| ---------- | ---- | ----------------------------- |
+| Uptime     | 40%  | clamp(uptime/100, 0, 1)       |
+| Latency    | 25%  | clamp(1 - latency/2000, 0, 1) |
+| Error Rate | 20%  | clamp(1 - errorRate, 0, 1)    |
+| 通用质量   | 15%  | 上述通用公式                  |
 
 #### Usage（使用量分，0-100）
 
-| 指标 | 权重 | 满分条件 |
-|------|------|---------|
-| installCount | 40% | ≥ 100 次安装 |
-| activeInstalls30d | 30% | ≥ 50 个活跃安装 |
-| invocationCount30d | 30% | ≥ 500 次调用 |
+| 指标               | 权重 | 满分条件        |
+| ------------------ | ---- | --------------- |
+| installCount       | 40%  | ≥ 100 次安装    |
+| activeInstalls30d  | 30%  | ≥ 50 个活跃安装 |
+| invocationCount30d | 30%  | ≥ 500 次调用    |
 
 #### Social（社区分，0-100）
 
-| 指标 | 权重 | 满分条件 |
-|------|------|---------|
-| starCount | 30% | ≥ 50 颗星 |
-| forkCount | 20% | ≥ 20 个 fork |
-| reviewCount | 20% | ≥ 10 条评论 |
-| averageRating | 30% | 5.0 分 |
+| 指标          | 权重 | 满分条件     |
+| ------------- | ---- | ------------ |
+| starCount     | 30%  | ≥ 50 颗星    |
+| forkCount     | 20%  | ≥ 20 个 fork |
+| reviewCount   | 20%  | ≥ 10 条评论  |
+| averageRating | 30%  | 5.0 分       |
 
 #### Freshness（新鲜度分，0-100）
 
@@ -209,12 +209,12 @@ freshness = decay × 100
 
 ### 5.3 类型特化权重
 
-| 维度 | 默认 | Strategy | Connector |
-|------|------|----------|-----------|
-| Quality | 35% | **45%** | **40%** |
-| Usage | 30% | **20%** | 30% |
-| Social | 20% | **15%** | **10%** |
-| Freshness | 15% | **20%** | **20%** |
+| 维度      | 默认 | Strategy | Connector |
+| --------- | ---- | -------- | --------- |
+| Quality   | 35%  | **45%**  | **40%**   |
+| Usage     | 30%  | **20%**  | 30%       |
+| Social    | 20%  | **15%**  | **10%**   |
+| Freshness | 15%  | **20%**  | **20%**   |
 
 策略类型更看重质量（回测表现），连接器更看重可靠性。
 
@@ -223,9 +223,9 @@ freshness = decay × 100
 ```json
 {
   "antiGaming": {
-    "maxDailyScoreChange": 5,     // 24h 内最多变化 ±5 分
-    "installVelocityCap": 50,     // 日安装上限
-    "minUniqueInstallers": 3      // 最少独立安装者
+    "maxDailyScoreChange": 5, // 24h 内最多变化 ±5 分
+    "installVelocityCap": 50, // 日安装上限
+    "minUniqueInstallers": 3 // 最少独立安装者
   }
 }
 ```
@@ -262,24 +262,24 @@ freshness = decay × 100
 
 ### 6.2 类型特定退化信号
 
-| 类型 | 退化触发条件 |
-|------|-------------|
-| **Strategy** | Sharpe < 0 **或** 最大回撤 > 50% **或** 180天无回测更新 |
-| **Connector** | 可用率 < 80% **或** 错误率 > 10% **或** 30天无健康检查 |
-| **Skill** | 90天零调用 **或** 30天零活跃安装 |
-| **Knowledge-Pack** | 365天未更新 |
-| **Compliance-Ruleset** | 365天未更新 |
-| **Persona/Workspace** | 180天无活跃安装且无使用 |
+| 类型                   | 退化触发条件                                            |
+| ---------------------- | ------------------------------------------------------- |
+| **Strategy**           | Sharpe < 0 **或** 最大回撤 > 50% **或** 180天无回测更新 |
+| **Connector**          | 可用率 < 80% **或** 错误率 > 10% **或** 30天无健康检查  |
+| **Skill**              | 90天零调用 **或** 30天零活跃安装                        |
+| **Knowledge-Pack**     | 365天未更新                                             |
+| **Compliance-Ruleset** | 365天未更新                                             |
+| **Persona/Workspace**  | 180天无活跃安装且无使用                                 |
 
 ### 6.3 关键阈值
 
 ```json
 {
   "lifecycle": {
-    "seedlingToGrowingThreshold": 30,    // FCS ≥ 30 → 升级到 growing
-    "growingToEstablishedThreshold": 65,  // FCS ≥ 65 → 升级到 established
-    "degradationThreshold": 20,          // FCS < 20 → 触发退化
-    "archivalGracePeriodDays": 90        // 退化 90 天无恢复 → 归档
+    "seedlingToGrowingThreshold": 30, // FCS ≥ 30 → 升级到 growing
+    "growingToEstablishedThreshold": 65, // FCS ≥ 65 → 升级到 established
+    "degradationThreshold": 20, // FCS < 20 → 触发退化
+    "archivalGracePeriodDays": 90 // 退化 90 天无恢复 → 归档
   }
 }
 ```
@@ -312,6 +312,7 @@ openfinclaw commons dashboard
 ```
 
 输出：
+
 - 七维度条形图（skill, strategy, connector 等条目数）
 - 生命周期分布（seedling / growing / established 计数）
 - 贡献者排行榜（排名、条目数、平均 FCS、主力维度）
@@ -324,6 +325,7 @@ openfinclaw commons build-site --open
 ```
 
 生成 `commons/site/index.html`：
+
 - 自包含 HTML（内联 CSS，Chart.js CDN）
 - 雷达图（7 个维度）
 - 维度卡片（含 tier 计数）
@@ -344,20 +346,20 @@ openfinclaw commons generate-report --output report.md --badges
 
 ## 九、完整 CLI 命令矩阵
 
-| 命令 | 功能 | 关键选项 |
-|------|------|---------|
-| `commons list` | 列出所有条目 | `--type`, `--sort fcs`, `--tier`, `--json` |
-| `commons search <query>` | 模糊搜索 | `--json` |
-| `commons info <id>` | 条目详情 | `--json` |
-| `commons install <id>` | 安装到本地 | `--dir`, `--json` |
-| `commons publish <path>` | 发布到注册表 | `--type`, `--id`, `--author`, `--json` |
-| `commons score <id>` | FCS 评分详情 | `--history`, `--json` |
-| `commons lifecycle <id>` | 生命周期状态 | `--json` |
-| `commons fcs recalculate` | 重算 FCS 分数 | `--entry <id>`, `--dry-run` |
-| `commons delist <id>` | 紧急下架 | `--reason`, `--restore` |
-| `commons dashboard` | CLI 仪表盘 | `--compact`, `--json` |
-| `commons generate-report` | Markdown 报告 | `--output`, `--badges` |
-| `commons build-site` | 静态网站 | `--output`, `--open` |
+| 命令                      | 功能          | 关键选项                                   |
+| ------------------------- | ------------- | ------------------------------------------ |
+| `commons list`            | 列出所有条目  | `--type`, `--sort fcs`, `--tier`, `--json` |
+| `commons search <query>`  | 模糊搜索      | `--json`                                   |
+| `commons info <id>`       | 条目详情      | `--json`                                   |
+| `commons install <id>`    | 安装到本地    | `--dir`, `--json`                          |
+| `commons publish <path>`  | 发布到注册表  | `--type`, `--id`, `--author`, `--json`     |
+| `commons score <id>`      | FCS 评分详情  | `--history`, `--json`                      |
+| `commons lifecycle <id>`  | 生命周期状态  | `--json`                                   |
+| `commons fcs recalculate` | 重算 FCS 分数 | `--entry <id>`, `--dry-run`                |
+| `commons delist <id>`     | 紧急下架      | `--reason`, `--restore`                    |
+| `commons dashboard`       | CLI 仪表盘    | `--compact`, `--json`                      |
+| `commons generate-report` | Markdown 报告 | `--output`, `--badges`                     |
+| `commons build-site`      | 静态网站      | `--output`, `--open`                       |
 
 ---
 
@@ -417,14 +419,14 @@ commons install <id>
 
 ## 十一、设计哲学
 
-| 原则 | 体现 |
-|------|------|
-| **CLI-First** | 所有操作通过命令行，支持 `--json` 机器消费 |
-| **类型感知** | Strategy 看 Sharpe，Connector 看 Uptime，不一刀切 |
-| **时间衰减** | 90 天半衰期，鼓励持续维护 |
-| **反作弊** | 日变化上限 ±5 分，防止刷分 |
-| **追加写入** | history/ 月度 JSONL 不可变，完整审计 |
-| **优雅降级** | scores.json 不存在时返回空结构，不崩溃 |
-| **Zod 校验** | 所有文件 I/O 严格 Schema 验证 |
-| **手动兜底** | delist/restore 人工介入，覆盖自动化 |
-| **自包含** | 生成的仪表盘网站零外部依赖（除 Chart.js CDN） |
+| 原则          | 体现                                              |
+| ------------- | ------------------------------------------------- |
+| **CLI-First** | 所有操作通过命令行，支持 `--json` 机器消费        |
+| **类型感知**  | Strategy 看 Sharpe，Connector 看 Uptime，不一刀切 |
+| **时间衰减**  | 90 天半衰期，鼓励持续维护                         |
+| **反作弊**    | 日变化上限 ±5 分，防止刷分                        |
+| **追加写入**  | history/ 月度 JSONL 不可变，完整审计              |
+| **优雅降级**  | scores.json 不存在时返回空结构，不崩溃            |
+| **Zod 校验**  | 所有文件 I/O 严格 Schema 验证                     |
+| **手动兜底**  | delist/restore 人工介入，覆盖自动化               |
+| **自包含**    | 生成的仪表盘网站零外部依赖（除 Chart.js CDN）     |

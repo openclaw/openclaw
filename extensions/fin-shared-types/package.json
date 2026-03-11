@@ -1,13 +1,38 @@
 {
   "name": "@openfinclaw/fin-shared-types",
-  "version": "2026.2.23",
-  "private": true,
+  "version": "0.0.1",
   "description": "Shared types, interfaces, and pure functions used across fin-* extensions",
+  "keywords": [
+    "financial",
+    "openclaw",
+    "openfinclaw",
+    "types"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cryptoSUN2049/openFinclaw.git",
+    "directory": "extensions/fin-shared-types"
+  },
+  "files": [
+    "*.ts",
+    "src"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "devDependencies": {
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openfinclaw": ">=2026.2.23"
+    "openfinclaw": ">=0.0.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

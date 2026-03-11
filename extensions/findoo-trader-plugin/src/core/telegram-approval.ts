@@ -121,6 +121,7 @@ export function registerTelegramApprovalRoute(
 ): void {
   // POST /api/v1/finance/telegram/callback — handle Telegram inline button callbacks
   api.registerHttpRoute({
+    auth: "plugin",
     path: "/api/v1/finance/telegram/callback",
     handler: async (req: unknown, res: HttpRes) => {
       try {

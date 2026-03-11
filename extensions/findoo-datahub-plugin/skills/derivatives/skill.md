@@ -95,11 +95,17 @@ fin_derivatives(futures/holding)     → 主力持仓方向
 
 ### 按 IV 分位选策略
 
-| IV 分位     | 看涨                       | 看跌                       | 无方向                  |
-| ----------- | -------------------------- | -------------------------- | ----------------------- |
-| < 30th (低) | 买 Call / Bull Call Spread | 买 Put / Bear Put Spread   | Long Straddle/Strangle  |
-| 30-70th     | Bull Call Spread           | Bear Put Spread            | Iron Condor             |
-| > 70th (高) | 卖 Put / Bull Put Spread   | 卖 Call / Bear Call Spread | Short Straddle/Strangle |
+**IV 分位计算方法 (DataHub 不直接提供，需自行计算):**
+
+- A 股: `fin_derivatives(endpoint="options/daily", symbol=<合约>, limit=250)` → 取 close 序列 → Black-Scholes 反推每日 IV → 当前 IV 在 250 日序列中的百分位
+- US: `fin_derivatives(endpoint="options/chains", symbol="SPY")` → 直接取返回的 IV 字段 → 与 VIX 历史对比
+- ⚠️ A 股标的有限 (50ETF/300ETF/科创50ETF 等)，个股期权几乎不存在
+
+| IV 分位     | 看涨                       | 看跌                       | 无方向                                |
+| ----------- | -------------------------- | -------------------------- | ------------------------------------- |
+| < 30th (低) | 买 Call / Bull Call Spread | 买 Put / Bear Put Spread   | Long Straddle/Strangle                |
+| 30-70th     | Bull Call Spread           | Bear Put Spread            | Iron Condor                           |
+| > 70th (高) | 卖 Put / Bull Put Spread   | 卖 Call / Bear Call Spread | Short Straddle/Strangle ⚠️ 必须设止损 |
 
 ### 常用策略参数
 

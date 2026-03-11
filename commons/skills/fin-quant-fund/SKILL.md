@@ -6,17 +6,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🏦",
-        "requires":
-          {
-            "extensions":
-              [
-                "fin-core",
-                "fin-market-data",
-                "fin-strategy-engine",
-                "fin-paper-trading",
-                "fin-fund-manager",
-              ],
-          },
+        "requires": { "extensions": ["findoo-trader-plugin", "findoo-datahub-plugin"] },
       },
   }
 ---

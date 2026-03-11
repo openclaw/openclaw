@@ -533,6 +533,26 @@ body::after{
 @media (max-width:800px){
   .col-l{display:none}
 }
+@media (max-width:640px){
+  .topbar{padding:0 8px;gap:6px;font-size:10px}
+  .topbar__logo{font-size:10px;letter-spacing:.4px}
+  .topbar__eq-val{font-size:12px}
+  .topbar__nav-item{padding:4px 6px;font-size:9px}
+  .topbar__clock{font-size:9px}
+  .chart-header{flex-wrap:wrap;gap:4px 8px}
+  .order-bar{flex-wrap:wrap;gap:6px}
+  .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .domain-switcher{display:none}
+}
+@media (max-width:380px){
+  .topbar{padding:0 4px;gap:4px}
+  .topbar__logo{display:none}
+  .topbar__eq-val{font-size:11px}
+  .topbar__nav-item{padding:3px 4px;font-size:8px}
+  .chart-header__symbol{font-size:11px}
+  .order-bar input,.order-bar select,.order-bar button{font-size:10px;padding:4px 6px}
+  .order-bar .bs-toggle button{font-size:9px;padding:3px 6px}
+}
 
 /* Embedded mode */
 body.embedded .topbar__nav-item:not(.active){display:none}

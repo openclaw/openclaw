@@ -76,21 +76,10 @@ describe("Phase F — Scenario: Emergency Recovery", () => {
     expect(createB.status).toBe(201);
     strategyIdB = (createB.body as { strategy: { id: string } }).strategy.id;
 
-    // Promote both strategies to L2_PAPER (L0->L1, L1->L2)
+    // Simulate Agent promoting L0 → L1 → L2 (LifecycleEngine no longer auto-promotes)
     for (const sid of [strategyIdA, strategyIdB]) {
-      const p1 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sid }),
-      });
-      expect(p1.status).toBe(200);
-
-      const p2 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sid }),
-      });
-      expect(p2.status).toBe(200);
+      ctx.services.strategyRegistry.updateLevel(sid, "L1_BACKTEST");
+      ctx.services.strategyRegistry.updateLevel(sid, "L2_PAPER");
     }
 
     // Set both strategies to "running" status
@@ -239,7 +228,10 @@ describe("Phase F — Scenario: Emergency Recovery", () => {
       }),
     });
     expect(smallOrder.status).toBe(201);
-    const smallWrapper = smallOrder.body as { domain?: string; order: { status: string; symbol: string } };
+    const smallWrapper = smallOrder.body as {
+      domain?: string;
+      order: { status: string; symbol: string };
+    };
     expect(smallWrapper.order.symbol).toBe("BTC/USDT");
     expect(smallWrapper.order.status).toBe("filled");
 

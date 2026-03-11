@@ -76,23 +76,9 @@ describe("Scenario — Day 14-30 Paper Trading Monitoring", () => {
     strategyId = created.id;
     expect(created.level).toBe("L0_INCUBATE");
 
-    // Promote L0 -> L1
-    const p1 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: strategyId }),
-    });
-    expect(p1.status).toBe(200);
-    expect((p1.body as { to: string }).to).toBe("L1_BACKTEST");
-
-    // Promote L1 -> L2
-    const p2 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: strategyId }),
-    });
-    expect(p2.status).toBe(200);
-    expect((p2.body as { to: string }).to).toBe("L2_PAPER");
+    // Simulate Agent promoting L0 → L1 → L2 (LifecycleEngine no longer auto-promotes)
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L1_BACKTEST");
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L2_PAPER");
   });
 
   // ── 2. Submit 5 paper orders ──

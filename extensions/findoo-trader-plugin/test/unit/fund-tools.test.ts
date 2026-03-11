@@ -232,7 +232,7 @@ describe("Fund tools L1 unit tests", () => {
       createdAt: Date.now() - 86_400_000 * 60,
     });
 
-    // Provide paper data that satisfies L2→L3 gates (30d, 30 trades, Sharpe ≥ 0.5, DD ≤ 20%)
+    // Provide paper data that satisfies L2→L3 gates (30d, 30 trades, Sharpe ≥ 1.5, DD ≤ 20%)
     const paperMock = {
       listAccounts: vi.fn(() => [{ id: "paper-1", name: "Paper Acct", equity: 11_000 }]),
       getAccountState: vi.fn(() => ({
@@ -248,8 +248,8 @@ describe("Fund tools L1 unit tests", () => {
         createdAt: Date.now() - 86_400_000 * 40,
       })),
       getMetrics: vi.fn(() => ({
-        rollingSharpe7d: 1.2,
-        rollingSharpe30d: 1.2,
+        rollingSharpe7d: 1.8,
+        rollingSharpe30d: 1.8,
         currentDrawdown: -5,
         consecutiveLossDays: 0,
         decayLevel: "none",
@@ -315,8 +315,8 @@ describe("Fund tools L1 unit tests", () => {
         createdAt: Date.now() - 86_400_000 * 40,
       }),
       getMetrics: () => ({
-        rollingSharpe7d: 1.2,
-        rollingSharpe30d: 1.2,
+        rollingSharpe7d: 1.8,
+        rollingSharpe30d: 1.8,
         currentDrawdown: -5,
         consecutiveLossDays: 0,
         decayLevel: "none",

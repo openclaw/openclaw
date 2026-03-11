@@ -8,7 +8,7 @@ metadata: { "openclaw": { "emoji": "🏛️", "requires": { "extensions": ["find
 
 Use **fin_macro** for macroeconomic indicators and interest rate data via DataHub.
 
-> Deep reference: `references/macro-cycle-cn.md` for Merrill Lynch Clock and cycle analysis.
+> 美林时钟四象限: Recovery (GDP↑CPI↓) / Overheat (GDP↑CPI↑) / Stagflation (GDP↓CPI↑) / Recession (GDP↓CPI↓)。判定信号详见下方 Macro Cycle Locator。
 
 ## fin_macro Parameters
 
@@ -43,7 +43,7 @@ Use **fin_macro** for macroeconomic indicators and interest rate data via DataHu
 | `shibor`       | Shanghai Interbank Rate    | Daily          |
 | `shibor_quote` | Shibor bank-level quotes   | Daily          |
 | `shibor_lpr`   | Loan Prime Rate            | Monthly (20th) |
-| `libor`        | London Interbank Rate      | Daily          |
+| `libor`        | London Interbank Rate ⚠️   | Daily          |
 | `hibor`        | Hong Kong Interbank Rate   | Daily          |
 | `treasury_cn`  | China treasury yields      | Daily          |
 | `treasury_us`  | US treasury yields         | Daily          |
@@ -76,13 +76,13 @@ Use **fin_macro** for macroeconomic indicators and interest rate data via DataHu
 
 `fin_macro(endpoint="fixedincome/rate/shibor")` 等 4 个端点是 `shibor`/`shibor_lpr`/`libor`/`hibor` 的别名路径，返回相同数据。
 可用端点: `fixedincome/rate/shibor`, `fixedincome/rate/shibor_lpr`, `fixedincome/rate/libor`, `fixedincome/rate/hibor`。
-注意: LIBOR 于 2023 年终止，数据截止 2020-06-24; HIBOR 固收路径同样停在 2020-06。`economy/hibor` 可能有更新数据。
+⚠️ **LIBOR 已于 2023 年正式终止**，DataHub 数据截止 2020-06-24。USD 浮动利率基准已迁移至 SOFR，DataHub 暂无 SOFR 端点。替代方案: 使用 `treasury_us` 短端 (2Y) 作为 USD 利率代理。HIBOR 固收路径同样停在 2020-06，使用 `economy/hibor` 获取更新数据。
 
 ## Analysis Patterns
 
 ### Macro Cycle Locator
 
-> See `references/macro-cycle-cn.md` for full Merrill Lynch Clock framework.
+> 美林时钟象限由 GDP 趋势 + CPI 趋势交叉判定，辅以 PMI/社融/M1 领先指标验证。
 
 ```
 Step 1: fin_macro(endpoint="gdp/real", limit=8)   → GDP trend (8 quarters)
@@ -127,7 +127,14 @@ Auxiliary signals:
 
 ### CN-US Spread Trade
 
-`treasury_cn`(limit=60) + `treasury_us`(limit=60) + `currency/price/historical`(symbol="USDCNH", limit=60)
+`treasury_cn`(limit=60) + `treasury_us`(limit=60) + `currency/price/historical`(symbol="USDCNH", limit=60, provider="massive")
+
+> **字段名注意:**
+>
+> - `treasury_cn` 返回: `yield_value` (收益率) + `curve_term` (期限: 1Y/2Y/5Y/10Y/30Y)
+> - `treasury_us` 返回: `y5`/`y7`/`y10`/`y20`/`y30` (各期限收益率，非通用 `yield` 字段)
+> - ⚠️ `treasury_us` 数据源待验证 — 部分返回值与中国国债收益率相似 (10Y≈1.80%)，跨境利差计算前请人工校验
+> - `currency/price/historical` 需添加 `provider="massive"` 以获取 FX 数据
 
 | 10Y Spread (CN-US) | FX impact        | Positioning                                      |
 | ------------------ | ---------------- | ------------------------------------------------ |
@@ -191,12 +198,12 @@ Probability adjustment rules (each trigger shifts +10pp):
 | Both rising  | Commodity longs, short duration bonds                      |
 | Both falling | Long duration bonds, defensive sectors                     |
 
-### 社融-GDP 领先关系
+### 社融-GDP 领先关系 (信贷脉冲)
 
-`fin_macro(endpoint="social_financing", limit=24)` + `fin_macro(endpoint="gdp/real", limit=8)` — 社融增速拐点 → GDP 在 2-3Q 后跟随:
+`fin_macro(endpoint="social_financing", limit=24)` + `fin_macro(endpoint="gdp/real", limit=8)` — 信贷脉冲 = 社融增量的二阶导 (3 月移动平均增速的变化率)，领先 GDP 2-3Q:
 
-- 社融连续 3 月加速 + PMI > 50 → high confidence GDP recovery ahead
-- 社融萎缩 + M1 下行 → GDP 下行风险，提前减仓周期股
+- 脉冲转正 (社融增速加速) + PMI > 50 → high confidence GDP recovery ahead
+- 脉冲转负 (社融增速减速) + M1 下行 → GDP 下行风险，提前减仓周期股
 
 ### HIBOR-LIBOR 利差 (港元联系汇率压力)
 

@@ -6,16 +6,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🏗️",
-        "requires":
-          {
-            "extensions":
-              [
-                "fin-core",
-                "fin-market-data",
-                "fin-data-bus",
-                "fin-strategy-engine",
-              ],
-          },
+        "requires": { "extensions": ["findoo-trader-plugin", "findoo-datahub-plugin"] },
       },
   }
 ---
@@ -70,15 +61,15 @@ Turn natural language trading ideas into compliant FEP skill packages. Generates
 
 Extract key dimensions through natural dialogue:
 
-| Dimension | Question | Example |
-|-----------|----------|---------|
-| Asset | "What do you want to trade?" | BTC, ETH, AAPL, 沪深300 |
-| Frequency | "How often?" | daily, weekly, monthly |
-| Core idea | "What's the basic approach?" | buy dips, trend follow, grid |
-| Capital | "Starting capital?" | $10,000 |
-| Risk tolerance | "Max acceptable loss?" | 25% drawdown |
-| Time horizon | "Backtest period?" | 2023-01 to now |
-| Market | "Which exchange/market?" | Binance, US stock, A-share |
+| Dimension      | Question                     | Example                      |
+| -------------- | ---------------------------- | ---------------------------- |
+| Asset          | "What do you want to trade?" | BTC, ETH, AAPL, 沪深300      |
+| Frequency      | "How often?"                 | daily, weekly, monthly       |
+| Core idea      | "What's the basic approach?" | buy dips, trend follow, grid |
+| Capital        | "Starting capital?"          | $10,000                      |
+| Risk tolerance | "Max acceptable loss?"       | 25% drawdown                 |
+| Time horizon   | "Backtest period?"           | 2023-01 to now               |
+| Market         | "Which exchange/market?"     | Binance, US stock, A-share   |
 
 If the user provides a vague idea like "buy BTC when it's cheap", ask clarifying questions to pin down the mechanism (RSI oversold? below moving average? fixed schedule?).
 
@@ -167,15 +158,16 @@ If any check fails, **auto-fix and re-validate** (up to 3 iterations). If still 
 
 Determine whether the strategy needs agent augmentation:
 
-| Signal | L1 (Script) | L2 (Agent) |
-|--------|------------|------------|
-| Decision logic | Fully deterministic rules | Requires judgment, context |
-| Indicators | Fixed set, computed mechanically | Dynamic selection, multi-timeframe |
-| Position sizing | Formula-based | Adaptive based on market analysis |
-| Data needs | OHLCV only | Additional analysis (volume profile, correlations) |
-| User request | "just run the rules" | "I want AI to analyze and decide" |
+| Signal          | L1 (Script)                      | L2 (Agent)                                         |
+| --------------- | -------------------------------- | -------------------------------------------------- |
+| Decision logic  | Fully deterministic rules        | Requires judgment, context                         |
+| Indicators      | Fixed set, computed mechanically | Dynamic selection, multi-timeframe                 |
+| Position sizing | Formula-based                    | Adaptive based on market analysis                  |
+| Data needs      | OHLCV only                       | Additional analysis (volume profile, correlations) |
+| User request    | "just run the rules"             | "I want AI to analyze and decide"                  |
 
 **Default: L1** (cheaper, deterministic, faster). Only generate `skill.md` if:
+
 - User explicitly wants agent involvement
 - Strategy complexity genuinely benefits from LLM analysis
 - Multi-factor strategies where factor weighting is judgment-based
@@ -207,27 +199,27 @@ Next steps:
 
 Built-in templates the builder can draw from:
 
-| Template | Archetype | Core Indicators | Default Route |
-|----------|-----------|----------------|---------------|
-| Simple DCA | dca | None | L1 |
-| Adaptive DCA | dca | RSI + volatility | L1 |
-| EMA Crossover | trend-following | EMA(fast) + EMA(slow) | L1 |
-| RSI Bounce | mean-reversion | RSI + Bollinger | L1 |
-| MACD Momentum | momentum | MACD + signal line | L1 |
-| Grid Trading | grid | ATR + price levels | L1 |
-| Multi-Factor | multi-factor | RSI + MACD + volume + regime | L2 |
-| Regime Adaptive | regime-adaptive | ADX + volatility + multi-TF | L2 |
+| Template        | Archetype       | Core Indicators              | Default Route |
+| --------------- | --------------- | ---------------------------- | ------------- |
+| Simple DCA      | dca             | None                         | L1            |
+| Adaptive DCA    | dca             | RSI + volatility             | L1            |
+| EMA Crossover   | trend-following | EMA(fast) + EMA(slow)        | L1            |
+| RSI Bounce      | mean-reversion  | RSI + Bollinger              | L1            |
+| MACD Momentum   | momentum        | MACD + signal line           | L1            |
+| Grid Trading    | grid            | ATR + price levels           | L1            |
+| Multi-Factor    | multi-factor    | RSI + MACD + volume + regime | L2            |
+| Regime Adaptive | regime-adaptive | ADX + volatility + multi-TF  | L2            |
 
 ## Market Adaptation Rules
 
 The builder auto-adapts generated code based on target market:
 
-| Market | Fee Model | Settlement | Lot Size | Price Limits | Special |
-|--------|-----------|------------|----------|--------------|---------|
-| US Stock | ~0.1% | T+0 | 1 share | None | Pre/post hours |
-| Crypto | ~0.1% | T+0 | 0.001+ | None | 24/7 |
-| A-Share (CN) | ~0.154% | **T+1** | **100 shares** | **±10%/±20%** | Stamp tax sell-only |
-| HK Stock | ~0.24% | T+0/T+2 | **Variable** | None | Lunch break |
+| Market       | Fee Model | Settlement | Lot Size       | Price Limits  | Special             |
+| ------------ | --------- | ---------- | -------------- | ------------- | ------------------- |
+| US Stock     | ~0.1%     | T+0        | 1 share        | None          | Pre/post hours      |
+| Crypto       | ~0.1%     | T+0        | 0.001+         | None          | 24/7                |
+| A-Share (CN) | ~0.154%   | **T+1**    | **100 shares** | **±10%/±20%** | Stamp tax sell-only |
+| HK Stock     | ~0.24%    | T+0/T+2    | **Variable**   | None          | Lunch break         |
 
 For A-share strategies: auto-inject T+1 signal delay, lot rounding to 100, and price limit filters.
 

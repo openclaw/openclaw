@@ -6,6 +6,8 @@
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
+- PR landing comments: always make commit SHAs clickable with full commit links (both landed SHA + source SHA when present).
+- PR review conversations: if a bot leaves review conversations on your PR, address them and resolve those conversations yourself once fixed. Leave a conversation unresolved only when reviewer or maintainer judgment is still needed; do not leave bot-conversation cleanup to maintainers.
 - GitHub searching footgun: don't limit yourself to the first 500 issues or PRs when wanting to search all. Unless you're supposed to look at the most recent, keep going until you've reached the last page in the search
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
 
@@ -28,6 +30,7 @@
 - Docs are hosted on Mintlify (docs.openclaw.ai).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - When working with documentation, read the mintlify skill.
+- For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime behavior (for example auto-detection or execution order).
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - Doc headings and anchors: avoid em dashes and apostrophes in headings because they break Mintlify anchor links.
 - When Peter asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
@@ -105,6 +108,7 @@
 - Full kit + what’s covered: see test scripts in `package.json` and inline comments.
 - Changelog: user-facing changes only; no internal/meta notes (version alignment, appcast reminders, release process).
 - Changelog placement: in the active version block, append new entries to the end of the target section (`### Changes` or `### Fixes`); do not insert new entries at the top of a section.
+- Changelog attribution: use at most one contributor mention per line; prefer `Thanks @author` and do not also add `by @author` on the same entry.
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
 
@@ -112,6 +116,7 @@
 
 **Full maintainer PR workflow (optional):** Follow Conventional Commits for commit messages. When a maintainer specifies a workflow, follow that. Default: create feature branch, open PR, request review.
 
+- `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
@@ -218,6 +223,7 @@
 ## NPM + 1Password (publish/verify)
 
 - Use the 1password skill; all `op` commands must run inside a fresh tmux session.
+- Correct 1Password path for npm release auth: `op://Private/Npmjs` (use that item; OTP stays `op://Private/Npmjs/one-time password?attribute=otp`).
 - Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
 - OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).

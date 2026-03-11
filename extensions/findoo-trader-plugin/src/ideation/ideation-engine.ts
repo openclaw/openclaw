@@ -31,6 +31,7 @@ export class IdeationEngine {
     snapshot: MarketSnapshot,
     existingStrategyNames: string[],
     maxStrategies: number,
+    failurePatterns?: string,
   ): void {
     if (snapshot.symbols.length === 0) {
       this.deps.activityLog?.append({
@@ -41,7 +42,12 @@ export class IdeationEngine {
       return;
     }
 
-    const prompt = this.buildPrompt(snapshot, existingStrategyNames, maxStrategies);
+    const prompt = this.buildPrompt(
+      snapshot,
+      existingStrategyNames,
+      maxStrategies,
+      failurePatterns,
+    );
 
     this.deps.activityLog?.append({
       category: "ideation",
@@ -65,6 +71,7 @@ export class IdeationEngine {
     snapshot: MarketSnapshot,
     existingStrategyNames: string[],
     maxStrategies: number,
+    failurePatterns?: string,
   ): string {
     const parts: string[] = [];
 
@@ -118,6 +125,12 @@ export class IdeationEngine {
       for (const name of existingStrategyNames) {
         parts.push(`- ${name}`);
       }
+      parts.push("");
+    }
+
+    // Failure feedback (injected by Alpha Factory)
+    if (failurePatterns) {
+      parts.push(failurePatterns);
       parts.push("");
     }
 

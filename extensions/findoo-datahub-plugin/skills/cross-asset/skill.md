@@ -8,7 +8,7 @@ metadata: { "openclaw": { "emoji": "🔗", "requires": { "extensions": ["findoo-
 
 跨资产相关性分析与大类资产配置。综合编排 **fin_macro** + **fin_index** + **fin_market** + **fin_derivatives** + **fin_crypto**，构建宏观象限判定与配置建议。
 
-> 美林时钟四象限定义、象限判定信号、各象限配置权重表 → see references/macro-cycle-cn.md
+> 美林时钟象限判定 → see `fin-macro` skill (Macro Cycle Locator 段落)。本 skill 聚焦跨资产配置权重映射。
 
 ## 多工具编排序列
 
@@ -71,8 +71,10 @@ fin_market(endpoint="margin/summary")     # 融资融券
 ### 加密资产 (fin_crypto)
 
 ```
-fin_crypto(endpoint="coin/historical", symbol="bitcoin", limit=250)
-fin_crypto(endpoint="coin/global_stats")  # 全局市值/恐贪指数
+fin_crypto(endpoint="coin/historical", symbol="bitcoin", start_date="2025-01-01", end_date="2026-03-07")
+# ⚠️ coin/historical 使用 CoinGecko API，需传 coin_id（如 "bitcoin"），非交易对格式
+# ⚠️ 必须传 start_date/end_date，不支持 limit 参数
+fin_crypto(endpoint="coin/global_stats")  # 全局市值/BTC dominance
 ```
 
 ### 市场体制 (fin_data_regime)
@@ -104,9 +106,10 @@ fin_data_regime(symbol="000300.SH")  # 当前市场体制检测
 
 ### 股债双杀 (流动性危机)
 
-触发: 股票暴跌 + 债券暴跌 + 信用利差急剧走阔
+触发: 股票暴跌 + 债券暴跌 + Shibor 急升（信用利差代理）
 
-- 验证: `fin_macro(shibor)` + `fin_macro(treasury_cn)` + `fin_index(000300.SH)`
+- 验证: `fin_macro(shibor)` O/N 急升 + `fin_macro(shibor_quote)` 期限结构倒挂 + `fin_macro(treasury_cn)` + `fin_index(000300.SH)`
+- ⚠️ DataHub 无直接信用利差端点，用 Shibor O/N 变化 + 期限结构作为流动性压力代理
 - 应对: 超配现金 + 黄金，等待央行注入流动性
 
 ### AH 溢价套利
@@ -134,7 +137,9 @@ fin_data_regime(symbol="000300.SH")  # 当前市场体制检测
 
 ### Risk-On / Risk-Off 快速判定
 
-并行查 4 指标: `fin_crypto(coin/historical, bitcoin)` + `fin_derivatives(AU.SHF)` + `fin_data_regime(000300.SH)` + `fin_macro(treasury_us)`
+并行查 4 指标: `fin_crypto(coin/global_stats)` BTC 24h 变化 + `fin_derivatives(AU.SHF)` + `fin_data_regime(000300.SH)` + `fin_macro(treasury_us)`
+
+> ⚠️ coin/historical 需 coin_id + start_date/end_date，快速判定改用 coin/global_stats 的 btc_market_cap_change_percentage_24h
 
 - BTC涨 + 黄金跌 + 体制=bull + 美债收益率升 → **Risk-On** → 超配股票/高收益资产
 - BTC跌 + 黄金涨 + 体制=bear/crisis + 美债收益率降 → **Risk-Off** → 超配债券/现金/黄金
@@ -167,12 +172,14 @@ fin_data_regime(symbol="000300.SH")  # 当前市场体制检测
 
 `fin_macro(social_financing)` + `fin_macro(money_supply)`:
 
-- 社融 3 月变化率转正 → 6-9 月后大宗需求回升; M2 拐头 + 社融放量 = 信贷宽松
+- 信贷脉冲 = 社融增量的二阶导 (3 月移动平均增速的变化率)。脉冲转正 → 6-9 月后大宗需求回升
 - 脉冲正 → 增配铜/原油/A 股周期板块
 
 ### Crypto-Equity 脱钩检测
 
-`fin_crypto(coin/historical, bitcoin, 60)` vs `fin_index(000300.SH, 60)` 30 日滚动相关性:
+`fin_crypto(coin/historical, symbol="bitcoin", start_date=60日前, end_date=今天)` vs `fin_index(000300.SH, 60)` 30 日滚动相关性:
+
+> ⚠️ coin/historical 使用 coin_id (非交易对)，需传 start_date/end_date
 
 - \> 0.6 = 高联动 (风险共振); < 0.3 = 脱钩 (独立行情)
 - 脱钩+BTC涨 = 加密独立叙事; 脱钩+BTC跌 = 加密特有风险

@@ -1,6 +1,10 @@
 {
   "recommended": [
     {
+      "id": "fin-strategy-builder",
+      "description": "Strategy builder — FEP v1.1 strategy packages, validation, L1/L2 routing; use with fin-backtest-remote for remote backtest"
+    },
+    {
       "id": "fin-market-data",
       "description": "Real-time prices, charts, and market data"
     },

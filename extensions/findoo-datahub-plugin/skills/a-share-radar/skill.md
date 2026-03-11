@@ -27,9 +27,9 @@ Use **fin_market** for A-share market-wide monitoring and anomaly detection via 
 
 | endpoint             | Description                          | Key Params | Example                                                                                             |
 | -------------------- | ------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------- |
-| `market/top_list`    | Dragon-tiger list (top movers)       | trade_date | `fin_market(endpoint="market/top_list", trade_date="2026-02-28")`                                   |
-| `market/top_inst`    | Institutional trades on dragon-tiger | trade_date | `fin_market(endpoint="market/top_inst", trade_date="2026-02-28")`                                   |
-| `market/limit_list`  | Limit-up/down stocks                 | trade_date | `fin_market(endpoint="market/limit_list", trade_date="2026-02-28")`                                 |
+| `market/top_list`    | Dragon-tiger list (top movers)       | date       | `fin_market(endpoint="market/top_list", date="2026-02-28")`                                         |
+| `market/top_inst`    | Institutional trades on dragon-tiger | date       | `fin_market(endpoint="market/top_inst", date="2026-02-28")`                                         |
+| `market/limit_list`  | Limit-up/down stocks                 | date       | `fin_market(endpoint="market/limit_list", date="2026-02-28")`                                       |
 | `market/suspend`     | Trading suspensions                  | trade_date | `fin_market(endpoint="market/suspend")`                                                             |
 | `market/stock_limit` | 个股涨跌停价 (tushare)               | symbol     | `fin_market(endpoint="market/stock_limit", symbol="600519.SH")` — 需带 symbol，不支持按日期批量扫描 |
 
@@ -54,7 +54,7 @@ Use **fin_market** for A-share market-wide monitoring and anomaly detection via 
 | endpoint           | Description                                  | Key Params          | Example                                                                           |
 | ------------------ | -------------------------------------------- | ------------------- | --------------------------------------------------------------------------------- |
 | `flow/hsgt_flow`   | Northbound/Southbound daily flows            | start_date/end_date | `fin_market(endpoint="flow/hsgt_flow", start_date="2026-02-01")`                  |
-| `flow/hsgt_top10`  | Top 10 HSGT holdings                         | trade_date          | `fin_market(endpoint="flow/hsgt_top10", trade_date="2026-02-28")`                 |
+| `flow/hsgt_top10`  | Top 10 HSGT holdings                         | date                | `fin_market(endpoint="flow/hsgt_top10", date="2026-02-28")`                       |
 | `flow/ggt_daily`   | Southbound daily flows                       | start_date/end_date | `fin_market(endpoint="flow/ggt_daily", start_date="2026-02-01")`                  |
 | `flow/ggt_monthly` | 南向月度汇总 (tushare)                       | start_date/end_date | `fin_market(endpoint="flow/ggt_monthly")` — 中长期南向资金趋势                    |
 | `flow/ggt_top10`   | Southbound top 10 transactions ⚠️ UNRELIABLE | trade_date          | ~~`fin_market(endpoint="flow/ggt_top10")`~~ — DataHub 超时，改用 `flow/ggt_daily` |
@@ -69,7 +69,7 @@ Use **fin_market** for A-share market-wide monitoring and anomaly detection via 
 
 | endpoint           | Description          | Key Params | Example                                                                             |
 | ------------------ | -------------------- | ---------- | ----------------------------------------------------------------------------------- |
-| `market_snapshots` | 全市场快照 (polygon) | —          | `fin_market(endpoint="market_snapshots")` — 返回 12000+ 记录，含所有标的最新价/成交 |
+| `market_snapshots` | 全市场快照 (massive) | —          | `fin_market(endpoint="market_snapshots")` — 返回 12000+ 记录，含所有标的最新价/成交 |
 
 ### 市场发现 (5)
 

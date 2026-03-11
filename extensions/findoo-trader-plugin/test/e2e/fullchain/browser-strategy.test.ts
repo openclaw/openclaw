@@ -67,7 +67,11 @@ d("Phase F — A2: Browser Strategy", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
   });
 
@@ -227,6 +231,34 @@ d("Phase F — A2: Browser Strategy", () => {
     // Create a strategy and promote it to L2
     const strategy = await createTestStrategy("Approval Test Strategy");
     const stratId = (strategy.id ?? strategy.name) as string;
+
+    // Inject backtest + walkforward data so L1→L2 gate passes
+    ctx.services.strategyRegistry.updateBacktest(stratId, {
+      strategyId: stratId,
+      totalReturn: 25,
+      sharpe: 1.5,
+      sortino: 2.0,
+      maxDrawdown: -10,
+      calmar: 2.5,
+      winRate: 0.6,
+      profitFactor: 1.8,
+      totalTrades: 150,
+      finalEquity: 12500,
+      initialCapital: 10000,
+      startDate: Date.now() - 90 * 86_400_000,
+      endDate: Date.now(),
+      trades: [],
+      equityCurve: [],
+      dailyReturns: [],
+    } as never);
+    ctx.services.strategyRegistry.updateWalkForward(stratId, {
+      passed: true,
+      windows: [],
+      combinedTestSharpe: 1.2,
+      avgTrainSharpe: 1.5,
+      ratio: 0.8,
+      threshold: 0.6,
+    } as never);
 
     // Promote L0 -> L1
     await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {

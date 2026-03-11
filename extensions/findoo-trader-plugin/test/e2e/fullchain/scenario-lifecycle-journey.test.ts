@@ -141,7 +141,11 @@ bd("J1-Browser — Empty State Flow in Browser", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
@@ -281,7 +285,7 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
     expect(levels.L1_BACKTEST).toBe(5); // 5 seeder L1
   });
 
-  it("runCycle auto-promotes L0→L1 and eligible L1→L2 from seed pool", async () => {
+  it("runCycle recommends L0→L1 and eligible L1→L2 from seed pool (Agent executes)", async () => {
     // Give one L1 seed strategy passing backtest + walkforward data
     const l1Strategies = ctx.services.strategyRegistry.list({ level: "L1_BACKTEST" as never });
     const targetId = l1Strategies[0]!.id;
@@ -293,15 +297,22 @@ describe("J2 — Cold Start: 10 Seed Strategies", () => {
     ctx.services.strategyRegistry.updateWalkForward(targetId, PASSING_WALKFORWARD as never);
 
     const result = await ctx.services.lifecycleEngine.runCycle();
-    // L0→L1 auto-promotes (5 manual seeds) + L1→L2 (1 with passing data)
+    // runCycle sends recommendations (counted in result.promoted) but does NOT change levels
     expect(result.promoted).toBeGreaterThanOrEqual(1);
 
-    // The target should now be L2_PAPER
+    // Level is unchanged — engine only recommends, Agent must execute
+    const unchanged = ctx.services.strategyRegistry.get(targetId);
+    expect(unchanged?.level).toBe("L1_BACKTEST");
+
+    // Simulate Agent executing the recommendation
+    ctx.services.strategyRegistry.updateLevel(targetId, "L2_PAPER");
+
+    // Now the target should be L2_PAPER after Agent action
     const updated = ctx.services.strategyRegistry.get(targetId);
     expect(updated?.level).toBe("L2_PAPER");
 
-    // Activity log should have promotion entries
-    const promoLogs = ctx.services.activityLog.listRecent(20, "promotion");
+    // Activity log should have lifecycle entries (recommendations)
+    const promoLogs = ctx.services.activityLog.listRecent(20, "lifecycle");
     expect(promoLogs.length).toBeGreaterThanOrEqual(1);
   });
 });
@@ -344,11 +355,18 @@ describe("J3 — Full Lifecycle Journey: L0→L1→L2→L3", () => {
     expect(card!.level).toBe("L0_INCUBATE");
   });
 
-  it("Step 2: runCycle promotes L0→L1 (auto), verify in Flow", async () => {
+  it("Step 2: runCycle recommends L0→L1, Agent executes, verify in Flow", async () => {
     const result = await ctx.services.lifecycleEngine.runCycle();
     expect(result.promoted).toBeGreaterThanOrEqual(1);
 
-    // Verify level changed
+    // Level unchanged after runCycle — engine only recommends
+    const beforeAgent = ctx.services.strategyRegistry.get(strategyId);
+    expect(beforeAgent?.level).toBe("L0_INCUBATE");
+
+    // Simulate Agent executing the recommendation
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L1_BACKTEST");
+
+    // Verify level changed after Agent action
     const record = ctx.services.strategyRegistry.get(strategyId);
     expect(record?.level).toBe("L1_BACKTEST");
 
@@ -359,7 +377,7 @@ describe("J3 — Full Lifecycle Journey: L0→L1→L2→L3", () => {
     expect(card!.level).toBe("L1_BACKTEST");
   });
 
-  it("Step 3: Add backtest + WF data, runCycle promotes L1→L2, verify", async () => {
+  it("Step 3: Add backtest + WF data, runCycle recommends L1→L2, Agent executes", async () => {
     // Simulate backtest completion with passing gate data
     ctx.services.strategyRegistry.updateBacktest(strategyId, {
       ...PASSING_BACKTEST,
@@ -370,6 +388,13 @@ describe("J3 — Full Lifecycle Journey: L0→L1→L2→L3", () => {
     const result = await ctx.services.lifecycleEngine.runCycle();
     expect(result.promoted).toBeGreaterThanOrEqual(1);
 
+    // Level unchanged after runCycle — engine only recommends
+    const beforeAgent = ctx.services.strategyRegistry.get(strategyId);
+    expect(beforeAgent?.level).toBe("L1_BACKTEST");
+
+    // Simulate Agent executing the recommendation
+    ctx.services.strategyRegistry.updateLevel(strategyId, "L2_PAPER");
+
     const record = ctx.services.strategyRegistry.get(strategyId);
     expect(record?.level).toBe("L2_PAPER");
 
@@ -379,12 +404,9 @@ describe("J3 — Full Lifecycle Journey: L0→L1→L2→L3", () => {
     const card = data.strategies.find((s) => s.id === strategyId);
     expect(card!.level).toBe("L2_PAPER");
 
-    // Activity log records the promotion chain
-    const promoLogs = ctx.services.activityLog.listRecent(20, "promotion");
-    const l2Promo = promoLogs.find(
-      (l) => l.strategyId === strategyId && l.detail.includes("L2_PAPER"),
-    );
-    expect(l2Promo).toBeDefined();
+    // Activity log records the lifecycle recommendation
+    const lifecycleLogs = ctx.services.activityLog.listRecent(20, "lifecycle");
+    expect(lifecycleLogs.some((l) => l.action === "lifecycle_recommendation")).toBe(true);
   });
 
   it("Step 4: Approve L2→L3 via HTTP, verify full journey complete", async () => {
@@ -414,7 +436,7 @@ describe("J3 — Full Lifecycle Journey: L0→L1→L2→L3", () => {
 
     // Engine stats reflect the promotions
     const stats = ctx.services.lifecycleEngine.getStats();
-    expect(stats.promotionCount).toBeGreaterThanOrEqual(2); // L0→L1, L1→L2, L2→L3(approval)
+    expect(stats.promotionCount).toBeGreaterThanOrEqual(1); // Only L2→L3 approval increments promotionCount now
   });
 });
 
@@ -463,7 +485,11 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
@@ -492,7 +518,11 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/flow`);
     await page.waitForLoadState("domcontentloaded");
@@ -514,7 +544,11 @@ bd("J4 — Browser Cold Start with Seeds", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
     await page.goto(`${ctx.baseUrl}/plugins/findoo-trader/dashboard/overview`, {
       waitUntil: "domcontentloaded",

@@ -837,20 +837,19 @@
         // ── Render: Notifications ──
         function renderNotifications(notif) {
           var n = notif || {};
-          $("notifTelegram").checked = n.telegram && n.telegram.enabled;
-          $("notifDiscord").checked = n.discord && n.discord.enabled;
-          $("notifEmail").checked = n.email && n.email.enabled;
+          var tg = n.telegram || {};
+          var dc = n.discord || {};
+          var em = n.email || {};
+          $("notifTelegram").checked = !!tg.enabled;
+          $("notifDiscord").checked = !!dc.enabled;
+          $("notifEmail").checked = !!em.enabled;
 
           // Populate Telegram fields
-          if (n.telegramBotToken) $("tgBotToken").value = n.telegramBotToken;
-          if (n.telegramChatId) $("tgChatId").value = n.telegramChatId;
+          if (tg.chatId) $("tgChatId").value = tg.chatId;
           // Populate Discord fields
-          if (n.discordWebhookUrl) $("dcWebhook").value = n.discordWebhookUrl;
+          if (dc.webhookUrl) $("dcWebhook").value = dc.webhookUrl;
           // Populate Email fields
-          if (n.emailHost) $("emailHost").value = n.emailHost;
-          if (n.emailPort) $("emailPort").value = n.emailPort;
-          if (n.emailFrom) $("emailFrom").value = n.emailFrom;
-          if (n.emailTo) $("emailTo").value = n.emailTo;
+          if (em.address) $("emailTo").value = em.address;
         }
 
         // ── Render: Plugins ──

@@ -1,6 +1,6 @@
 ---
 name: fin-risk-monitor
-description: "Risk monitoring dashboard — market regime detection, rate risk (Shibor/treasury spread), leverage risk (margin), foreign capital flows, macro warning signals. Orchestrates fin_data_regime + fin_macro + fin_market + fin_index. Use when: user asks about market risk assessment, stress signals, risk dashboard, or hedging recommendations. NOT for: trade decisions (use fin-a-share), macro analysis (use fin-macro)."
+description: "Risk monitoring dashboard — market regime detection, rate risk (Shibor/treasury spread), leverage risk (margin), foreign capital flows, macro warning signals. Orchestrates fin_data_regime + fin_macro + fin_market + fin_index. Use when: user asks about market risk assessment, stress signals, risk dashboard, or hedging recommendations. NOT for: trade decisions (use fin-a-share), macro cycle forecasting or positioning (use fin-macro)."
 metadata: { "openclaw": { "emoji": "🚨", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
@@ -112,31 +112,20 @@ Credit_stress = 0.4*shibor_score + 0.3*curve_score + 0.3*margin_score
 
 ## 风险传导链模型
 
-**路径 A — 外部冲击 (1-3日):** 美联储加息 → 美债上行(`treasury_us`) → CNH贬值(`currency/price/historical USDCNH`) → 北向流出(`flow/hsgt_flow`) → A股承压。_日频监测，美债变动当日关注。_
-
-**路径 B — 内部去杠杆 (1-2周):** 监管收紧 → 融资余额降(`margin/summary`) → 杠杆平仓(`margin/trading`) → 质押风险(`pledge/stat`) → 连锁跌停。_周频，融资连降3日升级日频。_
-
-**路径 C — 流动性危机 (当日-3日):** Shibor飙升(`shibor`) → 债券抛售 → 利差异常(`treasury_cn`) → 股票抛售 → 股债双杀。_日频，O/N>3%触发实时监控。_
-
-**路径 D — 跨市场传染 (同日-1周):** 美债急变(`treasury_us` 10Y日变>10bp) → USDCNH承压 → 外资撤离(`flow/hsgt_flow`) → 大宗联动(`fin_derivatives futures/historical` AU/SC) → A股轮动。_触发式，路径A任一[R]即启动全链扫描。_
+| 路径             | 链路                                                                                                  | 频率 | 升级触发     |
+| ---------------- | ----------------------------------------------------------------------------------------------------- | ---- | ------------ |
+| **A 外部冲击**   | 美债↑(`treasury_us`) → CNH贬(`USDCNH`) → 北向流出(`hsgt_flow`) → 大宗联动(AU/SC) → A股承压            | 日频 | 10Y日变>10bp |
+| **B 去杠杆**     | 监管收紧 → 融资降(`margin/summary`) → 杠杆平仓(`margin/trading`) → 质押风险(`pledge/stat`) → 连锁跌停 | 周频 | 融资连降3日  |
+| **C 流动性危机** | Shibor飙升(`shibor`) → 债券抛售(`treasury_cn`) → 利差异常 → 股债双杀                                  | 日频 | O/N>3%       |
 
 ## 风险情景预案
 
-**情景 A — 美联储意外加息:**
-触发: `treasury_us` 10Y 5日升>25bp → USDCNH周升>0.8% → 北向连3日流出累计>150亿 → regime转bear/crisis
-行动: 减持成长/科技至30%，增配高股息/价值，`fin_derivatives(futures/historical, IF主力)` 开空对冲
-
-**情景 B — 房地产暴雷/系统性信用事件:**
-触发: `margin/summary` 10日降>8% → `shibor` O/N>3.5% → 银行/地产跌停>15 → `shibor_quote` 倒挂
-行动: 清仓金融地产，仓位<30%，增配国债ETF(`fin_etf 511010.SH`)，等Shibor<2.5%
-
-**情景 C — 地缘冲突升级:**
-触发: `fin_derivatives` AU主力日涨>2% → SC主力日涨>5% → USDCNH 3日升>1% → 北向3日流出>200亿
-行动: 总仓位降至30%，加配黄金/现金/短期国债，回避出口依赖型行业
-
-**情景 D — 流动性危机 (钱荒):**
-触发: `shibor` O/N>5% → `margin/trading` 大面积强平 → 跌停数>200 → `treasury_cn` 10Y-1Y<10bp或倒挂
-行动: 全面清仓转现金。恢复信号 = O/N<2.5% + 央行净投放连续3日 + 跌停数<50
+| 情景             | 触发条件                                           | 行动                                           |
+| ---------------- | -------------------------------------------------- | ---------------------------------------------- |
+| **A 美联储冲击** | 10Y 5日升>25bp + USDCNH周升>0.8% + 北向3日出>150亿 | 减成长至30%，增配高股息，IF空头对冲            |
+| **B 信用事件**   | 融资10日降>8% + O/N>3.5% + 银行地产跌停>15         | 清仓金融地产，仓位<30%，增配国债ETF(511010.SH) |
+| **C 地缘冲突**   | AU日涨>2% + SC日涨>5% + USDCNH 3日升>1%            | 仓位30%，加配黄金/现金/短期国债                |
+| **D 钱荒**       | O/N>5% + 大面积强平 + 跌停>200 + 10Y-1Y<10bp       | 全清仓转现金。恢复: O/N<2.5% + 跌停<50         |
 
 ## 尾部风险预警 (Perfect Storm)
 

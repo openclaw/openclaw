@@ -154,22 +154,9 @@ describe("Scenario — Multi-Round Rebalance Cycle", () => {
         dailyReturns: [],
       });
 
-      // Promote L0 -> L1 -> L2
-      const p1 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      expect(p1.status).toBe(200);
-      expect((p1.body as { to: string }).to).toBe("L1_BACKTEST");
-
-      const p2 = await fetchJson(`${ctx.baseUrl}/api/v1/finance/strategies/promote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      expect(p2.status).toBe(200);
-      expect((p2.body as { to: string }).to).toBe("L2_PAPER");
+      // Simulate Agent promoting L0 → L1 → L2 (LifecycleEngine no longer auto-promotes)
+      ctx.services.strategyRegistry.updateLevel(id, "L1_BACKTEST");
+      ctx.services.strategyRegistry.updateLevel(id, "L2_PAPER");
     }
 
     [idA, idB, idC, idD] = ids;
