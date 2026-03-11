@@ -55,6 +55,7 @@ export async function buildGatewayInstallPlan(params: {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
+    nodeMaxOldSpaceMb: params.config?.gateway?.nodeMaxOldSpaceMb,
   });
 
   // Merge config env vars into the service environment (vars + inline env keys).

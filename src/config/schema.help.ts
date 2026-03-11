@@ -102,6 +102,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
+  "gateway.nodeMaxOldSpaceMb":
+    "Maximum V8 old-generation heap size for the gateway Node.js process, in MB. Also applied to child Node processes via NODE_OPTIONS. Defaults to 85% of total system RAM at install time. Increase if you run heavy parallel workloads and see out-of-memory crashes; decrease on memory-constrained systems.",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":

@@ -84,6 +84,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
+  "gateway.nodeMaxOldSpaceMb": "Gateway Node.js Heap Limit (MB)",
   "gateway.tailscale": "Gateway Tailscale",
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
   "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
