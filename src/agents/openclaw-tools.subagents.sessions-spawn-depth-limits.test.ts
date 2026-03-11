@@ -6,6 +6,11 @@ import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagen
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+}));
+
 const callGatewayMock = vi.fn();
 
 vi.mock("../gateway/call.js", () => ({
