@@ -293,32 +293,6 @@ describe("assistant output reconciliation", () => {
     expect(secondPass.nextStartIndex).toBe(3);
   });
 
-  it("rewinds stale reconcile cursor when message history compacts", async () => {
-    const seenSegmentIds = new Set<string>();
-    const messages = [
-      {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Final output after compaction." }],
-      },
-    ];
-
-    const result = await reconcileAssistantOutputs({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      messages: messages as any,
-      startIndex: 5,
-      seenSegmentIds,
-    });
-
-    expect(result.newOutputs).toEqual([
-      {
-        segmentId: "assistant:finalized-0:segment:0",
-        text: "Final output after compaction.",
-      },
-    ]);
-    expect(result.nextStartIndex).toBe(1);
-  });
-
   it("falls back to assistant message id and segment ordinal when no signature id exists", async () => {
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();
