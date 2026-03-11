@@ -448,6 +448,96 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
+  it("drops HEARTBEAT_OK final payload from own run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "HEARTBEAT_OK",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("drops HEARTBEAT_OK final payload from another run without clearing active stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+  });
+
+  it("drops assistant final message with NO_REPLY wrapped in thinking tags", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<think>internal reasoning</think>NO_REPLY" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("drops assistant final message with HEARTBEAT_OK wrapped in thinking tags", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<thinking>internal</thinking>HEARTBEAT_OK" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("keeps user messages containing NO_REPLY text", () => {
     const state = createState({
       sessionKey: "main",
@@ -670,5 +760,27 @@ describe("loadChatHistory", () => {
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+
+  it("filters HEARTBEAT_OK assistant messages from history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        { role: "assistant", text: "  HEARTBEAT_OK  " },
+      ],
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+    });
   });
 });

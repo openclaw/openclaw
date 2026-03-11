@@ -1,8 +1,10 @@
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractRawText, extractText } from "../chat/message-extract.ts";
+import { stripThinkingTags } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import {
+  HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
   isSilentReplyText,
 } from "../../../../src/auto-reply/tokens.js";
@@ -20,12 +22,18 @@ function isAssistantSilentReply(message: unknown): boolean {
   }
   // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
   if (typeof entry.text === "string") {
-    return isSilentReplyText(entry.text);
+    const stripped = stripThinkingTags(entry.text);
+    return isSilentReplyText(stripped) || isSilentReplyText(stripped, HEARTBEAT_TOKEN);
   }
   // Use extractRawText (not extractText) so that message-extract's own control-token
-  // filtering does not mask the raw NO_REPLY value before we can detect it here.
+  // filtering does not mask the raw NO_REPLY/HEARTBEAT_OK value before we can detect it here.
+  // Strip thinking tags first so that e.g. <think>...</think>NO_REPLY is still detected.
   const raw = extractRawText(message);
-  return typeof raw === "string" && isSilentReplyText(raw);
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const stripped = stripThinkingTags(raw);
+  return isSilentReplyText(stripped) || isSilentReplyText(stripped, HEARTBEAT_TOKEN);
 }
 
 export type ChatState = {
@@ -301,6 +309,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     } else if (
       state.chatStream?.trim() &&
       !isSilentReplyText(state.chatStream) &&
+      !isSilentReplyText(state.chatStream, HEARTBEAT_TOKEN) &&
       !isSilentReplyPrefixText(state.chatStream)
     ) {
       state.chatMessages = [
@@ -324,6 +333,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       if (
         streamedText.trim() &&
         !isSilentReplyText(streamedText) &&
+        !isSilentReplyText(streamedText, HEARTBEAT_TOKEN) &&
         !isSilentReplyPrefixText(streamedText)
       ) {
         state.chatMessages = [
