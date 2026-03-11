@@ -171,7 +171,6 @@ describe("promptModelMetadata", () => {
     const confirmResponses = [
       true, // reasoning
       false, // configure cost
-      false, // configure compat
     ];
 
     const prompter = createWizardPrompter({
@@ -193,7 +192,6 @@ describe("promptModelMetadata", () => {
     expect(result.maxTokens).toBe(4096);
     expect(result.api).toBeUndefined();
     expect(result.cost).toBeUndefined();
-    expect(result.compat).toBeUndefined();
   });
 
   it("prefills with current values when editing", async () => {
@@ -241,7 +239,7 @@ describe("promptModelMetadataForPrimary", () => {
         if (confirmCall++ === 0) {
           return true;
         } // yes, configure metadata
-        return false; // no to reasoning, cost, compat
+        return false; // no to reasoning, cost
       }),
       text: vi.fn(async (params: { message: string; initialValue?: string }) => {
         if (params.message === "Context window (tokens)") {
