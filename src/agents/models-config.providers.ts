@@ -15,6 +15,7 @@ import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
   buildOllamaProvider,
+  buildPpioProvider,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
   buildVllmProvider,
@@ -525,6 +526,10 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),
+    apiKey,
+  })),
+  withApiKey("ppio", async ({ apiKey, discoveryApiKey }) => ({
+    ...(await buildPpioProvider(discoveryApiKey)),
     apiKey,
   })),
 ];

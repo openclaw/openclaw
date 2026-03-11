@@ -10,6 +10,7 @@ import {
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import { discoverPpioModels, PPIO_BASE_URL } from "./ppio-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 
@@ -286,6 +287,19 @@ export async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConf
   const models = await discoverKilocodeModels();
   return {
     baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+/**
+ * Build the PPIO provider with dynamic model discovery.
+ * Falls back to the static catalog on failure.
+ */
+export async function buildPpioProvider(discoveryApiKey?: string): Promise<ProviderConfig> {
+  const models = await discoverPpioModels(discoveryApiKey);
+  return {
+    baseUrl: PPIO_BASE_URL,
     api: "openai-completions",
     models,
   };
