@@ -1065,6 +1065,24 @@ export const FIELD_HELP: Record<string, string> = {
     "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedPi.projectSettingsPolicy":
     'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
+  "agents.defaults.planSearch":
+    "Opt-in runtime planner that generates multiple candidate plans, estimates their compute footprint, and selects the best in-budget ROI candidate using the objective performance_gain / compute_cost while preserving backward-compatible defaults.",
+  "agents.defaults.planSearch.enabled":
+    "Enables candidate plan-search before execution. Disabled by default so legacy runtime behavior is unchanged unless explicitly opted in.",
+  "agents.defaults.planSearch.candidates":
+    "Number of candidate plans to generate and score before selecting one for execution (clamped to 2-8, default: 4).",
+  "agents.defaults.planSearch.scoring":
+    'Performance-gain estimator for candidate scoring. "heuristic" is cheap and local; "llm" currently falls back to heuristic in MVP until a lightweight ranker is wired. Final ranking still uses performance_gain / compute_cost.',
+  "agents.defaults.planSearch.includeSelectedPlanInPrompt":
+    "When enabled (default), prepends the selected execution plan to the prompt so the runtime follows the chosen plan explicitly. OpenClaw skips prompt injection when every candidate exceeds the configured compute budget.",
+  "agents.defaults.planSearch.budget":
+    "Optional compute-budget guardrails used to keep plan-search candidates within explicit token, runtime, and dollar-cost limits before the selected plan is injected into the run prompt.",
+  "agents.defaults.planSearch.budget.maxTokens":
+    "Maximum estimated token budget for an individual candidate plan. Candidates over this limit stay visible in planner metadata but lose priority to in-budget options.",
+  "agents.defaults.planSearch.budget.maxRuntimeMs":
+    "Maximum estimated runtime in milliseconds for an individual candidate plan. Use this to avoid selecting long validation-heavy plans when you need a faster iteration loop.",
+  "agents.defaults.planSearch.budget.maxCostUsd":
+    "Maximum estimated model spend in USD for an individual candidate plan, derived from the active model pricing metadata. Use this to cap planner-selected work when model cost matters.",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

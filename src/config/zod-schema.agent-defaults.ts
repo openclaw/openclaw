@@ -133,6 +133,23 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    planSearch: z
+      .object({
+        enabled: z.boolean().optional(),
+        candidates: z.number().int().min(2).max(8).optional(),
+        scoring: z.union([z.literal("heuristic"), z.literal("llm")]).optional(),
+        includeSelectedPlanInPrompt: z.boolean().optional(),
+        budget: z
+          .object({
+            maxTokens: z.number().int().positive().optional(),
+            maxRuntimeMs: z.number().int().positive().optional(),
+            maxCostUsd: z.number().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),
