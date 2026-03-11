@@ -91,8 +91,8 @@ export function formatTokenCount(n: number | undefined): string {
 }
 
 function parsePositiveInt(raw: string): number | undefined {
-  const n = Number.parseInt(raw.trim(), 10);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 function parseNonNegativeNumber(raw: string): number | undefined {
@@ -116,6 +116,7 @@ export async function promptModelMetadata(
     message: "Display name",
     initialValue: current?.name ?? modelId,
     placeholder: modelId,
+    validate: (v) => (v.trim() ? undefined : "Display name cannot be empty"),
   });
 
   const apiOptions = [
