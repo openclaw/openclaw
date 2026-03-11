@@ -32,6 +32,11 @@ type PendingApproval = {
   timeoutId: NodeJS.Timeout | null;
 };
 
+type ForwardDeliveryPayload = {
+  text: string;
+  channelData?: Record<string, unknown>;
+};
+
 export type ExecApprovalForwarder = {
   handleRequested: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
@@ -69,10 +74,10 @@ function shouldForward(params: {
   request: ExecApprovalRequest;
 }): boolean {
   const config = params.config;
-  if (!config?.enabled) {
+  if (config?.enabled === false) {
     return false;
   }
-  if (config.agentFilter?.length) {
+  if (config?.agentFilter?.length) {
     const agentId =
       params.request.request.agentId ??
       parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
@@ -83,7 +88,7 @@ function shouldForward(params: {
       return false;
     }
   }
-  if (config.sessionFilter?.length) {
+  if (config?.sessionFilter?.length) {
     const sessionKey = params.request.request.sessionKey;
     if (!sessionKey) {
       return false;
@@ -132,10 +137,14 @@ function shouldSkipDiscordForwarding(
   }
   const discord = cfg.channels?.discord as
     | {
+        allowFrom?: Array<string | number>;
         execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
         accounts?: Record<
           string,
-          { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+          {
+            allowFrom?: Array<string | number>;
+            execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+          }
         >;
       }
     | undefined;
@@ -144,7 +153,10 @@ function shouldSkipDiscordForwarding(
   }
   const account = resolveChannelAccountConfig(discord.accounts, target.accountId);
   const execApprovals = account?.execApprovals ?? discord.execApprovals;
-  return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
+  const hasConfiguredApprovers = (execApprovals?.approvers?.length ?? 0) > 0;
+  const fallbackApprovers = account?.allowFrom?.length ?? discord.allowFrom?.length ?? 0;
+  const enabled = execApprovals?.enabled ?? fallbackApprovers > 0;
+  return Boolean(enabled && (hasConfiguredApprovers || fallbackApprovers > 0));
 }
 
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
@@ -193,6 +205,84 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   lines.push(`Expires in: ${expiresIn}s`);
   lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
   return lines.join("\n");
+}
+
+function buildTelegramApprovalButtons(request: ExecApprovalRequest): {
+  telegram: {
+    buttons: Array<Array<{ text: string; callback_data: string }>>;
+  };
+} {
+  return {
+    telegram: {
+      buttons: [
+        [
+          { text: "✅ Allow", callback_data: `/approve ${request.id} allow-once` },
+          { text: "⚠️ Always", callback_data: `/approve ${request.id} allow-always` },
+          { text: "❌ Deny", callback_data: `/approve ${request.id} deny` },
+        ],
+      ],
+    },
+  };
+}
+
+function buildSlackApprovalBlocks(request: ExecApprovalRequest): {
+  slack: {
+    blocks: Array<Record<string, unknown>>;
+  };
+} {
+  return {
+    slack: {
+      blocks: [
+        {
+          type: "actions",
+          block_id: `openclaw_exec_approval_${request.id}`,
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "✅ Allow once", emoji: true },
+              style: "primary",
+              action_id: "openclaw:exec-approval:allow-once",
+              value: request.id,
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "⚠️ Always allow", emoji: true },
+              action_id: "openclaw:exec-approval:allow-always",
+              value: request.id,
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "❌ Deny", emoji: true },
+              style: "danger",
+              action_id: "openclaw:exec-approval:deny",
+              value: request.id,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function buildRequestPayload(
+  channel: DeliverableMessageChannel,
+  request: ExecApprovalRequest,
+  nowMs: number,
+): ForwardDeliveryPayload {
+  const text = buildRequestMessage(request, nowMs);
+  if (channel === "telegram") {
+    return {
+      text,
+      channelData: buildTelegramApprovalButtons(request),
+    };
+  }
+  if (channel === "slack") {
+    return {
+      text,
+      channelData: buildSlackApprovalBlocks(request),
+    };
+  }
+  return { text };
 }
 
 function decisionLabel(decision: ExecApprovalDecision): string {
@@ -261,7 +351,11 @@ function defaultResolveSessionTarget(params: {
 async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
-  text: string;
+  payload?: ForwardDeliveryPayload;
+  resolvePayload?: (
+    channel: DeliverableMessageChannel,
+    target: ForwardTarget,
+  ) => ForwardDeliveryPayload;
   deliver: typeof deliverOutboundPayloads;
   shouldSend?: () => boolean;
 }) {
@@ -273,6 +367,10 @@ async function deliverToTargets(params: {
     if (!isDeliverableMessageChannel(channel)) {
       return;
     }
+    const payload = params.resolvePayload?.(channel, target) ??
+      params.payload ?? {
+        text: "",
+      };
     try {
       await params.deliver({
         cfg: params.cfg,
@@ -280,7 +378,7 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [{ text: payload.text, channelData: payload.channelData }],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -366,7 +464,12 @@ export function createExecApprovalForwarder(
         }
         pending.delete(request.id);
         const expiredText = buildExpiredMessage(request);
-        await deliverToTargets({ cfg, targets: entry.targets, text: expiredText, deliver });
+        await deliverToTargets({
+          cfg,
+          targets: entry.targets,
+          payload: { text: expiredText },
+          deliver,
+        });
       })();
     }, expiresInMs);
     timeoutId.unref?.();
@@ -378,11 +481,10 @@ export function createExecApprovalForwarder(
       return false;
     }
 
-    const text = buildRequestMessage(request, nowMs());
     void deliverToTargets({
       cfg,
       targets: filteredTargets,
-      text,
+      resolvePayload: (channel) => buildRequestPayload(channel, request, nowMs()),
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     }).catch((err) => {
@@ -423,7 +525,7 @@ export function createExecApprovalForwarder(
       return;
     }
     const text = buildResolvedMessage(resolved);
-    await deliverToTargets({ cfg, targets, text, deliver });
+    await deliverToTargets({ cfg, targets, payload: { text }, deliver });
   };
 
   const stop = () => {

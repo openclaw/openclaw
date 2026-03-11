@@ -505,13 +505,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       );
     }
 
-    // Initialize exec approvals handler if enabled
+    // Initialize exec approvals handler when explicitly enabled, or implicitly
+    // when allowFrom is configured (so approval buttons work in the origin channel).
     const execApprovalsConfig = discordCfg.execApprovals ?? {};
-    const execApprovalsHandler = execApprovalsConfig.enabled
+    const fallbackApprovers = Array.isArray(allowFrom)
+      ? [...new Set(allowFrom.map((entry) => String(entry).trim()).filter(Boolean))]
+      : [];
+    const resolvedExecApprovalsConfig = {
+      ...execApprovalsConfig,
+      approvers:
+        execApprovalsConfig.approvers && execApprovalsConfig.approvers.length > 0
+          ? execApprovalsConfig.approvers
+          : fallbackApprovers,
+      enabled:
+        execApprovalsConfig.enabled ??
+        (fallbackApprovers.length > 0 ? true : execApprovalsConfig.enabled),
+      target:
+        execApprovalsConfig.target ??
+        (execApprovalsConfig.enabled === undefined && fallbackApprovers.length > 0
+          ? "channel"
+          : undefined),
+    };
+    const execApprovalsHandler = resolvedExecApprovalsConfig.enabled
       ? new DiscordExecApprovalHandler({
           token,
           accountId: account.accountId,
-          config: execApprovalsConfig,
+          config: resolvedExecApprovalsConfig,
           cfg,
           runtime,
         })

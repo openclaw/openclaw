@@ -1,3 +1,5 @@
+import type { Block, KnownBlock } from "@slack/web-api";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../../../slack/send.js";
@@ -51,6 +53,7 @@ async function sendSlackOutboundMessage(params: {
   cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
   to: string;
   text: string;
+  blocks?: (Block | KnownBlock)[];
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   accountId?: string | null;
@@ -87,17 +90,41 @@ async function sendSlackOutboundMessage(params: {
     ...(params.mediaUrl
       ? { mediaUrl: params.mediaUrl, mediaLocalRoots: params.mediaLocalRoots }
       : {}),
+    ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
   return { channel: "slack" as const, ...result };
+}
+
+function resolveSlackBlocks(payload: ReplyPayload): (Block | KnownBlock)[] | undefined {
+  const slackData = payload.channelData?.slack as { blocks?: unknown } | undefined;
+  return Array.isArray(slackData?.blocks)
+    ? (slackData.blocks as (Block | KnownBlock)[])
+    : undefined;
 }
 
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: 4000,
-  sendPayload: async (ctx) =>
-    await sendTextMediaPayload({ channel: "slack", ctx, adapter: slackOutbound }),
+  sendPayload: async (ctx) => {
+    const blocks = resolveSlackBlocks(ctx.payload);
+    const hasMedia = Boolean(ctx.payload.mediaUrl) || (ctx.payload.mediaUrls?.length ?? 0) > 0;
+    if (blocks && !hasMedia) {
+      return await sendSlackOutboundMessage({
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: ctx.payload.text ?? "",
+        blocks,
+        accountId: ctx.accountId,
+        deps: ctx.deps,
+        replyToId: ctx.replyToId,
+        threadId: ctx.threadId,
+        identity: ctx.identity,
+      });
+    }
+    return await sendTextMediaPayload({ channel: "slack", ctx, adapter: slackOutbound });
+  },
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
     return await sendSlackOutboundMessage({
       cfg,

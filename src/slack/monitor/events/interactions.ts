@@ -1,5 +1,6 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
+import { callGateway } from "../../../gateway/call.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -12,6 +13,7 @@ import {
 
 // Prefix for OpenClaw-generated action IDs to scope our handler
 const OPENCLAW_ACTION_PREFIX = "openclaw:";
+const EXEC_APPROVAL_ACTION_PREFIX = "openclaw:exec-approval:";
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
 const REDACTED_INTERACTION_VALUE = "[redacted]";
 const SLACK_INTERACTION_EVENT_MAX_CHARS = 2400;
@@ -52,6 +54,30 @@ type InteractionSummary = InteractionSelectionFields & {
   messageTs?: string;
   threadTs?: string;
 };
+
+type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+function parseExecApprovalAction(params: {
+  actionId: string;
+  value: unknown;
+}): { approvalId: string; decision: ExecApprovalDecision } | null {
+  const actionId = params.actionId.trim().toLowerCase();
+  if (!actionId.startsWith(EXEC_APPROVAL_ACTION_PREFIX)) {
+    return null;
+  }
+  const decisionRaw = actionId.slice(EXEC_APPROVAL_ACTION_PREFIX.length);
+  if (decisionRaw !== "allow-once" && decisionRaw !== "allow-always" && decisionRaw !== "deny") {
+    return null;
+  }
+  const approvalId = typeof params.value === "string" ? params.value.trim() : "";
+  if (!approvalId) {
+    return null;
+  }
+  return {
+    approvalId,
+    decision: decisionRaw,
+  };
+}
 
 function truncateInteractionString(
   value: string,
@@ -542,6 +568,40 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         threadTs,
       };
 
+      const approvalAction = parseExecApprovalAction({
+        actionId,
+        value: actionSummary.value,
+      });
+      if (approvalAction) {
+        try {
+          await callGateway({
+            config: ctx.cfg,
+            method: "exec.approval.resolve",
+            params: {
+              id: approvalAction.approvalId,
+              decision: approvalAction.decision,
+            },
+            clientDisplayName: `Slack approval (${userId})`,
+            mode: "backend",
+          });
+        } catch (err) {
+          ctx.runtime.log?.(
+            `slack:interaction approval resolve failed action=${actionId} user=${userId}: ${String(err)}`,
+          );
+          if (respond) {
+            try {
+              await respond({
+                text: "Failed to submit approval. It may have expired.",
+                response_type: "ephemeral",
+              });
+            } catch {
+              // best-effort feedback only
+            }
+          }
+          return;
+        }
+      }
+
       // Log the interaction for debugging
       ctx.runtime.log?.(
         `slack:interaction action=${actionId} type=${actionSummary.actionType ?? "unknown"} user=${userId} channel=${channelId}`,
@@ -559,10 +619,12 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const contextParts = ["slack:interaction", channelId, messageTs, actionId].filter(Boolean);
       const contextKey = contextParts.join(":");
 
-      enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
-        sessionKey,
-        contextKey,
-      });
+      if (!approvalAction) {
+        enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
+          sessionKey,
+          contextKey,
+        });
+      }
 
       const originalBlocks = typedBody.message?.blocks;
       if (!Array.isArray(originalBlocks) || !channelId || !messageTs) {

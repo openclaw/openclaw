@@ -611,7 +611,7 @@ export const FIELD_HELP: Record<string, string> = {
   "approvals.exec":
     "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.",
   "approvals.exec.enabled":
-    "Enables forwarding of exec approval requests to configured delivery destinations (default: false). Keep disabled in low-risk setups and enable only when human approval responders need channel-visible prompts.",
+    "Enables forwarding of exec approval requests to configured delivery destinations (default: true). Set false only when you intentionally want approvals to stay on operator clients such as Control UI.",
   "approvals.exec.mode":
     'Controls where approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths. Use "session" as baseline and expand only when operational workflow requires redundancy.',
   "approvals.exec.agentFilter":

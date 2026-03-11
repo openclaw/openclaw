@@ -12,7 +12,7 @@ export type ExecApprovalForwardTarget = {
 };
 
 export type ExecApprovalForwardingConfig = {
-  /** Enable forwarding exec approvals to chat channels. Default: false. */
+  /** Enable forwarding exec approvals to chat channels. Default: true. */
   enabled?: boolean;
   /** Delivery mode (session=origin chat, targets=config targets, both=both). Default: session. */
   mode?: ExecApprovalForwardingMode;

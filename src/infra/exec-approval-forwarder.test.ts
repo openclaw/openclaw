@@ -27,6 +27,16 @@ function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
   return firstCall?.payloads?.[0]?.text ?? "";
 }
 
+function getFirstDeliveryPayload(deliver: ReturnType<typeof vi.fn>): {
+  text?: string;
+  channelData?: Record<string, unknown>;
+} {
+  const firstCall = deliver.mock.calls[0]?.[0] as
+    | { payloads?: Array<{ text?: string; channelData?: Record<string, unknown> }> }
+    | undefined;
+  return firstCall?.payloads?.[0] ?? {};
+}
+
 const TARGETS_CFG = {
   approvals: {
     exec: {
@@ -57,17 +67,27 @@ function createForwarder(params: {
   return { deliver, forwarder };
 }
 
-function makeSessionCfg(options: { discordExecApprovalsEnabled?: boolean } = {}): OpenClawConfig {
+function makeSessionCfg(
+  options: {
+    discordExecApprovalsEnabled?: boolean;
+    discordAllowFrom?: string[];
+  } = {},
+): OpenClawConfig {
+  const discordChannelConfig: Record<string, unknown> = {};
+  if (options.discordAllowFrom?.length) {
+    discordChannelConfig.allowFrom = options.discordAllowFrom;
+  }
+  if (options.discordExecApprovalsEnabled) {
+    discordChannelConfig.execApprovals = {
+      enabled: true,
+      approvers: ["123"],
+    };
+  }
   return {
-    ...(options.discordExecApprovalsEnabled
+    ...(Object.keys(discordChannelConfig).length > 0
       ? {
           channels: {
-            discord: {
-              execApprovals: {
-                enabled: true,
-                approvers: ["123"],
-              },
-            },
+            discord: discordChannelConfig,
           },
         }
       : {}),
@@ -191,12 +211,23 @@ describe("exec approval forwarder", () => {
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
   });
 
-  it("returns false when forwarding is disabled", async () => {
+  it("returns false when forwarding is explicitly disabled", async () => {
     const { deliver, forwarder } = createForwarder({
-      cfg: {} as OpenClawConfig,
+      cfg: {
+        approvals: { exec: { enabled: false } },
+      } as OpenClawConfig,
     });
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("forwards by default when approvals.exec is omitted", async () => {
+    const { deliver, forwarder } = createForwarder({
+      cfg: {} as OpenClawConfig,
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+    });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("rejects unsafe nested-repetition regex in sessionFilter", async () => {
@@ -236,6 +267,14 @@ describe("exec approval forwarder", () => {
   it("skips discord forwarding when discord exec approvals handler is enabled", async () => {
     await expectDiscordSessionTargetRequest({
       cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
+      expectedAccepted: false,
+      expectedDeliveryCount: 0,
+    });
+  });
+
+  it("skips discord forwarding when discord allowFrom implies inline approval handler", async () => {
+    await expectDiscordSessionTargetRequest({
+      cfg: makeSessionCfg({ discordAllowFrom: ["123"] }),
       expectedAccepted: false,
       expectedDeliveryCount: 0,
     });
@@ -336,5 +375,73 @@ describe("exec approval forwarder", () => {
     ).resolves.toBe(true);
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
+  });
+
+  it("adds Telegram inline approval buttons for forwarded requests", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    const payload = getFirstDeliveryPayload(deliver);
+    expect(payload.channelData).toEqual({
+      telegram: {
+        buttons: [
+          [
+            { text: "✅ Allow", callback_data: "/approve req-1 allow-once" },
+            { text: "⚠️ Always", callback_data: "/approve req-1 allow-always" },
+            { text: "❌ Deny", callback_data: "/approve req-1 deny" },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("adds Slack action blocks for forwarded requests", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "slack", to: "C1" }],
+        },
+      },
+    } as OpenClawConfig;
+    const { deliver, forwarder } = createForwarder({ cfg });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    const payload = getFirstDeliveryPayload(deliver);
+    expect(payload.channelData).toEqual({
+      slack: {
+        blocks: [
+          {
+            type: "actions",
+            block_id: "openclaw_exec_approval_req-1",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "✅ Allow once", emoji: true },
+                style: "primary",
+                action_id: "openclaw:exec-approval:allow-once",
+                value: "req-1",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "⚠️ Always allow", emoji: true },
+                action_id: "openclaw:exec-approval:allow-always",
+                value: "req-1",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "❌ Deny", emoji: true },
+                style: "danger",
+                action_id: "openclaw:exec-approval:deny",
+                value: "req-1",
+              },
+            ],
+          },
+        ],
+      },
+    });
   });
 });

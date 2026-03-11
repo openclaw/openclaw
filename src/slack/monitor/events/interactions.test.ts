@@ -2,9 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { registerSlackInteractionEvents } from "./interactions.js";
 
 const enqueueSystemEventMock = vi.fn();
+const callGatewayMock = vi.fn();
 
 vi.mock("../../../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../../../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
 type RegisteredHandler = (args: {
@@ -151,8 +156,109 @@ function createContext(overrides?: {
 }
 
 describe("registerSlackInteractionEvents", () => {
+  it("resolves exec approvals from button clicks without emitting system events", async () => {
+    enqueueSystemEventMock.mockClear();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValue({ ok: true });
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "openclaw_exec_approval_req-1",
+              elements: [{ type: "button", action_id: "openclaw:exec-approval:allow-once" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:exec-approval:allow-once",
+        block_id: "openclaw_exec_approval_req-1",
+        value: "req-1",
+        text: { type: "plain_text", text: "Allow once" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "req-1", decision: "allow-once" },
+      }),
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns ephemeral error when exec approval resolve fails", async () => {
+    enqueueSystemEventMock.mockClear();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockRejectedValue(new Error("unknown approval id"));
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "openclaw_exec_approval_req-1",
+              elements: [{ type: "button", action_id: "openclaw:exec-approval:deny" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:exec-approval:deny",
+        block_id: "openclaw_exec_approval_req-1",
+        value: "req-1",
+        text: { type: "plain_text", text: "Deny" },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({
+      text: "Failed to submit approval. It may have expired.",
+      response_type: "ephemeral",
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
   it("enqueues structured events and updates button rows", async () => {
     enqueueSystemEventMock.mockClear();
+    callGatewayMock.mockReset();
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 

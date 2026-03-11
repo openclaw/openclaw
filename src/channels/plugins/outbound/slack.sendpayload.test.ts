@@ -80,6 +80,23 @@ describe("slackOutbound sendPayload", () => {
     expect(result).toEqual({ channel: "slack", messageId: "" });
   });
 
+  it("passes Slack blocks from channelData on text payloads", async () => {
+    const blocks = [{ type: "divider" }];
+    const ctx = baseCtx({
+      text: "",
+      channelData: { slack: { blocks } },
+    });
+    const result = await slackOutbound.sendPayload!(ctx);
+
+    expect(ctx.deps.sendSlack).toHaveBeenCalledTimes(1);
+    expect(ctx.deps.sendSlack).toHaveBeenCalledWith(
+      "C12345",
+      "",
+      expect.objectContaining({ blocks }),
+    );
+    expect(result).toMatchObject({ channel: "slack", messageId: "sl-1" });
+  });
+
   it("text exceeding chunk limit is sent as-is when chunker is null", async () => {
     // Slack has chunker: null, so long text should be sent as a single message
     const ctx = baseCtx({ text: "a".repeat(5000) });
