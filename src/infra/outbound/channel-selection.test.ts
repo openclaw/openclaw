@@ -231,6 +231,21 @@ describe("resolveMessageChannelSelection", () => {
   });
 
   it("throws when explicit channel is known but not configured (#42080)", async () => {
+    // whatsapp plugin is available (loaded) but not in configured list
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "telegram",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isConfigured: async () => true,
+        },
+      },
+    ]);
+
     await expect(
       resolveMessageChannelSelection({
         cfg: {} as never,
@@ -240,6 +255,9 @@ describe("resolveMessageChannelSelection", () => {
   });
 
   it("falls back to context channel when explicit channel is unconfigured (#42080)", async () => {
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "discord",
@@ -265,6 +283,9 @@ describe("resolveMessageChannelSelection", () => {
   });
 
   it("includes configured channels hint in unconfigured channel error (#42080)", async () => {
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "telegram",
