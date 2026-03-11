@@ -6,7 +6,7 @@ import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
-import { createTypingCallbacks } from "../../../channels/typing.js";
+import { createTypingCallbacks, resolveChannelTypingTtlMs } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
@@ -156,6 +156,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }).catch(() => {});
       }
     },
+    maxDurationMs: resolveChannelTypingTtlMs(cfg),
     stop: async () => {
       if (!didSetStatus) {
         return;

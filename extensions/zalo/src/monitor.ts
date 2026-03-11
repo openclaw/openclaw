@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/zalo";
 import {
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   issuePairingChallenge,
@@ -560,6 +561,7 @@ async function processMessageWithPipeline(params: {
         ZALO_TYPING_TIMEOUT_MS,
       );
     },
+    maxDurationMs: resolveChannelTypingTtlMs(config),
     onStartError: (err) => {
       logTypingFailure({
         log: (message) => logVerbose(core, runtime, message),

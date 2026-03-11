@@ -114,10 +114,12 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+  const configuredTypingTtlMs = agentCfg?.typingTtlMs ?? sessionCfg?.typingTtlMs;
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
     typingIntervalSeconds,
+    ...(typeof configuredTypingTtlMs === "number" ? { typingTtlMs: configuredTypingTtlMs } : {}),
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });

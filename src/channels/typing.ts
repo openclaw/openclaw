@@ -1,6 +1,20 @@
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 
+/** Minimal config shape for resolving typing TTL without coupling to the full config type. */
+type TypingTtlConfig = {
+  agents?: { defaults?: { typingTtlMs?: number } };
+  session?: { typingTtlMs?: number };
+};
+
+/**
+ * Resolve the channel-level typing indicator TTL from config.
+ * Falls back to `defaultMs` (60s) when unset.
+ */
+export function resolveChannelTypingTtlMs(cfg: TypingTtlConfig, defaultMs = 60_000): number {
+  return cfg.agents?.defaults?.typingTtlMs ?? cfg.session?.typingTtlMs ?? defaultMs;
+}
+
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
   onIdle?: () => void;

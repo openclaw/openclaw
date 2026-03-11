@@ -24,7 +24,7 @@ import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js
 import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize/signal.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
-import { createTypingCallbacks } from "../../channels/typing.js";
+import { createTypingCallbacks, resolveChannelTypingTtlMs } from "../../channels/typing.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -260,6 +260,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           accountId: deps.accountId,
         });
       },
+      maxDurationMs: resolveChannelTypingTtlMs(deps.cfg),
       onStartError: (err) => {
         logTypingFailure({
           log: logVerbose,

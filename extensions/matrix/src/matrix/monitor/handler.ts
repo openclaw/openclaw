@@ -4,6 +4,7 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   dispatchReplyFromConfigWithSettledDispatcher,
   evaluateGroupRouteAccessForPolicy,
   formatAllowlistMatchMeta,
@@ -711,6 +712,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const typingCallbacks = createTypingCallbacks({
         start: () => sendTypingMatrix(roomId, true, undefined, client),
         stop: () => sendTypingMatrix(roomId, false, undefined, client),
+        maxDurationMs: resolveChannelTypingTtlMs(cfg),
         onStartError: (err) => {
           logTypingFailure({
             log: logVerboseMessage,

@@ -117,6 +117,8 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
+  /** Maximum duration (ms) before the typing indicator auto-stops. Default: 120000 (2 min). */
+  typingTtlMs?: number;
   /**
    * Max parent transcript token count allowed for thread/session forking.
    * If parent totalTokens is above this value, OpenClaw skips parent fork and

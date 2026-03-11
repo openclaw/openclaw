@@ -1098,6 +1098,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingMode":
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
+  "session.typingTtlMs":
+    "Maximum duration in milliseconds before the typing indicator automatically stops. Increase for long agent tasks that need extended typing indicators. Default: 120000 (2 minutes).",
   "session.parentForkMaxTokens":
     "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
   "session.mainKey":

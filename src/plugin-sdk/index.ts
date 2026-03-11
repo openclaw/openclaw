@@ -486,7 +486,7 @@ export {
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createTypingCallbacks, resolveChannelTypingTtlMs } from "../channels/typing.js";
 export { createReplyPrefixContext, createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";

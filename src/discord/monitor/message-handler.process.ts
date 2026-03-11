@@ -20,7 +20,7 @@ import {
   DEFAULT_TIMING,
   type StatusReactionAdapter,
 } from "../../channels/status-reactions.js";
-import { createTypingCallbacks } from "../../channels/typing.js";
+import { createTypingCallbacks, resolveChannelTypingTtlMs } from "../../channels/typing.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -445,7 +445,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
     },
     // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
-    maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
+    maxDurationMs: resolveChannelTypingTtlMs(cfg, DISCORD_TYPING_MAX_DURATION_MS),
   });
 
   // --- Discord draft stream (edit-based preview streaming) ---

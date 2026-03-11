@@ -12,6 +12,7 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   logInboundDrop,
   logTypingFailure,
   buildPendingHistoryContextFromMap,
@@ -613,6 +614,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const typingCallbacks = createTypingCallbacks({
           start: () => sendTypingIndicator(opts.channelId),
+          maxDurationMs: resolveChannelTypingTtlMs(cfg),
           onStartError: (err) => {
             logTypingFailure({
               log: (message) => logger.debug?.(message),
@@ -916,6 +918,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const typingCallbacks = shouldDeliverReplies
       ? createTypingCallbacks({
           start: () => sendTypingIndicator(params.channelId),
+          maxDurationMs: resolveChannelTypingTtlMs(cfg),
           onStartError: (err) => {
             logTypingFailure({
               log: (message) => logger.debug?.(message),
@@ -1632,6 +1635,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const typingCallbacks = createTypingCallbacks({
       start: () => sendTypingIndicator(channelId, threadRootId),
+      maxDurationMs: resolveChannelTypingTtlMs(cfg),
       onStartError: (err) => {
         logTypingFailure({
           log: (message) => logger.debug?.(message),
