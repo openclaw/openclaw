@@ -21,13 +21,18 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
 }
 
 /**
- * Returns true when the cron store has at least one enabled job that shares the
- * current session key. Used to suppress the "no reminder scheduled" guard note
- * when an existing cron (created in a prior turn) already covers the commitment.
+ * Returns true when the cron store has at least one enabled job related to the
+ * current session. Checks both:
+ * 1. Jobs that share the same sessionKey (main-session crons)
+ * 2. Jobs created by the same agentId with sessionTarget "isolated" (#43292)
+ *
+ * Used to suppress the "no reminder scheduled" guard note when an existing cron
+ * (created in a prior turn) already covers the commitment.
  */
 export async function hasSessionRelatedCronJobs(params: {
   cronStorePath?: string;
   sessionKey?: string;
+  agentId?: string;
 }): Promise<boolean> {
   try {
     const storePath = resolveCronStorePath(params.cronStorePath);
@@ -35,10 +40,20 @@ export async function hasSessionRelatedCronJobs(params: {
     if (store.jobs.length === 0) {
       return false;
     }
-    if (params.sessionKey) {
-      return store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey);
-    }
-    return false;
+    return store.jobs.some((job) => {
+      if (!job.enabled) {
+        return false;
+      }
+      // Match by session key (main-session crons)
+      if (params.sessionKey && job.sessionKey === params.sessionKey) {
+        return true;
+      }
+      // Match isolated crons that share the same agent (#43292)
+      if (params.agentId && job.agentId === params.agentId && job.sessionTarget === "isolated") {
+        return true;
+      }
+      return false;
+    });
   } catch {
     // If we cannot read the cron store, do not suppress the note.
     return false;
