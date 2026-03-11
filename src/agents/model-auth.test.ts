@@ -235,7 +235,17 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
             "custom-127-0-0-1-8080": {
               baseUrl: "http://127.0.0.1:8080/v1",
               api: "openai-completions",
-              models: [{ id: "qwen-3.5", name: "Qwen 3.5" }],
+              models: [
+                {
+                  id: "qwen-3.5",
+                  name: "Qwen 3.5",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
             },
           },
         },
@@ -254,7 +264,17 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
             "my-local": {
               baseUrl: "http://localhost:11434/v1",
               api: "openai-completions",
-              models: [{ id: "llama3", name: "Llama 3" }],
+              models: [
+                {
+                  id: "llama3",
+                  name: "Llama 3",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
             },
           },
         },
@@ -273,7 +293,17 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
               "my-remote": {
                 baseUrl: "https://api.example.com/v1",
                 api: "openai-completions",
-                models: [{ id: "gpt-5", name: "GPT-5" }],
+                models: [
+                  {
+                    id: "gpt-5",
+                    name: "GPT-5",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 4096,
+                  },
+                ],
               },
             },
           },
