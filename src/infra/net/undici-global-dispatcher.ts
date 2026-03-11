@@ -13,6 +13,8 @@ export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
 let lastAppliedDispatcherKey: string | null = null;
+let temporaryEnvProxyScopeDepth = 0;
+let temporaryEnvProxyRestoreDispatcher: Dispatcher | null = null;
 
 type DispatcherKind = "agent" | "env-proxy" | "unsupported";
 
@@ -134,10 +136,34 @@ export async function withTemporaryEnvProxyDispatcher<T>(
   if (kind === "unsupported") {
     return await fn();
   }
+  if (temporaryEnvProxyScopeDepth > 0) {
+    temporaryEnvProxyScopeDepth += 1;
+    try {
+      return await fn();
+    } finally {
+      temporaryEnvProxyScopeDepth -= 1;
+      if (temporaryEnvProxyScopeDepth === 0) {
+        const restoreDispatcher = temporaryEnvProxyRestoreDispatcher;
+        temporaryEnvProxyRestoreDispatcher = null;
+        if (restoreDispatcher) {
+          try {
+            setGlobalDispatcher(restoreDispatcher);
+          } catch {
+            // Best-effort restore only.
+          }
+        }
+      }
+    }
+  }
+  if (kind === "env-proxy") {
+    return await fn();
+  }
 
   const connect = resolveConnectOptions(resolveAutoSelectFamily());
   const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
   const timeoutMs = Math.max(1, Math.floor(timeoutMsRaw));
+  temporaryEnvProxyRestoreDispatcher = dispatcher;
+  temporaryEnvProxyScopeDepth = 1;
   try {
     const proxyOptions = {
       bodyTimeout: timeoutMs,
@@ -146,20 +172,31 @@ export async function withTemporaryEnvProxyDispatcher<T>(
     } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
     setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
   } catch {
+    temporaryEnvProxyScopeDepth = 0;
+    temporaryEnvProxyRestoreDispatcher = null;
     return await fn();
   }
 
   try {
     return await fn();
   } finally {
-    try {
-      setGlobalDispatcher(dispatcher);
-    } catch {
-      // Best-effort restore only.
+    temporaryEnvProxyScopeDepth -= 1;
+    if (temporaryEnvProxyScopeDepth === 0) {
+      const restoreDispatcher = temporaryEnvProxyRestoreDispatcher;
+      temporaryEnvProxyRestoreDispatcher = null;
+      if (restoreDispatcher) {
+        try {
+          setGlobalDispatcher(restoreDispatcher);
+        } catch {
+          // Best-effort restore only.
+        }
+      }
     }
   }
 }
 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedDispatcherKey = null;
+  temporaryEnvProxyScopeDepth = 0;
+  temporaryEnvProxyRestoreDispatcher = null;
 }

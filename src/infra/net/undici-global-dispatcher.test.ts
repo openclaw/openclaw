@@ -173,7 +173,7 @@ describe("withTemporaryEnvProxyDispatcher", () => {
 
     await withTemporaryEnvProxyDispatcher(async () => {});
 
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
@@ -204,10 +204,10 @@ describe("withTemporaryEnvProxyDispatcher", () => {
       seenDispatchers.push(getCurrentDispatcher());
     });
 
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(4);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(seenDispatchers[0]).toBeInstanceOf(EnvHttpProxyAgent);
     expect(seenDispatchers[1]).toBeInstanceOf(EnvHttpProxyAgent);
-    expect(seenDispatchers[1]).not.toBe(seenDispatchers[0]);
+    expect(seenDispatchers[1]).toBe(seenDispatchers[0]);
     expect(seenDispatchers[2]).toBe(seenDispatchers[0]);
     expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
   });
