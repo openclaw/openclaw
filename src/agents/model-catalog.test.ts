@@ -292,6 +292,7 @@ describe("loadModelCatalog", () => {
                   input: ["text", "image"],
                   contextWindow: 1000000,
                   maxTokens: 128000,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 },
               ],
             },
@@ -309,7 +310,7 @@ describe("loadModelCatalog", () => {
 
   it("enriches existing catalog entry with configured input capabilities", async () => {
     // Simulate: Pi SDK returns anthropic/claude-opus-4-6 without input field,
-    // config provides input: ["text", "image"] � should enrich the existing entry.
+    // config provides input: ["text", "image"] ï¿½ should enrich the existing entry.
     const result = await loadModelCatalog({
       useCache: false,
       config: {
@@ -323,6 +324,10 @@ describe("loadModelCatalog", () => {
                   id: "claude-opus-4-6",
                   name: "Claude Opus 4.6",
                   input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 1000000,
+                  maxTokens: 128000,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 },
               ],
             },
@@ -334,7 +339,7 @@ describe("loadModelCatalog", () => {
     const matches = result.filter(
       (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-4-6",
     );
-    // Should not duplicate � should be exactly 1 entry
+    // Should not duplicate ï¿½ should be exactly 1 entry
     expect(matches.length).toBeLessThanOrEqual(1);
     // If present, should have image input
     if (matches.length === 1) {
