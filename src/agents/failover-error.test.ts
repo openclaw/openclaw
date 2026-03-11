@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coerceToFailoverError,
   describeFailoverError,
+  FailoverError,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -398,5 +399,59 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  it("preserves partialExecution through construction", () => {
+    const err = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        hadToolExecution: true,
+        toolNames: ["send_message", "search"],
+        didSendViaMessagingTool: true,
+      },
+    });
+    expect(err.partialExecution).toEqual({
+      hadToolExecution: true,
+      toolNames: ["send_message", "search"],
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("includes partialExecution in describeFailoverError", () => {
+    const err = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        hadToolExecution: true,
+        toolNames: ["run_shell"],
+        didSendViaMessagingTool: false,
+      },
+    });
+    const described = describeFailoverError(err);
+    expect(described.partialExecution?.toolNames).toEqual(["run_shell"]);
+    expect(described.partialExecution?.didSendViaMessagingTool).toBe(false);
+  });
+
+  it("sanitizeToolNames caps at 20 entries", () => {
+    const names = Array.from({ length: 30 }, (_, i) => `tool_${i}`);
+    const sanitized = FailoverError.sanitizeToolNames(names);
+    expect(sanitized).toHaveLength(20);
+  });
+
+  it("sanitizeToolNames strips invalid characters", () => {
+    expect(FailoverError.sanitizeToolNames(["valid_name", "has spaces!", "<script>"])).toEqual([
+      "valid_name",
+      "hasspaces",
+      "script",
+    ]);
+  });
+
+  it("sanitizeToolNames truncates to 100 characters", () => {
+    const longName = "a".repeat(150);
+    const sanitized = FailoverError.sanitizeToolNames([longName]);
+    expect(sanitized[0]).toHaveLength(100);
+  });
+
+  it("sanitizeToolNames filters empty results", () => {
+    expect(FailoverError.sanitizeToolNames(["!!!"])).toEqual([]);
   });
 });

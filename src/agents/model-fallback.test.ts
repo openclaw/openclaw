@@ -1399,6 +1399,83 @@ describe("runWithModelFallback", () => {
       });
     });
   });
+
+  it("forwards previousPartialExecution from FailoverError to next run call", async () => {
+    const { FailoverError } = await import("./failover-error.js");
+    const cfg = makeCfg();
+    const failoverErr = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        hadToolExecution: true,
+        toolNames: ["send_message", "search"],
+        didSendViaMessagingTool: true,
+      },
+    });
+    const run = vi.fn().mockRejectedValueOnce(failoverErr).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    // Second call should receive previousPartialExecution in options
+    const secondCallOptions = run.mock.calls[1]?.[2];
+    expect(secondCallOptions?.previousPartialExecution).toEqual({
+      hadToolExecution: true,
+      toolNames: ["send_message", "search"],
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("does not forward previousPartialExecution when error has none", async () => {
+    const { FailoverError } = await import("./failover-error.js");
+    const cfg = makeCfg();
+    const failoverErr = new FailoverError("timeout", { reason: "timeout" });
+    const run = vi.fn().mockRejectedValueOnce(failoverErr).mockResolvedValueOnce("ok");
+
+    await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    // Second call should not have previousPartialExecution
+    const secondCallOptions = run.mock.calls[1]?.[2];
+    expect(secondCallOptions?.previousPartialExecution).toBeUndefined();
+  });
+
+  it("stores partialExecution in attempts array", async () => {
+    const { FailoverError } = await import("./failover-error.js");
+    const cfg = makeCfg();
+    const failoverErr = new FailoverError("timeout", {
+      reason: "timeout",
+      partialExecution: {
+        hadToolExecution: true,
+        toolNames: ["run_shell"],
+        didSendViaMessagingTool: false,
+      },
+    });
+    const run = vi.fn().mockRejectedValueOnce(failoverErr).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0].partialExecution).toEqual({
+      hadToolExecution: true,
+      toolNames: ["run_shell"],
+      didSendViaMessagingTool: false,
+    });
+  });
 });
 
 describe("runWithImageModelFallback", () => {

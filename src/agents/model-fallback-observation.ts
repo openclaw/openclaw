@@ -1,5 +1,6 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import type { PartialExecution } from "./failover-error.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import { buildTextObservationFields } from "./pi-embedded-error-observation.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
@@ -50,6 +51,7 @@ export function logModelFallbackDecision(params: {
   allowTransientCooldownProbe?: boolean;
   profileCount?: number;
   previousAttempts?: FallbackAttempt[];
+  partialExecution?: PartialExecution;
 }): void {
   const nextText = params.nextCandidate
     ? `${sanitizeForLog(params.nextCandidate.provider)}/${sanitizeForLog(params.nextCandidate.model)}`
@@ -78,6 +80,12 @@ export function logModelFallbackDecision(params: {
     fallbackConfigured: params.fallbackConfigured,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     profileCount: params.profileCount,
+    partialExecution: params.partialExecution
+      ? {
+          toolCount: params.partialExecution.toolNames.length,
+          didSendViaMessagingTool: params.partialExecution.didSendViaMessagingTool,
+        }
+      : undefined,
     previousAttempts: params.previousAttempts?.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,

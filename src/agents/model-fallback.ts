@@ -18,6 +18,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isTimeoutError,
+  type PartialExecution,
 } from "./failover-error.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
@@ -36,6 +37,7 @@ const log = createSubsystemLogger("model-fallback");
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  previousPartialExecution?: PartialExecution;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -524,6 +526,7 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let lastPartialExecution: PartialExecution | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
 
   const hasFallbackCandidates = candidates.length > 1;
@@ -652,6 +655,12 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
+    // Forward partial execution context from a prior failed attempt so the
+    // fallback model knows which tools already ran.
+    if (lastPartialExecution) {
+      runOptions = { ...runOptions, previousPartialExecution: lastPartialExecution };
+    }
+
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -721,6 +730,7 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
+      lastPartialExecution = described.partialExecution;
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
@@ -728,6 +738,7 @@ export async function runWithModelFallback<T>(params: {
         reason: described.reason ?? "unknown",
         status: described.status,
         code: described.code,
+        partialExecution: described.partialExecution,
       });
       logModelFallbackDecision({
         decision: "candidate_failed",
@@ -745,6 +756,7 @@ export async function runWithModelFallback<T>(params: {
         isPrimary,
         requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,
+        partialExecution: described.partialExecution,
       });
       await params.onError?.({
         provider: candidate.provider,

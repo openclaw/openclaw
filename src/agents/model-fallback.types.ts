@@ -1,3 +1,4 @@
+import type { PartialExecution } from "./failover-error.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 
 export type ModelCandidate = {
@@ -12,4 +13,5 @@ export type FallbackAttempt = {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  partialExecution?: PartialExecution;
 };

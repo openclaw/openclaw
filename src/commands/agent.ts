@@ -139,11 +139,28 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+  previousPartialExecution?: { toolNames: string[]; didSendViaMessagingTool: boolean };
+}): string {
   if (!params.isFallbackRetry) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  if (!params.previousPartialExecution) {
+    return "Continue where you left off. The previous model attempt failed or timed out.";
+  }
+  const toolList = params.previousPartialExecution.toolNames.join(", ");
+  const messagingWarning = params.previousPartialExecution.didSendViaMessagingTool
+    ? " Messages were already sent to the user — do NOT re-send them."
+    : "";
+  return [
+    `[System: The previous model attempt partially executed before failing. ` +
+      `It completed these tool calls: ${toolList}.${messagingWarning} ` +
+      `Do not repeat actions that have already been performed. ` +
+      `Review the conversation history and continue from where the previous attempt left off.]`,
+    params.body,
+  ].join("\n\n");
 }
 
 function prependInternalEventContext(
@@ -344,10 +361,12 @@ function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  previousPartialExecution?: { toolNames: string[]; didSendViaMessagingTool: boolean };
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    previousPartialExecution: params.previousPartialExecution,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -1135,6 +1154,7 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            previousPartialExecution: runOptions?.previousPartialExecution,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

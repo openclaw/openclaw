@@ -1418,6 +1418,16 @@ export async function runEmbeddedPiAgent(
                 model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
+                partialExecution:
+                  attempt.toolMetas.length > 0
+                    ? {
+                        hadToolExecution: true,
+                        toolNames: FailoverError.sanitizeToolNames(
+                          attempt.toolMetas.map((t) => t.toolName),
+                        ),
+                        didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                      }
+                    : undefined,
               });
             }
             logAssistantFailoverDecision("surface_error");
