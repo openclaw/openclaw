@@ -16,6 +16,7 @@ import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import {
+  appendAssistantMessageToSessionTranscript,
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
@@ -110,6 +111,30 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+
+async function mirrorTelegramReplyToSessionTranscript(params: {
+  sessionKey?: string;
+  agentId: string;
+  payload: ReplyPayload;
+}): Promise<void> {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  const mirrored = await appendAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey,
+    text: params.payload.text,
+    mediaUrls:
+      params.payload.mediaUrls ??
+      (params.payload.mediaUrl ? [params.payload.mediaUrl] : undefined),
+  });
+  if (!mirrored.ok) {
+    logVerbose(
+      `telegram: failed mirroring outbound reply to transcript for ${sessionKey}: ${mirrored.reason}`,
+    );
+  }
+}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -560,14 +585,14 @@ export const dispatchTelegramMessage = async ({
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
             if (!buffered) {
-              return;
+              return false;
             }
             const bufferedButtons = (
               buffered.payload.channelData?.telegram as
                 | { buttons?: TelegramInlineButtons }
                 | undefined
             )?.buttons;
-            await deliverLaneText({
+            const result = await deliverLaneText({
               laneName: "answer",
               text: buffered.text,
               payload: buffered.payload,
@@ -575,8 +600,10 @@ export const dispatchTelegramMessage = async ({
               previewButtons: bufferedButtons,
             });
             reasoningStepState.resetForNextStep();
+            return result !== "skipped";
           };
 
+          let deliveredFinalPayload = false;
           for (const segment of segments) {
             if (
               segment.lane === "answer" &&
@@ -600,10 +627,14 @@ export const dispatchTelegramMessage = async ({
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
+            if (info.kind === "final" && result !== "skipped") {
+              deliveredFinalPayload = true;
+            }
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
-                await flushBufferedFinalAnswer();
+                deliveredFinalPayload =
+                  (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
               }
               continue;
             }
@@ -616,16 +647,31 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
+            if (info.kind === "final" && deliveredFinalPayload) {
+              await mirrorTelegramReplyToSessionTranscript({
+                sessionKey: ctxPayload.SessionKey,
+                agentId: route.agentId,
+                payload,
+              });
+            }
             return;
           }
           if (split.suppressedReasoningOnly) {
             if (hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+              deliveredFinalPayload = await sendPayload(payloadWithoutSuppressedReasoning);
             }
             if (info.kind === "final") {
-              await flushBufferedFinalAnswer();
+              deliveredFinalPayload =
+                (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
+              if (deliveredFinalPayload) {
+                await mirrorTelegramReplyToSessionTranscript({
+                  sessionKey: ctxPayload.SessionKey,
+                  agentId: route.agentId,
+                  payload,
+                });
+              }
             }
             return;
           }
@@ -639,13 +685,20 @@ export const dispatchTelegramMessage = async ({
             hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
           if (!canSendAsIs) {
             if (info.kind === "final") {
-              await flushBufferedFinalAnswer();
+              deliveredFinalPayload = (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
             }
             return;
           }
-          await sendPayload(payload);
+          deliveredFinalPayload = await sendPayload(payload);
           if (info.kind === "final") {
-            await flushBufferedFinalAnswer();
+            deliveredFinalPayload = (await flushBufferedFinalAnswer()) || deliveredFinalPayload;
+            if (deliveredFinalPayload) {
+              await mirrorTelegramReplyToSessionTranscript({
+                sessionKey: ctxPayload.SessionKey,
+                agentId: route.agentId,
+                payload,
+              });
+            }
           }
         },
         onSkip: (_payload, info) => {
@@ -793,11 +846,19 @@ export const dispatchTelegramMessage = async ({
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
+    const fallbackPayload: ReplyPayload = { text: fallbackText };
     const result = await deliverReplies({
-      replies: [{ text: fallbackText }],
+      replies: [fallbackPayload],
       ...deliveryBaseOptions,
     });
     sentFallback = result.delivered;
+    if (sentFallback) {
+      await mirrorTelegramReplyToSessionTranscript({
+        sessionKey: ctxPayload.SessionKey,
+        agentId: route.agentId,
+        payload: fallbackPayload,
+      });
+    }
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;

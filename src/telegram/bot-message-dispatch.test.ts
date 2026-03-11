@@ -11,6 +11,7 @@ const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
+const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 
@@ -34,6 +35,7 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
   return {
     ...actual,
+    appendAssistantMessageToSessionTranscript,
     loadSessionStore,
     resolveStorePath,
   };
@@ -54,6 +56,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
     editMessageTelegram.mockClear();
+    appendAssistantMessageToSessionTranscript.mockClear();
+    appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true, sessionFile: "x" });
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
@@ -210,6 +214,72 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("mirrors final replies to the session transcript after direct Telegram delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello from Telegram" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      text: "Hello from Telegram",
+      mediaUrls: undefined,
+    });
+  });
+
+  it("mirrors preview-finalized Telegram replies to the session transcript", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Partial reply" });
+        await dispatcherOptions.deliver({ text: "Final reply" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+    });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Final reply",
+      expect.any(Object),
+    );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      text: "Final reply",
+      mediaUrls: undefined,
+    });
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
