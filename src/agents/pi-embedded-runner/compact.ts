@@ -582,8 +582,11 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      // Budget covers the full retry path: initial attempt + settle wait + retry.
+      // Using only EMBEDDED_COMPACTION_TIMEOUT_MS gives a 420s window (300s + 120s grace),
+      // which the watchdog can force-expire before the settle wait + retry finish (~540s total).
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
+        timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS + 2 * EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
       }),
     });
     try {
