@@ -61,6 +61,11 @@ import {
   resolvePluginDiscoveryProviders,
 } from "../plugins/provider-discovery.js";
 import {
+  hasGcpAdcCredentials,
+  resolveVertexProjectId,
+  resolveVertexRegion,
+} from "./anthropic-vertex-auth.js";
+import {
   MINIMAX_OAUTH_MARKER,
   QWEN_OAUTH_MARKER,
   isNonSecretApiKeyMarker,
@@ -527,11 +532,26 @@ export function normalizeProviders(params: {
     const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
     if (hasModels && !hasConfiguredApiKey) {
       const authMode =
-        normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
+        normalizedProvider.auth ??
+        (normalizedKey === "amazon-bedrock"
+          ? "aws-sdk"
+          : normalizedKey === "anthropic-vertex"
+            ? "gcp-adc"
+            : undefined);
       if (authMode === "aws-sdk") {
         const apiKey = resolveAwsSdkApiKeyVarName(env);
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
+      } else if (authMode === "gcp-adc") {
+        const projectVar = env.ANTHROPIC_VERTEX_PROJECT_ID?.trim()
+          ? "ANTHROPIC_VERTEX_PROJECT_ID"
+          : env.GOOGLE_CLOUD_PROJECT?.trim()
+            ? "GOOGLE_CLOUD_PROJECT"
+            : env.GCLOUD_PROJECT?.trim()
+              ? "GCLOUD_PROJECT"
+              : "GCP_ADC";
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey: projectVar };
       } else {
         const fromEnv = resolveEnvApiKeyVarName(normalizedKey, env);
         const apiKey = fromEnv ?? profileApiKey?.apiKey;
@@ -905,6 +925,13 @@ export async function resolveImplicitProviders(
       : implicitBedrock;
   }
 
+  if (!providers["anthropic-vertex"]) {
+    const implicitVertex = resolveImplicitAnthropicVertexProvider({ env });
+    if (implicitVertex) {
+      providers["anthropic-vertex"] = implicitVertex;
+    }
+  }
+
   return providers;
 }
 
@@ -963,6 +990,67 @@ export async function resolveImplicitCopilotProvider(params: {
   return {
     baseUrl,
     models: [],
+  } satisfies ProviderConfig;
+}
+
+/**
+ * Auto-discover anthropic-vertex when GCP project + ADC credentials are present.
+ * Follows the same implicit-provider pattern as Bedrock (resolveImplicitBedrockProvider).
+ * See: https://github.com/openclaw/openclaw/issues/6937
+ */
+export function resolveImplicitAnthropicVertexProvider(params: {
+  env?: NodeJS.ProcessEnv;
+}): ProviderConfig | null {
+  const env = params.env ?? process.env;
+  const project = resolveVertexProjectId(env);
+  if (!project) {
+    return null;
+  }
+  if (!hasGcpAdcCredentials(env)) {
+    return null;
+  }
+
+  const region = resolveVertexRegion(env);
+  const projectVar = env.ANTHROPIC_VERTEX_PROJECT_ID?.trim()
+    ? "ANTHROPIC_VERTEX_PROJECT_ID"
+    : env.GOOGLE_CLOUD_PROJECT?.trim()
+      ? "GOOGLE_CLOUD_PROJECT"
+      : "GCLOUD_PROJECT";
+
+  return {
+    baseUrl: `https://${region}-aiplatform.googleapis.com`,
+    api: "anthropic-messages",
+    auth: "gcp-adc",
+    apiKey: projectVar,
+    models: [
+      {
+        id: "claude-opus-4-6@20250514",
+        name: "Claude Opus 4.6 (Vertex AI)",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32000,
+      },
+      {
+        id: "claude-sonnet-4-6@20250514",
+        name: "Claude Sonnet 4.6 (Vertex AI)",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 16000,
+      },
+      {
+        id: "claude-haiku-4-5@20251001",
+        name: "Claude Haiku 4.5 (Vertex AI)",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      },
+    ],
   } satisfies ProviderConfig;
 }
 

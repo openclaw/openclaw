@@ -113,7 +113,13 @@ function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "gcp-adc" ||
+    auth === "oauth" ||
+    auth === "token"
+  ) {
     return auth;
   }
   return undefined;
@@ -171,6 +177,28 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
+function resolveGcpAdcAuthInfo(): ResolvedProviderAuth {
+  const applied = new Set(getShellEnvAppliedKeys());
+  const projectVar = process.env.ANTHROPIC_VERTEX_PROJECT_ID?.trim()
+    ? "ANTHROPIC_VERTEX_PROJECT_ID"
+    : process.env.GOOGLE_CLOUD_PROJECT?.trim()
+      ? "GOOGLE_CLOUD_PROJECT"
+      : process.env.GCLOUD_PROJECT?.trim()
+        ? "GCLOUD_PROJECT"
+        : undefined;
+  return {
+    apiKey: projectVar ?? "GCP_ADC",
+    mode: "gcp-adc",
+    source: projectVar
+      ? resolveEnvSourceLabel({
+          applied,
+          envVars: [projectVar],
+          label: projectVar,
+        })
+      : "gcp-adc default chain",
+  };
+}
+
 function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   const applied = new Set(getShellEnvAppliedKeys());
   if (process.env[AWS_BEARER_ENV]?.trim()) {
@@ -210,7 +238,7 @@ export type ResolvedProviderAuth = {
   apiKey?: string;
   profileId?: string;
   source: string;
-  mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  mode: "api-key" | "oauth" | "token" | "aws-sdk" | "gcp-adc";
 };
 
 export async function resolveApiKeyForProvider(params: {
@@ -246,6 +274,9 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+  if (authOverride === "gcp-adc") {
+    return resolveGcpAdcAuthInfo();
   }
 
   const order = resolveAuthProfileOrder({
@@ -299,6 +330,9 @@ export async function resolveApiKeyForProvider(params: {
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
   }
+  if (authOverride === undefined && normalized === "anthropic-vertex") {
+    return resolveGcpAdcAuthInfo();
+  }
 
   if (provider === "openai") {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
@@ -321,7 +355,14 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "gcp-adc"
+  | "unknown";
 
 export function resolveEnvApiKey(
   provider: string,
@@ -372,6 +413,9 @@ export function resolveModelAuthMode(
   if (authOverride === "aws-sdk") {
     return "aws-sdk";
   }
+  if (authOverride === "gcp-adc") {
+    return "gcp-adc";
+  }
 
   const authStore = store ?? ensureAuthProfileStore();
   const profiles = listProfilesForProvider(authStore, resolved);
@@ -400,6 +444,9 @@ export function resolveModelAuthMode(
 
   if (authOverride === undefined && normalizeProviderId(resolved) === "amazon-bedrock") {
     return "aws-sdk";
+  }
+  if (authOverride === undefined && normalizeProviderId(resolved) === "anthropic-vertex") {
+    return "gcp-adc";
   }
 
   const envKey = resolveEnvApiKey(resolved);

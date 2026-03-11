@@ -150,6 +150,7 @@ export function resolveThinkingDefaultForModel(params: {
   const isAnthropicFamilyModel =
     normalizedProvider === "anthropic" ||
     normalizedProvider === "amazon-bedrock" ||
+    normalizedProvider === "anthropic-vertex" ||
     modelLower.includes("anthropic/") ||
     modelLower.includes(".anthropic.");
   if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {

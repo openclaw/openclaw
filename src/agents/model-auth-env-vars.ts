@@ -38,6 +38,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   sglang: ["SGLANG_API_KEY"],
   vllm: ["VLLM_API_KEY"],
   kilocode: ["KILOCODE_API_KEY"],
+  "anthropic-vertex": ["ANTHROPIC_VERTEX_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
 };
 
 export function listKnownProviderEnvApiKeyNames(): string[] {
