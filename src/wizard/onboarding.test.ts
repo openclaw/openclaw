@@ -5,12 +5,15 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { ApplyAuthChoiceResult } from "../commands/auth-choice.apply.js";
 import { runOnboardingWizard } from "./onboarding.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
-const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
+const applyAuthChoice = vi.hoisted(() =>
+  vi.fn(async (args): Promise<ApplyAuthChoiceResult> => ({ config: args.config })),
+);
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(() => "openai"));
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
