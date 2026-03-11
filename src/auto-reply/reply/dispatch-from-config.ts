@@ -338,28 +338,8 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
-    const acpDispatch = await tryDispatchAcpReply({
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey: acpDispatchSessionKey,
-      inboundAudio,
-      sessionTtsAuto,
-      ttsChannel,
-      shouldRouteToOriginating,
-      originatingChannel,
-      originatingTo,
-      shouldSendToolSummaries,
-      bypassForCommand: bypassAcpForCommand,
-      onReplyStart: params.replyOptions?.onReplyStart,
-      recordProcessed,
-      markIdle,
-    });
-    if (acpDispatch) {
-      return acpDispatch;
-    }
 
-    // Run registered dispatch interceptors before starting the Agent.
+    // Run registered dispatch interceptors before starting the Agent (or ACP).
     // Interceptors can handle the message entirely (e.g. content filtering,
     // rate limiting, access control) — when intercepted, the Agent never starts.
     const pluginRegistry = getGlobalPluginRegistry();
@@ -412,6 +392,27 @@ export async function dispatchReplyFromConfig(params: {
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
         }
       }
+    }
+
+    const acpDispatch = await tryDispatchAcpReply({
+      ctx,
+      cfg,
+      dispatcher,
+      sessionKey: acpDispatchSessionKey,
+      inboundAudio,
+      sessionTtsAuto,
+      ttsChannel,
+      shouldRouteToOriginating,
+      originatingChannel,
+      originatingTo,
+      shouldSendToolSummaries,
+      bypassForCommand: bypassAcpForCommand,
+      onReplyStart: params.replyOptions?.onReplyStart,
+      recordProcessed,
+      markIdle,
+    });
+    if (acpDispatch) {
+      return acpDispatch;
     }
 
     // Track accumulated block text for TTS generation after streaming completes.

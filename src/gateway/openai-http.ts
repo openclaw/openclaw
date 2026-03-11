@@ -482,59 +482,75 @@ export async function handleOpenAiHttpRequest(
   // Run registered dispatch interceptors before starting the Agent.
   const pluginRegistry = getGlobalPluginRegistry();
   if (pluginRegistry && pluginRegistry.dispatchInterceptors.length > 0) {
-    for (const interceptor of pluginRegistry.dispatchInterceptors) {
-      const interceptorChunks: string[] = [];
-      const { intercepted } = await interceptor.intercept(
-        prompt.message ?? "",
-        {
-          sessionKey,
-          channelId: messageChannel,
-          userId: user,
-        },
-        {
-          sendBlock: (message: string) => {
-            interceptorChunks.push(message);
+    try {
+      for (const interceptor of pluginRegistry.dispatchInterceptors) {
+        const interceptorChunks: string[] = [];
+        const { intercepted } = await interceptor.intercept(
+          prompt.message ?? "",
+          {
+            sessionKey,
+            channelId: messageChannel,
+            userId: user,
           },
-          sendStreamChunk: (text: string) => {
-            interceptorChunks.push(text);
+          {
+            sendBlock: (message: string) => {
+              interceptorChunks.push(message);
+            },
+            sendStreamChunk: (text: string) => {
+              interceptorChunks.push(text);
+            },
+            sendStreamDone: () => {
+              // Collected via interceptorChunks.
+            },
           },
-          sendStreamDone: () => {
-            // Collected via interceptorChunks.
-          },
-        },
-      );
-      if (intercepted) {
-        const content = interceptorChunks.join("") || "Request intercepted.";
-        if (!stream) {
-          sendJson(res, 200, {
-            id: runId,
-            object: "chat.completion",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [
-              {
-                index: 0,
-                message: { role: "assistant", content },
-                finish_reason: "stop",
-              },
-            ],
-            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-          });
-        } else {
-          setSseHeaders(res);
-          const chunk = {
-            id: runId,
-            object: "chat.completion.chunk",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }],
-          };
-          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-          writeDone(res);
-          res.end();
+        );
+        if (intercepted) {
+          const content = interceptorChunks.join("") || "Request intercepted.";
+          if (!stream) {
+            sendJson(res, 200, {
+              id: runId,
+              object: "chat.completion",
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content },
+                  finish_reason: "stop",
+                },
+              ],
+              usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+            });
+          } else {
+            setSseHeaders(res);
+            const roleChunk = {
+              id: runId,
+              object: "chat.completion.chunk",
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+            };
+            res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
+            const contentChunk = {
+              id: runId,
+              object: "chat.completion.chunk",
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [{ index: 0, delta: { content }, finish_reason: null }],
+            };
+            res.write(`data: ${JSON.stringify(contentChunk)}\n\n`);
+            writeDone(res);
+            res.end();
+          }
+          return true;
         }
-        return true;
       }
+    } catch (err) {
+      logWarn(`openai-compat: dispatch interceptor failed: ${String(err)}`);
+      sendJson(res, 500, {
+        error: { message: "internal error", type: "api_error" },
+      });
+      return true;
     }
   }
 

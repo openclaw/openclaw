@@ -136,8 +136,21 @@ describe("OpenAI HTTP dispatch interceptor (e2e)", () => {
     const jsonChunks = data
       .filter((d) => d !== "[DONE]")
       .map((d) => JSON.parse(d) as Record<string, unknown>);
-    expect(jsonChunks.length).toBeGreaterThan(0);
+    expect(jsonChunks.length).toBe(2);
     expect(jsonChunks[0].object).toBe("chat.completion.chunk");
+
+    // First chunk: role only (no content) per OpenAI spec
+    const firstDelta = (jsonChunks[0].choices as Array<Record<string, unknown>>)[0].delta as Record<
+      string,
+      unknown
+    >;
+    expect(firstDelta.role).toBe("assistant");
+    expect(firstDelta.content).toBeUndefined();
+
+    // Second chunk: content only (no role)
+    const secondDelta = (jsonChunks[1].choices as Array<Record<string, unknown>>)[0]
+      .delta as Record<string, unknown>;
+    expect(secondDelta.content).toBe("Stream blocked.");
 
     const content = jsonChunks
       .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
