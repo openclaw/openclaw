@@ -16,17 +16,6 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
   matchSource?: TSource;
 };
 
-type CachedAllowListSet = {
-  size: number;
-  set: Set<string>;
-};
-
-const ALLOWLIST_SET_CACHE = new WeakMap<string[], CachedAllowListSet>();
-const SIMPLE_ALLOWLIST_CACHE = new WeakMap<
-  Array<string | number>,
-  { normalized: string[]; size: number; wildcard: boolean; set: Set<string> }
->();
-
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
 ): string {
@@ -82,13 +71,7 @@ export function resolveAllowlistMatchSimple(params: {
 }
 
 function resolveAllowListSet(allowList: string[]): Set<string> {
-  const cached = ALLOWLIST_SET_CACHE.get(allowList);
-  if (cached && cached.size === allowList.length) {
-    return cached.set;
-  }
-  const set = new Set(allowList);
-  ALLOWLIST_SET_CACHE.set(allowList, { size: allowList.length, set });
-  return set;
+  return new Set(allowList);
 }
 
 function resolveSimpleAllowFrom(allowFrom: Array<string | number>): {
@@ -97,19 +80,12 @@ function resolveSimpleAllowFrom(allowFrom: Array<string | number>): {
   wildcard: boolean;
   set: Set<string>;
 } {
-  const cached = SIMPLE_ALLOWLIST_CACHE.get(allowFrom);
-  if (cached && cached.size === allowFrom.length) {
-    return cached;
-  }
-
   const normalized = allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean);
   const set = new Set(normalized);
-  const built = {
+  return {
     normalized,
     size: allowFrom.length,
     wildcard: set.has("*"),
     set,
   };
-  SIMPLE_ALLOWLIST_CACHE.set(allowFrom, built);
-  return built;
 }
