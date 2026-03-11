@@ -131,6 +131,11 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /**
+   * When false, thread replies reuse the parent session instead of forking
+   * into per-thread sessions. Only affects Slack today. Default: true.
+   */
+  threadIsolation?: boolean;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
 };

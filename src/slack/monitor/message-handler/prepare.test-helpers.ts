@@ -38,6 +38,7 @@ export function createInboundSlackTestContext(params: {
     replyToMode: params.replyToMode ?? "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
+    threadIsolation: true,
     slashCommand: {
       enabled: false,
       name: "openclaw",

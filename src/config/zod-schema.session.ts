@@ -69,6 +69,7 @@ export const SessionSchema = z
       })
       .strict()
       .optional(),
+    threadIsolation: z.boolean().optional(),
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),

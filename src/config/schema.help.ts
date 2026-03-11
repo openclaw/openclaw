@@ -1132,6 +1132,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+  "session.threadIsolation":
+    "When false, thread replies reuse the parent session instead of forking into per-thread sessions. Only affects Slack. Thread history and starter context are still injected per-thread. Default: true.",
   "session.maintenance":
     "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":

@@ -296,10 +296,15 @@ function resolveSlackRoutingContext(params: {
     baseSessionKey: route.sessionKey,
     threadId: canonicalThreadId,
     parentSessionKey: canonicalThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
+    useSuffix: ctx.threadIsolation,
   });
   const sessionKey = threadKeys.sessionKey;
+  // When thread isolation is disabled, key history off threadTs so threads
+  // don't share the same history bucket on the now-shared session key.
   const historyKey =
-    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
+    isThreadReply && ctx.threadHistoryScope === "thread"
+      ? (ctx.threadIsolation ? sessionKey : threadTs ?? sessionKey)
+      : message.channel;
 
   return {
     route,
@@ -705,11 +710,16 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
-    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
+    // Include thread starter body for new sessions, or always when thread isolation
+    // is disabled (shared session means the "previous timestamp" check is unreliable
+    // since it reflects activity from any thread, not just this one).
+    ThreadStarterBody:
+      !ctx.threadIsolation || !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
     ThreadHistoryBody: threadHistoryBody,
     IsFirstThreadTurn:
-      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+      isThreadReply && threadTs && (!ctx.threadIsolation || !threadSessionPreviousTimestamp)
+        ? true
+        : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,

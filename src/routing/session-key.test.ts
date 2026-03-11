@@ -5,9 +5,11 @@ import {
   isCronSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentPeerSessionKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  resolveThreadSessionKeys,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -128,5 +130,62 @@ describe("isValidAgentId", () => {
     expect(isValidAgentId("Agent not found: xyz")).toBe(false);
     expect(isValidAgentId("../../../etc/passwd")).toBe(false);
     expect(isValidAgentId("a".repeat(65))).toBe(false);
+  });
+});
+
+describe("resolveThreadSessionKeys", () => {
+  const base = "agent:main:main";
+
+  it("appends thread suffix by default", () => {
+    const result = resolveThreadSessionKeys({ baseSessionKey: base, threadId: "12345" });
+    expect(result.sessionKey).toBe(`${base}:thread:12345`);
+  });
+
+  it("respects useSuffix: false to disable thread forking", () => {
+    const result = resolveThreadSessionKeys({
+      baseSessionKey: base,
+      threadId: "12345",
+      useSuffix: false,
+    });
+    expect(result.sessionKey).toBe(base);
+  });
+
+  it("respects useSuffix: true (explicit)", () => {
+    const result = resolveThreadSessionKeys({
+      baseSessionKey: base,
+      threadId: "12345",
+      useSuffix: true,
+    });
+    expect(result.sessionKey).toBe(`${base}:thread:12345`);
+  });
+
+  it("returns base key when no threadId", () => {
+    const result = resolveThreadSessionKeys({ baseSessionKey: base });
+    expect(result.sessionKey).toBe(base);
+  });
+
+  it("preserves parentSessionKey", () => {
+    const result = resolveThreadSessionKeys({
+      baseSessionKey: base,
+      threadId: "12345",
+      parentSessionKey: "agent:main:main",
+      useSuffix: false,
+    });
+    expect(result.sessionKey).toBe(base);
+    expect(result.parentSessionKey).toBe("agent:main:main");
+  });
+});
+
+describe("buildAgentPeerSessionKey", () => {
+  it("returns channel-specific key by default for non-direct peers", () => {
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "channel",
+      peerId: "C123",
+    });
+    expect(key).toContain("slack");
+    expect(key).toContain("channel");
+    expect(key).toContain("c123");
   });
 });

@@ -76,7 +76,11 @@ export async function resolveSlackThreadContextData(params: {
     sessionKey: params.sessionKey,
   });
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  // When thread isolation is disabled, the shared session's "previous timestamp"
+  // reflects activity from any thread — not just this one. Always fetch thread
+  // history in that case so each thread gets its conversation context.
+  const shouldFetchHistory = !threadSessionPreviousTimestamp || !params.ctx.threadIsolation;
+  if (threadInitialHistoryLimit > 0 && shouldFetchHistory) {
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,

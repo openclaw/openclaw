@@ -503,6 +503,150 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
+  // ── threadIsolation: false ─────────────────────────────────────────
+  // When session.threadIsolation is false, threads reuse the parent session
+  // key but still get per-thread history/starter context via threadTs.
+
+  function createThreadIsolationOffCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
+    const ctx = createInboundSlackCtx({
+      cfg: params.cfg,
+      appClient: { conversations: { replies: params.replies } } as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+    });
+    // Disable thread isolation so threads share the parent session
+    ctx.threadIsolation = false;
+    return ctx;
+  }
+
+  it("does not append :thread: suffix when threadIsolation is false", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "100.000" }],
+    });
+    const ctx = createThreadIsolationOffCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(ctx, {
+      text: "reply in thread",
+      ts: "101.000",
+    });
+
+    expect(prepared).toBeTruthy();
+    // Session key should NOT contain :thread: when isolation is off
+    expect(prepared!.ctxPayload.SessionKey).not.toContain(":thread:");
+  });
+
+  it("uses unique historyKey per threadTs when threadIsolation is false", async () => {
+    const { storePath } = makeTmpStorePath();
+    const repliesA = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter A", user: "U2", ts: "100.000" }],
+    });
+    const repliesB = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter B", user: "U2", ts: "200.000" }],
+    });
+
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+
+    const ctxA = createThreadIsolationOffCtx({ cfg, replies: repliesA });
+    ctxA.resolveUserName = async () => ({ name: "Alice" });
+    ctxA.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const ctxB = createThreadIsolationOffCtx({ cfg, replies: repliesB });
+    ctxB.resolveUserName = async () => ({ name: "Alice" });
+    ctxB.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const preparedA = await prepareThreadMessage(ctxA, {
+      text: "reply A",
+      ts: "101.000",
+      thread_ts: "100.000",
+    });
+    const preparedB = await prepareThreadMessage(ctxB, {
+      text: "reply B",
+      ts: "201.000",
+      thread_ts: "200.000",
+    });
+
+    expect(preparedA).toBeTruthy();
+    expect(preparedB).toBeTruthy();
+    // Both share the same session key (no :thread: suffix)
+    expect(preparedA!.ctxPayload.SessionKey).toBe(preparedB!.ctxPayload.SessionKey);
+    // But historyKeys must differ so they don't share history buckets
+    expect(preparedA!.historyKey).not.toBe(preparedB!.historyKey);
+  });
+
+  it("still injects thread starter and history when session exists and threadIsolation is false", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    // Pre-create a session entry to simulate an existing session
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    // With threadIsolation off, the session key is the base key (no :thread: suffix)
+    const sessionKey = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "300.000",
+      useSuffix: false,
+    }).sessionKey;
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "parent message", user: "U2", ts: "300.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "parent message", user: "U2", ts: "300.000" },
+          { text: "old reply", user: "U1", ts: "300.500" },
+          { text: "new reply", user: "U1", ts: "301.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+
+    const ctx = createThreadIsolationOffCtx({ cfg, replies });
+    ctx.resolveUserName = async (id: string) => ({
+      name: id === "U1" ? "Alice" : "Bob",
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(ctx, {
+      text: "new reply",
+      ts: "301.000",
+      thread_ts: "300.000",
+    });
+
+    expect(prepared).toBeTruthy();
+    // Thread starter should always be injected when isolation is off,
+    // even though the session already exists
+    expect(prepared!.ctxPayload.ThreadStarterBody).toContain("parent message");
+    // IsFirstThreadTurn should be set since the thread hasn't had its own
+    // previous activity marker
+    expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
+    // Thread history should be fetched even with existing session
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("old reply");
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",
@@ -614,6 +758,7 @@ describe("prepareSlackMessage sender prefix", () => {
       replyToMode: "off",
       threadHistoryScope: "channel",
       threadInheritParent: false,
+      threadIsolation: true,
       slashCommand: params.slashCommand,
       textLimit: 2000,
       ackReactionScope: "off",
