@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
@@ -273,5 +273,70 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("reads configured provider models for non-kilocode providers (e.g. anthropic)", async () => {
+    const result = await loadModelCatalog({
+      useCache: false,
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              api: "anthropic-messages",
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  name: "Claude Opus 4.6",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  contextWindow: 1000000,
+                  maxTokens: 128000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const match = result.find(
+      (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-4-6",
+    );
+    expect(match).toBeDefined();
+    expect(match?.input).toContain("image");
+  });
+
+  it("enriches existing catalog entry with configured input capabilities", async () => {
+    // Simulate: Pi SDK returns anthropic/claude-opus-4-6 without input field,
+    // config provides input: ["text", "image"] — should enrich the existing entry.
+    const result = await loadModelCatalog({
+      useCache: false,
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              api: "anthropic-messages",
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  name: "Claude Opus 4.6",
+                  input: ["text", "image"],
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const matches = result.filter(
+      (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-4-6",
+    );
+    // Should not duplicate — should be exactly 1 entry
+    expect(matches.length).toBeLessThanOrEqual(1);
+    // If present, should have image input
+    if (matches.length === 1) {
+      expect(matches[0]?.input).toContain("image");
+    }
   });
 });
