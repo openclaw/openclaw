@@ -93,7 +93,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/session reset auth: split conversation `/new` and `/reset` handling away from the admin-only `sessions.reset` control-plane RPC so write-scoped gateway callers can no longer reach the privileged reset path through `agent`. Thanks @tdjackey for reporting.
 - Telegram/final preview delivery followup: keep ambiguous missing-`message_id` finals only when a preview was already visible, while first-preview/no-id cases still fall back so Telegram users do not lose the final reply. (#41932) thanks @hougangdev.
 - Agents/Azure OpenAI Responses: include the `azure-openai` provider in the Responses API store override so Azure OpenAI multi-turn cron jobs and embedded agent runs no longer fail with HTTP 400 "store is set to false". (#42934, fixes #42800) Thanks @ademczuk.
-- Agents/context pruning: prune image-only tool results during soft-trim, align context-pruning coverage with the new tool-result contract, and extend historical image cleanup to the same screenshot-heavy session path. (#42212) Thanks @MoerAI.
+- Agents/context pruning: prune image-only tool results during soft-trim, align context-pruning coverage with the new tool-result contract, and extend historical image cleanup to the same screenshot-heavy session path. (#43045) Thanks @MoerAI.
 
 ## 2026.3.8
 
