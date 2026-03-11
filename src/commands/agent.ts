@@ -15,8 +15,7 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
+import { resolveSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
@@ -1000,22 +999,16 @@ async function agentCommandInternal(
       }
     }
     if (sessionEntry) {
-      const authProfileId = sessionEntry.authProfileOverride;
-      if (authProfileId) {
-        const entry = sessionEntry;
-        const store = ensureAuthProfileStore();
-        const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== provider) {
-          if (sessionStore && sessionKey) {
-            await clearSessionAuthProfileOverride({
-              sessionEntry: entry,
-              sessionStore,
-              sessionKey,
-              storePath,
-            });
-          }
-        }
-      }
+      await resolveSessionAuthProfileOverride({
+        cfg,
+        provider,
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isNewSession,
+      });
     }
 
     if (!resolvedThinkLevel) {

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "../cron/isolated-agent.mocks.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -686,6 +687,49 @@ describe("agentCommand", () => {
       expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
       expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
       expect(entry?.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
+  it("auto-selects auth profile for provider-backed local sessions", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:openrouter-local";
+      mockConfig(home, store, {
+        model: { primary: "openrouter/auto" },
+        models: { "openrouter/auto": {} },
+      });
+
+      vi.mocked(ensureAuthProfileStore).mockReturnValue({
+        version: 1,
+        profiles: {
+          "openrouter:default": {
+            provider: "openrouter",
+            type: "api_key",
+            key: "sk-openrouter-test",
+            source: "config",
+          },
+        },
+      } as never);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey,
+        },
+        runtime,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.authProfileId).toBe("openrouter:default");
+      expect(callArgs?.authProfileIdSource).toBe("auto");
+
+      const saved = readSessionStore<{
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+      }>(store);
+      expect(saved[sessionKey]?.authProfileOverride).toBe("openrouter:default");
+      expect(saved[sessionKey]?.authProfileOverrideSource).toBe("auto");
     });
   });
 
