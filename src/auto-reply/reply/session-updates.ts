@@ -223,18 +223,19 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? {
-        ...buildWorkspaceSkillSnapshot(workspaceDir, {
-          config: cfg,
-          skillFilter,
-          eligibility: { remote: remoteEligibility },
-          snapshotVersion,
-        }),
-        eligibilitySignature,
-      }
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
+  const skillsSnapshot =
+    nextEntry?.skillsSnapshot ??
+    (shouldRefreshSnapshot
+      ? {
+          ...buildWorkspaceSkillSnapshot(workspaceDir, {
+            config: cfg,
+            skillFilter,
+            eligibility: { remote: remoteEligibility },
+            snapshotVersion,
+          }),
+          eligibilitySignature,
+        }
+      : isFirstTurnInSession
         ? undefined
         : {
             ...buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -244,7 +245,7 @@ export async function ensureSkillSnapshot(params: {
               snapshotVersion,
             }),
             eligibilitySignature,
-          }));
+          });
   if (
     skillsSnapshot &&
     sessionStore &&
