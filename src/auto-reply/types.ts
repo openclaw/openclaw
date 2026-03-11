@@ -32,6 +32,12 @@ export type GetReplyOptions = {
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
+  /**
+   * Called when the typing TTL expires while the agent run is still in progress.
+   * Use this to send a "still processing" feedback message to the user so they
+   * know the request is being handled even though the typing indicator has stopped.
+   */
+  onTypingTtlExpired?: () => Promise<void> | void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */

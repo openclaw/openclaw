@@ -403,12 +403,32 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    // When the typing TTL fires the agent is still running but the typing
+    // indicator has stopped. Send a short "still processing" note so the user
+    // isn't left wondering whether their message was received.
+    // Only inject the default handler when typing is active and the caller
+    // hasn't supplied their own handler.
+    const onTypingTtlExpired =
+      !typing.suppressTyping && !params.replyOptions?.onTypingTtlExpired
+        ? () => {
+            const noticePayload: ReplyPayload = {
+              text: "⏳ Still working on it, this might take a little while longer…",
+            };
+            if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+              void sendPayloadAsync(noticePayload);
+            } else {
+              dispatcher.sendBlockReply(noticePayload);
+            }
+          }
+        : params.replyOptions?.onTypingTtlExpired;
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onTypingTtlExpired,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
