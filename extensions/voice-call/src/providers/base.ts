@@ -56,7 +56,7 @@ export interface VoiceCallProvider {
    * Play TTS audio to the caller.
    * The provider should handle streaming if supported.
    */
-  playTts(input: PlayTtsInput): Promise<void>;
+  playTts(input: PlayTtsInput): Promise<void | { partial?: boolean }>;
 
   /**
    * Start listening for user speech (activate STT).
