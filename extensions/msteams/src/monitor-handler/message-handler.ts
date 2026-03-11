@@ -479,19 +479,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (!graphTeamId) {
           throw new Error("Could not resolve team group ID");
         }
-        const parentMsg = await fetchChannelMessage({
-          token: graphToken,
-          teamId: graphTeamId,
-          channelId: conversationId,
-          messageId: conversationMessageId,
-        });
-        const replies = await fetchThreadReplies({
-          token: graphToken,
-          teamId: graphTeamId,
-          channelId: conversationId,
-          messageId: conversationMessageId,
-          top: 50,
-        });
+        const [parentMsg, replies] = await Promise.all([
+          fetchChannelMessage({
+            token: graphToken,
+            teamId: graphTeamId,
+            channelId: conversationId,
+            messageId: conversationMessageId,
+          }),
+          fetchThreadReplies({
+            token: graphToken,
+            teamId: graphTeamId,
+            channelId: conversationId,
+            messageId: conversationMessageId,
+            top: 50,
+          }),
+        ]);
         const threadMessages: string[] = [];
         if (parentMsg?.body?.content) {
           const sender = parentMsg.from?.user?.displayName ?? "Unknown";
