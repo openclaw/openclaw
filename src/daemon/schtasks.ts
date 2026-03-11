@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { relaunchGatewayScheduledTask } from "../infra/windows-task-restart.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -318,11 +319,20 @@ export async function restartScheduledTask({
   env,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
-  await execSchtasks(["/End", "/TN", taskName]);
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
+  const resolvedEnv = env ?? (process.env as GatewayServiceEnv);
+  const taskName = resolveTaskName(resolvedEnv);
+  const end = await execSchtasks(["/End", "/TN", taskName]);
+  if (end.code !== 0 && !isTaskNotRunning(end)) {
+    throw new Error(`schtasks end failed: ${end.stderr || end.stdout}`.trim());
+  }
+
+  const relaunch = relaunchGatewayScheduledTask(resolvedEnv);
+  if (!relaunch.ok) {
+    const res = await execSchtasks(["/Run", "/TN", taskName]);
+    if (res.code !== 0) {
+      const relaunchDetail = relaunch.detail ? `helper=${relaunch.detail}; ` : "";
+      throw new Error(`schtasks run failed: ${relaunchDetail}${res.stderr || res.stdout}`.trim());
+    }
   }
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
 }
