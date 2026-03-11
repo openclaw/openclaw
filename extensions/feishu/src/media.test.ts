@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -5,10 +6,15 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
+const execFileMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", () => ({
+  execFile: execFileMock,
+}));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -105,7 +111,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=media for opus", async () => {
+  it("uses msg_type=audio for opus", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -121,7 +127,57 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it("transcodes mp3 to opus and includes duration metadata", async () => {
+    vi.spyOn(fs.promises, "mkdtemp").mockResolvedValue("/tmp/openclaw-feishu-audio-test");
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fs.promises, "readFile").mockResolvedValue(Buffer.from("opus-audio"));
+    vi.spyOn(fs.promises, "rm").mockResolvedValue(undefined);
+
+    execFileMock.mockImplementation(
+      (
+        file: string,
+        _args: readonly string[],
+        callback: (err: Error | null, result?: { stdout: string; stderr: string }) => void,
+      ) => {
+        const cb = callback;
+        if (file === "ffmpeg") {
+          cb(null, { stdout: "", stderr: "" });
+          return undefined;
+        }
+        if (file === "ffprobe") {
+          cb(null, { stdout: "10.0\n", stderr: "" });
+          return undefined;
+        }
+        cb(new Error(`unexpected binary: ${String(file)}`));
+        return undefined;
+      },
+    );
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("audio"),
+      fileName: "voice.mp3",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_type: "opus",
+          file_name: "voice.ogg",
+          duration: 10000,
+        }),
+      }),
+    );
+
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
       }),
     );
   });

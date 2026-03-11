@@ -21,6 +21,14 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+function stripInternalTtsTags(text: string): string {
+  return text
+    .replace(/\[\[tts:text\]\][\s\S]*?\[\[\/tts:text\]\]/gi, "")
+    .replace(/\[\[tts:[^\]]+\]\]/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
@@ -137,7 +145,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
+        const text = stripInternalTtsTags(payload.text ?? "");
         if (!text.trim()) {
           return;
         }
@@ -218,11 +226,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onModelSelected: prefixContext.onModelSelected,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-            if (!payload.text || payload.text === lastPartial) {
+            const text = stripInternalTtsTags(payload.text ?? "");
+            if (!text || text === lastPartial) {
               return;
             }
-            lastPartial = payload.text;
-            streamText = payload.text;
+            lastPartial = text;
+            streamText = text;
             partialUpdateQueue = partialUpdateQueue.then(async () => {
               if (streamingStartPromise) {
                 await streamingStartPromise;

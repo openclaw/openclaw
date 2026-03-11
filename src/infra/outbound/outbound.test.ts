@@ -853,6 +853,16 @@ describe("normalizeOutboundPayloads", () => {
     const normalized = normalizeOutboundPayloads([{ channelData }]);
     expect(normalized).toEqual([{ text: "", mediaUrls: [], channelData }]);
   });
+
+  it("strips internal tts tags from outbound text", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text:
+          "[[tts:provider=edge voice=zh-CN-XiaoxiaoNeural]]Visible line\n[[tts:text]]Spoken only[[/tts:text]]",
+      },
+    ]);
+    expect(normalized).toEqual([{ text: "Visible line", mediaUrls: [] }]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {

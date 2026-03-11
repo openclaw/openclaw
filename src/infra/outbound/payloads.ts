@@ -37,9 +37,18 @@ function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>):
   return merged;
 }
 
+function stripInternalTtsTags(text: string): string {
+  return text
+    .replace(/\[\[tts:text\]\][\s\S]*?\[\[\/tts:text\]\]/gi, "")
+    .replace(/\[\[tts:[^\]]+\]\]/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.flatMap((payload) => {
     const parsed = parseReplyDirectives(payload.text ?? "");
+    const cleanedText = stripInternalTtsTags(parsed.text ?? "");
     const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
     const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
     const mergedMedia = mergeMediaUrls(
@@ -50,7 +59,7 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
     const next: ReplyPayload = {
       ...payload,
-      text: parsed.text ?? "",
+      text: cleanedText,
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,

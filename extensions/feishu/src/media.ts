@@ -1,13 +1,19 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { execFile } from "node:child_process";
 import { Readable } from "stream";
+import { promisify } from "node:util";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+
+const execFileAsync = promisify(execFile);
+const FEISHU_IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"];
+const FEISHU_AUDIO_TRANSCODE_EXTS = [".mp3", ".m4a", ".wav", ".aac", ".flac", ".webm"];
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -307,8 +313,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for audio/video files, "file" for documents */
-  msgType?: "file" | "media";
+  /** Use "audio" for audio, "media" for video, "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
@@ -383,6 +389,89 @@ export function detectFileType(
   }
 }
 
+async function transcodeAudioToFeishuOpus(params: {
+  buffer: Buffer;
+  fileName: string;
+}): Promise<{ buffer: Buffer; fileName: string; durationMs?: number } | null> {
+  const ext = path.extname(params.fileName).toLowerCase();
+  if (!FEISHU_AUDIO_TRANSCODE_EXTS.includes(ext)) {
+    return null;
+  }
+
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-audio-"));
+  const inputPath = path.join(tmpDir, `input${ext || ".bin"}`);
+  const outputBase = path.basename(params.fileName, ext) || "audio";
+  const outputPath = path.join(tmpDir, `${outputBase}.ogg`);
+
+  try {
+    await fs.promises.writeFile(inputPath, params.buffer);
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-loglevel",
+      "error",
+      "-i",
+      inputPath,
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "24k",
+      "-ar",
+      "24000",
+      "-ac",
+      "1",
+      outputPath,
+    ]);
+
+    const durationMs = await probeMediaDurationMs(outputPath);
+    return {
+      buffer: await fs.promises.readFile(outputPath),
+      fileName: `${outputBase}.ogg`,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    };
+  } catch {
+    return null;
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function probeMediaDurationMs(filePath: string): Promise<number | undefined> {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=nk=1:nw=1",
+      filePath,
+    ]);
+    const seconds = Number.parseFloat(stdout.trim());
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return undefined;
+    }
+    return Math.max(1, Math.ceil(seconds * 1000));
+  } catch {
+    return undefined;
+  }
+}
+
+async function probeBufferDurationMs(params: {
+  buffer: Buffer;
+  fileName: string;
+}): Promise<number | undefined> {
+  const ext = path.extname(params.fileName).toLowerCase() || ".bin";
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-probe-"));
+  const filePath = path.join(tmpDir, `probe${ext}`);
+
+  try {
+    await fs.promises.writeFile(filePath, params.buffer);
+    return await probeMediaDurationMs(filePath);
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer
  */
@@ -421,27 +510,35 @@ export async function sendMediaFeishu(params: {
 
   // Determine if it's an image based on extension
   const ext = path.extname(name).toLowerCase();
-  const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const isImage = FEISHU_IMAGE_EXTS.includes(ext);
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
   } else {
-    const fileType = detectFileType(name);
+    const transcodedAudio = await transcodeAudioToFeishuOpus({ buffer, fileName: name });
+    const normalizedBuffer = transcodedAudio?.buffer ?? buffer;
+    const normalizedName = transcodedAudio?.fileName ?? name;
+    const fileType = detectFileType(normalizedName);
+    const durationMs =
+      fileType === "opus" || fileType === "mp4"
+        ? (transcodedAudio?.durationMs ??
+          (await probeBufferDurationMs({ buffer: normalizedBuffer, fileName: normalizedName })))
+        : undefined;
     const { fileKey } = await uploadFileFeishu({
       cfg,
-      file: buffer,
-      fileName: name,
+      file: normalizedBuffer,
+      fileName: normalizedName,
       fileType,
+      duration: durationMs,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType,
       replyToMessageId,
       accountId,
     });

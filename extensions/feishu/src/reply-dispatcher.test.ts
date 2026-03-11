@@ -113,4 +113,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
+
+  it("strips internal tts tags from streaming partial updates", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({
+      text: "[[tts:provider=edge]]Visible text[[tts:text]]Spoken only[[/tts:text]]",
+    });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].update).toHaveBeenCalledWith("Visible text");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("Visible text");
+  });
 });
