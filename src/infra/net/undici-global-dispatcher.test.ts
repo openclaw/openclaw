@@ -192,4 +192,17 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
+
+  it("reinstalls env proxy if an external change later reverts the dispatcher to Agent", () => {
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+
+    ensureGlobalUndiciEnvProxyDispatcher();
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+
+    setCurrentDispatcher(new Agent());
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
 });

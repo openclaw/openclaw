@@ -75,8 +75,14 @@ function resolveCurrentDispatcherKind(): DispatcherKind | null {
 
 export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   const shouldUseEnvProxy = hasEnvHttpProxyConfigured("https");
-  if (!shouldUseEnvProxy || lastAppliedProxyBootstrap) {
+  if (!shouldUseEnvProxy) {
     return;
+  }
+  if (lastAppliedProxyBootstrap) {
+    if (resolveCurrentDispatcherKind() === "env-proxy") {
+      return;
+    }
+    lastAppliedProxyBootstrap = false;
   }
   const currentKind = resolveCurrentDispatcherKind();
   if (currentKind === null) {
