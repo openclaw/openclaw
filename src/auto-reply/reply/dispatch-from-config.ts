@@ -349,12 +349,18 @@ export async function dispatchReplyFromConfig(params: {
       ? {
           ...dispatcher,
           sendBlockReply: (payload) => {
-            const text = payload.text?.trim();
-            if (!text) {
+            const text = payload.text;
+            if (!text?.trim()) {
               return dispatcher.sendBlockReply(payload);
             }
-            acpDraftText = acpDraftText ? `${acpDraftText}\n${text}` : text;
-            void params.replyOptions?.onPartialReply?.({ ...payload, text: acpDraftText });
+            acpDraftText += text;
+            params.replyOptions
+              ?.onPartialReply?.({ ...payload, text: acpDraftText })
+              ?.catch((err: unknown) => {
+                logVerbose(
+                  `dispatch-from-config: onPartialReply error during ACP draft stream: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
             return true;
           },
         }
