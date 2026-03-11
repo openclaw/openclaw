@@ -121,6 +121,11 @@ export type TelegramAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /**
+   * Max chars of Telegram quote context to include in reply_parameters.quote.
+   * When unset, Telegram falls back to its native auto-generated quote snippet.
+   */
+  replyContextLength?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
   /**

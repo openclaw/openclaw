@@ -75,12 +75,21 @@ export async function sendTelegramWithThreadFallback<T>(params: {
 
 export function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
+  replyQuoteText?: string;
   thread?: TelegramThreadSpec | null;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
   if (opts?.replyToMessageId) {
-    params.reply_to_message_id = opts.replyToMessageId;
+    const replyQuoteText = opts.replyQuoteText?.trim();
+    if (replyQuoteText) {
+      params.reply_parameters = {
+        message_id: opts.replyToMessageId,
+        quote: replyQuoteText,
+      };
+    } else {
+      params.reply_to_message_id = opts.replyToMessageId;
+    }
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
@@ -105,6 +114,7 @@ export async function sendTelegramText(
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
+    replyQuoteText: opts?.replyQuoteText,
     thread: opts?.thread,
   });
   // Add link_preview_options when link preview is disabled.

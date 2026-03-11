@@ -576,8 +576,10 @@ export async function deliverReplies(params: {
   onVoiceRecording?: () => Promise<void> | void;
   /** Controls whether link previews are shown. Default: true (previews enabled). */
   linkPreview?: boolean;
-  /** Optional quote text for Telegram reply_parameters. */
+  /** Optional fallback quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** Optional quote text keyed by reply target message id. */
+  replyQuoteTextByMessageId?: Record<string, string>;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -641,6 +643,10 @@ export async function deliverReplies(params: {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyToId =
         params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+      const replyQuoteText =
+        replyToId != null
+          ? (params.replyQuoteTextByMessageId?.[String(replyToId)] ?? params.replyQuoteText)
+          : params.replyQuoteText;
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
@@ -654,7 +660,7 @@ export async function deliverReplies(params: {
           chunkText,
           replyText: reply.text || "",
           replyMarkup,
-          replyQuoteText: params.replyQuoteText,
+          replyQuoteText,
           linkPreview: params.linkPreview,
           replyToId,
           replyToMode: params.replyToMode,
@@ -673,7 +679,7 @@ export async function deliverReplies(params: {
           chunkText,
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,
-          replyQuoteText: params.replyQuoteText,
+          replyQuoteText,
           replyMarkup,
           replyToId,
           replyToMode: params.replyToMode,

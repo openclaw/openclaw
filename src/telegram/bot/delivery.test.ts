@@ -583,7 +583,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses reply_to_message_id when quote text is provided", async () => {
+  it("uses reply_parameters.quote when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
@@ -603,14 +603,17 @@ describe("deliverReplies", () => {
       "123",
       expect.any(String),
       expect.objectContaining({
-        reply_to_message_id: 500,
+        reply_parameters: {
+          message_id: 500,
+          quote: "quoted text",
+        },
       }),
     );
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
       expect.not.objectContaining({
-        reply_parameters: expect.anything(),
+        reply_to_message_id: 500,
       }),
     );
   });
@@ -681,7 +684,10 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
-        reply_to_message_id: 77,
+        reply_parameters: {
+          message_id: 77,
+          quote: "quoted context",
+        },
         reply_markup: {
           inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
         },

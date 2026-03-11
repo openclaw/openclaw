@@ -110,6 +110,21 @@ describe("web search provider config", () => {
   });
 });
 
+describe("telegram reply context config", () => {
+  it("accepts replyContextLength", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          botToken: "fake",
+          replyContextLength: 2048,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
