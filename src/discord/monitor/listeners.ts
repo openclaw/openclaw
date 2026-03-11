@@ -529,11 +529,11 @@ async function handleDiscordReactionEvent(
         contextKey,
       });
     };
-    const canEmitReactionCommand = (params: {
+    const canEmitReactionCommand = (options: {
       channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
     }) => {
-      const userAllowList = params.channelConfig?.users ?? guildInfo?.users;
-      const roleAllowList = params.channelConfig?.roles ?? guildInfo?.roles;
+      const userAllowList = options.channelConfig?.users ?? guildInfo?.users;
+      const roleAllowList = options.channelConfig?.roles ?? guildInfo?.roles;
       const hasRestriction =
         (Array.isArray(userAllowList) && userAllowList.length > 0) ||
         (Array.isArray(roleAllowList) && roleAllowList.length > 0);

@@ -1308,6 +1308,39 @@ describe("discord DM reaction handling", () => {
     );
     expect(commandCalls).toHaveLength(0);
   });
+
+  it("emits triage command intents when allowNameMatching authorizes by username", async () => {
+    enqueueSystemEventSpy.mockClear();
+
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      botAsAuthor: true,
+      emojiName: "✅",
+      userId: "user-not-in-id-allowlist",
+      messageId: "msg-name-match",
+      guild: { name: "Test Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        allowNameMatching: true,
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "allowlist",
+            users: ["testuser"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    const commandCalls = enqueueSystemEventSpy.mock.calls.filter(([text]) =>
+      String(text).includes("Reaction command: accept (✅)"),
+    );
+    expect(commandCalls).toHaveLength(1);
+  });
 });
 
 describe("discord reaction notification modes", () => {
