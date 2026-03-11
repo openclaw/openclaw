@@ -433,6 +433,200 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+function extractBalancedJsonPrefix(raw: string): string | null {
+  let start = 0;
+  while (start < raw.length && /\s/.test(raw[start] ?? "")) {
+    start += 1;
+  }
+  const startChar = raw[start];
+  if (startChar !== "{" && startChar !== "[") {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (char === undefined) {
+      break;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function tryParseMalformedToolCallArguments(raw: string): Record<string, unknown> | undefined {
+  if (!raw.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    const jsonPrefix = extractBalancedJsonPrefix(raw);
+    if (!jsonPrefix) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(jsonPrefix) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function repairToolCallArgumentsInMessage(
+  message: unknown,
+  contentIndex: number,
+  repairedArgs: Record<string, unknown>,
+): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  const block = content[contentIndex];
+  if (!block || typeof block !== "object") {
+    return;
+  }
+  const typedBlock = block as { type?: unknown; arguments?: unknown };
+  if (!isToolCallBlockType(typedBlock.type)) {
+    return;
+  }
+  typedBlock.arguments = repairedArgs;
+}
+
+function repairMalformedToolCallArgumentsInMessage(
+  message: unknown,
+  repairedArgsByIndex: Map<number, Record<string, unknown>>,
+): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const [index, repairedArgs] of repairedArgsByIndex.entries()) {
+    repairToolCallArgumentsInMessage(message, index, repairedArgs);
+  }
+}
+
+function wrapStreamRepairMalformedToolCallArguments(
+  stream: ReturnType<typeof streamSimple>,
+): ReturnType<typeof streamSimple> {
+  const partialJsonByIndex = new Map<number, string>();
+  const repairedArgsByIndex = new Map<number, Record<string, unknown>>();
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    repairMalformedToolCallArgumentsInMessage(message, repairedArgsByIndex);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as {
+              type?: unknown;
+              contentIndex?: unknown;
+              delta?: unknown;
+              partial?: unknown;
+              message?: unknown;
+              toolCall?: unknown;
+            };
+            if (
+              typeof event.contentIndex === "number" &&
+              Number.isInteger(event.contentIndex) &&
+              event.type === "toolcall_delta" &&
+              typeof event.delta === "string"
+            ) {
+              const nextPartialJson =
+                (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
+              partialJsonByIndex.set(event.contentIndex, nextPartialJson);
+              const repairedArgs = tryParseMalformedToolCallArguments(nextPartialJson);
+              if (repairedArgs) {
+                repairedArgsByIndex.set(event.contentIndex, repairedArgs);
+                repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
+                repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
+              }
+            }
+            if (
+              typeof event.contentIndex === "number" &&
+              Number.isInteger(event.contentIndex) &&
+              event.type === "toolcall_end"
+            ) {
+              const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
+              if (repairedArgs) {
+                if (event.toolCall && typeof event.toolCall === "object") {
+                  (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
+                }
+                repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
+              }
+            }
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+
+  return stream;
+}
+
+export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamRepairMalformedToolCallArguments(stream),
+      );
+    }
+    return wrapStreamRepairMalformedToolCallArguments(maybeStream);
+  };
+}
+
 // ---------------------------------------------------------------------------
 // xAI / Grok: decode HTML entities in tool call arguments
 // ---------------------------------------------------------------------------
@@ -1372,6 +1566,12 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
         allowedToolNames,
       );
+
+      if (params.model.api === "anthropic-messages") {
+        activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
+          activeSession.agent.streamFn,
+        );
+      }
 
       if (isXaiProvider(params.provider, params.modelId)) {
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
