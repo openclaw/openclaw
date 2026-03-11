@@ -480,12 +480,17 @@ export async function buildRestoreOperations(params: {
           candidateDirs,
           workspaceAssetSourceKeys,
         );
+        // Only fall back to positional matching when there is exactly 1 workspace
+        // (unambiguous). With multiple workspaces, positional mapping can silently
+        // restore to the wrong directory when counts match by coincidence.
         const workspaceTargets =
           workspaceTargetsBySourcePath ??
-          selectWorkspaceTargets({
-            workspaceAssetCount: workspaceAssets.length,
-            workspaceDirs: candidateDirs,
-          });
+          (workspaceAssets.length === 1
+            ? selectWorkspaceTargets({
+                workspaceAssetCount: workspaceAssets.length,
+                workspaceDirs: candidateDirs,
+              })
+            : undefined);
         if (!workspaceTargets) {
           continue;
         }

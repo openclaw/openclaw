@@ -79,6 +79,36 @@ export async function resolveInstallationId(params: {
     createdAt: new Date().toISOString(),
   };
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  try {
+    // Use exclusive create (wx) to avoid races: two concurrent processes
+    // that both see ENOENT will only let one writer succeed.
+    await fs.writeFile(filePath, `${JSON.stringify(record, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "EEXIST"
+    ) {
+      // Another process won the race — read the file it created.
+      const existing = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(existing) as Partial<InstallationRecord>;
+      if (
+        parsed.schemaVersion === 1 &&
+        typeof parsed.installationId === "string" &&
+        isValidInstallationId(parsed.installationId)
+      ) {
+        return parsed.installationId;
+      }
+      throw new Error(
+        `Invalid backup installation record at ${filePath}. Delete or repair it before continuing.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   return record.installationId;
 }
