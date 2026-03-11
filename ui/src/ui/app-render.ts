@@ -68,6 +68,7 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { navigateToSessionChat } from "./session-chat-navigation.ts";
 import {
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
@@ -445,6 +446,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionsIncludeUnknown = next.includeUnknown;
                 },
                 onRefresh: () => loadSessions(state),
+                onSelectSession: (key) => navigateToSessionChat(state, key),
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSessionAndRefresh(state, key),
               })

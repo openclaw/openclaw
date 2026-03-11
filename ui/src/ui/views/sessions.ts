@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { handleSessionLinkClick } from "../session-link-click.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 
 export type SessionsProps = {
@@ -20,6 +21,7 @@ export type SessionsProps = {
     includeUnknown: boolean;
   }) => void;
   onRefresh: () => void;
+  onSelectSession: (key: string) => void;
   onPatch: (
     key: string,
     patch: {
@@ -206,7 +208,14 @@ export function renderSessions(props: SessionsProps) {
                 <div class="muted">No sessions found.</div>
               `
             : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                renderRow(
+                  row,
+                  props.basePath,
+                  props.onSelectSession,
+                  props.onPatch,
+                  props.onDelete,
+                  props.loading,
+                ),
               )
         }
       </div>
@@ -217,6 +226,7 @@ export function renderSessions(props: SessionsProps) {
 function renderRow(
   row: GatewaySessionRow,
   basePath: string,
+  onSelectSession: SessionsProps["onSelectSession"],
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
   disabled: boolean,
@@ -244,7 +254,16 @@ function renderRow(
   return html`
     <div class="table-row">
       <div class="mono session-key-cell">
-        ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+        ${
+          canLink
+            ? html`<a
+              href=${chatUrl}
+              class="session-link"
+              @click=${(event: MouseEvent) =>
+                handleSessionLinkClick(event, onSelectSession, row.key)}
+            >${row.key}</a>`
+            : row.key
+        }
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>
       <div>

@@ -25,6 +25,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     basePath: "",
     onFiltersChange: () => undefined,
     onRefresh: () => undefined,
+    onSelectSession: () => undefined,
     onPatch: () => undefined,
     onDelete: () => undefined,
   };
