@@ -198,6 +198,42 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     const effectiveDmAllowFrom = access.effectiveAllowFrom;
 
+    // Build conversation reference for proactive replies.
+    const agent = activity.recipient;
+    const conversationRef: StoredConversationReference = {
+      activityId: activity.id,
+      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+      agent,
+      bot: agent ? { id: agent.id, name: agent.name } : undefined,
+      conversation: {
+        id: conversationId,
+        conversationType,
+        tenantId: conversation?.tenantId,
+      },
+      teamId,
+      channelId: activity.channelId,
+      serviceUrl: activity.serviceUrl,
+      locale: activity.locale,
+    };
+    let conversationRefPersisted = false;
+    const persistConversationRef = () => {
+      if (conversationRefPersisted) {
+        return;
+      }
+      conversationRefPersisted = true;
+      conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+        log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
+        });
+      });
+    };
+
+    // Persist first-DM conversation reference before pairing/allowlist early returns
+    // so pairing approval notifications can be delivered immediately.
+    if (isDirectMessage) {
+      persistConversationRef();
+    }
+
     if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
       if (access.reason === "dmPolicy=disabled") {
         log.debug?.("dropping dm (dms disabled)");
@@ -317,28 +353,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    // Build conversation reference for proactive replies.
-    const agent = activity.recipient;
-    const conversationRef: StoredConversationReference = {
-      activityId: activity.id,
-      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
-      agent,
-      bot: agent ? { id: agent.id, name: agent.name } : undefined,
-      conversation: {
-        id: conversationId,
-        conversationType,
-        tenantId: conversation?.tenantId,
-      },
-      teamId,
-      channelId: activity.channelId,
-      serviceUrl: activity.serviceUrl,
-      locale: activity.locale,
-    };
-    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
-      log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
-      });
-    });
+    persistConversationRef();
 
     const pollVote = extractMSTeamsPollVote(activity);
     if (pollVote) {
