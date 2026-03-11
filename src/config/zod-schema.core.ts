@@ -1,14 +1,17 @@
 import path from "node:path";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isValidFileSecretRefId } from "../secrets/ref-contract.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
+  isValidFileSecretRefId,
+} from "../secrets/ref-contract.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -65,12 +68,7 @@ const ExecSecretRefSchema = z
         SECRET_PROVIDER_ALIAS_PATTERN,
         'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
       ),
-    id: z
-      .string()
-      .regex(
-        EXEC_SECRET_REF_ID_PATTERN,
-        'Exec secret reference id must match /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/ (example: "vault/openai/api-key").',
-      ),
+    id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
   })
   .strict();
 
@@ -198,6 +196,7 @@ export const ModelCompatSchema = z
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
     requiresMistralToolIds: z.boolean().optional(),
+    requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -234,7 +233,7 @@ export const ModelProviderSchema = z
       .optional(),
     api: ModelApiSchema.optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
   })

@@ -120,6 +120,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "modelstudio",
+    label: "Alibaba Cloud Model Studio",
+    hint: "Coding Plan API key (CN / Global)",
+    choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -132,10 +138,10 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["ai-gateway-api-key"],
   },
   {
-    value: "opencode-zen",
-    label: "OpenCode Zen",
-    hint: "API key",
-    choices: ["opencode-zen"],
+    value: "opencode",
+    label: "OpenCode",
+    hint: "Shared API key for Zen + Go catalogs",
+    choices: ["opencode-zen", "opencode-go"],
   },
   {
     value: "xiaomi",
@@ -193,6 +199,8 @@ const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
   "venice-api-key": "Privacy-focused inference (uncensored models)",
   "together-api-key": "Access to Llama, DeepSeek, Qwen, and more open models",
   "huggingface-api-key": "Inference Providers — OpenAI-compatible chat",
+  "opencode-zen": "Shared OpenCode key; curated Zen catalog",
+  "opencode-go": "Shared OpenCode key; Kimi/GLM/MiniMax Go catalog",
 };
 
 const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = {
@@ -200,6 +208,8 @@ const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = 
   "moonshot-api-key-cn": "Kimi API key (.cn)",
   "kimi-code-api-key": "Kimi Code API key (subscription)",
   "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
+  "opencode-zen": "OpenCode Zen catalog",
+  "opencode-go": "OpenCode Go catalog",
 };
 
 function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
@@ -283,7 +293,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   { value: "apiKey", label: "Anthropic API key" },
   {
     value: "opencode-zen",
-    label: "OpenCode Zen (multi-model proxy)",
+    label: "OpenCode Zen catalog",
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
   },
   { value: "minimax-api", label: "MiniMax M2.5" },
@@ -296,6 +306,17 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "minimax-api-lightning",
     label: "MiniMax M2.5 Highspeed",
     hint: "Official fast tier (legacy: Lightning)",
+  },
+  { value: "qianfan-api-key", label: "Qianfan API key" },
+  {
+    value: "modelstudio-api-key-cn",
+    label: "Coding Plan API Key for China (subscription)",
+    hint: "Endpoint: coding.dashscope.aliyuncs.com",
+  },
+  {
+    value: "modelstudio-api-key",
+    label: "Coding Plan API Key for Global/Intl (subscription)",
+    hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];
