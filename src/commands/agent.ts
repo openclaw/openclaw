@@ -345,6 +345,7 @@ function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
+  const attemptStartedAt = Date.now();
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
@@ -354,6 +355,16 @@ function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  let firstAssistantLogged = false;
+  const onAgentEventWithPerf = (evt: { stream: string; data?: Record<string, unknown> }) => {
+    if (!firstAssistantLogged && evt.stream === "assistant") {
+      firstAssistantLogged = true;
+      console.log(
+        `[agent] runId=${params.runId} provider=${params.providerOverride} model=${params.modelOverride} first-assistant ms=${Date.now() - attemptStartedAt}`,
+      );
+    }
+    params.onAgentEvent(evt);
+  };
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
@@ -495,9 +506,14 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    onAgentEvent: params.onAgentEvent,
+    onAgentEvent: onAgentEventWithPerf,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
+  }).then((result) => {
+    console.log(
+      `[agent] runId=${params.runId} provider=${params.providerOverride} model=${params.modelOverride} attempt-complete ms=${Date.now() - attemptStartedAt} payloads=${result.payloads?.length ?? 0}`,
+    );
+    return result;
   });
 }
 
@@ -680,6 +696,7 @@ async function agentCommandInternal(
   runtime: RuntimeEnv = defaultRuntime,
   deps: CliDeps = createDefaultDeps(),
 ) {
+  const commandStartedAt = Date.now();
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
@@ -706,6 +723,9 @@ async function agentCommandInternal(
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
+  console.log(
+    `[agent] runId=${runId} prepared ms=${Date.now() - commandStartedAt} sessionId=${sessionId} sessionKey=${sessionKey ?? "<none>"} agent=${sessionAgentId} timeoutMs=${timeoutMs}`,
+  );
 
   try {
     if (opts.deliver === true) {
@@ -1109,6 +1129,9 @@ async function agentCommandInternal(
         run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
+          console.log(
+            `[agent] runId=${runId} attempt=${fallbackAttemptIndex} provider=${providerOverride} model=${modelOverride} fallbackRetry=${isFallbackRetry}`,
+          );
           return runAgentAttempt({
             providerOverride,
             modelOverride,
@@ -1202,6 +1225,9 @@ async function agentCommandInternal(
     }
 
     const payloads = result.payloads ?? [];
+    console.log(
+      `[agent] runId=${runId} completed totalMs=${Date.now() - commandStartedAt} payloads=${payloads.length} provider=${fallbackProvider} model=${fallbackModel}`,
+    );
     return await deliverAgentCommandResult({
       cfg,
       deps,

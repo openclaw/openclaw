@@ -2085,15 +2085,21 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
+      const cleanupStartedAt = Date.now();
       removeToolResultContextGuard?.();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,
         clearPendingOnTimeout: true,
       });
+      const flushedAt = Date.now();
       session?.dispose();
+      const disposedAt = Date.now();
       releaseWsSession(params.sessionId);
       await sessionLock.release();
+      console.log(
+        `[embedded-attempt] runId=${params.runId} cleanup waitForIdleMs=${flushedAt - cleanupStartedAt} disposeMs=${disposedAt - flushedAt} releaseLockMs=${Date.now() - disposedAt} totalCleanupMs=${Date.now() - cleanupStartedAt}`,
+      );
     }
   } finally {
     restoreSkillEnv?.();
