@@ -405,6 +405,73 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("rewrites covered nested workspace paths when only parent workspace asset is restored", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const sourceWorkspaceRoot = path.join(sourceHome.home, "workspace-root");
+    const sourceNestedWorkspace = path.join(sourceWorkspaceRoot, "agent-nested");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-workspace-nested-"),
+    );
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.mkdir(path.join(sourceStateDir, "credentials"), { recursive: true });
+      await fs.mkdir(sourceNestedWorkspace, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: sourceWorkspaceRoot,
+            },
+            list: [
+              {
+                id: "nested",
+                workspace: sourceNestedWorkspace,
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials", "oauth.json"), "{}", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(sourceWorkspaceRoot, "SOUL.md"), "# root\n", "utf8");
+      await fs.writeFile(path.join(sourceNestedWorkspace, "NESTED.md"), "# nested\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-covered-nested-home-");
+      setActiveHome(targetHome);
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+      });
+
+      const targetWorkspaceRoot = path.join(targetHome, "workspace-root");
+      const targetNestedWorkspace = path.join(targetWorkspaceRoot, "agent-nested");
+      expect(await fs.readFile(path.join(targetWorkspaceRoot, "SOUL.md"), "utf8")).toBe("# root\n");
+      expect(await fs.readFile(path.join(targetNestedWorkspace, "NESTED.md"), "utf8")).toBe(
+        "# nested\n",
+      );
+      const restoredSnapshot = await readConfigFileSnapshot();
+      expect(restoredSnapshot.valid).toBe(true);
+      expect(restoredSnapshot.config?.agents?.defaults?.workspace).toBe(targetWorkspaceRoot);
+      expect(restoredSnapshot.config?.agents?.list?.[0]?.workspace).toBe(targetNestedWorkspace);
+      expect(restored.updatedConfigWorkspacePaths).toBe(2);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("rewrites covered config workspace paths when backup stateDir is a symlink alias", async () => {
     const sourceHomeDir = sourceHome.home;
     const sourceStateLinkDir = path.join(sourceHomeDir, "state-link");

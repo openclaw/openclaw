@@ -392,9 +392,32 @@ function rewriteWorkspacePathsInConfig(
     if (!workspace?.trim()) {
       return workspace;
     }
-    const mapped = buildPathAliases(normalizeConfigWorkspacePath(workspace))
+    const workspaceAliases = buildPathAliases(normalizeConfigWorkspacePath(workspace));
+    const exactMapped = workspaceAliases
       .map((candidate) => rewrites.get(candidate))
       .find((candidate): candidate is string => typeof candidate === "string");
+    let mapped = exactMapped;
+    if (!mapped) {
+      let nestedMapped: { sourceAlias: string; rewritePath: string } | undefined;
+      for (const workspaceAlias of workspaceAliases) {
+        for (const [sourceAlias, rewriteRoot] of rewrites) {
+          if (!isPathWithin(workspaceAlias, sourceAlias)) {
+            continue;
+          }
+          const relative = path.relative(sourceAlias, workspaceAlias);
+          if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+            continue;
+          }
+          if (!nestedMapped || sourceAlias.length > nestedMapped.sourceAlias.length) {
+            nestedMapped = {
+              sourceAlias,
+              rewritePath: path.resolve(rewriteRoot, relative),
+            };
+          }
+        }
+      }
+      mapped = nestedMapped?.rewritePath;
+    }
     if (!mapped || mapped === workspace) {
       return workspace;
     }
@@ -574,6 +597,60 @@ async function buildCoveredWorkspaceRewrites(params: {
   return rewrites;
 }
 
+function resolveWorkspaceRewritePathFromTargets(params: {
+  sourcePath: string;
+  workspaceTargets: Map<string, WorkspaceRestoreTarget>;
+}): string | undefined {
+  const normalizedSourcePath = path.resolve(params.sourcePath);
+  const directTarget = params.workspaceTargets.get(normalizedSourcePath);
+  if (directTarget) {
+    return path.resolve(directTarget.rewritePath);
+  }
+
+  let bestMatch: { sourcePath: string; rewritePath: string } | undefined;
+  for (const [workspaceSourcePath, target] of params.workspaceTargets) {
+    if (!isPathWithin(normalizedSourcePath, workspaceSourcePath)) {
+      continue;
+    }
+    const relative = path.relative(workspaceSourcePath, normalizedSourcePath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      continue;
+    }
+
+    if (!bestMatch || workspaceSourcePath.length > bestMatch.sourcePath.length) {
+      bestMatch = {
+        sourcePath: workspaceSourcePath,
+        rewritePath: path.resolve(target.rewritePath, relative),
+      };
+    }
+  }
+
+  return bestMatch?.rewritePath;
+}
+
+async function buildWorkspaceRewritesFromTargets(params: {
+  manifestWorkspaceDirs: string[] | undefined;
+  workspaceTargets: Map<string, WorkspaceRestoreTarget>;
+}): Promise<Map<string, string>> {
+  const rewrites = new Map<string, string>();
+  for (const workspaceDir of params.manifestWorkspaceDirs ?? []) {
+    const rewritePath = resolveWorkspaceRewritePathFromTargets({
+      sourcePath: workspaceDir,
+      workspaceTargets: params.workspaceTargets,
+    });
+    if (!rewritePath) {
+      continue;
+    }
+    for (const alias of buildPathAliases(workspaceDir)) {
+      rewrites.set(alias, rewritePath);
+    }
+    for (const alias of buildPathAliases(await canonicalizePath(path.resolve(workspaceDir)))) {
+      rewrites.set(alias, rewritePath);
+    }
+  }
+  return rewrites;
+}
+
 async function buildRestoreItems(params: {
   archivePath: string;
   includeWorkspace: boolean;
@@ -624,7 +701,14 @@ async function buildRestoreItems(params: {
     backupStateCanonicalDir: stateAsset?.sourcePath,
     currentStateDir,
   });
+  const targetWorkspaceRewrites = await buildWorkspaceRewritesFromTargets({
+    manifestWorkspaceDirs: manifest.paths?.workspaceDirs,
+    workspaceTargets,
+  });
   for (const [sourceAlias, rewritePath] of coveredWorkspaceRewrites) {
+    workspaceRewrites.set(sourceAlias, rewritePath);
+  }
+  for (const [sourceAlias, rewritePath] of targetWorkspaceRewrites) {
     workspaceRewrites.set(sourceAlias, rewritePath);
   }
   await Promise.all(
@@ -666,8 +750,19 @@ async function buildRestoreItems(params: {
 
     if (asset.kind === "workspace") {
       const workspaceTarget = workspaceTargets.get(path.resolve(asset.sourcePath));
-      const rewritePath = workspaceTarget?.rewritePath ?? path.resolve(targetPath);
+      const rewritePath =
+        resolveWorkspaceRewritePathFromTargets({
+          sourcePath: asset.sourcePath,
+          workspaceTargets,
+        }) ??
+        workspaceTarget?.rewritePath ??
+        path.resolve(targetPath);
       for (const alias of buildPathAliases(asset.sourcePath)) {
+        workspaceRewrites.set(alias, rewritePath);
+      }
+      for (const alias of buildPathAliases(
+        await canonicalizePath(path.resolve(asset.sourcePath)),
+      )) {
         workspaceRewrites.set(alias, rewritePath);
       }
       for (const alias of workspaceSourceAliases.get(await canonicalizePath(asset.sourcePath)) ??
