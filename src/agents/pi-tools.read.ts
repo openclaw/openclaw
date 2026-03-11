@@ -718,6 +718,12 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
  * overwriting it.  This prevents silent data loss when multiple isolated
  * sessions (e.g. cron jobs) write to the same file concurrently.
  *
+ * **Atomicity note:** `fs.appendFile` reduces but does not eliminate data
+ * races for concurrent appenders.  On POSIX systems, `O_APPEND` writes
+ * are atomic up to `PIPE_BUF` (4 KB on Linux/macOS), but larger appends
+ * may interleave.  Callers that need strict ordering should use external
+ * coordination (e.g. a file lock or write queue).
+ *
  * The upstream `createWriteTool` from `@mariozechner/pi-coding-agent` does
  * not support append — this wrapper intercepts the parameter at the OpenClaw
  * layer and performs the append via `fs.appendFile` before delegating other
