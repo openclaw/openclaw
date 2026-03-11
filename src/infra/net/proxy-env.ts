@@ -17,12 +17,12 @@ export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boo
   return false;
 }
 
-function trimNonEmpty(value: string | undefined): string | undefined {
+function normalizeProxyEnvValue(value: string | undefined): string | null | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /**
@@ -35,12 +35,16 @@ export function resolveEnvHttpProxyUrl(
   protocol: "http" | "https",
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const httpProxy = trimNonEmpty(env.http_proxy) ?? trimNonEmpty(env.HTTP_PROXY);
-  const httpsProxy = trimNonEmpty(env.https_proxy) ?? trimNonEmpty(env.HTTPS_PROXY);
+  const lowerHttpProxy = normalizeProxyEnvValue(env.http_proxy);
+  const lowerHttpsProxy = normalizeProxyEnvValue(env.https_proxy);
+  const httpProxy =
+    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeProxyEnvValue(env.HTTP_PROXY);
+  const httpsProxy =
+    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeProxyEnvValue(env.HTTPS_PROXY);
   if (protocol === "https") {
-    return httpsProxy ?? httpProxy;
+    return httpsProxy ?? httpProxy ?? undefined;
   }
-  return httpProxy;
+  return httpProxy ?? undefined;
 }
 
 export function hasEnvHttpProxyConfigured(
