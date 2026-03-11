@@ -36,6 +36,7 @@ const log = createSubsystemLogger("model-fallback");
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  previousFailureReason?: FailoverReason;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -521,6 +522,7 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let previousFailureReason: FailoverReason | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
 
   const hasFallbackCandidates = candidates.length > 1;
@@ -646,11 +648,21 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
+    const effectiveOptions: ModelFallbackRunOptions | undefined = (() => {
+      if (!previousFailureReason && !runOptions) {
+        return undefined;
+      }
+      const opts: ModelFallbackRunOptions = { ...runOptions };
+      if (previousFailureReason) {
+        opts.previousFailureReason = previousFailureReason;
+      }
+      return opts;
+    })();
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: effectiveOptions,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -715,11 +727,12 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
+      previousFailureReason = described.reason ?? "unknown";
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
         error: described.message,
-        reason: described.reason ?? "unknown",
+        reason: previousFailureReason,
         status: described.status,
         code: described.code,
       });
