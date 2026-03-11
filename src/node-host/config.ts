@@ -9,6 +9,8 @@ export type NodeHostGatewayConfig = {
   port?: number;
   tls?: boolean;
   tlsFingerprint?: string;
+  /** HTTP headers for WebSocket upgrade (e.g. Cloudflare Zero Trust). */
+  headers?: Record<string, string>;
 };
 
 export type NodeHostConfig = {

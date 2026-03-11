@@ -55,8 +55,26 @@ Options:
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
+- `--header <header>`: HTTP header for WebSocket upgrade (`Name: value`); repeatable
 - `--node-id <id>`: Override node id (clears pairing token)
 - `--display-name <name>`: Override the node display name
+
+## Reverse proxy auth (e.g. Cloudflare Zero Trust)
+
+When the gateway is behind Cloudflare Zero Trust or another proxy that requires custom headers on the WebSocket upgrade, use repeatable `--header`:
+
+```bash
+openclaw node run --host gateway.example.com --port 443 --tls \
+  --header "CF-Access-Client-Id: your-client-id" \
+  --header "CF-Access-Client-Secret: your-client-secret"
+```
+
+For an installed service, you can pass the same `--header` flags to `openclaw node install`, or set environment variables so secrets are not stored in config or command lines:
+
+- `OPENCLAW_NODE_HEADERS`: JSON object of header name to value, e.g. `{"CF-Access-Client-Id":"id","CF-Access-Client-Secret":"secret"}`
+- `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`: Automatically added as `CF-Access-Client-Id` and `CF-Access-Client-Secret` on the WebSocket request
+
+Configure these in the service environment (launchd `EnvironmentVariables`, systemd `Environment=`, or Task Scheduler env) so the node host sends the headers when it connects.
 
 ## Gateway auth for node host
 
@@ -83,6 +101,7 @@ Options:
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
+- `--header <header>`: HTTP header for WebSocket upgrade (`Name: value`); repeatable
 - `--node-id <id>`: Override node id (clears pairing token)
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node` or `bun`)

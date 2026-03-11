@@ -36,12 +36,14 @@ import {
   parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
+import { parseHeaderArgs } from "./header-args.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
   tls?: boolean;
   tlsFingerprint?: string;
+  header?: string[];
   nodeId?: string;
   displayName?: string;
   runtime?: string;
@@ -110,6 +112,17 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
+  let headers: Record<string, string> | undefined;
+  try {
+    headers = parseHeaderArgs(opts.header);
+  } catch (err) {
+    fail(String(err));
+    return;
+  }
+  if (Object.keys(headers).length === 0) {
+    headers = undefined;
+  }
+
   const service = resolveNodeService();
   let loaded = false;
   try {
@@ -142,6 +155,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       port: port ?? 18789,
       tls,
       tlsFingerprint: tlsFingerprint || undefined,
+      headers,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
       runtime: runtimeRaw,

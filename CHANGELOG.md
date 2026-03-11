@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - iOS/Home canvas: replace floating controls with a docked toolbar, make the bundled home scaffold adapt to smaller phones, and open chat in the resolved main session instead of a synthetic `ios` session. (#42456) Thanks @ngutman.
 - Discord/auto threads: add `autoArchiveDuration` channel config for auto-created threads so Discord thread archiving can stay at 1 hour, 1 day, 3 days, or 1 week instead of always using the 1-hour default. (#35065) Thanks @davidguttman.
 - macOS/chat UI: add a chat model picker, persist explicit thinking-level selections across relaunch, and harden provider-aware session model sync for the shared chat composer. (#42314) Thanks @ImLukeF.
+- Node run/install: add repeatable `--header` for WebSocket upgrade headers (e.g. Cloudflare Zero Trust). Support `OPENCLAW_NODE_HEADERS` and `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` env vars for the installed service. Fixes #42792.
 
 ### Breaking
 

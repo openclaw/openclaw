@@ -23,6 +23,7 @@ export async function buildNodeInstallPlan(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  headers?: Record<string, string>;
   runtime: NodeDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
@@ -41,6 +42,7 @@ export async function buildNodeInstallPlan(params: {
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,
     displayName: params.displayName,
+    headers: params.headers,
     dev: devMode,
     runtime: params.runtime,
     nodePath,

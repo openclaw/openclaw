@@ -12,7 +12,7 @@ vi.mock("node:fs/promises", () => ({
   realpath: fsMocks.realpath,
 }));
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -86,5 +86,46 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+});
+
+describe("resolveNodeProgramArguments", () => {
+  it("includes --header args when headers are provided", async () => {
+    const argv1 = path.resolve("/tmp/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveNodeProgramArguments({
+      host: "gateway.example.com",
+      port: 443,
+      tls: true,
+      headers: { "CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "secret" },
+      runtime: "node",
+    });
+
+    const args = result.programArguments;
+    expect(args).toContain("--header");
+    const headerIdx = args.indexOf("--header");
+    expect(headerIdx).toBeGreaterThanOrEqual(0);
+    expect(args[headerIdx + 1]).toBe("CF-Access-Client-Id: id");
+    expect(args[headerIdx + 3]).toBe("CF-Access-Client-Secret: secret");
+  });
+
+  it("omits --header when headers is empty", async () => {
+    const argv1 = path.resolve("/tmp/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveNodeProgramArguments({
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+    });
+
+    expect(result.programArguments).not.toContain("--header");
   });
 });

@@ -12,11 +12,14 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+import { parseHeaderArgs } from "./header-args.js";
 
 function parsePortWithFallback(value: unknown, fallback: number): number {
   const parsed = parsePort(value);
   return parsed ?? fallback;
 }
+
+export { parseHeaderArgs } from "./header-args.js";
 
 export function registerNodeCli(program: Command) {
   const node = program
@@ -43,6 +46,11 @@ export function registerNodeCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
+    .option(
+      "--header <header>",
+      "HTTP header for WebSocket upgrade (Name: value); repeatable",
+      (v: string, prev: string[] = []) => [...prev, v],
+    )
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {
@@ -50,11 +58,13 @@ export function registerNodeCli(program: Command) {
       const host =
         (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
       const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+      const headers = parseHeaderArgs(opts.header as string[] | undefined);
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
         gatewayTls: Boolean(opts.tls) || Boolean(opts.tlsFingerprint),
         gatewayTlsFingerprint: opts.tlsFingerprint,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         nodeId: opts.nodeId,
         displayName: opts.displayName,
       });
@@ -75,6 +85,11 @@ export function registerNodeCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
+    .option(
+      "--header <header>",
+      "HTTP header for WebSocket upgrade (Name: value); repeatable",
+      (v: string, prev: string[] = []) => [...prev, v],
+    )
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")

@@ -31,6 +31,8 @@ type NodeHostRunOptions = {
   gatewayTlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  /** HTTP headers for WebSocket upgrade (e.g. Cloudflare Zero Trust). */
+  headers?: Record<string, string>;
 };
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -141,6 +143,45 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
   return nextConfig;
 }
 
+/** Merge headers from config, opts, and env (opts overrides config, env overrides both). */
+function resolveNodeHostHeaders(params: {
+  configHeaders?: Record<string, string>;
+  optsHeaders?: Record<string, string>;
+  env?: NodeJS.ProcessEnv;
+}): Record<string, string> {
+  const env = params.env ?? process.env;
+  const out: Record<string, string> = { ...params.configHeaders };
+  if (params.optsHeaders) {
+    for (const [k, v] of Object.entries(params.optsHeaders)) {
+      out[k] = v;
+    }
+  }
+  const openclawHeaders = env.OPENCLAW_NODE_HEADERS?.trim();
+  if (openclawHeaders) {
+    try {
+      const parsed = JSON.parse(openclawHeaders) as Record<string, string>;
+      if (typeof parsed === "object" && parsed !== null) {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof k === "string" && typeof v === "string") {
+            out[k] = v;
+          }
+        }
+      }
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+  const cfId = env.CF_ACCESS_CLIENT_ID?.trim();
+  const cfSecret = env.CF_ACCESS_CLIENT_SECRET?.trim();
+  if (cfId) {
+    out["CF-Access-Client-Id"] = cfId;
+  }
+  if (cfSecret) {
+    out["CF-Access-Client-Secret"] = cfSecret;
+  }
+  return out;
+}
+
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
   const nodeId = opts.nodeId?.trim() || config.nodeId;
@@ -156,9 +197,16 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
+    headers: opts.headers !== undefined ? opts.headers : config.gateway?.headers,
   };
   config.gateway = gateway;
   await saveNodeHostConfig(config);
+
+  const headers = resolveNodeHostHeaders({
+    configHeaders: config.gateway?.headers,
+    optsHeaders: opts.headers,
+    env: process.env,
+  });
 
   const cfg = loadConfig();
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
@@ -199,6 +247,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     permissions: undefined,
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     onEvent: (evt) => {
       if (evt.event !== "node.invoke.request") {
         return;
