@@ -119,4 +119,34 @@ describe("redactSensitiveText", () => {
     });
     expect(output).toBe(input);
   });
+
+  it("applies custom patterns alongside defaults when explicit patterns provided", () => {
+    // Use a simple pattern that compileSafeRegex won't reject
+    const ssnPattern = String.raw`\b(\d{3}-\d{2}-\d{4})\b`;
+    const input = "SSN 123-45-6789 and key sk-1234567890abcdef";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [...defaults, ssnPattern],
+    });
+    // SSN should be redacted by custom pattern
+    expect(output).not.toContain("123-45-6789");
+    // API key should still be redacted by default pattern
+    expect(output).not.toContain("sk-1234567890abcdef");
+    expect(output).toContain("sk-123…cdef");
+  });
+
+  it("applies default patterns when called with mode-only options (no explicit patterns)", () => {
+    // This tests the fix for #42982: callers passing { mode: "tools" }
+    // without patterns should still get default pattern redaction.
+    const input = "OPENAI_API_KEY=sk-1234567890abcdef";
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
+  });
+
+  it("applies default patterns when called with no options at all", () => {
+    const input = "OPENAI_API_KEY=sk-1234567890abcdef";
+    const output = redactSensitiveText(input);
+    // Default mode is "tools", default patterns should apply
+    expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
+  });
 });

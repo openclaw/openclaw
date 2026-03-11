@@ -65,6 +65,19 @@ function resolvePatterns(value?: string[]): RegExp[] {
   return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
+/**
+ * Resolve patterns that merge defaults with user-configured patterns.
+ * Config `redactPatterns` are additive — they extend (not replace) the
+ * built-in secret detection patterns so API keys, tokens, etc. are never
+ * accidentally dropped when users add custom patterns like email regexes.
+ */
+function resolveConfigPatterns(configPatterns?: string[]): RegExp[] {
+  if (!configPatterns?.length) {
+    return resolvePatterns(DEFAULT_REDACT_PATTERNS);
+  }
+  return resolvePatterns([...DEFAULT_REDACT_PATTERNS, ...configPatterns]);
+}
+
 function maskToken(token: string): string {
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
@@ -127,11 +140,17 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") {
+  // Always load config so user-configured redactPatterns and mode are
+  // respected even when callers provide partial options (#42982).
+  const configResolved = resolveConfigRedaction();
+  const mode = normalizeMode(options?.mode ?? configResolved.mode);
+  if (mode === "off") {
     return text;
   }
-  const patterns = resolvePatterns(resolved.patterns);
+  // Explicit patterns take precedence; otherwise merge defaults + config.
+  const patterns = options?.patterns
+    ? resolvePatterns(options.patterns)
+    : resolveConfigPatterns(configResolved.patterns);
   if (!patterns.length) {
     return text;
   }
