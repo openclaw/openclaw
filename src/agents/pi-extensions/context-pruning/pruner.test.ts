@@ -109,4 +109,119 @@ describe("pruneContextMessages", () => {
     });
     expect(result).toHaveLength(2);
   });
+
+  it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([
+        { type: "text", text: "A".repeat(120) },
+        { type: "image", data: "img", mimeType: "image/png" },
+        { type: "text", text: "B".repeat(120) },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 200,
+          headChars: 170,
+          tailChars: 30,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 16,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toHaveLength(1);
+    expect(toolResult.content[0]).toMatchObject({ type: "text" });
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[image removed during context pruning]");
+    expect(textBlock.text).toContain(
+      "[Tool result trimmed: kept first 170 chars and last 30 chars",
+    );
+  });
+
+  it("replaces image-only tool results with placeholders even when text trimming is not needed", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([{ type: "image", data: "img", mimeType: "image/png" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "[image removed during context pruning]" },
+    ]);
+  });
+
+  it("hard-clears image-containing tool results once ratios require clearing", () => {
+    const messages: AgentMessage[] = [
+      makeUser("summarize this"),
+      makeToolResult([
+        { type: "text", text: "small text" },
+        { type: "image", data: "img", mimeType: "image/png" },
+      ]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    const placeholder = "[hard cleared test placeholder]";
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 1,
+        softTrim: {
+          maxChars: 5_000,
+          headChars: 2_000,
+          tailChars: 2_000,
+        },
+        hardClear: {
+          enabled: true,
+          placeholder,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 8,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toEqual([{ type: "text", text: placeholder }]);
+  });
 });

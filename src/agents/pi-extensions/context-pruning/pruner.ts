@@ -190,21 +190,25 @@ function softTrimToolResultMessage(params: {
   settings: EffectiveContextPruningSettings;
 }): ToolResultMessage | null {
   const { msg, settings } = params;
-  // Ignore image tool results for now: these are often directly relevant and hard to partially prune safely.
-  if (hasImageBlocks(msg.content)) {
-    return null;
-  }
-
-  const parts = collectTextSegments(msg.content);
+  const hasImages = hasImageBlocks(msg.content);
+  const parts = hasImages
+    ? collectPrunableToolResultSegments(msg.content)
+    : collectTextSegments(msg.content);
   const rawLen = estimateJoinedTextLength(parts);
   if (rawLen <= settings.softTrim.maxChars) {
-    return null;
+    if (!hasImages) {
+      return null;
+    }
+    return { ...msg, content: [asText(parts.join("\n"))] };
   }
 
   const headChars = Math.max(0, settings.softTrim.headChars);
   const tailChars = Math.max(0, settings.softTrim.tailChars);
   if (headChars + tailChars >= rawLen) {
-    return null;
+    if (!hasImages) {
+      return null;
+    }
+    return { ...msg, content: [asText(parts.join("\n"))] };
   }
 
   const head = takeHeadFromJoinedText(parts, headChars);
