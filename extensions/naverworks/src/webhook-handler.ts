@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { formatLocationText } from "openclaw/plugin-sdk";
 import type { NaverWorksAccount, NaverWorksInboundEvent } from "./types.js";
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -35,6 +36,96 @@ function asString(value: unknown): string | undefined {
     return converted || undefined;
   }
   return undefined;
+}
+
+function parseNaverWorksLocation(
+  raw: Record<string, unknown>,
+): NaverWorksInboundEvent["location"] | undefined {
+  const content = asObject(raw.content);
+  const message = asObject(raw.message);
+  const resource = asObject(content.resource);
+  const location = asObject(content.location);
+
+  const latitudeRaw = pickFirstString([
+    content.latitude,
+    content.lat,
+    content.y,
+    location.latitude,
+    location.lat,
+    location.y,
+    resource.latitude,
+    resource.lat,
+    resource.y,
+    message.latitude,
+    message.lat,
+    raw.latitude,
+    raw.lat,
+  ]);
+  const longitudeRaw = pickFirstString([
+    content.longitude,
+    content.lng,
+    content.lon,
+    content.x,
+    location.longitude,
+    location.lng,
+    location.lon,
+    location.x,
+    resource.longitude,
+    resource.lng,
+    resource.lon,
+    resource.x,
+    message.longitude,
+    message.lng,
+    raw.longitude,
+    raw.lng,
+  ]);
+
+  if (!latitudeRaw || !longitudeRaw) {
+    return undefined;
+  }
+
+  const latitude = Number.parseFloat(latitudeRaw);
+  const longitude = Number.parseFloat(longitudeRaw);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return undefined;
+  }
+
+  const accuracyRaw = pickFirstString([
+    content.accuracy,
+    content.accuracyMeters,
+    location.accuracy,
+    location.accuracyMeters,
+    resource.accuracy,
+    resource.accuracyMeters,
+    raw.accuracy,
+    raw.accuracyMeters,
+  ]);
+  const accuracy = accuracyRaw ? Number.parseFloat(accuracyRaw) : undefined;
+
+  return {
+    latitude,
+    longitude,
+    accuracy: Number.isFinite(accuracy) && (accuracy ?? 0) > 0 ? accuracy : undefined,
+    name: pickFirstString([
+      content.title,
+      content.name,
+      location.title,
+      location.name,
+      resource.title,
+      resource.name,
+      raw.title,
+      raw.name,
+    ]),
+    address: pickFirstString([content.address, location.address, resource.address, raw.address]),
+    isLive:
+      typeof content.isLive === "boolean"
+        ? content.isLive
+        : typeof location.isLive === "boolean"
+          ? location.isLive
+          : typeof raw.isLive === "boolean"
+            ? raw.isLive
+            : pickFirstString([content.isLive, location.isLive, raw.isLive]) === "true",
+  };
 }
 
 function parseMediaDurationMs(candidates: unknown[]): number | undefined {
@@ -86,6 +177,80 @@ function inferMediaKind(params: {
   if (fileName?.match(/\.(mp3|m4a|wav|ogg|opus|aac|flac|amr)$/)) {
     return "audio";
   }
+  return undefined;
+}
+
+function resolveContentType(candidates: unknown[]): string | undefined {
+  const contentType = pickFirstString(candidates)?.toLowerCase();
+  return contentType || undefined;
+}
+
+function synthesizeNaverWorksText(params: {
+  contentType?: string;
+  content: Record<string, unknown>;
+  message: Record<string, unknown>;
+  root: Record<string, unknown>;
+}): string | undefined {
+  const contentType = params.contentType;
+  if (!contentType) {
+    return undefined;
+  }
+
+  if (["sticker", "emoji"].includes(contentType)) {
+    const stickerId = pickFirstString([
+      params.content.stickerId,
+      params.content.emojiId,
+      params.message.stickerId,
+      params.root.stickerId,
+    ]);
+    return stickerId ? `🧩 Sticker (${stickerId})` : "🧩 Sticker";
+  }
+
+  if (["contact", "contacts", "vcard"].includes(contentType)) {
+    const contact = asObject(params.content.contact);
+    const profile = asObject(contact.profile);
+    const phones = Array.isArray(contact.phones) ? contact.phones : [];
+    const firstPhone = phones.length > 0 ? asObject(phones[0]) : {};
+    const emails = Array.isArray(contact.emails) ? contact.emails : [];
+    const firstEmail = emails.length > 0 ? asObject(emails[0]) : {};
+
+    const name = pickFirstString([
+      contact.name,
+      profile.displayName,
+      profile.name,
+      params.content.name,
+      params.message.name,
+      params.root.name,
+    ]);
+    const phone = pickFirstString([
+      contact.phoneNumber,
+      firstPhone.value,
+      firstPhone.phoneNumber,
+      params.content.phoneNumber,
+      params.root.phoneNumber,
+    ]);
+    const email = pickFirstString([
+      contact.email,
+      firstEmail.value,
+      firstEmail.email,
+      params.content.email,
+      params.root.email,
+    ]);
+    const parts = [name, phone, email].filter(Boolean);
+    return parts.length > 0 ? `👤 Contact: ${parts.join(" | ")}` : "👤 Contact shared";
+  }
+
+  if (["template", "postback", "button"].includes(contentType)) {
+    const action = pickFirstString([
+      params.content.action,
+      params.content.label,
+      params.message.action,
+      params.root.action,
+      params.root.postback,
+    ]);
+    return action ? `🧾 ${contentType}: ${action}` : `🧾 ${contentType}`;
+  }
+
   return undefined;
 }
 
@@ -168,7 +333,9 @@ export function parseNaverWorksInbound(rawBody: string): NaverWorksInboundEvent 
     root.user_id,
     root.senderId,
   ]);
+  const location = parseNaverWorksLocation(root);
   const text = pickFirstString([content.text, message.text, root.text, root.body, root.message]);
+  const contentType = resolveContentType([content.type, message.type, root.type]);
   const resource = asObject(content.resource);
   const file = asObject(content.file);
   const attachment = asObject(content.attachment);
@@ -212,12 +379,21 @@ export function parseNaverWorksInbound(rawBody: string): NaverWorksInboundEvent 
   ]);
 
   const mediaKind = inferMediaKind({
-    contentType: pickFirstString([content.type, message.type, root.type]),
+    contentType,
     mimeType: mediaMimeType,
     fileName: mediaFileName,
   });
+  const synthesizedText =
+    text ??
+    (location ? formatLocationText(location) : undefined) ??
+    synthesizeNaverWorksText({
+      contentType,
+      content,
+      message,
+      root,
+    });
 
-  if (!userId || (!text && !mediaUrl)) {
+  if (!userId || (!synthesizedText && !mediaUrl && !location)) {
     return null;
   }
 
@@ -250,7 +426,8 @@ export function parseNaverWorksInbound(rawBody: string): NaverWorksInboundEvent 
     raw: root,
     userId,
     teamId,
-    text,
+    text: synthesizedText,
+    location,
     mediaUrl,
     mediaKind,
     mediaMimeType,

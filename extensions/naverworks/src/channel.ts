@@ -4,6 +4,7 @@ import {
   registerPluginHttpRoute,
   resolveOutboundMediaUrls,
   setAccountEnabledInConfigSection,
+  toLocationContext,
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
@@ -323,6 +324,7 @@ export function createNaverWorksPlugin() {
                 ? [downloadedMedia.mediaType ?? event.mediaMimeType ?? "application/octet-stream"]
                 : undefined;
 
+            const locationContext = event.location ? toLocationContext(event.location) : undefined;
             const msgCtx = {
               Body: inboundBody,
               BodyForAgent: inboundBody,
@@ -346,6 +348,7 @@ export function createNaverWorksPlugin() {
               MediaUrl: event.mediaUrl ?? mediaPath,
               MediaUrls: mediaUrls,
               MediaName: event.mediaFileName,
+              ...(locationContext ?? {}),
             };
 
             await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({

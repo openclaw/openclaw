@@ -26,6 +26,14 @@ export type NaverWorksInboundEvent = {
   userId: string;
   teamId?: string;
   text?: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+    name?: string;
+    address?: string;
+    isLive?: boolean;
+  };
   mediaUrl?: string;
   mediaKind?: "image" | "audio" | "file";
   mediaMimeType?: string;

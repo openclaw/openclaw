@@ -64,6 +64,128 @@ describe("parseNaverWorksInbound", () => {
     );
   });
 
+  it("keeps text-only payload handling unchanged", () => {
+    const payload = JSON.stringify({
+      source: { userId: "u6", teamId: "team-a" },
+      content: { text: "just text" },
+      channel: { type: "direct" },
+    });
+
+    const parsed = parseNaverWorksInbound(payload);
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        userId: "u6",
+        text: "just text",
+        location: undefined,
+        mediaUrl: undefined,
+        isDirect: true,
+      }),
+    );
+  });
+
+  it("keeps file payload handling unchanged", () => {
+    const payload = JSON.stringify({
+      source: { userId: "u7", teamId: "team-a" },
+      content: {
+        type: "file",
+        file: {
+          url: "https://cdn.example.com/report.pdf",
+          mimeType: "application/pdf",
+          fileName: "report.pdf",
+        },
+      },
+      channel: { type: "direct" },
+    });
+
+    const parsed = parseNaverWorksInbound(payload);
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        userId: "u7",
+        text: undefined,
+        mediaKind: "file",
+        mediaUrl: "https://cdn.example.com/report.pdf",
+        mediaMimeType: "application/pdf",
+        mediaFileName: "report.pdf",
+        location: undefined,
+        isDirect: true,
+      }),
+    );
+  });
+
+  it("parses sticker payloads without mediaUrl by synthesizing text", () => {
+    const payload = JSON.stringify({
+      source: { userId: "u8", teamId: "team-a" },
+      content: {
+        type: "sticker",
+        stickerId: "st-123",
+      },
+      channel: { type: "direct" },
+    });
+
+    const parsed = parseNaverWorksInbound(payload);
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        userId: "u8",
+        text: "🧩 Sticker (st-123)",
+        mediaUrl: undefined,
+        isDirect: true,
+      }),
+    );
+  });
+
+  it("parses contact payloads by normalizing contact text", () => {
+    const payload = JSON.stringify({
+      source: { userId: "u9", teamId: "team-a" },
+      content: {
+        type: "contact",
+        contact: {
+          name: "Jane Kim",
+          phones: [{ value: "+82-10-1234-5678" }],
+          emails: [{ value: "jane@example.com" }],
+        },
+      },
+      channel: { type: "direct" },
+    });
+
+    const parsed = parseNaverWorksInbound(payload);
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        userId: "u9",
+        text: "👤 Contact: Jane Kim | +82-10-1234-5678 | jane@example.com",
+        mediaUrl: undefined,
+        isDirect: true,
+      }),
+    );
+  });
+
+  it("parses location payloads and synthesizes text", () => {
+    const payload = JSON.stringify({
+      source: { userId: "u5", teamId: "team-a" },
+      content: {
+        type: "location",
+        latitude: 37.5665,
+        longitude: 126.978,
+        title: "Seoul City Hall",
+        address: "110 Sejong-daero, Jung-gu, Seoul",
+      },
+      channel: { type: "direct" },
+    });
+
+    const parsed = parseNaverWorksInbound(payload);
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        userId: "u5",
+        text: expect.stringContaining("📍"),
+        location: expect.objectContaining({
+          latitude: 37.5665,
+          longitude: 126.978,
+          name: "Seoul City Hall",
+        }),
+        isDirect: true,
+      }),
+    );
+  });
+
   it("parses voice payloads and normalizes duration", () => {
     const payload = JSON.stringify({
       source: { userId: "u4" },
