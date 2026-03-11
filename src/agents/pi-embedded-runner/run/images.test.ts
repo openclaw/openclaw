@@ -251,7 +251,6 @@ describe("loadImageFromRef", () => {
       await fs.rm(sandboxParent, { recursive: true, force: true });
     }
   });
-});
 
   it("loads image outside workspace when path is inside allowedExternalDirs", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-allowed-external-"));
