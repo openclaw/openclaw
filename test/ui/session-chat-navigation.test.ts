@@ -25,6 +25,10 @@ describe("navigateToSessionChat", () => {
     const state = {
       sessionKey: "main",
       chatMessage: "draft message",
+      chatAttachments: [
+        { id: "att-1", dataUrl: "data:image/png;base64,abc", mimeType: "image/png" },
+      ],
+      chatQueue: [{ id: "queued-1", text: "queued", createdAt: 123 }],
       chatStream: "streaming",
       chatStreamStartedAt: 123,
       chatRunId: "run-1",
@@ -43,6 +47,8 @@ describe("navigateToSessionChat", () => {
 
     expect(state.sessionKey).toBe("agent:main:session-123");
     expect(state.chatMessage).toBe("");
+    expect(state.chatAttachments).toEqual([]);
+    expect(state.chatQueue).toEqual([]);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatRunId).toBeNull();

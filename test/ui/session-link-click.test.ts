@@ -19,11 +19,7 @@ describe("handleSessionLinkClick", () => {
     const event = buildEvent();
     const onSelectSession = vi.fn();
 
-    const handled = handleSessionLinkClick(
-      event,
-      onSelectSession,
-      "agent:main:session-123",
-    );
+    const handled = handleSessionLinkClick(event, onSelectSession, "agent:main:session-123");
 
     expect(handled).toBe(true);
     expect(event.preventDefault).toHaveBeenCalledOnce();
@@ -34,11 +30,7 @@ describe("handleSessionLinkClick", () => {
     const event = buildEvent({ ctrlKey: true });
     const onSelectSession = vi.fn();
 
-    const handled = handleSessionLinkClick(
-      event,
-      onSelectSession,
-      "agent:main:session-123",
-    );
+    const handled = handleSessionLinkClick(event, onSelectSession, "agent:main:session-123");
 
     expect(handled).toBe(false);
     expect(event.preventDefault).not.toHaveBeenCalled();
