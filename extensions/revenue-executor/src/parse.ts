@@ -32,11 +32,11 @@ function extractPrice(raw: string, fallback?: number): number {
   const match = raw.match(PRICE_REGEX);
   const fromText = match?.[1] ?? match?.[2];
   if (!fromText) {
-    throw new Error("Could not parse price from command. Include a price like '$47'.");
+    return 0;
   }
   const value = Number.parseFloat(fromText);
   if (!Number.isFinite(value) || value < 0) {
-    throw new Error("Parsed price is invalid.");
+    return 0;
   }
   return Number(value.toFixed(2));
 }
@@ -68,7 +68,7 @@ function extractContactName(command: string, explicit?: string): string {
     return titleCase(`${twoWordName[1]} ${twoWordName[2]}`);
   }
 
-  throw new Error("Could not parse contact name from command.");
+  return "AI Lead";
 }
 
 function extractProductType(command: string, explicit?: string): string {

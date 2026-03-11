@@ -37,9 +37,10 @@ describe("parseRevenueCommand", () => {
     expect(result.price).toBe(97);
   });
 
-  it("throws when price is missing", () => {
-    expect(() =>
-      parseRevenueCommand({ command: "sell coaching to john smith" }),
-    ).toThrow(/parse price/i);
+  it("falls back to zero when price is missing", () => {
+    const result = parseRevenueCommand({ command: "sell coaching to john smith" });
+
+    expect(result.price).toBe(0);
+    expect(result.contactName).toBe("John Smith");
   });
 });
