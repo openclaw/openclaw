@@ -1,4 +1,5 @@
 import {
+  type AuthProfileStore,
   listProfilesForProvider,
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileCredential,
@@ -85,6 +86,8 @@ type SecretResolutionResult = {
   fallbackEnvVar?: string;
   fallbackUsedAfterRefFailure: boolean;
 };
+
+type AuthStoreLoader = (agentDir?: string) => AuthProfileStore;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -421,12 +424,14 @@ function resolveMinimaxApiHostFromProfile(params: {
 async function resolveMinimaxApiKeyFromAuthProfiles(params: {
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
+  loadAuthStore?: AuthStoreLoader;
 }): Promise<
   { apiKey: string; profileProvider: MinimaxAuthProfileProvider; apiHost: string } | undefined
 > {
-  let store: ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
+  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
+  let store: AuthProfileStore;
   try {
-    store = loadAuthProfileStoreForSecretsRuntime(params.context.env.OPENCLAW_AGENT_DIR);
+    store = loadAuthStore(params.context.env.OPENCLAW_AGENT_DIR);
   } catch {
     return undefined;
   }
@@ -549,6 +554,7 @@ export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
+  loadAuthStore?: AuthStoreLoader;
 }): Promise<RuntimeWebToolsMetadata> {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
@@ -629,6 +635,7 @@ export async function resolveRuntimeWebTools(params: {
         const authProfileMatch = await resolveMinimaxApiKeyFromAuthProfiles({
           sourceConfig: params.sourceConfig,
           context: params.context,
+          loadAuthStore: params.loadAuthStore,
         });
         if (authProfileMatch) {
           resolution = {

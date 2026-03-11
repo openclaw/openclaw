@@ -394,6 +394,18 @@ describe("web_search minimax api host resolution", () => {
     });
   });
 
+  it("prefers resolved minimax baseUrl over process env host", () => {
+    withEnv({ MINIMAX_API_HOST: "https://api.minimax.stale-env/v1" }, () => {
+      expect(
+        resolveMinimaxApiHost({
+          minimax: {
+            baseUrl: "https://api.minimaxi.com/anthropic",
+          },
+        }),
+      ).toBe("https://api.minimaxi.com");
+    });
+  });
+
   it("prefers MINIMAX_API_HOST when configured", () => {
     withEnv({ MINIMAX_API_HOST: "https://api.minimax.custom/v1" }, () => {
       expect(resolveMinimaxApiHost()).toBe("https://api.minimax.custom");

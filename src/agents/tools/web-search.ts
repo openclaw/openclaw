@@ -1021,14 +1021,14 @@ function resolveMinimaxApiHost(params?: {
     return fromRuntime;
   }
 
-  const fromEnv = resolveUrlOrigin(normalizeSecretInput(process.env.MINIMAX_API_HOST));
-  if (fromEnv) {
-    return fromEnv;
-  }
-
   const fromSearchConfig = resolveUrlOrigin(params?.minimax?.baseUrl);
   if (fromSearchConfig) {
     return fromSearchConfig;
+  }
+
+  const fromEnv = resolveUrlOrigin(normalizeSecretInput(process.env.MINIMAX_API_HOST));
+  if (fromEnv) {
+    return fromEnv;
   }
 
   for (const providerId of resolveMinimaxProviderPriority({ cfg: params?.cfg })) {

@@ -11,7 +11,13 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
+async function runRuntimeWebTools(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  loadAuthStore?: (
+    agentDir?: string,
+  ) => ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>;
+}) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
@@ -22,6 +28,7 @@ async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS
     sourceConfig,
     resolvedConfig,
     context,
+    loadAuthStore: params.loadAuthStore,
   });
   return { metadata, resolvedConfig, context };
 }
@@ -444,6 +451,52 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBeUndefined();
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBeUndefined();
     expect(resolveApiKeySpy).not.toHaveBeenCalled();
+  });
+
+  it("uses injected auth-store loader for minimax auth-profile probing", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {},
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+
+    const injectedStore = {
+      version: 1,
+      profiles: {
+        "minimax:default": {
+          type: "oauth",
+          provider: "minimax",
+          access: "injected-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>;
+
+    const loadAuthStore = vi.fn(() => injectedStore);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax" ? ["minimax:default"] : [],
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {},
+      loadAuthStore,
+    });
+
+    expect(loadAuthStore).toHaveBeenCalledWith(undefined);
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("injected-token");
   });
 
   it("treats configured provider as primary and falls back to next available provider", async () => {
