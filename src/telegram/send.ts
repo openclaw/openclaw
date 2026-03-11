@@ -27,7 +27,11 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
-import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isSafeToRetrySendError,
+  isTelegramServerError,
+} from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
@@ -1150,6 +1154,9 @@ export async function editMessageTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
+    shouldRetry: (err) =>
+      isRecoverableTelegramNetworkError(err, { allowMessageMatch: true }) ||
+      isTelegramServerError(err),
   });
   const requestWithEditShouldLog = <T>(
     fn: () => Promise<T>,
