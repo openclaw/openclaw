@@ -351,6 +351,7 @@ async function readSubagentPartialProgress(sessionKey: string): Promise<string |
             typeof block === "object" &&
             ((block as { type?: string }).type === "toolCall" ||
               (block as { type?: string }).type === "tool_use" ||
+              (block as { type?: string }).type === "toolUse" ||
               (block as { type?: string }).type === "functionCall" ||
               (block as { type?: string }).type === "function_call")
           ) {

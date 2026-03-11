@@ -324,6 +324,9 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).toBeTruthy();
     expect(internalEvents[0]?.result).not.toBe("(no output)");
     expect(internalEvents[0]?.result).toContain("tool call");
+    // Verify assistant text fragments are extracted, not just tool call counts.
+    expect(internalEvents[0]?.result).toContain("reading the files");
+    expect(internalEvents[0]?.result).toContain("analyzing the code structure");
   });
 
   it("reports tool call count in partial progress for timeout with no assistant text", async () => {
