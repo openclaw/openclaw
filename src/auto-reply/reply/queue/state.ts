@@ -18,7 +18,29 @@ export const DEFAULT_QUEUE_DEBOUNCE_MS = 1000;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
+/** Maximum number of session queues before triggering eviction of stale entries. */
+export const MAX_FOLLOWUP_QUEUE_SESSIONS = 500;
+
+/** Queues idle longer than this are eligible for eviction (30 minutes). */
+export const FOLLOWUP_QUEUE_STALE_MS = 30 * 60 * 1000;
+
 export const FOLLOWUP_QUEUES = new Map<string, FollowupQueueState>();
+
+/**
+ * Prune stale, non-draining queues that have been idle beyond FOLLOWUP_QUEUE_STALE_MS.
+ * Called automatically when the map exceeds MAX_FOLLOWUP_QUEUE_SESSIONS.
+ */
+export function pruneStaleFollowupQueues(nowMs: number = Date.now()): number {
+  let pruned = 0;
+  const cutoff = nowMs - FOLLOWUP_QUEUE_STALE_MS;
+  for (const [key, queue] of FOLLOWUP_QUEUES) {
+    if (!queue.draining && queue.lastEnqueuedAt < cutoff && queue.items.length === 0) {
+      FOLLOWUP_QUEUES.delete(key);
+      pruned += 1;
+    }
+  }
+  return pruned;
+}
 
 export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
   const cleaned = key.trim();
@@ -36,6 +58,11 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
       settings,
     });
     return existing;
+  }
+
+  // Prune stale entries when the map grows beyond the session limit.
+  if (FOLLOWUP_QUEUES.size >= MAX_FOLLOWUP_QUEUE_SESSIONS) {
+    pruneStaleFollowupQueues();
   }
 
   const created: FollowupQueueState = {
