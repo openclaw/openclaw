@@ -9,14 +9,7 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./oauth-tls-preflight.js";
 
-const PROXY_ENV_KEYS = [
-  "HTTPS_PROXY",
-  "https_proxy",
-  "HTTP_PROXY",
-  "http_proxy",
-  "ALL_PROXY",
-  "all_proxy",
-];
+const PROXY_ENV_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
 
 function hasConfiguredProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return PROXY_ENV_KEYS.some((key) => {

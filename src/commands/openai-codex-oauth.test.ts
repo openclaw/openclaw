@@ -67,17 +67,19 @@ async function runCodexOAuth(params: { isRemote: boolean }) {
 }
 
 describe("loginOpenAICodexOAuth", () => {
-  const prevHttpsProxy = process.env.HTTPS_PROXY;
-  const prevHttpProxy = process.env.HTTP_PROXY;
+  const PROXY_ENV_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
+  const prevProxyEnv = Object.fromEntries(
+    PROXY_ENV_KEYS.map((key) => [key, process.env[key]]),
+  ) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
-    if (prevHttpsProxy == null) delete process.env.HTTPS_PROXY;
-    else process.env.HTTPS_PROXY = prevHttpsProxy;
-    if (prevHttpProxy == null) delete process.env.HTTP_PROXY;
-    else process.env.HTTP_PROXY = prevHttpProxy;
+    for (const key of PROXY_ENV_KEYS) {
+      if (prevProxyEnv[key] == null) delete process.env[key];
+      else process.env[key] = prevProxyEnv[key];
+    }
   });
 
   it("returns credentials on successful oauth login", async () => {
@@ -175,6 +177,7 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(mocks.EnvHttpProxyAgent).toHaveBeenCalledTimes(1);
     expect(mocks.setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(mocks.setGlobalDispatcher.mock.calls[0]?.[0]).toMatchObject({ kind: "env-proxy" });
     expect(mocks.setGlobalDispatcher.mock.calls[1]?.[0]).toEqual({ kind: "original" });
   });
 
