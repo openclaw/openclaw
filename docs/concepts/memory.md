@@ -310,6 +310,29 @@ Notes:
 - `remote.baseUrl` is optional (defaults to the Gemini API base URL).
 - `remote.headers` lets you add extra headers if needed.
 - Default model: `gemini-embedding-001`.
+- `gemini-embedding-2-preview` is also supported: 8192 token limit and configurable dimensions (768 / 1536 / 3072, default 3072).
+
+#### Gemini Embedding 2 (preview)
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 3072,  // optional: 768, 1536, or 3072 (default)
+      remote: {
+        apiKey: "YOUR_GEMINI_API_KEY"
+      }
+    }
+  }
+}
+```
+
+> **⚠️ Re-index required:** Switching from `gemini-embedding-001` (768 dimensions)
+> to `gemini-embedding-2-preview` (3072 dimensions) changes the vector size. The same is true if you
+> change `outputDimensionality` between 768, 1536, and 3072.
+> OpenClaw will automatically reindex when it detects a model or dimension change.
 
 If you want to use a **custom OpenAI-compatible endpoint** (OpenRouter, vLLM, or a proxy),
 you can use the `remote` configuration with the OpenAI provider:
