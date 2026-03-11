@@ -72,4 +72,10 @@ export type BrowserConfig = {
    * the relay must be reachable from a different network namespace.
    */
   relayBindHost?: string;
+  /**
+   * If true, automatically output screenshot images as visual input when using browser screenshot.
+   * This allows the model to "see" the screenshot content when analyzing web pages.
+   * Default: false
+   */
+  autoVisualInput?: boolean;
 };
