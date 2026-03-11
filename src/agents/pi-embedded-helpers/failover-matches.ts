@@ -42,6 +42,7 @@ const ERROR_PATTERNS = {
     /\behostdown\b/i,
     /\benetreset\b/i,
     /\betimedout\b/i,
+    /\besockettimedout\b/i,
     /\bepipe\b/i,
     /\benotfound\b/i,
     /\beai_again\b/i,

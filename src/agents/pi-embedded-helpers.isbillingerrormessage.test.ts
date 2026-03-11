@@ -538,6 +538,7 @@ describe("isFailoverErrorMessage", () => {
   it("matches network errno codes in serialized error messages", () => {
     const samples = [
       "Error: connect ETIMEDOUT 10.0.0.1:443",
+      "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
       "Error: connect EHOSTUNREACH 10.0.0.1:443",
       "Error: connect ENETUNREACH 10.0.0.1:443",
       "Error: write EPIPE",
