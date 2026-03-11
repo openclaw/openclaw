@@ -1,8 +1,10 @@
+import { DASHSCOPE_DEFAULT_MODEL_REF } from "../../../agents/dashscope-models.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
-import { setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
+import { setDashscopeApiKey, setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import { applyPrimaryModel } from "../../model-picker.js";
 import { applyLitellmConfig } from "../../onboard-auth.config-litellm.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
@@ -35,6 +37,33 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null | undefined> {
+  if (params.authChoice === "dashscope-api-key") {
+    const resolved = await params.resolveApiKey({
+      provider: "dashscope",
+      cfg: params.baseConfig,
+      flagValue: params.opts.dashscopeApiKey,
+      flagName: "--dashscope-api-key",
+      envVar: "DASHSCOPE_API_KEY",
+      runtime: params.runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await params.maybeSetResolvedApiKey(resolved, (value) =>
+        setDashscopeApiKey(value, undefined, params.apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    const configWithAuth = applyAuthProfileConfig(params.nextConfig, {
+      profileId: "dashscope:default",
+      provider: "dashscope",
+      mode: "api_key",
+    });
+    return applyPrimaryModel(configWithAuth, DASHSCOPE_DEFAULT_MODEL_REF);
+  }
+
   if (params.authChoice !== "litellm-api-key") {
     return undefined;
   }

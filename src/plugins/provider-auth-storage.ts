@@ -312,6 +312,20 @@ export function setModelStudioApiKey(
   });
 }
 
+export const DASHSCOPE_DEFAULT_MODEL_REF = "dashscope/qwen3-max";
+
+export function setDashscopeApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "dashscope:default",
+    credential: buildApiKeyCredential("dashscope", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export function setXaiApiKey(key: SecretInput, agentDir?: string, options?: ApiKeyStorageOptions) {
   upsertAuthProfile({
     profileId: "xai:default",
