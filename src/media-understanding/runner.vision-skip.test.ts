@@ -65,7 +65,7 @@ describe("runCapability image skip", () => {
     const cfg = {
       agents: {
         defaults: {
-          // Use openai so it has vision support in catalog and doesn't cause auth errors in test
+          // Use openai so it has vision support in catalog
           imageModel: "openai/gpt-4-vision",
         },
       },
@@ -82,15 +82,12 @@ describe("runCapability image skip", () => {
         activeModel: { provider: "openai", model: "gpt-4.1" },
       });
 
-      // Should NOT skip with "primary model supports vision" reason
-      // When explicit imageModel is configured, it should proceed to try image processing
-      expect(result.decision.outcome).not.toBe("skipped");
-      // The outcome will be "skipped" with a different reason (no API key for image provider)
-      // OR it attempts to process. Either way, it's not the "vision natively" skip reason.
-      if (result.decision.outcome === "skipped" && result.decision.attachments[0]?.attempts[0]) {
-        const reason = result.decision.attachments[0].attempts[0].reason;
-        expect(reason).not.toBe("primary model supports vision natively");
-      }
+      // The early-return skip injects a specific reason; a processing attempt should not have it
+      expect(result.decision.attachments[0]?.attempts[0]?.reason).not.toBe(
+        "primary model supports vision natively",
+      );
+      // At least one attempt should have been recorded (i.e., we didn't take the early return)
+      expect(result.decision.attachments[0]?.attempts.length).toBeGreaterThan(0);
     } finally {
       await cache.cleanup();
     }

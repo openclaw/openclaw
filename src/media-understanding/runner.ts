@@ -709,9 +709,10 @@ export async function runCapability(params: {
   // The image will be injected directly into the model context instead.
   const activeProvider = params.activeModel?.provider?.trim();
   if (capability === "image" && activeProvider) {
-    // Check if imageModel is explicitly configured
+    // Check if imageModel is explicitly configured via agent defaults or shared media models
     const configuredImageModels = resolveImageModelFromAgentDefaults(cfg);
-    const hasExplicitImageModel = configuredImageModels.length > 0;
+    const sharedModels = cfg.tools?.media?.models ?? [];
+    const hasExplicitImageModel = configuredImageModels.length > 0 || sharedModels.length > 0;
 
     if (!hasExplicitImageModel) {
       const catalog = await loadModelCatalog({ config: cfg });
