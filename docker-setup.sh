@@ -32,12 +32,12 @@ is_truthy_value() {
   esac
 }
 
-# Check whether the Docker daemon is responsive, with a timeout.
-# When Docker Desktop is still starting, `docker info` can hang indefinitely.
-# This wraps the call in a background process and polls for completion.
+# Check whether the Docker daemon responds within a given timeout (seconds).
+# This wraps the call in a background process and polls for completion,
+# avoiding a hard dependency on the `timeout` command (absent on stock macOS).
 docker_is_ready() {
   local wait_secs="${1:-10}"
-  ( docker info >/dev/null 2>&1 ) &
+  docker info >/dev/null 2>&1 &
   local pid=$!
   local i=0
   while [ "$i" -lt "$wait_secs" ]; do
@@ -195,17 +195,18 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-# Wait for the Docker daemon to become responsive.
-# On macOS/Windows, Docker Desktop may still be starting when this script runs.
+# Wait for the Docker daemon if it is installed but not yet responsive
+# (common when Docker Desktop is still launching).
 if ! docker_is_ready 10; then
   echo "Waiting for Docker daemon to start..."
-  local_wait=0
-  while ! docker_is_ready 10; do
-    local_wait=$((local_wait + 10))
-    if [ "$local_wait" -ge 60 ]; then
+  start_ts=$(date +%s)
+  while ! docker_is_ready 5; do
+    elapsed=$(( $(date +%s) - start_ts + 10 ))
+    if [ "$elapsed" -ge 60 ]; then
       fail "Docker daemon did not start within 60 seconds. Please start Docker Desktop and retry."
     fi
-    echo "  still waiting... (${local_wait}s elapsed)"
+    echo "  still waiting... (${elapsed}s elapsed)"
+    sleep 2
   done
   echo "Docker daemon is ready."
 fi
