@@ -58,7 +58,7 @@ export function loadPluginManifest(
       raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") {
         return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
       }
       return {
