@@ -176,6 +176,31 @@ describe("memory search config", () => {
       modalities: [],
       maxFileBytes: 10 * 1024 * 1024,
     });
+    expect(resolved?.provider).toBe("gemini");
+  });
+
+  it("does not enforce multimodal provider validation when no modalities are active", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            fallback: "openai",
+            multimodal: {
+              enabled: true,
+              modalities: [],
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: [],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
   });
 
   it("rejects multimodal memory on unsupported providers", () => {

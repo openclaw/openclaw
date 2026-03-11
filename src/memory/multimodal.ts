@@ -50,6 +50,15 @@ export function isMemoryMultimodalEnabled(settings: MemoryMultimodalSettings): b
   return settings.enabled && settings.modalities.length > 0;
 }
 
+export function buildCaseInsensitiveExtensionGlob(extension: string): string {
+  const normalized = extension.trim().replace(/^\./, "").toLowerCase();
+  if (!normalized) {
+    return "*";
+  }
+  const parts = Array.from(normalized, (char) => `[${char.toLowerCase()}${char.toUpperCase()}]`);
+  return `*.${parts.join("")}`;
+}
+
 export function classifyMemoryMultimodalPath(
   filePath: string,
   settings: MemoryMultimodalSettings,
