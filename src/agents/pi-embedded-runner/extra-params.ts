@@ -324,9 +324,19 @@ function isThinkingDisabled(value: unknown): boolean {
   }
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    return ["off", "none", "disabled", "disable", "false", "0", "no", "hide", "hidden"].includes(
-      normalized,
-    );
+    return [
+      "off",
+      "none",
+      "disabled",
+      "disable",
+      "false",
+      "0",
+      "no",
+      "hide",
+      "hidden",
+      "null",
+      "undefined",
+    ].includes(normalized);
   }
   if (typeof value === "object" && !Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
@@ -351,7 +361,7 @@ function resolveDynamicTemperature(params: {
 
   const explicitThinking = params.merged.thinking;
   const isThinkingActive =
-    explicitThinking != null
+    explicitThinking !== undefined
       ? !isThinkingDisabled(explicitThinking)
       : params.thinkingLevel != null && params.thinkingLevel !== "off";
 
