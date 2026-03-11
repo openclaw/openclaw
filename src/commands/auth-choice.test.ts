@@ -498,6 +498,15 @@ describe("applyAuthChoice", () => {
       profileId: "opencode:default",
       provider: "opencode",
       modelPrefix: "opencode/",
+      extraProfiles: ["opencode-go:default"],
+    },
+    {
+      authChoice: "opencode-go",
+      tokenProvider: "opencode-go",
+      profileId: "opencode-go:default",
+      provider: "opencode-go",
+      modelPrefix: "opencode-go/",
+      extraProfiles: ["opencode:default"],
     },
     {
       authChoice: "together-api-key",
@@ -522,7 +531,7 @@ describe("applyAuthChoice", () => {
     },
   ] as const)(
     "uses opts token for $authChoice without prompting",
-    async ({ authChoice, tokenProvider, profileId, provider, modelPrefix }) => {
+    async ({ authChoice, tokenProvider, profileId, provider, modelPrefix, extraProfiles }) => {
       await setupTempState();
 
       const text = vi.fn();
@@ -554,6 +563,9 @@ describe("applyAuthChoice", () => {
         ),
       ).toBe(true);
       expect((await readAuthProfile(profileId))?.key).toBe(token);
+      for (const extraProfile of extraProfiles ?? []) {
+        expect((await readAuthProfile(extraProfile))?.key).toBe(token);
+      }
     },
   );
 
@@ -805,14 +817,15 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "xai-api-key" | "opencode-zen";
+      authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
       token: string;
       promptMessage: string;
       existingPrimary: string;
       expectedOverride: string;
       profileId?: string;
       profileProvider?: string;
-      expectProviderConfigUndefined?: "opencode-zen";
+      extraProfileId?: string;
+      expectProviderConfigUndefined?: "opencode" | "opencode-go" | "opencode-zen";
       agentId?: string;
     }> = [
       {
@@ -828,10 +841,24 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "opencode-zen",
         token: "sk-opencode-zen-test",
-        promptMessage: "Enter OpenCode Zen API key",
+        promptMessage: "Enter OpenCode API key",
         existingPrimary: "anthropic/claude-opus-4-5",
         expectedOverride: "opencode/claude-opus-4-6",
-        expectProviderConfigUndefined: "opencode-zen",
+        profileId: "opencode:default",
+        profileProvider: "opencode",
+        extraProfileId: "opencode-go:default",
+        expectProviderConfigUndefined: "opencode",
+      },
+      {
+        authChoice: "opencode-go",
+        token: "sk-opencode-go-test",
+        promptMessage: "Enter OpenCode API key",
+        existingPrimary: "anthropic/claude-opus-4-5",
+        expectedOverride: "opencode-go/kimi-k2.5",
+        profileId: "opencode-go:default",
+        profileProvider: "opencode-go",
+        extraProfileId: "opencode:default",
+        expectProviderConfigUndefined: "opencode-go",
       },
     ];
     for (const scenario of scenarios) {
@@ -862,6 +889,9 @@ describe("applyAuthChoice", () => {
           mode: "api_key",
         });
         expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
+      }
+      if (scenario.extraProfileId) {
+        expect((await readAuthProfile(scenario.extraProfileId))?.key).toBe(scenario.token);
       }
       if (scenario.expectProviderConfigUndefined) {
         expect(
