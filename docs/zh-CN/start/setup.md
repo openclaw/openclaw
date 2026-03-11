@@ -15,7 +15,9 @@ x-i18n:
 
 # 设置
 
-> 如果你是首次设置，请从[入门指南](/start/getting-started)开始。向导详情请参阅[新手引导向导](/start/wizard)。
+<Note>
+如果你是首次设置，请从[入门指南](/start/getting-started)开始。向导详情请参阅[新手引导向导](/start/wizard)。
+</Note>
 
 最后更新：2026-01-01
 
