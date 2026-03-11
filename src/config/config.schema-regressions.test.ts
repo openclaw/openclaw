@@ -75,6 +75,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts channels.whatsapp.systemPrompt at root and account scope", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          systemPrompt: "Reply directly.",
+          accounts: {
+            work: {
+              systemPrompt: "Reply as work.",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

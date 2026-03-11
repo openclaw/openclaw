@@ -257,6 +257,11 @@ export async function processMessage(params: {
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.route.accountId,
+  });
+  const groupSystemPrompt = account.systemPrompt?.trim() || undefined;
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "whatsapp",
@@ -316,6 +321,7 @@ export async function processMessage(params: {
     ChatType: params.msg.chatType,
     ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
     GroupSubject: params.msg.groupSubject,
+    GroupSystemPrompt: groupSystemPrompt,
     GroupMembers: formatGroupMembers({
       participants: params.msg.groupParticipants,
       roster: params.groupMemberNames.get(params.groupHistoryKey),

@@ -15,6 +15,7 @@ export type ResolvedWhatsAppAccount = {
   enabled: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
+  systemPrompt?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
@@ -132,6 +133,7 @@ export function resolveWhatsAppAccount(params: {
     sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
       accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    systemPrompt: accountCfg?.systemPrompt ?? rootCfg?.systemPrompt,
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,

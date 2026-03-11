@@ -236,6 +236,42 @@ describe("web processMessage inbound contract", () => {
     expect(getDispatcherResponsePrefix()).toBeUndefined();
   });
 
+  it("passes account-level WhatsApp systemPrompt into the inbound context", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        cfg: {
+          channels: {
+            whatsapp: {
+              systemPrompt: "Reply casually.",
+              accounts: {
+                default: {
+                  systemPrompt: "Reply directly with text.",
+                },
+              },
+            },
+          },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        msg: {
+          id: "msg-system-prompt",
+          from: "+1555",
+          to: "+2000",
+          chatType: "direct",
+          body: "hi",
+        },
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const ctx = capturedCtx as any;
+    expect(ctx?.GroupSystemPrompt).toBe("Reply directly with text.");
+  });
+
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {
     capturedCtx = undefined;
     const groupHistories = new Map<string, Array<{ sender: string; body: string }>>([

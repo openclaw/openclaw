@@ -1498,6 +1498,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+  "channels.whatsapp.systemPrompt":
+    "Optional system prompt snippet prepended to inbound WhatsApp turns. Account-level values override the root WhatsApp prompt.",
   "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
   "channels.whatsapp.debounceMs":
     "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",

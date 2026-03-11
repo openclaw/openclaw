@@ -93,6 +93,8 @@ type WhatsAppConfigCore = {
   messagePrefix?: string;
   /** Outbound response prefix override. */
   responsePrefix?: string;
+  /** Optional system prompt snippet applied to inbound WhatsApp turns. */
+  systemPrompt?: string;
 };
 
 export type WhatsAppConfig = WhatsAppConfigCore &
