@@ -102,10 +102,32 @@ export function buildMSTeamsGraphMessageUrls(params: {
         `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
       );
     }
+    // Fallback: Teams channel thread IDs (19:...@thread.tacv2) are rejected by
+    // /teams/{guid}/channels/ but accepted by /chats/{threadId}/messages/.
+    // Add /chats/ URLs so we succeed even when teamId is not a GUID.
+    const convIdFallback = params.conversationId?.trim();
+    if (convIdFallback) {
+      if (replyToId) {
+        for (const candidate of messageIdCandidates) {
+          if (candidate !== replyToId) {
+            urls.push(
+              `${GRAPH_ROOT}/chats/${encodeURIComponent(convIdFallback)}/messages/${encodeURIComponent(replyToId)}/replies/${encodeURIComponent(candidate)}`,
+            );
+          }
+        }
+      }
+      for (const candidate of messageIdCandidates) {
+        urls.push(
+          `${GRAPH_ROOT}/chats/${encodeURIComponent(convIdFallback)}/messages/${encodeURIComponent(candidate)}`,
+        );
+      }
+    }
     return Array.from(new Set(urls));
   }
 
-  const chatId = params.conversationId?.trim() || readNestedString(params.channelData, ["chatId"]);
+  // For DM/group chats, prefer channelData.chatId (proper chat GUID) over
+  // conversationId which may be a Bot Framework conversation ID.
+  const chatId = readNestedString(params.channelData, ["chatId"]) || params.conversationId?.trim();
   if (!chatId) {
     return [];
   }
