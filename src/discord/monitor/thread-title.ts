@@ -4,6 +4,7 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { getApiKeyForModel } from "../../agents/model-auth.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import { extractAssistantText } from "../../agents/pi-embedded-utils.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -107,7 +108,12 @@ async function resolveThreadTitleModel(params: {
 }): Promise<ThreadTitleModel | null> {
   const authStorage = discoverAuthStorage(params.selection.agentDir);
   const modelRegistry = discoverModels(authStorage, params.selection.agentDir);
-  const model = modelRegistry.find(params.selection.provider, params.selection.modelId);
+  const model = resolveModelWithRegistry({
+    provider: params.selection.provider,
+    modelId: params.selection.modelId,
+    modelRegistry,
+    cfg: params.cfg,
+  });
   if (!model) {
     logVerbose(
       `thread-title: model not found for agent ${params.agentId}: ${params.selection.provider}/${params.selection.modelId}`,
