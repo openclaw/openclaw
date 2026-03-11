@@ -3,6 +3,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { normalizeProviderId, normalizeProviderIdForAuth } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
+  saveProvisionedAuthProfileStore,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
@@ -46,6 +47,7 @@ export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
+  syncProvisionedCopy?: boolean;
 }): void {
   const credential =
     params.credential.type === "api_key"
@@ -61,6 +63,9 @@ export function upsertAuthProfile(params: {
   const store = ensureAuthProfileStore(params.agentDir);
   store.profiles[params.profileId] = credential;
   saveAuthProfileStore(store, params.agentDir);
+  if (params.syncProvisionedCopy) {
+    saveProvisionedAuthProfileStore(store, params.agentDir);
+  }
 }
 
 export async function upsertAuthProfileWithLock(params: {
