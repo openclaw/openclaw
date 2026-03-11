@@ -133,6 +133,107 @@ some code
     });
   });
 
+  describe("<notts> tag handling", () => {
+    it("keeps <notts> content visible but removes it from spoken text", () => {
+      const input = `Here are the results:
+
+<notts>
+| Name  | Score |
+|-------|-------|
+| Alice | 95    |
+</notts>
+
+Summary: Alice won.`;
+
+      const { visibleText, spokenText } = preprocessTtsText(input);
+
+      // visibleText: table content visible, <notts> tags stripped
+      expect(visibleText).toContain("| Name  | Score |");
+      expect(visibleText).toContain("| Alice | 95    |");
+      expect(visibleText).not.toContain("<notts>");
+      expect(visibleText).not.toContain("</notts>");
+
+      // spokenText: entire <notts> block removed
+      expect(spokenText).not.toContain("| Name");
+      expect(spokenText).not.toContain("| Alice | 95");
+      expect(spokenText).toContain("Here are the results:");
+      expect(spokenText).toContain("Summary: Alice won.");
+    });
+
+    it("handles <notts> with code blocks inside", () => {
+      const input = `Explanation:
+
+<notts>
+\`\`\`swift
+struct Foo { let bar: Int }
+\`\`\`
+</notts>
+
+That's the struct.`;
+
+      const { visibleText, spokenText } = preprocessTtsText(input);
+
+      expect(visibleText).toContain("struct Foo");
+      expect(visibleText).not.toContain("<notts>");
+      expect(spokenText).not.toContain("struct Foo");
+      expect(spokenText).toContain("That's the struct.");
+    });
+
+    it("handles <notts> combined with <tts> for alternative text", () => {
+      const input = `Status update:
+
+<notts>
+| Feature | Status |
+|---------|--------|
+| Voice   | Done   |
+| Agent   | WIP    |
+</notts>
+<tts>Voice is done, Agent is work in progress.</tts>
+
+Moving on.`;
+
+      const { visibleText, spokenText } = preprocessTtsText(input);
+
+      // visibleText: table shown, tts alternative hidden
+      expect(visibleText).toContain("| Voice   | Done   |");
+      expect(visibleText).not.toContain("Voice is done");
+      expect(visibleText).not.toContain("<notts>");
+      expect(visibleText).not.toContain("<tts>");
+
+      // spokenText: table hidden, tts alternative spoken
+      expect(spokenText).not.toContain("|");
+      expect(spokenText).toContain("Voice is done, Agent is work in progress.");
+      expect(spokenText).toContain("Moving on.");
+    });
+
+    it("is case-insensitive", () => {
+      const input = "Hello <NOTTS>secret</NOTTS> world.";
+      const { visibleText, spokenText } = preprocessTtsText(input);
+      expect(visibleText).toContain("secret");
+      expect(visibleText).not.toContain("<NOTTS>");
+      expect(spokenText).not.toContain("secret");
+    });
+
+    it("handles multiple <notts> blocks", () => {
+      const input = "A <notts>hidden1</notts> B <notts>hidden2</notts> C";
+      const { visibleText, spokenText } = preprocessTtsText(input);
+      expect(visibleText).toContain("hidden1");
+      expect(visibleText).toContain("hidden2");
+      expect(spokenText).not.toContain("hidden1");
+      expect(spokenText).not.toContain("hidden2");
+      expect(spokenText).toContain("A");
+      expect(spokenText).toContain("B");
+      expect(spokenText).toContain("C");
+    });
+
+    it("preserves <notts> tags when processTtsTags is false", () => {
+      const input = "Hello <notts>world</notts> there.";
+      const { visibleText, spokenText } = preprocessTtsText(input, { processTtsTags: false });
+      expect(spokenText).toContain("<notts>world</notts>");
+      expect(visibleText).toContain("<notts>world</notts>");
+    });
+  });
+
   describe("passthrough (no special content)", () => {
     it("returns text unchanged when no special content is present", () => {
       const input = "Just a normal sentence with no code or tables.";

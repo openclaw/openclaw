@@ -45,6 +45,13 @@ export function preprocessTtsText(
   let spokenText = text;
 
   if (processTtsTags) {
+    // <notts>...</notts>: content visible in chat but NOT spoken.
+    // visibleText: strip the tags, keep the inner content
+    visibleText = visibleText.replace(/<\/?notts>/gi, "");
+    // spokenText: remove <notts>...</notts> blocks entirely
+    spokenText = spokenText.replace(/<notts>[\s\S]*?<\/notts>/gi, "");
+
+    // <tts>...</tts>: content spoken but NOT visible in chat.
     // spokenText: replace <tts>content</tts> with the inner content
     spokenText = spokenText.replace(/<tts>([\s\S]*?)<\/tts>/gi, "$1");
     // visibleText: remove <tts>...</tts> entirely
