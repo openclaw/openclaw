@@ -18,7 +18,11 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
-import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
+import {
+  DiscordMessageListener,
+  DiscordReactionListener,
+  DiscordReactionRemoveListener,
+} from "./monitor/listeners.js";
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
@@ -834,19 +838,23 @@ describe("discord media payload", () => {
 // These test that handleDiscordReactionEvent (via DiscordReactionListener)
 // properly handles DM reactions instead of silently dropping them.
 
-const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
-  enqueueSystemEventSpy: vi.fn(),
-  resolveAgentRouteMock: vi.fn((params: unknown) => ({
-    agentId: "default",
-    channel: "discord",
-    accountId: "acc-1",
-    sessionKey: "discord:acc-1:dm:user-1",
-    ...(typeof params === "object" && params !== null ? { _params: params } : {}),
-  })),
-}));
+const { enqueueSystemEventSpy, clearSystemEventDedupeKeySpy, resolveAgentRouteMock } = vi.hoisted(
+  () => ({
+    enqueueSystemEventSpy: vi.fn(),
+    clearSystemEventDedupeKeySpy: vi.fn(),
+    resolveAgentRouteMock: vi.fn((params: unknown) => ({
+      agentId: "default",
+      channel: "discord",
+      accountId: "acc-1",
+      sessionKey: "discord:acc-1:dm:user-1",
+      ...(typeof params === "object" && params !== null ? { _params: params } : {}),
+    })),
+  }),
+);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,
+  clearSystemEventDedupeKey: clearSystemEventDedupeKeySpy,
 }));
 
 vi.mock("../routing/resolve-route.js", () => ({
@@ -952,6 +960,7 @@ function makeReactionListenerParams(overrides?: {
 describe("discord DM reaction handling", () => {
   beforeEach(() => {
     enqueueSystemEventSpy.mockClear();
+    clearSystemEventDedupeKeySpy.mockClear();
     resolveAgentRouteMock.mockClear();
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   });
@@ -1234,6 +1243,38 @@ describe("discord DM reaction handling", () => {
     const options = commandCall?.[1] as { dedupeKey?: string; dedupeTtlMs?: number };
     expect(options.dedupeKey).toBe("discord:reaction:cmd:added:msg-replay-1:123:✅:accept");
     expect(options.dedupeTtlMs).toBe(60_000);
+  });
+
+  it("clears triage command dedupe key on reaction remove", async () => {
+    clearSystemEventDedupeKeySpy.mockClear();
+
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      botAsAuthor: true,
+      emojiName: "✅",
+      userId: "123",
+      messageId: "msg-replay-1",
+      guild: { name: "Test Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionRemoveListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "own",
+            users: ["123"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(clearSystemEventDedupeKeySpy).toHaveBeenCalledOnce();
+    const [sessionKey, dedupeKey] = clearSystemEventDedupeKeySpy.mock.calls[0] as [string, string];
+    expect(sessionKey).toBe("discord:acc-1:dm:user-1");
+    expect(dedupeKey).toBe("discord:reaction:cmd:added:msg-replay-1:123:✅:accept");
   });
 });
 

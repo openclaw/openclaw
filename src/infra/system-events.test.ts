@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
+  clearSystemEventDedupeKey,
   enqueueSystemEvent,
   isSystemEventContextChanged,
   peekSystemEvents,
@@ -93,6 +94,27 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("allows re-enqueue after dedupe key is explicitly cleared", () => {
+    const sessionKey = "agent:main:test-dedupe-key-clear";
+    const dedupeKey = "discord:reaction:cmd:added:msg-1:user-1:✅:accept";
+
+    const first = enqueueSystemEvent("Reaction command: accept", {
+      sessionKey,
+      dedupeKey,
+      dedupeTtlMs: 60_000,
+    });
+    const cleared = clearSystemEventDedupeKey(sessionKey, dedupeKey);
+    const second = enqueueSystemEvent("Reaction command: accept (retry)", {
+      sessionKey,
+      dedupeKey,
+      dedupeTtlMs: 60_000,
+    });
+
+    expect(first).toBe(true);
+    expect(cleared).toBe(true);
+    expect(second).toBe(true);
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {

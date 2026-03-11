@@ -159,6 +159,19 @@ export function hasSystemEvents(sessionKey: string) {
   return (queues.get(key)?.queue.length ?? 0) > 0;
 }
 
+export function clearSystemEventDedupeKey(sessionKey: string, dedupeKey?: string | null) {
+  const key = requireSessionKey(sessionKey);
+  const normalized = normalizeDedupeKey(dedupeKey);
+  if (!normalized) {
+    return false;
+  }
+  const entry = queues.get(key);
+  if (!entry) {
+    return false;
+  }
+  return entry.dedupeKeys.delete(normalized);
+}
+
 export function resetSystemEventsForTest() {
   queues.clear();
 }

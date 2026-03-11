@@ -11,7 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { clearSystemEventDedupeKey, enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
@@ -550,14 +550,7 @@ async function handleDiscordReactionEvent(
         allowNameMatching: params.allowNameMatching,
       });
     };
-    const emitReactionCommand = (params: {
-      route: ReturnType<typeof resolveAgentRoute>;
-      contextKey: string;
-      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
-    }) => {
-      if (action !== "added" || !canEmitReactionCommand({ channelConfig: params.channelConfig })) {
-        return;
-      }
+    const resolveReactionCommand = () => {
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
       const reactionCommand =
         emojiLabel === "✅"
@@ -570,14 +563,33 @@ async function handleDiscordReactionEvent(
                 ? "confirm"
                 : null;
       if (!reactionCommand) {
+        return null;
+      }
+      const dedupeKey = `discord:reaction:cmd:added:${data.message_id}:${user.id}:${emojiLabel}:${reactionCommand}`;
+      return { emojiLabel, reactionCommand, dedupeKey };
+    };
+    const emitReactionCommand = (params: {
+      route: ReturnType<typeof resolveAgentRoute>;
+      contextKey: string;
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+    }) => {
+      const resolved = resolveReactionCommand();
+      if (!resolved) {
+        return;
+      }
+      if (action === "removed") {
+        clearSystemEventDedupeKey(params.route.sessionKey, resolved.dedupeKey);
+        return;
+      }
+      if (action !== "added" || !canEmitReactionCommand({ channelConfig: params.channelConfig })) {
         return;
       }
       enqueueSystemEvent(
-        `Reaction command: ${reactionCommand} (${emojiLabel}) for message ${data.message_id}`,
+        `Reaction command: ${resolved.reactionCommand} (${resolved.emojiLabel}) for message ${data.message_id}`,
         {
           sessionKey: params.route.sessionKey,
           contextKey: params.contextKey,
-          dedupeKey: `discord:reaction:cmd:${action}:${data.message_id}:${user.id}:${emojiLabel}:${reactionCommand}`,
+          dedupeKey: resolved.dedupeKey,
           dedupeTtlMs: 60_000,
         },
       );
