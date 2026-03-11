@@ -50,6 +50,10 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
+ARG HTTP_PROXY
+ARG http_proxy
+ARG HTTPS_PROXY
+ARG https_proxy
 # Import proxy args if set
 ENV HTTP_PROXY="${HTTP_PROXY}"
 ENV http_proxy="${http_proxy}"
