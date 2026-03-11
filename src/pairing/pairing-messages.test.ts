@@ -91,6 +91,7 @@ describe("buildPairingReply", () => {
         pairingMessage: { showCliHint: false },
       });
       expect(text).not.toContain("openclaw");
+      expect(text).not.toContain("Ask the bot owner to approve with:");
       expect(text).toContain("ABC123");
     });
 
@@ -103,6 +104,18 @@ describe("buildPairingReply", () => {
       });
       expect(text).toContain("Share this code with your contact.");
       expect(text).not.toContain("bot owner");
+    });
+
+    it("applies senderIdLabel overrides centrally", () => {
+      const text = buildPairingReply({
+        channel: "imessage",
+        idLine: "Your iMessage sender id: +15550001111",
+        senderId: "+15550001111",
+        code: "ABC123",
+        pairingMessage: { senderIdLabel: "Contact ID:" },
+      });
+      expect(text).toContain("Contact ID: +15550001111");
+      expect(text).not.toContain("Your iMessage sender id:");
     });
 
     it("applies no changes when pairingMessage is undefined (backward compat)", () => {

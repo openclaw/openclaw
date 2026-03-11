@@ -294,17 +294,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return;
       }
       const pairingMessageCfg = imessageCfg.pairingMessage;
+      const senderIdLine = `Your iMessage sender id: ${decision.senderId}`;
       await issuePairingChallenge({
         channel: "imessage",
         senderId: decision.senderId,
-        senderIdLine: pairingMessageCfg?.senderIdLabel
-          ? `${pairingMessageCfg.senderIdLabel} ${decision.senderId}`
-          : `Your iMessage sender id: ${decision.senderId}`,
+        senderIdLine,
         buildReplyText: pairingMessageCfg
-          ? ({ code, senderIdLine }) =>
+          ? ({ code, senderIdLine, senderId }) =>
               buildPairingReply({
                 channel: "imessage",
                 idLine: senderIdLine,
+                senderId,
                 code,
                 pairingMessage: pairingMessageCfg,
               })

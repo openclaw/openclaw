@@ -82,17 +82,17 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "pairing") {
     try {
       const telegramUserId = sender.userId ?? sender.candidateId;
+      const senderIdLine = `Your Telegram user id: ${telegramUserId}`;
       await issuePairingChallenge({
         channel: "telegram",
         senderId: telegramUserId,
-        senderIdLine: pairingMessageCfg?.senderIdLabel
-          ? `${pairingMessageCfg.senderIdLabel} ${telegramUserId}`
-          : `Your Telegram user id: ${telegramUserId}`,
+        senderIdLine,
         buildReplyText: pairingMessageCfg
-          ? ({ code, senderIdLine }) =>
+          ? ({ code, senderIdLine, senderId }) =>
               buildPairingReply({
                 channel: "telegram",
                 idLine: senderIdLine,
+                senderId,
                 code,
                 pairingMessage: pairingMessageCfg,
               })

@@ -35,15 +35,22 @@ export function buildPairingReply(params: {
   channel: PairingChannel;
   idLine: string;
   code: string;
+  senderId?: string;
   pairingMessage?: PairingMessageConfig;
 }): string {
-  const { channel, idLine, code, pairingMessage: cfg } = params;
+  const { channel, idLine: idLineParam, code, senderId, pairingMessage: cfg } = params;
   const header = cfg?.header ?? "OpenClaw: access not configured.";
   const codeLabel = cfg?.codeLabel ?? "Pairing code:";
   const footer = cfg?.footer ?? "Ask the bot owner to approve with:";
   const showCliHint = cfg?.showCliHint ?? true;
+  const applyDefaultFooter = cfg?.footer !== undefined || showCliHint;
+  const resolvedIdLine =
+    cfg?.senderIdLabel && senderId ? `${cfg.senderIdLabel} ${senderId}` : idLineParam;
 
-  const lines = [header, "", idLine, "", `${codeLabel} ${code}`, "", footer];
+  const lines = [header, "", resolvedIdLine, "", `${codeLabel} ${code}`];
+  if (applyDefaultFooter) {
+    lines.push("", footer);
+  }
   if (showCliHint) {
     lines.push(formatCliCommand(`openclaw pairing approve ${channel} ${code}`));
   }
