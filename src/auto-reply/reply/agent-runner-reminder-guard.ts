@@ -45,8 +45,13 @@ export async function hasSessionRelatedCronJobs(params: {
       if (job.sessionKey && job.sessionKey === params.sessionKey) {
         return true;
       }
-      // Isolated job (no sessionKey): match by agentId.
-      if (!job.sessionKey && params.agentId && job.agentId === params.agentId) {
+      // Isolated job (sessionTarget=isolated, no sessionKey): match by agentId.
+      if (
+        job.sessionTarget === "isolated" &&
+        !job.sessionKey &&
+        params.agentId &&
+        job.agentId === params.agentId
+      ) {
         return true;
       }
       return false;

@@ -12,7 +12,12 @@ import { hasSessionRelatedCronJobs } from "./agent-runner-reminder-guard.js";
 const loadCronStoreMock = vi.mocked(loadCronStore);
 
 function makeStore(
-  jobs: Array<{ enabled: boolean; sessionKey?: string; agentId?: string }>,
+  jobs: Array<{
+    enabled: boolean;
+    sessionKey?: string;
+    agentId?: string;
+    sessionTarget?: "main" | "isolated";
+  }>,
 ): CronStoreFile {
   return {
     version: 1,
@@ -22,7 +27,7 @@ function makeStore(
       enabled: j.enabled,
       sessionKey: j.sessionKey,
       agentId: j.agentId,
-      sessionTarget: "main" as const,
+      sessionTarget: j.sessionTarget ?? "main",
       schedule: { cron: "0 * * * *", tz: "UTC" },
       payload: { kind: "systemEvent" as const, text: "test" },
       createdAtMs: Date.now(),
@@ -52,23 +57,39 @@ describe("hasSessionRelatedCronJobs", () => {
   });
 
   it("returns true for an isolated job matching agentId", async () => {
-    loadCronStoreMock.mockResolvedValue(makeStore([{ enabled: true, agentId: "main" }]));
+    loadCronStoreMock.mockResolvedValue(
+      makeStore([{ enabled: true, agentId: "main", sessionTarget: "isolated" }]),
+    );
 
     const result = await hasSessionRelatedCronJobs({ sessionKey: "agent:main", agentId: "main" });
     expect(result).toBe(true);
   });
 
   it("returns false for an isolated job with mismatched agentId", async () => {
-    loadCronStoreMock.mockResolvedValue(makeStore([{ enabled: true, agentId: "ops" }]));
+    loadCronStoreMock.mockResolvedValue(
+      makeStore([{ enabled: true, agentId: "ops", sessionTarget: "isolated" }]),
+    );
 
     const result = await hasSessionRelatedCronJobs({ sessionKey: "agent:main", agentId: "main" });
     expect(result).toBe(false);
   });
 
   it("returns false for an isolated job when agentId is not provided in params", async () => {
-    loadCronStoreMock.mockResolvedValue(makeStore([{ enabled: true, agentId: "main" }]));
+    loadCronStoreMock.mockResolvedValue(
+      makeStore([{ enabled: true, agentId: "main", sessionTarget: "isolated" }]),
+    );
 
     const result = await hasSessionRelatedCronJobs({ sessionKey: "agent:main" });
+    expect(result).toBe(false);
+  });
+
+  it("returns false for a main job without sessionKey sharing agentId", async () => {
+    // sessionTarget=main but no sessionKey — should NOT match by agentId fallback
+    loadCronStoreMock.mockResolvedValue(
+      makeStore([{ enabled: true, agentId: "main", sessionTarget: "main" }]),
+    );
+
+    const result = await hasSessionRelatedCronJobs({ sessionKey: "agent:main", agentId: "main" });
     expect(result).toBe(false);
   });
 
