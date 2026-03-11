@@ -176,6 +176,28 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
     expect(result.config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:19000");
   });
 
+  it("includes origins for both override and configured bind modes when different", () => {
+    const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "myhost.local",
+          port: 18789,
+        },
+      },
+      { bindOverride: "lan" },
+    );
+    expect(result.seededOrigins).not.toBe(null);
+    expect(result.bind).toBe("lan");
+    // Should include localhost origins (for both modes)
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain("http://localhost:18789");
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain("http://127.0.0.1:18789");
+    // Should also include custom host origin (for future runs without override)
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+      "http://myhost.local:18789",
+    );
+  });
+
   it("skips seeding when Control UI is explicitly disabled", () => {
     const result = ensureControlUiAllowedOriginsForNonLoopbackBind(
       {

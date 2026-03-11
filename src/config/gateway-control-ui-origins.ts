@@ -73,11 +73,31 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   }
 
   const port = resolveGatewayPortWithDefault(opts?.defaultPort, config.gateway?.port);
-  const seededOrigins = buildDefaultControlUiAllowedOrigins({
+
+  // Build origins for the effective bind mode (override or configured)
+  let allOrigins = buildDefaultControlUiAllowedOrigins({
     port,
     bind,
     customBindHost: config.gateway?.customBindHost,
   });
+
+  // If using bindOverride and it differs from configured bind, also include
+  // origins for the configured bind mode so future runs without override work
+  if (
+    opts?.bindOverride &&
+    isGatewayNonLoopbackBindMode(config.gateway?.bind) &&
+    opts.bindOverride !== config.gateway.bind
+  ) {
+    const configuredOrigins = buildDefaultControlUiAllowedOrigins({
+      port,
+      bind: config.gateway.bind,
+      customBindHost: config.gateway?.customBindHost,
+    });
+    // Merge and dedupe
+    const merged = new Set([...allOrigins, ...configuredOrigins]);
+    allOrigins = [...merged];
+  }
+
   return {
     config: {
       ...config,
@@ -85,11 +105,11 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
         ...config.gateway,
         controlUi: {
           ...config.gateway?.controlUi,
-          allowedOrigins: seededOrigins,
+          allowedOrigins: allOrigins,
         },
       },
     },
-    seededOrigins,
+    seededOrigins: allOrigins,
     bind,
   };
 }
