@@ -2,88 +2,90 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.3.11
-
-### Changes
-
-- Chat/header: add channel-binding selector — sessions can be bound to an external delivery channel (Telegram, Discord, Slack, etc.) directly from the chat header; when bound, replies are delivered to both the webchat UI and the external channel simultaneously (dual delivery)
-- Chat/messages: add per-turn input token badges showing context tokens consumed each turn (Zap icon, formatted as `k`/`M`); assistant bubbles show cumulative context delta and user bubbles show incremental input growth
-- Chat/sidebar: add session filter panel with type filter and date-range selector (Today / This Week / This Month / custom), persisted to `localStorage`
-- Chat/input: add browser-native speech-to-text with real-time interim transcription, falling back to server STT (Whisper/OpenAI/Groq) when browser API is unavailable or unreachable; add TTS speaking indicator while audio plays
-- UI/docs: rewrite in-app docs viewer with fumadocs-core headless integration — Cmd+K full-text search with fuzzy matching (`ignoreLocation`) and post-render term highlighting; numbered sections in sidebar and TOC; reading progress bar and estimated reading time; heading deep-link anchor copy buttons; breadcrumb navigation with internal `<Link>` routing; mobile sidebar drawer; Mermaid diagram rendering with dark-mode sync and click-to-zoom overlay; syntax-highlighted code blocks (Shiki) with language badges; prev/next page navigation; per-page feedback widget
-- Docs: add reference pages for Agents UI (Browse, Organization, Installed, Registries, Health), Visualize canvas, Memory (Index Status, Files, Search, Activity Log), and Chat
-- MCP: native MCP client integration — connect to any MCP server (HTTP, SSE, Stdio transports), discover tools dynamically, and register them as native agent tools; two-tier architecture with direct registration for small deployments and progressive-disclosure Tool Search (`mcp_search` meta-tool) for scaling to many servers
-- MCP/scope: three-tier installation scope system (user/project/local) with narrowest-wins merge; CRUD helpers for scope-aware config management
-- MCP/UI: full server management — Add, Edit (pre-populated), Remove, Enable/Disable with runtime connect/disconnect, Test with live ping and latency measurement, Server detail panel with discovered tools list
-- MCP/UI: Browse, Registries, and Health pages for registry-based server discovery and monitoring
-- MCP/gateway: scope-aware RPC handlers (`mcp.servers.*`, `mcp.health.*`, `mcp.registry.*`, `mcp.browse.*`) persisting to scope YAML files
-- Docs: add MCP Integration page to in-app docs
-
-- UI/docs: add image rendering support to Markdown component; add infographic images to Operator1 overview (hierarchy + gateway architecture diagrams)
-- UI/docs: rewrite `/images/` paths to `/openclaw-docs/images/` in operator1 docs processor so shared doc images render in-app; symlink `public/openclaw-docs/images` to `docs/images/`
-- Project: add slash commands implementation spec and project task template
-- SQLite/Phase 8A: promote `session_entries.project_id` to dedicated column (migrated from `extra_json`); add index for project-scoped queries
-- SQLite/Phase 8B: project-scoped memory — each project gets an isolated memory directory at `~/.openclaw/workspace/projects/{id}/memory/`; memory search auto-indexes all project memory dirs via `extraPaths`
-- SQLite/Phase 3: add `audit_state` table with 15 AFTER triggers on 5 security-sensitive tables for state change auditing
-- Agents/projects: subagents now inherit parent session's project context automatically; system prompt injects project-specific instructions and memory path when bound
-- Agents/projects: `projects.bindSession` and `projects.unbindSession` RPCs persist project binding to SQLite; `buildProjectContextBlock()` instructs agents on project-scoped memory writes
-- Memory/QMD: discover native QMD collections (docs, project-tasks, skills-docs) alongside managed collections — search now spans all indexed content, not just memory + sessions
-- Memory/UI: add "docs" source filter to search tab, with amber badges and Database icons for native doc results; distinct from session (blue/Activity) and memory (default/FileText) results
-- Memory/UI: search result expand/collapse shows snippet in highlighted code block with `whitespace-pre-wrap`; session and doc results expand inline instead of navigating to Files tab
-- Memory/UI: Index Status tab shows native collections with amber "native" badges alongside managed collections
-- Memory/search: activity log RPC (`memory.activityLog`) returns recent memory operations (search, read, write, edit) parsed from session JSONL logs
-- Memory/health: health score computation (10-point scale with A–D grades) based on index content, embedding status, memory recency, daily notes, and fallback state
-- Memory/distillation: auto-distillation framework for condensing daily notes into knowledge entries with configurable thresholds
-- Memory/retention: daily note retention policy with configurable age limits and automatic cleanup
-- Slash commands: full slash command infrastructure — SQLite-backed registry with filesystem scanner, `skills.list`/`skills.invoke` RPCs, autocomplete menu in chat input, dedicated Commands page with categories and search
-- Heartbeat: add dedicated Heartbeat page with live status, schedule visualization, and template editor
-- Gateway/agents: `agents.updateIdentity` RPC for updating agent identity (emoji, tagline, role) at runtime; persisted to config
-
-### Fixes
-
-- Gateway/dispatch: webchat-originated sessions with a bound `deliveryContext` now deliver final replies, tool results, and block replies to both the webchat dispatcher and the external channel (dual delivery)
-- Gateway/sessions: `sessions.patch` now accepts `deliveryContext` to bind or unbind external channel routing on a live session; sets `lastChannel`/`lastTo` for subsequent dispatch
-- Gateway/server: add missing `mediaCleanup` to `createGatewayCloseHandler` — media cleanup interval was not being cleared on gateway shutdown
-- TypeScript/agent-pages: fix ReactFlow `useNodesState`/`useEdgesState` `never[]` inference by providing explicit `Node<AgentNodeData>` and `Edge<DepartmentEdgeData>` type parameters
-- TypeScript/agent-pages: fix `keyof AgentHealth` not assignable to `string` by dropping unnecessary `as keyof` casts on `DataTable` column keys
-- TypeScript/agent-pages: add typed `sendRpc` response generics across `preview.tsx`, `registries.tsx`, `health.tsx` and related components
-- TypeScript/config: widen `sectionIssues` prop type in `ConfigFormView` and `ConfigSidebar` to accept `Map<string, unknown>` (returned by `mapIssuesToSections`) in addition to `Record<string, unknown>`
-- TypeScript/tests: fix `delete` operand in `clawhub.test.ts` — cast lock object as `Partial<typeof lock>` so the key is optional
-- UI/code-block: fix `useRef` missing initial value for `timerRef` (React 19 strict types require an explicit `undefined` argument)
-- ui-next/tsconfig: bump TypeScript lib from `ES2022` to `ES2023` to enable `.toSorted()` and `.toReversed()` array methods used throughout the codebase
-- MCP/gateway: fix `getProjectRoot()` using `process.cwd()` (returns `/` from macOS app) — now uses `resolveAgentWorkspaceDir()` for correct scope resolution
-- MCP/gateway: fix Enable/Disable not taking effect at runtime — now calls `manager.connect()`/`manager.close()` immediately
-- MCP/gateway: fix Test button returning "not found" for disabled servers — now returns helpful status message
-- UI/DataTable: fix generic constraint from `Record<string, unknown>` to `object` to support typed interfaces across all MCP pages
-- UI/vite: externalize langium/vscode-languageserver deps (fumadocs transitive) to fix build failure
-
-## 2026.3.10
-
-### Changes
-
-- Agents/marketplace: full agent marketplace system with browse, install, create, remove, health check, and registry management via gateway RPCs (`agents.marketplace.*`)
-- Agents/manifests: YAML-based agent manifest schema with tier enforcement, dependency validation, deprecation tracking, and version lock files
-- Agents/config sync: automatic config synchronization from agent manifests — workspace deploy, allowAgents derivation, and drift detection
-- Agents/bundles: bundle support for installing groups of agents together with version conflict detection
-- Agents/registries: external agent registry support with sync, caching, and enable/disable controls
-- Agents/routing: keyword-based task routing with confidence scoring and priority tiebreakers
-- UI/agents: redesigned agent pages — Organization (React Flow hierarchy), Browse (marketplace grid), Installed (searchable list), Config (tabbed editor with Prompt/Identity/Tools/Workspace tabs), Health dashboard, Preview, and Registries management
-- UI/agents/config: smart Deploy/Upgrade button based on version drift detection, file categories (System/User/Memory) in workspace tab
-- UI/agents: clickable agent rows in table and grid views navigate to config editor
-
-### Fixes
-
-- Gateway: remove unused `agents.create`, `agents.update`, `agents.delete` RPCs (zero callers — replaced by marketplace RPCs)
-- CLI: remove old `agents add` and `agents delete` commands that bypassed the marketplace system
-- UI: remove legacy 1729-line agents page and associated components (org-chart, persona-tab, build-agent-hierarchy)
-
 ## Unreleased
 
 ### Changes
 
+- Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
+- Git/runtime state: ignore the gateway-generated `.dev-state` file so local runtime state does not show up as untracked repo noise. (#41848) Thanks @smysle.
+- ACP/sessions_spawn: add optional `resumeSessionId` for `runtime: "acp"` so spawned ACP sessions can resume an existing ACPX/Codex conversation instead of always starting fresh. (#41847) Thanks @pejmanjohn.
+- Exec/child commands: mark child command environments with `OPENCLAW_CLI` so subprocesses can detect when they were launched from the OpenClaw CLI. (#41411) Thanks @vincentkoc.
+- iOS/Home canvas: add a bundled welcome screen with a live agent overview that refreshes on connect, reconnect, and foreground return, and move the compact connection pill off the top-left canvas overlay. (#42456) Thanks @ngutman.
+- iOS/Home canvas: replace floating controls with a docked toolbar, make the bundled home scaffold adapt to smaller phones, and open chat in the resolved main session instead of a synthetic `ios` session. (#42456) Thanks @ngutman.
+- Discord/auto threads: add `autoArchiveDuration` channel config for auto-created threads so Discord thread archiving can stay at 1 hour, 1 day, 3 days, or 1 week instead of always using the 1-hour default. (#35065) Thanks @davidguttman.
+
 ### Breaking
 
+- Cron/doctor: tighten isolated cron delivery so cron jobs can no longer notify through ad hoc agent sends or fallback main-session summaries, and add `openclaw doctor --fix` migration for legacy cron storage and legacy notify/webhook delivery metadata. (#40998) Thanks @mbelinky.
+
 ### Fixes
+
+- Agents/text sanitization: strip leaked model control tokens (`<|...|>` and full-width `<｜...｜>` variants) from user-facing assistant text, preventing GLM-5 and DeepSeek internal delimiters from reaching end users. (#42173) Thanks @imwyvern.
+- Resolve web tool SecretRefs atomically at runtime. (#41599) Thanks @joshavant.
+- Feishu/local image auto-convert: pass `mediaLocalRoots` through the `sendText` local-image shim so allowed local image paths upload as Feishu images again instead of falling back to raw path text. (#40623) Thanks @ayanesakura.
+- ACP/ACPX plugin: bump the bundled `acpx` pin to `0.1.16` so plugin-local installs and strict version checks match the latest published CLI. (#41975) Thanks @dutifulbob.
+- macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
+- Gateway/Control UI: keep dashboard auth tokens in session-scoped browser storage so same-tab refreshes preserve remote token auth without restoring long-lived localStorage token persistence, while scoping tokens to the selected gateway URL and fragment-only bootstrap flow. (#40892) thanks @velvet-shark.
+- Secret files: harden CLI and channel credential file reads against path-swap races by requiring direct regular files for `*File` secret inputs and rejecting symlink-backed secret files.
+- Archive extraction: harden TAR and external `tar.bz2` installs against destination symlink and pre-existing child-symlink escapes by extracting into staging first and merging into the canonical destination with safe file opens.
+- Models/Kimi Coding: send `anthropic-messages` tools in native Anthropic format again so `kimi-coding` stops degrading tool calls into XML/plain-text pseudo invocations instead of real `tool_use` blocks. (#38669, #39907, #40552) Thanks @opriz.
+- Context engine/tests: add bundled-registry regression coverage for cross-chunk resolution, plugin-sdk re-exports, and concurrent chunk registration. (#40460) thanks @dsantoreis.
+- Agents/embedded runner: bound compaction retry waiting and drain embedded runs during SIGUSR1 restart so session lanes recover instead of staying blocked behind compaction. (#40324) thanks @cgdusek.
+- ACP/sessions.patch: allow `spawnedBy` and `spawnDepth` lineage fields on ACP session keys so `sessions_spawn` with `runtime: "acp"` no longer fails during child-session setup. Fixes #40971. (#40995) thanks @xaeon2026.
+- ACP/stop reason mapping: resolve gateway chat `state: "error"` completions as ACP `end_turn` instead of `refusal` so transient backend failures are not surfaced as deliberate refusals. (#41187) thanks @pejmanjohn.
+- ACP/setSessionMode: propagate gateway `sessions.patch` failures back to ACP clients so rejected mode changes no longer return silent success. (#41185) thanks @pejmanjohn.
+- Agents/embedded logs: add structured, sanitized lifecycle and failover observation events so overload and provider failures are easier to tail and filter. (#41336) thanks @altaywtf.
+- iOS/gateway foreground recovery: reconnect immediately on foreground return after stale background sockets are torn down, so the app no longer stays disconnected until a later wake path happens. (#41384) Thanks @mbelinky.
+- Cron/subagent followup: do not misclassify empty or `NO_REPLY` cron responses as interim acknowledgements that need a rerun, so deliberately silent cron jobs are no longer retried. (#41383) thanks @jackal092927.
+- Auth/cooldowns: reset expired auth-profile cooldown error counters before computing the next backoff so stale on-disk counters do not re-escalate into long cooldown loops after expiry. (#41028) thanks @zerone0x.
+- Gateway/node pending drain followup: keep `hasMore` true when the deferred baseline status item still needs delivery, and avoid allocating empty pending-work state for drain-only nodes with no queued work. (#41429) Thanks @mbelinky.
+- ACP/bridge mode: reject unsupported per-session MCP server setup and propagate rejected session-mode changes so IDE clients see explicit bridge limitations instead of silent success. (#41424) Thanks @mbelinky.
+- ACP/session UX: replay stored user and assistant text on `loadSession`, expose Gateway-backed session controls and metadata, and emit approximate session usage updates so IDE clients restore context more faithfully. (#41425) Thanks @mbelinky.
+- ACP/tool streaming: enrich `tool_call` and `tool_call_update` events with best-effort text content and file-location hints so IDE clients can follow bridge tool activity more naturally. (#41442) Thanks @mbelinky.
+- ACP/runtime attachments: forward normalized inbound image attachments into ACP runtime turns so ACPX sessions can preserve image prompt content on the runtime path. (#41427) Thanks @mbelinky.
+- ACP/regressions: add gateway RPC coverage for ACP lineage patching, ACPX runtime coverage for image prompt serialization, and an operator smoke-test procedure for live ACP spawn verification. (#41456) Thanks @mbelinky.
+- Agents/billing recovery: probe single-provider billing cooldowns on the existing throttle so topping up credits can recover without a manual gateway restart. (#41422) thanks @altaywtf.
+- ACP/follow-up hardening: make session restore and prompt completion degrade gracefully on transcript/update failures, enforce bounded tool-location traversal, and skip non-image ACPX turns the runtime cannot serialize. (#41464) Thanks @mbelinky.
+- Agents/fallback observability: add structured, sanitized model-fallback decision and auth-profile failure-state events with correlated run IDs so cooldown probes and failover paths are easier to trace in logs. (#41337) thanks @altaywtf.
+- Protocol/Swift model sync: regenerate pending node work Swift bindings after the landed `node.pending.*` schema additions so generated protocol artifacts are consistent again. (#41477) Thanks @mbelinky.
+- Discord/reply chunking: resolve the effective `maxLinesPerMessage` config across live reply paths and preserve `chunkMode` in the fast send path so long Discord replies no longer split unexpectedly at the default 17-line limit. (#40133) thanks @rbutera.
+- Logging/probe observations: suppress structured embedded and model-fallback probe warnings on the console without hiding error or fatal output. (#41338) thanks @altaywtf.
+- Agents/fallback: treat HTTP 499 responses as transient in both raw-text and structured failover paths so Anthropic-style client-closed overload responses trigger model fallback reliably. (#41468) thanks @zeroasterisk.
+- Plugins/context-engine model auth: expose `runtime.modelAuth` and plugin-sdk auth helpers so plugins can resolve provider/model API keys through the normal auth pipeline. (#41090) thanks @xinhuagu.
+- CLI/memory teardown: close cached memory search/index managers in the one-shot CLI shutdown path so watcher-backed memory caches no longer keep completed CLI runs alive after output finishes. (#40389) thanks @Julbarth.
+- Tools/web search: treat Brave `llm-context` grounding snippets as plain strings so `web_search` no longer returns empty snippet arrays in LLM Context mode. (#41387) thanks @zheliu2.
+- Telegram/exec approvals: reject `/approve` commands aimed at other bots, keep deterministic approval prompts visible when tool-result delivery fails, and stop resolved exact IDs from matching other pending approvals by prefix. (#37233) Thanks @huntharo.
+- Control UI/Sessions: restore single-column session table collapse on narrow viewport or container widths by moving the responsive table override next to the base grid rule and enabling inline-size container queries. (#12175) Thanks @benjipeng.
+- Telegram/final preview delivery: split active preview lifecycle from cleanup retention so missing archived preview edits avoid duplicate fallback sends without clearing the live preview or blocking later in-place finalization. (#41662) thanks @hougangdev.
+- Cron/state errors: record `lastErrorReason` in cron job state and keep the gateway schema aligned with the full failover-reason set, including regression coverage for protocol conformance. (#14382) thanks @futuremind2026.
+- Tools/web search: recover OpenRouter Perplexity citation extraction from `message.annotations` when chat-completions responses omit top-level citations. (#40881) Thanks @laurieluo.
+- Security/external content: treat whitespace-delimited `EXTERNAL UNTRUSTED CONTENT` boundary markers like underscore-delimited variants so prompt wrappers cannot bypass marker sanitization. (#35983) Thanks @urianpaul94.
+- Telegram/network env-proxy: apply configured transport policy to proxied HTTPS dispatchers as well as direct `NO_PROXY` bypasses, so resolver-scoped IPv4 fallback and network settings work consistently for env-proxied Telegram traffic. (#40740) Thanks @sircrumpet.
+- Agents/memory flush: forward `memoryFlushWritePath` through `runEmbeddedPiAgent` so memory-triggered flush turns keep the append-only write guard without aborting before tool setup. Follows up on #38574. (#41761) Thanks @frankekn.
+- CI/CodeQL Swift toolchain: select Xcode 26.1 before installing Swift build tools so the CodeQL Swift job uses Swift tools 6.2 on `macos-latest`. (#41787) thanks @BunsDev.
+- Sandbox/subagents: pass the real configured workspace through `sessions_spawn` inheritance when a parent agent runs in a copied-workspace sandbox, so child `/agent` mounts point at the configured workspace instead of the parent sandbox copy. (#40757) Thanks @dsantoreis.
+- Mattermost/plugin send actions: normalize direct `replyTo` fallback handling so threaded plugin sends trim blank IDs and reuse the correct reply target again. (#41176) Thanks @hnykda.
+- MS Teams/allowlist resolution: use the General channel conversation ID as the resolved team key (with Graph GUID fallback) so Bot Framework runtime `channelData.team.id` matching works for team and team/channel allowlist entries. (#41838) Thanks @BradGroux.
+- Mattermost/Markdown formatting: preserve first-line indentation when stripping bot mentions so nested list items and indented code blocks keep their structure, and render Mattermost tables natively by default instead of fenced-code fallback. (#18655) thanks @echo931.
+- Agents/fallback cooldown probing: cap cooldown-bypass probing to one attempt per provider per fallback run so multi-model same-provider cooldown chains can continue to cross-provider fallbacks instead of repeatedly stalling on duplicate cooldown probes. (#41711) Thanks @cgdusek.
+- Telegram/direct delivery: bridge direct delivery sends to internal `message:sent` hooks so internal hook listeners observe successful Telegram deliveries. (#40185) Thanks @vincentkoc.
+- Plugins/global hook runner: harden singleton state handling so shared global hook runner reuse does not leak or corrupt runner state across executions. (#40184) Thanks @vincentkoc.
+- Agents/fallback: recognize Poe `402 You've used up your points!` billing errors so configured model fallbacks trigger instead of surfacing the raw provider error. (#42278) Thanks @CryUshio.
+- Telegram/outbound HTML sends: chunk long HTML-mode messages, preserve plain-text fallback and silent-delivery params across retries, and cut over to plain text when HTML chunk planning cannot safely preserve the full message. (#42240) thanks @obviyus.
+- Agents/embedded overload logs: include the failing model and provider in error-path console output, with lifecycle regression coverage for the rendered and sanitized `consoleMessage`. (#41236) thanks @jiarung.
+- Agents/failover: treat Gemini `MALFORMED_RESPONSE` stop reasons as retryable timeouts so preview-model enum drift falls back cleanly instead of crashing the run, without also reclassifying malformed function-call errors. (#42292) Thanks @jnMetaCode.
+- Discord/Telegram outbound runtime config: thread runtime-resolved config through Discord and Telegram send paths so SecretRef-based credentials stay resolved during message delivery. (#42352) Thanks @joshavant.
+- Secrets/SecretRef: reject exec SecretRef traversal ids across schema, runtime, and gateway. (#42370) Thanks @joshavant.
+- Telegram/docs: clarify that `channels.telegram.groups` allowlists chats while `groupAllowFrom` allowlists users inside those chats, and point invalid negative chat IDs at the right config key. (#42451) Thanks @altaywtf.
+- Models/Alibaba Cloud Model Studio: wire `MODELSTUDIO_API_KEY` through shared env auth, implicit provider discovery, and shell-env fallback so onboarding works outside the wizard too. (#40634) Thanks @pomelo-nwu.
+- ACP/sessions_spawn: implicitly stream `mode="run"` ACP spawns to parent only for eligible subagent orchestrator sessions (heartbeat `target: "last"` with a usable session-local route), restoring parent progress relays without thread binding. (#42404) Thanks @davidguttman.
+- Sessions/reset model recompute: clear stale runtime model, context-token, and system-prompt metadata before session resets recompute the replacement session, so resets pick up current defaults and explicit overrides instead of reusing old runtime model state. (#41173) thanks @PonyX-lab.
+- Browser/Browserbase 429 handling: surface stable no-retry rate-limit guidance without buffering discarded HTTP 429 response bodies from remote browser services. (#40491) thanks @mvanhorn.
+- Gateway/auth: allow one trusted device-token retry on shared-token mismatch with recovery hints to prevent reconnect churn during token drift. (#42507) Thanks @joshavant.
+- Channels/allowlists: remove stale matcher caching so same-array allowlist edits and wildcard replacements take effect immediately, with regression coverage for in-place mutation cases.
+- Gateway/auth: fail closed when local `gateway.auth.*` SecretRefs are configured but unavailable, instead of silently falling back to `gateway.remote.*` credentials in local mode. Thanks @tdjackey.
+- Sandbox/fs bridge: pin staged writes to verified parent directories so temporary write files cannot materialize outside the allowed mount before atomic replace. Thanks @tdjackey.
+- Commands/config writes: enforce `configWrites` against both the originating account and the targeted account scope for `/config` and config-backed `/allowlist` edits, blocking sibling-account mutations while preserving gateway `operator.admin` flows. Thanks @tdjackey for reporting.
 
 ## 2026.3.8
 
@@ -139,6 +141,7 @@ Docs: https://docs.openclaw.ai
 - Docs/Changelog: correct the contributor credit for the bundled Control UI global-install fix to @LarytheLord. (#40420) Thanks @velvet-shark.
 - Telegram/media downloads: time out only stalled body reads so polling recovers from hung file downloads without aborting slow downloads that are still streaming data. (#40098) thanks @tysoncung.
 - Docker/runtime image: prune dev dependencies, strip build-only dist metadata for smaller Docker images. (#40307) Thanks @vincentkoc.
+- Subagents/sandboxing: restrict leaf subagents to their own spawned runs and remove leaf `subagents` control access so sandboxed leaf workers can no longer steer sibling sessions. Thanks @tdjackey.
 - Gateway/restart timeout recovery: exit non-zero when restart-triggered shutdown drains time out so launchd/systemd restart the gateway instead of treating the failed restart as a clean stop. Landed from contributor PR #40380 by @dsantoreis. Thanks @dsantoreis.
 - Gateway/config restart guard: validate config before service start/restart and keep post-SIGUSR1 startup failures from crashing the gateway process, reducing invalid-config restart loops and macOS permission loss. Landed from contributor PR #38699 by @lml2468. Thanks @lml2468.
 - Gateway/launchd respawn detection: treat `XPC_SERVICE_NAME` as a launchd supervision hint so macOS restarts exit cleanly under launchd instead of attempting detached self-respawn. Landed from contributor PR #20555 by @dimat. Thanks @dimat.
@@ -149,6 +152,10 @@ Docs: https://docs.openclaw.ai
 - MS Teams/authz: keep `groupPolicy: "allowlist"` enforcing sender allowlists even when a team/channel route allowlist is configured, so route matches no longer widen group access to every sender in that route. Thanks @zpbrent.
 - Security/system.run: bind approved `bun` and `deno run` script operands to on-disk file snapshots so post-approval script rewrites are denied before execution.
 - Skills/download installs: pin the validated per-skill tools root before writing downloaded archives, so rebinding the lexical tools path cannot redirect download writes outside the intended tools directory. Thanks @tdjackey.
+- Control UI/Debug: replace the Manual RPC free-text method field with a sorted dropdown sourced from gateway-advertised methods, and stack the form vertically for narrower layouts. (#14967) thanks @rixau.
+- Auth/profile resolution: log debug details when auto-discovered auth profiles fail during provider API-key resolution, so `--debug` output surfaces the real refresh/keychain/credential-store failure instead of only the generic missing-key message. (#41271) thanks @he-yufeng.
+- ACP/cancel scoping: scope `chat.abort` and shared-session ACP event routing by `runId` so one session cannot cancel or consume another session's run when they share the same gateway session key. (#41331) Thanks @pejmanjohn.
+- SecretRef/models: harden custom/provider secret persistence and reuse across models.json snapshots, merge behavior, runtime headers, and secret audits. (#42554) Thanks @joshavant.
 
 ## 2026.3.7
 
@@ -506,6 +513,8 @@ Docs: https://docs.openclaw.ai
 - Control UI/Telegram sender labels: preserve inbound sender labels in sanitized chat history so dashboard user-message groups split correctly and show real group-member names instead of `You`. (#39414) Thanks @obviyus.
 - Agents/failover 402 recovery: keep temporary spend-limit `402` payloads retryable, preserve explicit insufficient-credit billing detection even in long provider payloads, and allow throttled billing-cooldown probes so single-provider setups can recover instead of staying locked out. (#38533) Thanks @xialonglee.
 - Browser/config schema: accept `browser.profiles.*.driver: "openclaw"` while preserving legacy `"clawd"` compatibility in validated config. (#39374; based on #35621) Thanks @gambletan and @ingyukoh.
+- Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
+- Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
 
 ## 2026.3.2
 

@@ -592,6 +592,52 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.reply?.text).toContain("Config writes are disabled");
   });
 
+  it("blocks /config set when the target account disables writes", async () => {
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams(
+      "/config set channels.telegram.accounts.work.enabled=false",
+      cfg,
+      {
+        AccountId: "default",
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    );
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("blocks ambiguous channel-root /config writes from channel commands", async () => {
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: { telegram: { configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams('/config set channels.telegram={"enabled":false}', cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain(
+      "cannot replace channels, channel roots, or accounts collections",
+    );
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
   it("blocks /config set from gateway clients without operator.admin", async () => {
     const cfg = {
       commands: { config: true, text: true },
@@ -648,6 +694,49 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(writeConfigFileMock).toHaveBeenCalledOnce();
     expect(result.reply?.text).toContain("Config updated");
+  });
+
+  it("keeps /config set working for gateway operator.admin on protected account paths", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          telegram: {
+            accounts: {
+              work: { enabled: true, configWrites: false },
+            },
+          },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    const params = buildParams(
+      "/config set channels.telegram.accounts.work.enabled=false",
+      {
+        commands: { config: true, text: true },
+        channels: {
+          telegram: {
+            accounts: {
+              work: { enabled: true, configWrites: false },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write", "operator.admin"],
+      },
+    );
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config updated");
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
   });
 });
 
@@ -799,6 +888,31 @@ describe("handleCommands /allowlist", () => {
       entry: "789",
       accountId: "work",
     });
+  });
+
+  it("blocks config-targeted /allowlist edits when the target account disables writes", async () => {
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, allowFrom: ["123"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm --account work --config 789", cfg, {
+      AccountId: "default",
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
