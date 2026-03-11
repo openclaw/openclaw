@@ -337,6 +337,38 @@ describe("launchd install", () => {
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
 
+  it("rewrites the plist before bootstrap during restart", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        '  <dict>',
+        '    <key>Label</key>',
+        '    <string>ai.openclaw.gateway</string>',
+        '    <key>ProgramArguments</key>',
+        '    <array>',
+        '      <string>node</string>',
+        '      <string>gateway.js</string>',
+        '    </array>',
+        '  </dict>',
+        '</plist>',
+      ].join('\n'),
+    );
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(state.files.get(plistPath)).toContain('<key>StandardOutPath</key>');
+    expect(state.files.get(plistPath)).toContain('<string>node</string>');
+    const bootstrapIndex = state.launchctlCalls.findIndex((c) => c[0] === 'bootstrap');
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+  });
+
   it("waits for previous launchd pid to exit before bootstrapping", async () => {
     const env = createDefaultLaunchdEnv();
     state.printOutput = ["state = running", "pid = 4242"].join("\n");
