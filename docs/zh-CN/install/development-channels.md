@@ -5,10 +5,10 @@ read_when:
 summary: stable、beta 和 dev 渠道：语义、切换和标签
 title: 开发渠道
 x-i18n:
-  generated_at: "2026-02-03T10:07:21Z"
+  generated_at: "2026-03-11T12:00:00Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 2b01219b7e705044ce39838a0da7c7fa65c719809ab2f8a51e14529064af81bf
+  source_hash: a585ce9f2a9c61271c2a0f56cfb6c20645029a32
   source_path: install/development-channels.md
   workflow: 15
 ---
