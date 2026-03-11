@@ -268,4 +268,64 @@ describe("installToolResultContextGuard", () => {
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
   });
+
+  it("strips delivery-mirror messages from context", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 100_000,
+    });
+
+    const deliveryMirror = castAgentMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Hello from mirror" }],
+      provider: "openclaw",
+      model: "delivery-mirror",
+      timestamp: Date.now(),
+    });
+
+    const realAssistant = castAgentMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Hello from LLM" }],
+      provider: "anthropic",
+      model: "claude-3",
+      timestamp: Date.now(),
+    });
+
+    const contextForNextCall = [makeUser("hi"), realAssistant, deliveryMirror, makeUser("thanks")];
+
+    const result = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
+
+    expect(result).toHaveLength(3);
+    expect(result.some((m) => "model" in m && m.model === "delivery-mirror")).toBe(false);
+    expect(result.some((m) => "model" in m && m.model === "claude-3")).toBe(true);
+  });
+
+  it("preserves array identity when no delivery-mirror messages present", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 100_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("hi"),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+        provider: "anthropic",
+        model: "claude-3",
+        timestamp: Date.now(),
+      }),
+    ];
+
+    const result = await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    expect(result).toBe(contextForNextCall);
+  });
 });

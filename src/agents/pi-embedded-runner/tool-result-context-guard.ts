@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -208,13 +209,23 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
+
+    // Strip delivery-mirror entries before they reach the LLM.
+    // These are internal cross-channel delivery audit records (provider=openclaw,
+    // model=delivery-mirror) that should never appear in the model context.
+    // Pre-check avoids allocating a new array when none exist, preserving
+    // reference equality for the common case.
+    const filtered = contextMessages.some(isDeliveryMirrorMessage)
+      ? contextMessages.filter((msg) => !isDeliveryMirrorMessage(msg))
+      : contextMessages;
+
     enforceToolResultContextBudgetInPlace({
-      messages: contextMessages,
+      messages: filtered,
       contextBudgetChars,
       maxSingleToolResultChars,
     });
 
-    return contextMessages;
+    return filtered;
   }) as GuardableTransformContext;
 
   return () => {
