@@ -175,6 +175,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     // Avoid FD exhaustion on macOS when a workspace contains huge trees.
     // This watcher only needs to react to SKILL.md changes.
     ignored: DEFAULT_SKILLS_WATCH_IGNORED,
+    depth: 2,
   });
 
   const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
