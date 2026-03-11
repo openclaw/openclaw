@@ -1047,7 +1047,7 @@ export async function executeJobCore(
         error:
           kind === "systemEvent"
             ? "main job requires non-empty systemEvent text"
-            : 'main job requires payload.kind="systemEvent"',
+            : "main agentTurn job requires a non-empty message",
       };
     }
     // Preserve the job session namespace for main-target reminders so heartbeat

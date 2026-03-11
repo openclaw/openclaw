@@ -590,6 +590,23 @@ describe("resolveJobPayloadTextForMain", () => {
 
     expect(text).toBe("do the thing");
   });
+
+  it("returns undefined for empty main-session agentTurn messages", () => {
+    const text = resolveJobPayloadTextForMain({
+      id: "job-main-empty",
+      name: "job-main-empty",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "   " },
+      state: {},
+    } as CronJob);
+
+    expect(text).toBeUndefined();
+  });
 });
 
 describe("createJob delivery defaults", () => {

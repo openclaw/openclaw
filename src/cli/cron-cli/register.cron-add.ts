@@ -188,7 +188,7 @@ export function registerCronAddCommand(cron: Command) {
               : () => undefined;
           const sessionSource = optionSource("session");
           const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
-          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const inferredSessionTarget = "main";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
           if (sessionTarget !== "main" && sessionTarget !== "isolated") {

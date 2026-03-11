@@ -142,16 +142,6 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
-function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId">,
-  _defaultAgentId: string | undefined,
-) {
-  if (job.sessionTarget !== "main") {
-    return;
-  }
-  return;
-}
-
 const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
 const TELEGRAM_SLASH_TOPIC_REGEX = /^-?\d+\/\d+$/;
 
@@ -545,7 +535,6 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
-  assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
@@ -555,7 +544,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string },
+  _opts?: { defaultAgentId?: string },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -635,7 +624,6 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
-  assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
 }
