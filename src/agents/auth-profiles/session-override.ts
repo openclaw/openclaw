@@ -90,6 +90,31 @@ export async function resolveSessionAuthProfileOverride(params: {
     if (!profileId) {
       return undefined;
     }
+    const legacyEntry = store.profiles[profileId];
+    const legacyHasIdentity =
+      legacyEntry?.type === "oauth" &&
+      ((typeof legacyEntry.email === "string" && legacyEntry.email.trim().length > 0) ||
+        (typeof legacyEntry.accountId === "string" && legacyEntry.accountId.length > 0));
+    const matchesLegacyIdentity = (candidateId: string) => {
+      if (legacyEntry?.type !== "oauth") {
+        return false;
+      }
+      const entry = store.profiles[candidateId];
+      if (entry?.type !== "oauth") {
+        return false;
+      }
+      const sameEmail =
+        typeof legacyEntry.email === "string" &&
+        typeof entry.email === "string" &&
+        legacyEntry.email.trim().length > 0 &&
+        legacyEntry.email.trim() === entry.email.trim();
+      const sameAccount =
+        typeof legacyEntry.accountId === "string" &&
+        typeof entry.accountId === "string" &&
+        legacyEntry.accountId.length > 0 &&
+        legacyEntry.accountId === entry.accountId;
+      return sameEmail || sameAccount;
+    };
     const suggested = suggestOAuthProfileIdForLegacyDefault({
       cfg,
       store,
@@ -97,11 +122,15 @@ export async function resolveSessionAuthProfileOverride(params: {
       legacyProfileId: profileId,
     });
     const candidate = suggested && suggested !== profileId ? suggested : undefined;
-    if (candidate && order.includes(candidate) && !isProfileInCooldown(store, candidate)) {
+    if (
+      candidate &&
+      order.includes(candidate) &&
+      !isProfileInCooldown(store, candidate) &&
+      (!legacyHasIdentity || matchesLegacyIdentity(candidate))
+    ) {
       return candidate;
     }
     if (profileId.endsWith(":default")) {
-      const legacyEntry = store.profiles[profileId];
       const fallback = order.find((candidateId) => {
         if (candidateId === profileId || isProfileInCooldown(store, candidateId)) {
           return false;
@@ -113,23 +142,13 @@ export async function resolveSessionAuthProfileOverride(params: {
         if (entry?.type !== "oauth") {
           return false;
         }
-        if (legacyEntry?.type === "oauth") {
-          const sameEmail =
-            typeof legacyEntry.email === "string" &&
-            typeof entry.email === "string" &&
-            legacyEntry.email.trim().length > 0 &&
-            legacyEntry.email.trim() === entry.email.trim();
-          const sameAccount =
-            typeof legacyEntry.accountId === "string" &&
-            typeof entry.accountId === "string" &&
-            legacyEntry.accountId.length > 0 &&
-            legacyEntry.accountId === entry.accountId;
-          if (sameEmail || sameAccount) {
-            return true;
-          }
+        if (matchesLegacyIdentity(candidateId)) {
+          return true;
         }
-        // Compatibility fallback: any non-default oauth alias is still more canonical
-        // than provider:default for durable session overrides.
+        if (legacyHasIdentity) {
+          return false;
+        }
+        // Compatibility fallback: only when legacy default has no usable identity.
         return true;
       });
       if (fallback) {
