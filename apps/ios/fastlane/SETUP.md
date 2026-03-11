@@ -60,6 +60,13 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
+ASC auth is only required when:
+
+- uploading to TestFlight
+- auto-resolving the next build number from App Store Connect
+
+If you pass `--build-number` to `pnpm ios:beta:archive`, the local archive path does not need ASC auth.
+
 Archive locally without upload:
 
 ```bash

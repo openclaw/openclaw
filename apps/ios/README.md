@@ -56,7 +56,7 @@ Prereqs:
 - `xcodegen`
 - `fastlane`
 - Apple account signed into Xcode for automatic signing/provisioning
-- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh`
+- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh` when auto-resolving a beta build number or uploading to TestFlight
 
 Release behavior:
 
