@@ -87,7 +87,7 @@ RUN mkdir -p /root/.openfinclaw && \
     else \
       AGENTS_JSON=""; \
     fi && \
-    printf '{"gateway":{"mode":"local","bind":"lan","trustedProxies":["172.16.0.0/12","10.0.0.0/8"],"auth":{"mode":"token","token":"%s"},"controlUi":{"allowedOrigins":%s,"dangerouslyAllowHostHeaderOriginFallback":true,"allowInsecureAuth":true}},"plugins":{"enabled":false,"slots":{"memory":"none"}}%s}\n' \
+    printf '{"gateway":{"mode":"local","bind":"lan","trustedProxies":["172.16.0.0/12","10.0.0.0/8"],"auth":{"mode":"token","token":"%s"},"controlUi":{"allowedOrigins":%s,"dangerouslyAllowHostHeaderOriginFallback":true,"allowInsecureAuth":true}},"plugins":{"slots":{"memory":"none"}}%s}\n' \
     "${GATEWAY_AUTH_TOKEN}" "${ORIGINS_JSON}" "${AGENTS_JSON}" > /root/.openfinclaw/openfinclaw.json
 
 # 暴露端口 (实际端口由 GATEWAY_PORT 环境变量控制)
