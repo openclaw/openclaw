@@ -5,6 +5,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
@@ -66,7 +67,9 @@ vi.mock("../workspace-run.js", () => ({
 }));
 
 export const mockedFormatBillingErrorMessage = vi.fn(() => "");
-export const mockedClassifyFailoverReason = vi.fn(() => null);
+export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReason | null>(
+  () => null,
+);
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
 export const mockedIsAuthAssistantError = vi.fn(() => false);
 export const mockedIsBillingAssistantError = vi.fn(() => false);

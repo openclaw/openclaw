@@ -10,6 +10,7 @@ import {
   mockedIsFailoverAssistantError,
 } from "./run.overflow-compaction.mocks.shared.js";
 import { mockedRunEmbeddedAttempt } from "./run.overflow-compaction.shared-test.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
   beforeEach(() => {
@@ -34,7 +35,7 @@ describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
           errorMessage: rawCodexError,
           provider: "openai-codex",
           model: "gpt-5.4",
-        },
+        } as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
 
