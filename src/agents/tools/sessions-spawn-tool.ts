@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { endSubagentSpan, startSubagentSpan } from "../../observability/langfuse-agent-hooks.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -149,17 +150,74 @@ export function createSessionsSpawnTool(
               "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
           });
         }
-        const result = await spawnAcpDirect(
+        const acpSpanHandle = startSubagentSpan({
+          agentId: requestedAgentId,
+          task,
+          model: modelOverride,
+        });
+        let acpResult: Awaited<ReturnType<typeof spawnAcpDirect>>;
+        try {
+          acpResult = await spawnAcpDirect(
+            {
+              task,
+              label: label || undefined,
+              agentId: requestedAgentId,
+              resumeSessionId,
+              cwd,
+              mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+              thread,
+              sandbox,
+              streamTo,
+            },
+            {
+              agentSessionKey: opts?.agentSessionKey,
+              agentChannel: opts?.agentChannel,
+              agentAccountId: opts?.agentAccountId,
+              agentTo: opts?.agentTo,
+              agentThreadId: opts?.agentThreadId,
+              sandboxed: opts?.sandboxed,
+            },
+          );
+        } catch (err) {
+          endSubagentSpan(acpSpanHandle, {
+            status: "error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
+        endSubagentSpan(acpSpanHandle, {
+          status: acpResult.status,
+          childSessionKey: acpResult.childSessionKey,
+          runId: acpResult.runId,
+        });
+        return jsonResult(acpResult);
+      }
+
+      const subagentSpanHandle = startSubagentSpan({
+        agentId: requestedAgentId,
+        task,
+        model: modelOverride,
+      });
+      let spawnResult: Awaited<ReturnType<typeof spawnSubagentDirect>>;
+      try {
+        spawnResult = await spawnSubagentDirect(
           {
             task,
             label: label || undefined,
             agentId: requestedAgentId,
-            resumeSessionId,
-            cwd,
-            mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+            model: modelOverride,
+            thinking: thinkingOverrideRaw,
+            runTimeoutSeconds,
             thread,
+            mode,
+            cleanup,
             sandbox,
-            streamTo,
+            expectsCompletionMessage: true,
+            attachments,
+            attachMountPath:
+              params.attachAs && typeof params.attachAs === "object"
+                ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+                : undefined,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
@@ -167,46 +225,27 @@ export function createSessionsSpawnTool(
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
-            sandboxed: opts?.sandboxed,
+            agentGroupId: opts?.agentGroupId,
+            agentGroupChannel: opts?.agentGroupChannel,
+            agentGroupSpace: opts?.agentGroupSpace,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+            workspaceDir: opts?.workspaceDir,
           },
         );
-        return jsonResult(result);
+      } catch (err) {
+        endSubagentSpan(subagentSpanHandle, {
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
       }
+      endSubagentSpan(subagentSpanHandle, {
+        status: spawnResult.status,
+        childSessionKey: spawnResult.childSessionKey,
+        runId: spawnResult.runId,
+      });
 
-      const result = await spawnSubagentDirect(
-        {
-          task,
-          label: label || undefined,
-          agentId: requestedAgentId,
-          model: modelOverride,
-          thinking: thinkingOverrideRaw,
-          runTimeoutSeconds,
-          thread,
-          mode,
-          cleanup,
-          sandbox,
-          expectsCompletionMessage: true,
-          attachments,
-          attachMountPath:
-            params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
-              : undefined,
-        },
-        {
-          agentSessionKey: opts?.agentSessionKey,
-          agentChannel: opts?.agentChannel,
-          agentAccountId: opts?.agentAccountId,
-          agentTo: opts?.agentTo,
-          agentThreadId: opts?.agentThreadId,
-          agentGroupId: opts?.agentGroupId,
-          agentGroupChannel: opts?.agentGroupChannel,
-          agentGroupSpace: opts?.agentGroupSpace,
-          requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-          workspaceDir: opts?.workspaceDir,
-        },
-      );
-
-      return jsonResult(result);
+      return jsonResult(spawnResult);
     },
   };
 }
