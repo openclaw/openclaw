@@ -483,37 +483,38 @@ export async function restartLaunchAgent({
       ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
       : undefined;
 
-  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
-    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
+  let start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (start.code !== 0) {
+    if (!isLaunchctlNotLoaded(start)) {
+      throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    }
+
+    // If the service isn't currently loaded, re-register it and retry kickstart.
+    await execLaunchctl(["enable", `${domain}/${label}`]);
+    const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+    if (boot.code !== 0) {
+      const detail = (boot.stderr || boot.stdout).trim();
+      if (isUnsupportedGuiDomain(detail)) {
+        throw new Error(
+          [
+            `launchctl bootstrap failed: ${detail}`,
+            `LaunchAgent restart requires a logged-in macOS GUI session for this user (${domain}).`,
+            "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
+            "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway restart`.",
+            "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
+          ].join("\n"),
+        );
+      }
+      throw new Error(`launchctl bootstrap failed: ${detail}`);
+    }
+
+    start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+    if (start.code !== 0) {
+      throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    }
   }
   if (typeof previousPid === "number") {
     await waitForPidExit(previousPid);
-  }
-
-  // launchd can persist "disabled" state after bootout; clear it before bootstrap
-  // (matches the same guard in installLaunchAgent).
-  await execLaunchctl(["enable", `${domain}/${label}`]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  if (boot.code !== 0) {
-    const detail = (boot.stderr || boot.stdout).trim();
-    if (isUnsupportedGuiDomain(detail)) {
-      throw new Error(
-        [
-          `launchctl bootstrap failed: ${detail}`,
-          `LaunchAgent restart requires a logged-in macOS GUI session for this user (${domain}).`,
-          "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
-          "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway restart`.",
-          "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
-        ].join("\n"),
-      );
-    }
-    throw new Error(`launchctl bootstrap failed: ${detail}`);
-  }
-
-  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
-  if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
