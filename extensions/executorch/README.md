@@ -233,7 +233,45 @@ xcode-select --install
 
 ---
 
-## 8) Fallback Local Runtime Build (only if HF runtime is missing)
+## 8) Hustles & gotchas
+
+Notes from real usage and Mac app integration.
+
+### Plugin shows disabled / "Error: bundled (disabled by default)"
+
+Bundled plugins are disabled by default. That’s expected, not a failure. Enable and restart:
+
+```bash
+pnpm openclaw config set plugins.entries.executorch.enabled true
+# Restart gateway: quit Mac app and reopen, or:
+pnpm openclaw gateway restart
+```
+
+After enabling, `pnpm openclaw plugins info executorch` should show disabled with a hint to enable (no Error line).
+
+### Mac app build: Swift 6 Sendable errors in ExecuTorchSTTBridge
+
+The macOS app’s ExecuTorch STT bridge lives in `apps/macos/Sources/OpenClaw/ExecuTorchSTTBridge.swift`. Under Swift 6 strict concurrency it can fail with “sending value of non-Sendable type” or “passing closure as a 'sending' parameter” when:
+
+- Using `Task { await self?.logStatus(...) }` (or similar) from `DispatchQueue` callbacks.
+- Passing closures that capture `continuation` or local `finish`/`didFinish` into concurrent contexts.
+- Using the `AVAudioConverter` input callback with a mutable `consumed` flag or non-Sendable `AVAudioPCMBuffer`.
+
+Fixes applied in this repo: `@preconcurrency import AVFoundation`; capture actor as `let ref = self` and use `ref` in `Task`; `ContinuationHolder` + `FinishState` for Sendable-safe resume/finish; lock around the converter’s single-use `consumed` flag. If you patch the bridge yourself, keep those patterns.
+
+### Talk Mode (Mac) vs CLI vs web
+
+- **Mac app**: Menubar → Talk Mode; STT backend can be ExecuTorch (`voxtral_realtime_runner`). No equivalent in the web UI.
+- **CLI**: Use `pnpm openclaw executorch voice-agent` or `pnpm openclaw executorch transcribe <file>` for realtime or file transcription. This uses the extension’s embedded runtime path.
+- **Web**: No Talk Mode; use the CLI for ExecuTorch transcription.
+
+### Gateway must be restarted after enabling plugin
+
+After `config set plugins.entries.executorch.enabled true`, the running gateway does not reload plugins. Restart the Mac app or run `openclaw gateway restart` so the executorch plugin is loaded.
+
+---
+
+## 9) Fallback Local Runtime Build (only if HF runtime is missing)
 
 Use this only when runtime binaries are not yet published to HF:
 
@@ -248,7 +286,7 @@ cp cmake-out/examples/models/voxtral_realtime/libvoxtral_realtime_runtime.dylib 
 
 ---
 
-## 9) Manual Model Download (Optional)
+## 10) Manual Model Download (Optional)
 
 If you prefer manual download over `setup`:
 
@@ -262,7 +300,7 @@ huggingface-cli download younghan-meta/Voxtral-Mini-4B-Realtime-2602-ExecuTorch-
 
 ---
 
-## 10) macOS Talk Mode Note
+## 11) macOS Talk Mode Note
 
 The macOS app Talk Mode currently uses `voxtral_realtime_runner` for streaming STT.
 The OpenClaw extension path (`pnpm openclaw executorch ...`) uses embedded runtime.

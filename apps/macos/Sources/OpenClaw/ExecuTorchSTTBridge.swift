@@ -1,7 +1,43 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Accelerate
 import Foundation
 import OSLog
+
+/// Thread-safe holder so a single continuation can be resumed once from any thread (Sendable-safe).
+private final class ContinuationHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+    private let continuation: CheckedContinuation<Void, Error>
+    init(_ c: CheckedContinuation<Void, Error>) { continuation = c }
+    func resume() {
+        lock.lock()
+        defer { lock.unlock() }
+        if !resumed { resumed = true; continuation.resume() }
+    }
+    func resume(throwing e: Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !resumed { resumed = true; continuation.resume(throwing: e) }
+    }
+}
+
+/// Thread-safe “finish once” state so DispatchQueue closures can call finish/didFinish in a Sendable-safe way.
+private final class FinishState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    func finish(_ action: @Sendable () -> Void) {
+        lock.lock()
+        if finished { lock.unlock(); return }
+        finished = true
+        lock.unlock()
+        action()
+    }
+    func didFinish() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished
+    }
+}
 
 /// Swift actor that bridges to the ExecuTorch `voxtral_realtime_runner` binary
 /// for on-device speech-to-text. Adapted from VoxtralRealtimeApp's RunnerBridge
@@ -150,12 +186,13 @@ actor ExecuTorchSTTBridge {
         self.process = proc
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            let ref = self
             let handle = stderrPipe.fileHandleForReading
             while true {
                 let data = handle.availableData
                 if data.isEmpty { break }
                 if let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .newlines), !text.isEmpty {
-                    Task { await self?.logStatus(text) }
+                    Task { await ref?.logStatus(text) }
                 }
             }
         }
@@ -178,27 +215,11 @@ actor ExecuTorchSTTBridge {
 
     private func waitForModelReady(stdout: Pipe) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let lock = NSLock()
-            var finished = false
-
-            func finish(_ action: () -> Void) {
-                lock.lock()
-                if finished {
-                    lock.unlock()
-                    return
-                }
-                finished = true
-                lock.unlock()
-                action()
-            }
-
-            func didFinish() -> Bool {
-                lock.lock()
-                defer { lock.unlock() }
-                return finished
-            }
+            let holder = ContinuationHolder(continuation)
+            let state = FinishState()
 
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let ref = self
                 let handle = stdout.fileHandleForReading
                 while true {
                     let data = handle.availableData
@@ -207,39 +228,40 @@ actor ExecuTorchSTTBridge {
                     guard let text = String(data: data, encoding: .utf8) else { continue }
 
                     if text.contains("Listening") {
-                        finish {
-                            Task { await self?.setReady() }
-                            continuation.resume()
+                        state.finish {
+                            Task { await ref?.setReady() }
+                            holder.resume()
                         }
 
                         let remainder = text
                             .replacingOccurrences(of: "Listening (Ctrl+C to stop)...", with: "")
                             .trimmingCharacters(in: .whitespacesAndNewlines)
                         if !remainder.isEmpty {
-                            Task { await self?.handleToken(remainder) }
+                            Task { await ref?.handleToken(remainder) }
                         }
                         continue
                     }
 
-                    if didFinish() {
+                    if state.didFinish() {
                         let cleaned = Self.cleanRunnerOutput(text)
                         if !cleaned.isEmpty {
-                            Task { await self?.handleToken(cleaned) }
+                            Task { await ref?.handleToken(cleaned) }
                         }
                     }
                 }
 
-                finish {
-                    Task { await self?.setError("Runner exited before model became ready") }
-                    continuation.resume(throwing: ExecuTorchError.launchFailed(
+                state.finish {
+                    Task { await ref?.setError("Runner exited before model became ready") }
+                    holder.resume(throwing: ExecuTorchError.launchFailed(
                         "Runner exited before model became ready"))
                 }
             }
 
-            DispatchQueue.global().asyncAfter(deadline: .now() + 120) {
-                finish {
-                    Task { await self.setError("Model load timed out") }
-                    continuation.resume(throwing: ExecuTorchError.modelLoadTimeout)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 120) { [weak self] in
+                guard let ref = self else { return }
+                state.finish {
+                    Task { await ref.setError("Model load timed out") }
+                    holder.resume(throwing: ExecuTorchError.modelLoadTimeout)
                 }
             }
         }
@@ -288,8 +310,11 @@ actor ExecuTorchSTTBridge {
                 return
             }
 
+            let consumedLock = NSLock()
             var consumed = false
             converter.convert(to: converted, error: nil) { _, outStatus in
+                consumedLock.lock()
+                defer { consumedLock.unlock() }
                 if !consumed {
                     consumed = true
                     outStatus.pointee = .haveData
