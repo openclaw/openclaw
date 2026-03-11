@@ -531,8 +531,11 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  // Use the main lane for dispatch to avoid self-deadlocking when the
+  // manual path eventually schedules isolated agent work onto the cron lane.
+  // (Manual trigger previously nested cron->cron enqueues with maxConcurrent=1.)
   void enqueueCommandInLane(
-    CommandLane.Cron,
+    CommandLane.Main,
     async () => {
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {

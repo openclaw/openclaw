@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import * as schedule from "./schedule.js";
 import {
@@ -1565,6 +1569,54 @@ describe("Cron issue regressions", () => {
       expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
     });
 
+    clearCommandLane(CommandLane.Cron);
+  });
+
+  it("avoids cron lane self-deadlock for manual runs (#43008)", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Main);
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Main, 1);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-03-11T09:05:00.000Z");
+    const job = createDueIsolatedJob({ id: "manual-deadlock-43008", nowMs: dueAt, nextRunAtMs: dueAt });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
+
+    const nestedCronWorkStarted = createDeferred<void>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: createNoopLogger(),
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        return await enqueueCommandInLane(CommandLane.Cron, async () => {
+          nestedCronWorkStarted.resolve();
+          return { status: "ok", summary: "manual run finished" } as const;
+        });
+      }),
+    });
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expect(ack).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+    await Promise.race([
+      nestedCronWorkStarted.promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timed out waiting for nested cron lane work")), 250),
+      ),
+    ]);
+
+    await vi.waitFor(() => {
+      const currentJob = state.store?.jobs.find((candidate) => candidate.id === job.id);
+      expect(currentJob?.state.lastStatus).toBe("ok");
+    });
+
+    clearCommandLane(CommandLane.Main);
     clearCommandLane(CommandLane.Cron);
   });
 
