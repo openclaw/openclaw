@@ -268,10 +268,8 @@ export async function handleToolsInvokeHttpRequest(
   });
 
   const subagentFiltered = applyToolPolicyPipeline({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    tools: allTools as any,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
+    tools: allTools,
+    toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
@@ -312,13 +310,11 @@ export async function handleToolsInvokeHttpRequest(
 
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: tool.parameters,
       action,
       args,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const result = await tool.execute(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
