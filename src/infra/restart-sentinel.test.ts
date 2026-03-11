@@ -210,6 +210,29 @@ describe("formatRestartSentinelUserMessage", () => {
     expect(formatRestartSentinelUserMessage(payload)).toBe("Gateway restart failed.");
   });
 
+  it("returns skipped message for skipped status", () => {
+    const payload = {
+      kind: "update" as const,
+      status: "skipped" as const,
+      ts: Date.now(),
+    };
+    expect(formatRestartSentinelUserMessage(payload)).toBe(
+      "Gateway restart skipped (no restart was performed).",
+    );
+  });
+
+  it("returns skipped message for skipped status even with a note", () => {
+    const payload = {
+      kind: "update" as const,
+      status: "skipped" as const,
+      ts: Date.now(),
+      message: "update already up to date",
+    };
+    const result = formatRestartSentinelUserMessage(payload);
+    expect(result).toBe("Gateway restart skipped (no restart was performed).");
+    expect(result).not.toContain("already up to date");
+  });
+
   it("never includes doctorHint", () => {
     const payload = {
       kind: "config-patch" as const,
