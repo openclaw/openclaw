@@ -1,3 +1,4 @@
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -30,6 +31,7 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { resolveDefaultModel } from "./directive-handling.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -75,6 +77,7 @@ async function maybePreprocessInboundAudioForAcp(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
   inboundAudio: boolean;
+  sessionKey?: string;
 }): Promise<void> {
   if (!params.inboundAudio) {
     return;
@@ -86,15 +89,34 @@ async function maybePreprocessInboundAudioForAcp(params: {
   ) {
     return;
   }
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  const acpResolution = getAcpSessionManager().resolveSession({
+    cfg: params.cfg,
+    sessionKey,
+  });
+  if (acpResolution.kind === "none") {
+    return;
+  }
   const agentId = resolveSessionAgentId({
-    sessionKey: params.ctx.SessionKey,
+    sessionKey,
     config: params.cfg,
   });
   const agentDir = resolveAgentDir(params.cfg, agentId);
+  const { defaultProvider, defaultModel } = resolveDefaultModel({
+    cfg: params.cfg,
+    agentId,
+  });
   await applyMediaUnderstanding({
     ctx: params.ctx,
     cfg: params.cfg,
     agentDir,
+    activeModel: {
+      provider: defaultProvider,
+      model: defaultModel,
+    },
   });
 }
 
@@ -369,6 +391,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       cfg,
       inboundAudio,
+      sessionKey: acpDispatchSessionKey,
     });
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
