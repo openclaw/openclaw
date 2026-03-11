@@ -335,7 +335,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.15.0",
     "@aws-sdk/client-bedrock": "^3.1006.0",
-    "@buape/carbon": "0.14.0",
+    "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.1.0",
     "@discordjs/voice": "^0.19.1",
     "@grammyjs/runner": "^2.0.3",
@@ -421,7 +421,7 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "@buape/carbon": "0.14.0",
+      "@buape/carbon": "0.0.0-beta-20260216184201",
       "hono": "4.12.7",
       "@hono/node-server": "1.19.11",
       "fast-xml-parser": "5.3.8",
