@@ -44,13 +44,15 @@ Use the `--soul` option when adding a channel:
 
 ```bash
 # Add Telegram bot with custom SOUL
-openclaw channels add telegram \
+openclaw channels add \
+  --channel telegram \
   --name fin \
   --bot-token YOUR_TOKEN \
   --soul SOUL.fin.md
 
 # Add Discord bot with custom SOUL
-openclaw channels add discord \
+openclaw channels add \
+  --channel discord \
   --name assistant \
   --token YOUR_TOKEN \
   --soul SOUL.discord.md

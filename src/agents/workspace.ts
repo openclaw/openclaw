@@ -207,6 +207,19 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+async function isReadableRegularFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) {
+      return false;
+    }
+    await fs.access(filePath, fs.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
@@ -774,16 +787,11 @@ export async function resolveSoulFile(params: {
         continue;
       }
 
-      // Check if file exists and is readable
-      if (await fileExists(normalized)) {
-        try {
-          await fs.access(normalized, fs.constants.R_OK);
-          const isDefault = normalized.endsWith(DEFAULT_SOUL_FILENAME);
-          return { path: normalized, usedFallback: isDefault && candidates.indexOf(candidate) > 0 };
-        } catch {
-          // Not readable, try next candidate
-          continue;
-        }
+      // Only accept suitable readable regular files so invalid configured candidates
+      // do not suppress fallback to the default SOUL.md.
+      if (await isReadableRegularFile(normalized)) {
+        const isDefault = normalized.endsWith(DEFAULT_SOUL_FILENAME);
+        return { path: normalized, usedFallback: isDefault && candidates.indexOf(candidate) > 0 };
       }
     } catch {
       // Error checking file, try next candidate
