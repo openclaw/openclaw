@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Pilot Shell</title>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="pilot-dashboard">
+    <main class="app-shell">
+      <header class="shell-header">
+        <p class="eyebrow">OpenClaw Operator Harness</p>
+        <nav class="shell-nav" aria-label="Pilot shell routes">
+          <a class="shell-nav__link" data-testid="nav-root" href="/index.html">Fixture</a>
+          <a class="shell-nav__link is-active" data-testid="nav-pilot" href="/pilot/index.html"
+            >/pilot</a
+          >
+          <a class="shell-nav__link" data-testid="nav-project" href="/pilot/project/index.html"
+            >/pilot/project</a
+          >
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">Pilot runtime</p>
+        <h1>Discovery-first pilot dashboard</h1>
+        <p class="lede">
+          The dedicated pilot shell keeps jurisdiction health, blocked source families, and active
+          projects visible before any model run starts.
+        </p>
+        <div class="hero-actions">
+          <a class="cta cta--primary" href="/pilot/project/index.html">Start New Pilot Project</a>
+          <button class="cta" type="button" data-testid="launch-pilot-chat">
+            Launch Saved Pilot Context
+          </button>
+        </div>
+        <p class="pilot-context" data-testid="pilot-context"></p>
+      </section>
+
+      <section class="status-grid" aria-label="Pilot health summary">
+        <article class="status-card">
+          <p class="status-card__label">Validated jurisdictions</p>
+          <p class="status-card__value">12</p>
+        </article>
+        <article class="status-card">
+          <p class="status-card__label">Needs revalidation</p>
+          <p class="status-card__value">3</p>
+        </article>
+        <article class="status-card">
+          <p class="status-card__label">Blocked source families</p>
+          <p class="status-card__value">2</p>
+        </article>
+        <article class="status-card">
+          <p class="status-card__label">Upcoming reviews</p>
+          <p class="status-card__value">5</p>
+        </article>
+      </section>
+
+      <section class="toolbar">
+        <div class="filter-bar" role="toolbar" aria-label="Ticket filters">
+          <button
+            data-testid="filter-all"
+            data-filter="all"
+            class="filter-pill is-active"
+            aria-pressed="true"
+          >
+            All
+          </button>
+          <button
+            data-testid="filter-ready"
+            data-filter="ready"
+            class="filter-pill"
+            aria-pressed="false"
+          >
+            Ready
+          </button>
+          <button
+            data-testid="filter-blocked"
+            data-filter="blocked"
+            class="filter-pill"
+            aria-pressed="false"
+          >
+            Blocked
+          </button>
+          <button
+            data-testid="filter-review"
+            data-filter="review"
+            class="filter-pill"
+            aria-pressed="false"
+          >
+            Review
+          </button>
+        </div>
+      </section>
+
+      <section data-testid="summary-card" class="summary-card">
+        <p class="summary-card__eyebrow">Queue summary</p>
+        <h2 data-testid="summary-title">All tickets</h2>
+        <p data-testid="summary-body">Showing every active ticket waiting in the pilot queue.</p>
+      </section>
+
+      <section data-testid="empty-state" class="empty-state" hidden>
+        <h2>No tickets available</h2>
+        <p>Pick another filter when this queue is empty.</p>
+      </section>
+
+      <section data-testid="ticket-list" class="ticket-list">
+        <article class="ticket-card" data-status="ready">
+          <p class="ticket-card__status">Ready</p>
+          <h2>Queue parcel discovery</h2>
+          <p>Parcel + address intake completed and awaiting first source scan.</p>
+        </article>
+        <article class="ticket-card" data-status="blocked">
+          <p class="ticket-card__status">Blocked</p>
+          <h2>County zoning feed paused</h2>
+          <p>Automated extraction failed for CAD overlays; revalidation run required.</p>
+        </article>
+        <article class="ticket-card" data-status="ready">
+          <p class="ticket-card__status">Ready</p>
+          <h2>Upcoming planning review</h2>
+          <p>Civil PM requested parcel context handoff for Thursday approval sync.</p>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="../main.js"></script>
+  </body>
+</html>

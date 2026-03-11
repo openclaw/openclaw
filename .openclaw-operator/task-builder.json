@@ -1,0 +1,109 @@
+{
+  "kind": "task",
+  "contractId": "moore-bass-pilot",
+  "externalTicketId": "END-7",
+  "role": "builder",
+  "summary": "Implement END-7 and collect the required MVP evidence.",
+  "upstreamUrl": "https://linear.app/endeavorship-ai/issue/END-7/pilot-shell-and-parcel-intake-on-clean-main",
+  "startupCommand": "if [ ! -d node_modules ]; then pnpm install --frozen-lockfile; fi; pnpm ui:dev --host 127.0.0.1 --port 41566",
+  "healthcheckUrl": "http://127.0.0.1:41566/pilot/",
+  "browserWalkthrough": [
+    {
+      "action": "open",
+      "value": "http://127.0.0.1:41566/pilot/"
+    },
+    {
+      "action": "wait_load"
+    },
+    {
+      "action": "assert_text",
+      "target": "[data-testid='pilot-home-title']",
+      "value": "Pilot Home"
+    },
+    {
+      "action": "assert_text",
+      "target": "[data-testid='pilot-dashboard-card-source-health-title']",
+      "value": "Source pack health"
+    },
+    {
+      "action": "click",
+      "target": "[data-testid='pilot-home-new-project']"
+    },
+    {
+      "action": "wait_load"
+    },
+    {
+      "action": "fill",
+      "target": "[data-testid='pilot-project-parcel-input']",
+      "value": "APN 123-456-789"
+    },
+    {
+      "action": "fill",
+      "target": "[data-testid='pilot-project-address-input']",
+      "value": "100 Main St, Austin, TX"
+    },
+    {
+      "action": "fill",
+      "target": "[data-testid='pilot-project-scope-input']",
+      "value": "Civil entitlement due diligence"
+    },
+    {
+      "action": "click",
+      "target": "[data-testid='pilot-project-create']"
+    },
+    {
+      "action": "assert_text",
+      "target": "[data-testid='pilot-project-summary-title']",
+      "value": "Pilot project created"
+    },
+    {
+      "action": "assert_text",
+      "target": "[data-testid='pilot-project-launch-chat']",
+      "value": "Launch project workspace"
+    }
+  ],
+  "requiredArtifacts": [
+    "before.png",
+    "after.png",
+    "annotated.png",
+    "walkthrough.webm",
+    "serve.log",
+    "review.md"
+  ],
+  "artifactDir": "/Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/operator-harness/evidence/END-7/builder",
+  "repoRelativeArtifactDir": "operator-harness/evidence/END-7/builder",
+  "repoCwd": "/Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder",
+  "branchName": "codex/end-7-pilot-shell-and-parcel-intake-on-clean-main",
+  "baseBranch": "main",
+  "gitRemoteName": "origin",
+  "prRequired": true,
+  "prTitle": "[END-7] Pilot shell and parcel intake on clean main",
+  "prBodyPath": "/Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/.openclaw-operator/pr-body.md",
+  "validationCommand": "node --import tsx operator-harness/scripts/run-artifact-walkthrough.ts --task /Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/.openclaw-operator/task-builder.json",
+  "prSyncCommand": "node --import tsx operator-harness/scripts/sync-pr.ts --task /Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/.openclaw-operator/task-builder.json",
+  "finalizeCommand": "node --import tsx operator-harness/scripts/finalize-ticket.ts --task /Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/.openclaw-operator/task-builder.json",
+  "specPacketPath": "/Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/.openclaw-operator/spec-packet.json",
+  "taskPacketPath": "/Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-7/builder/.openclaw-operator/task-builder.json",
+  "notionUrls": [
+    "https://www.notion.so/Construction-Knowledge-Platform-Storyboard-Hub-3182cb8d0fb481c08f55c19d7c9bd4f5",
+    "https://www.notion.so/3182cb8d0fb4818c8f4fd32a892f22a8",
+    "https://www.notion.so/3182cb8d0fb481969088c2e2b13f1a8d",
+    "https://www.notion.so/Moore-Bass-02-Pilot-Home-Dashboard-3182cb8d0fb4818c8f4fd32a892f22a8",
+    "https://www.notion.so/Moore-Bass-03-New-Pilot-Project-Setup-3182cb8d0fb481969088c2e2b13f1a8d"
+  ],
+  "acceptanceCriteria": [
+    "A dedicated `/pilot` shell exists on clean `main`.",
+    "`/pilot/project` captures parcel ID, address, and project scope.",
+    "`project`, `parcel`, and `jurisdiction` persist separately from generic chats.",
+    "Pilot project context can launch and reuse the existing chat/runner stack.",
+    "[Screen 02 - Pilot Home Dashboard](<https://www.notion.so/3182cb8d0fb4818c8f4fd32a892f22a8>): canonical visual for the `/pilot` landing shell, dashboard cards, and blocked-work framing.",
+    "[Screen 03 - New Pilot Project Setup](<https://www.notion.so/3182cb8d0fb481969088c2e2b13f1a8d>): canonical visual for parcel, address, and project-scope intake."
+  ],
+  "relevantScreens": [
+    "Construction Knowledge Platform Storyboard Hub",
+    "Screen 02: Moore Bass 02 - Pilot Home Dashboard",
+    "Validated jurisdictions, needs revalidation, blocked source families, active pilot projects, upcoming reviews, and discovery-first dashboard guidance.",
+    "Screen 03: Moore Bass 03 - New Pilot Project Setup",
+    "Parcel ID, address, project type, inferred jurisdiction, objective/checklist choices, and Create Project & Discover Sources action."
+  ]
+}

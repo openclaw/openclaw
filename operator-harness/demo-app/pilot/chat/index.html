@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Pilot Chat Runner</title>
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body data-page="pilot-chat">
+    <main class="app-shell app-shell--narrow">
+      <header class="shell-header">
+        <p class="eyebrow">OpenClaw Operator Harness</p>
+        <nav class="shell-nav" aria-label="Pilot shell routes">
+          <a class="shell-nav__link" href="/index.html">Fixture</a>
+          <a class="shell-nav__link" href="/pilot/index.html">/pilot</a>
+          <a class="shell-nav__link" href="/pilot/project/index.html">/pilot/project</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">Pilot runner</p>
+        <h1>Pilot chat context reuse</h1>
+        <p class="lede" data-testid="chat-context"></p>
+      </section>
+
+      <section class="panel">
+        <p class="muted" data-testid="generic-chat-status"></p>
+        <button class="cta cta--primary" type="button" data-testid="simulate-runner">
+          Run Discovery Step
+        </button>
+        <ol class="runner-log" data-testid="runner-log"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="../../main.js"></script>
+  </body>
+</html>

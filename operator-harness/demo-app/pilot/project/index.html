@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Pilot Project Intake</title>
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body data-page="project-intake">
+    <main class="app-shell app-shell--narrow">
+      <header class="shell-header">
+        <p class="eyebrow">OpenClaw Operator Harness</p>
+        <nav class="shell-nav" aria-label="Pilot shell routes">
+          <a class="shell-nav__link" href="/index.html">Fixture</a>
+          <a class="shell-nav__link" href="/pilot/index.html">/pilot</a>
+          <a class="shell-nav__link is-active" href="/pilot/project/index.html">/pilot/project</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">Screen 03</p>
+        <h1>New pilot project setup</h1>
+        <p class="lede">
+          Capture parcel ID, address, and project scope before discovery starts. The fixture
+          persists project, parcel, and jurisdiction records separately to mirror the pilot runtime
+          contract.
+        </p>
+      </section>
+
+      <section class="panel panel--form">
+        <form class="intake-form" data-testid="project-intake-form">
+          <label>
+            Project name
+            <input
+              data-testid="field-project-name"
+              name="projectName"
+              type="text"
+              placeholder="Sunset Expansion"
+              required
+            />
+          </label>
+          <label>
+            Parcel ID
+            <input
+              data-testid="field-parcel-id"
+              name="parcelId"
+              type="text"
+              placeholder="082-104-17"
+              required
+            />
+          </label>
+          <label>
+            Parcel address
+            <input
+              data-testid="field-address"
+              name="address"
+              type="text"
+              placeholder="1276 Meadow Ln, Austin, TX"
+              required
+            />
+          </label>
+          <label>
+            Project scope
+            <select data-testid="field-scope" name="projectScope" required>
+              <option value="">Select scope</option>
+              <option value="rezoning">Rezoning</option>
+              <option value="site-plan">Site plan</option>
+              <option value="subdivision">Subdivision</option>
+              <option value="variance">Variance</option>
+            </select>
+          </label>
+          <label>
+            Jurisdiction (optional override)
+            <input
+              data-testid="field-jurisdiction"
+              name="jurisdictionOverride"
+              type="text"
+              placeholder="Travis County"
+            />
+          </label>
+          <button class="cta cta--primary" type="submit" data-testid="create-project-button">
+            Create Project &amp; Discover Sources
+          </button>
+        </form>
+      </section>
+
+      <section class="panel" data-testid="project-result" hidden>
+        <h2>Pilot project created</h2>
+        <p data-testid="result-project"></p>
+        <p data-testid="result-parcel"></p>
+        <p data-testid="result-jurisdiction"></p>
+        <p class="muted" data-testid="result-storage"></p>
+        <a class="cta" data-testid="open-pilot-chat" href="/pilot/chat/index.html"
+          >Launch Pilot Chat Runner</a
+        >
+      </section>
+    </main>
+
+    <script type="module" src="../../main.js"></script>
+  </body>
+</html>

@@ -27,7 +27,6 @@ mise.toml
 apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
-apps/android/.kotlin/
 
 # Bun build artifacts
 *.bun-build
@@ -81,7 +80,6 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
-tmp/
 IDENTITY.md
 USER.md
 .tgz
@@ -96,11 +94,13 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
-.claude/
+.claude/settings.local.json
 .agents/
 .agents
 .agent/
 skills-lock.json
+.artifacts/
+operator-harness/harness.state.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
@@ -122,4 +122,3 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
-.dev-state

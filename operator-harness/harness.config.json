@@ -1,0 +1,79 @@
+{
+  "paperclip": {
+    "apiBase": "http://127.0.0.1:3100",
+    "companyName": "OpenClaw Operator Harness",
+    "projectName": "OpenClaw Operator Harness"
+  },
+  "linear": {
+    "teamKey": "END",
+    "readyStateTypes": ["unstarted"],
+    "readyStateNames": ["Todo", "Backlog"],
+    "preferredProjectNames": ["Moore Bass Pilot: Discovery-First DD"],
+    "listLimit": 100
+  },
+  "notion": {
+    "authEnv": "NOTION_TOKEN",
+    "version": "2022-06-28",
+    "baselineUrls": [
+      "https://www.notion.so/Construction-Knowledge-Platform-Storyboard-Hub-3182cb8d0fb481c08f55c19d7c9bd4f5"
+    ]
+  },
+  "workspace": {
+    "repoKey": "openclaw",
+    "repoName": "OpenClaw",
+    "repoCwd": "..",
+    "repoUrl": "https://github.com/openclaw/openclaw",
+    "baseBranch": "main",
+    "branchPrefix": "codex",
+    "ticketWorkspaceRootDir": "../.local/operator-harness/workspaces-v2",
+    "installCommand": "pnpm install --frozen-lockfile",
+    "defaultStartupCommand": "pnpm ui:dev --host 127.0.0.1 --port 4173",
+    "defaultHealthcheckUrl": "http://127.0.0.1:4173/",
+    "defaultBrowserWalkthrough": [
+      {
+        "action": "open",
+        "value": "http://127.0.0.1:4173/"
+      },
+      {
+        "action": "wait_load"
+      }
+    ]
+  },
+  "artifacts": {
+    "rootDir": "../.artifacts/operator-harness"
+  },
+  "agents": {
+    "builder": {
+      "name": "operator-builder",
+      "title": "Harness Builder",
+      "role": "builder",
+      "instructionsFile": "./agents/builder.md",
+      "model": "gpt-5.3-codex",
+      "capabilities": "Implementation, local startup, browser validation, artifact collection",
+      "dangerouslyBypassApprovalsAndSandbox": true
+    },
+    "qa": {
+      "name": "operator-qa",
+      "title": "QA Reviewer",
+      "role": "qa",
+      "instructionsFile": "./agents/qa.md",
+      "model": "gpt-5.3-codex",
+      "capabilities": "Acceptance testing, browser validation, evidence-backed review",
+      "dangerouslyBypassApprovalsAndSandbox": true
+    },
+    "ux": {
+      "name": "operator-ux",
+      "title": "UX Reviewer",
+      "role": "ux",
+      "instructionsFile": "./agents/ux.md",
+      "model": "gpt-5.3-codex",
+      "capabilities": "Visual review, interaction fidelity, browser validation",
+      "dangerouslyBypassApprovalsAndSandbox": true
+    }
+  },
+  "reviewRules": {
+    "default": ["qa"],
+    "ui": ["qa", "ux"],
+    "ai": ["qa", "ai"]
+  }
+}
