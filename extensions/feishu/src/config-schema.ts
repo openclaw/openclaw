@@ -38,12 +38,15 @@ const MarkdownConfigSchema = z
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
 // Streaming configuration for CardKit-based typewriter effect
-const StreamingConfigSchema = z
-  .object({
+// Supports boolean (legacy) or object config for fine-tuning
+const StreamingConfigSchema = z.union([
+  z.boolean(),
+  z.object({
     enabled: z.boolean().optional(),
     throttleMs: z.number().int().min(100).max(5000).optional(),
     title: z.string().optional(),
-  })
+  }),
+])
   .strict()
   .optional();
 

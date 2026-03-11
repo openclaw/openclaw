@@ -137,8 +137,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
+  // Support both boolean and object config for streaming
+  const streamingConfig = account.config?.streaming;
   const streamingEnabled =
-    !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
+    !threadReplyMode &&
+    renderMode !== "raw" &&
+    (streamingConfig === true ||
+      (typeof streamingConfig === "object" && streamingConfig?.enabled !== false) ||
+      (streamingConfig !== true && typeof streamingConfig !== "object"));
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -190,14 +196,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
-      streaming = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
-        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+      // Extract streaming config options
+      const streamingOpts = typeof streamingConfig === "object" ? streamingConfig : {};
+      const throttleMs = streamingOpts.throttleMs ?? 150;
+      const title = streamingOpts.title ?? "🤖 AI 助手";
+
+      streaming = new FeishuStreamingSession(
+        createFeishuClient(account),
+        creds,
+        (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
+      // Set throttle interval from config
+      (streaming as any).updateThrottleMs = throttleMs;
+
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
+          header: { title, template: "blue" },
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -231,7 +248,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
-        if (streamingEnabled && renderMode === "card") {
+        // Start streaming when enabled and using card mode (explicit or auto-detected)
+        if (streamingEnabled && (renderMode === "card" || renderMode === "auto")) {
           startStreaming();
         }
         void typingCallbacks.onReplyStart?.();
