@@ -1929,7 +1929,7 @@ export function createWebSearchTool(options?: {
 
   return {
     label: "Web Search",
-    name: "web_search",
+    name: "oc_web_search",
     description,
     parameters: createWebSearchSchema({
       provider,
