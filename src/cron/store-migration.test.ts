@@ -111,6 +111,35 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
+  it("migrates legacy lowercase payload kinds to canonical form", () => {
+    const jobs = [
+      {
+        id: "legacy-lowercase-agent-turn",
+        schedule: { kind: "every", everyMs: 60_000 },
+        state: {},
+        payload: {
+          kind: "agentturn",
+          message: "ping",
+        },
+      },
+      {
+        id: "legacy-lowercase-system-event",
+        schedule: { kind: "every", everyMs: 60_000 },
+        state: {},
+        payload: {
+          kind: "systemevent",
+          text: "ping",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect((jobs[0]?.payload as Record<string, unknown> | undefined)?.kind).toBe("agentTurn");
+    expect((jobs[1]?.payload as Record<string, unknown> | undefined)?.kind).toBe("systemEvent");
+  });
+
   it("trims unknown payload kinds without lowercasing them", () => {
     const jobs = [
       {
