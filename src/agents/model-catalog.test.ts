@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
@@ -283,6 +283,7 @@ describe("loadModelCatalog", () => {
           providers: {
             anthropic: {
               api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com/v1",
               models: [
                 {
                   id: "claude-opus-4-6",
@@ -308,7 +309,7 @@ describe("loadModelCatalog", () => {
 
   it("enriches existing catalog entry with configured input capabilities", async () => {
     // Simulate: Pi SDK returns anthropic/claude-opus-4-6 without input field,
-    // config provides input: ["text", "image"] — should enrich the existing entry.
+    // config provides input: ["text", "image"] � should enrich the existing entry.
     const result = await loadModelCatalog({
       useCache: false,
       config: {
@@ -316,6 +317,7 @@ describe("loadModelCatalog", () => {
           providers: {
             anthropic: {
               api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com/v1",
               models: [
                 {
                   id: "claude-opus-4-6",
@@ -332,7 +334,7 @@ describe("loadModelCatalog", () => {
     const matches = result.filter(
       (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-4-6",
     );
-    // Should not duplicate — should be exactly 1 entry
+    // Should not duplicate � should be exactly 1 entry
     expect(matches.length).toBeLessThanOrEqual(1);
     // If present, should have image input
     if (matches.length === 1) {
