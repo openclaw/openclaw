@@ -29,9 +29,6 @@ const MAX_SEARCH_COUNT = 10;
 const BRAVE_DEFAULT_BASE_URL = "https://api.search.brave.com";
 const BRAVE_SEARCH_PATH = "/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_PATH = "/res/v1/llm/context";
-// Keep full-URL constants for backward-compatibility (used as fallback strings).
-const BRAVE_SEARCH_ENDPOINT = `${BRAVE_DEFAULT_BASE_URL}${BRAVE_SEARCH_PATH}`;
-const BRAVE_LLM_CONTEXT_ENDPOINT = `${BRAVE_DEFAULT_BASE_URL}${BRAVE_LLM_CONTEXT_PATH}`;
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
@@ -1632,7 +1629,7 @@ async function runWebSearch(params: {
               : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
-      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
+      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}:${providerSpecificKey}`
       : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
