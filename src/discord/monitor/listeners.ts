@@ -577,6 +577,8 @@ async function handleDiscordReactionEvent(
         {
           sessionKey: params.route.sessionKey,
           contextKey: params.contextKey,
+          dedupeKey: `discord:reaction:cmd:${action}:${data.message_id}:${user.id}:${emojiLabel}:${reactionCommand}`,
+          dedupeTtlMs: 60_000,
         },
       );
     };

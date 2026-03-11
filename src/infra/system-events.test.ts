@@ -78,6 +78,23 @@ describe("system events (session routing)", () => {
     expect(isSystemEventContextChanged(sessionKey, "presence:node:b")).toBe(true);
   });
 
+  it("dedupes events by stable dedupeKey within TTL", () => {
+    const sessionKey = "agent:main:test-dedupe-key";
+    const first = enqueueSystemEvent("Reaction command: accept", {
+      sessionKey,
+      dedupeKey: "discord:reaction:cmd:added:msg-1:user-1:✅:accept",
+      dedupeTtlMs: 60_000,
+    });
+    const second = enqueueSystemEvent("Reaction command: accept", {
+      sessionKey,
+      dedupeKey: "discord:reaction:cmd:added:msg-1:user-1:✅:accept",
+      dedupeTtlMs: 60_000,
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+
   it("filters heartbeat/noise lines, returning undefined", async () => {
     const key = "agent:main:test-heartbeat-filter";
     enqueueSystemEvent("Read HEARTBEAT.md before continuing", { sessionKey: key });

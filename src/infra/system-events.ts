@@ -10,6 +10,7 @@ type SessionQueue = {
   queue: SystemEvent[];
   lastText: string | null;
   lastContextKey: string | null;
+  dedupeKeys: Map<string, number>;
 };
 
 const queues = new Map<string, SessionQueue>();
@@ -17,6 +18,8 @@ const queues = new Map<string, SessionQueue>();
 type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
+  dedupeKey?: string | null;
+  dedupeTtlMs?: number;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -38,6 +41,32 @@ function normalizeContextKey(key?: string | null): string | null {
   return trimmed.toLowerCase();
 }
 
+function normalizeDedupeKey(key?: string | null): string | null {
+  if (!key) {
+    return null;
+  }
+  const trimmed = key.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.toLowerCase();
+}
+
+function normalizeDedupeTtlMs(value?: number): number {
+  if (!Number.isFinite(value) || !value || value <= 0) {
+    return 0;
+  }
+  return Math.floor(value);
+}
+
+function pruneExpiredDedupeKeys(entry: SessionQueue, now: number) {
+  for (const [key, expiresAt] of entry.dedupeKeys.entries()) {
+    if (expiresAt <= now) {
+      entry.dedupeKeys.delete(key);
+    }
+  }
+}
+
 export function isSystemEventContextChanged(
   sessionKey: string,
   contextKey?: string | null,
@@ -57,6 +86,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
         queue: [],
         lastText: null,
         lastContextKey: null,
+        dedupeKeys: new Map<string, number>(),
       };
       queues.set(key, created);
       return created;
@@ -65,15 +95,30 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   if (!cleaned) {
     return false;
   }
+  const now = Date.now();
+  pruneExpiredDedupeKeys(entry, now);
+
+  const normalizedDedupeKey = normalizeDedupeKey(options?.dedupeKey);
+  const dedupeTtlMs = normalizeDedupeTtlMs(options?.dedupeTtlMs);
+  if (normalizedDedupeKey && dedupeTtlMs > 0) {
+    const existingExpiry = entry.dedupeKeys.get(normalizedDedupeKey) ?? 0;
+    if (existingExpiry > now) {
+      return false;
+    }
+  }
+
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   if (entry.lastText === cleaned) {
     return false;
   } // skip consecutive duplicates
   entry.lastText = cleaned;
   entry.lastContextKey = normalizedContextKey;
+  if (normalizedDedupeKey && dedupeTtlMs > 0) {
+    entry.dedupeKeys.set(normalizedDedupeKey, now + dedupeTtlMs);
+  }
   entry.queue.push({
     text: cleaned,
-    ts: Date.now(),
+    ts: now,
     contextKey: normalizedContextKey,
   });
   if (entry.queue.length > MAX_EVENTS) {
