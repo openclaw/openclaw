@@ -779,6 +779,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
       expect.objectContaining({ text: "🔧 exec: ls" }),
     );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
