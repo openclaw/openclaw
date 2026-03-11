@@ -227,23 +227,25 @@ function buildSlackCommandArgMenuBlocks(params: {
           },
         ]
       : encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE || !canUseStaticSelect
-        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map((choices) => ({
-            type: "actions",
-            elements: choices.map((choice) => ({
-              type: "button",
-              action_id: SLACK_COMMAND_ARG_ACTION_ID,
-              text: { type: "plain_text", text: choice.label },
-              value: choice.value,
-              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
-            })),
-          }))
+        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map(
+            (choices, rowIndex) => ({
+              type: "actions",
+              elements: choices.map((choice, choiceIndex) => ({
+                type: "button",
+                action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${choiceIndex}`,
+                text: { type: "plain_text", text: choice.label },
+                value: choice.value,
+                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+              })),
+            }),
+          )
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
               type: "actions",
               elements: [
                 {
                   type: "static_select",
-                  action_id: SLACK_COMMAND_ARG_ACTION_ID,
+                  action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${index}`,
                   confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
                   placeholder: {
                     type: "plain_text",
@@ -738,7 +740,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   const registerArgOptions = () => {
     const appWithOptions = ctx.app as unknown as {
       options?: (
-        actionId: string,
+        actionId: string | RegExp,
         handler: (args: {
           ack: (payload: { options: unknown[] }) => Promise<void>;
           body: unknown;
@@ -748,7 +750,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     if (typeof appWithOptions.options !== "function") {
       return;
     }
-    appWithOptions.options(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
+    appWithOptions.options(/^openclaw_cmdarg/, async ({ ack, body }) => {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         await ack({ options: [] });
         runtime.log?.("slack: drop slash arg options payload (mismatched app/team)");
@@ -799,12 +801,12 @@ export async function registerSlackMonitorSlashCommands(params: {
     );
   }
 
-  const registerArgAction = (actionId: string) => {
+  const registerArgAction = (actionIdPattern: string | RegExp) => {
     (
       ctx.app as unknown as {
         action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
       }
-    ).action(actionId, async (args: SlackActionMiddlewareArgs) => {
+    ).action(actionIdPattern, async (args: SlackActionMiddlewareArgs) => {
       const { ack, body, respond } = args;
       const action = args.action as { value?: string; selected_option?: { value?: string } };
       await ack();
@@ -877,5 +879,5 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
     });
   };
-  registerArgAction(SLACK_COMMAND_ARG_ACTION_ID);
+  registerArgAction(/^openclaw_cmdarg/);
 }
