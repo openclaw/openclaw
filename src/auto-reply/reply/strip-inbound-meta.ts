@@ -176,12 +176,7 @@ export function stripInboundMetadata(text: string): string {
               const parsed = JSON.parse(jsonText);
               // Only set the marker if this is LEADING metadata (no user content seen yet)
               // and the parsed JSON contains the _sep field
-              if (
-                !seenUserContent &&
-                parsed &&
-                typeof parsed === "object" &&
-                "_sep" in parsed
-              ) {
+              if (!seenUserContent && parsed && typeof parsed === "object" && "_sep" in parsed) {
                 hasLeadingMetadataWithSep = true;
               }
             } catch {
