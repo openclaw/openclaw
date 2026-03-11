@@ -1112,7 +1112,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "openai-codex" ||
-    authChoice === "openai-device-code" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-portal"
   ) {

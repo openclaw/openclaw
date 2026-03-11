@@ -230,6 +230,15 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
+  it("uses a device-code-specific missing credentials error", async () => {
+    const runtime = createRuntime();
+    mocks.loginOpenAICodexDeviceCode.mockResolvedValueOnce(null);
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai-codex", method: "device-code" }, runtime),
+    ).rejects.toThrow("Codex CLI device-code login did not return credentials.");
+  });
+
   it("rejects unknown built-in openai-codex auth methods", async () => {
     const runtime = createRuntime();
 

@@ -5,6 +5,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
+import * as onboardAuth from "./onboard-auth.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -170,10 +171,12 @@ describe("applyAuthChoice", () => {
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();
 
-    loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
-
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
+    loginOpenAICodexOAuth.mockImplementationOnce(async ({ runtime: loginRuntime }) => {
+      loginRuntime.error("oauth failed");
+      throw new Error("oauth failed");
+    });
 
     await expect(
       applyAuthChoice({
@@ -184,6 +187,41 @@ describe("applyAuthChoice", () => {
         setDefaultModel: false,
       }),
     ).resolves.toEqual({ config: {} });
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith("oauth failed");
+  });
+
+  it("rethrows openai-codex credential persistence failures", async () => {
+    await setupTempState();
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const writeOAuthCredentialsSpy = vi
+      .spyOn(onboardAuth, "writeOAuthCredentials")
+      .mockRejectedValueOnce(new Error("disk full"));
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    try {
+      await expect(
+        applyAuthChoice({
+          authChoice: "openai-codex",
+          config: {},
+          prompter,
+          runtime,
+          setDefaultModel: false,
+        }),
+      ).rejects.toThrow("disk full");
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      writeOAuthCredentialsSpy.mockRestore();
+    }
   });
 
   it("stores openai-codex OAuth with email profile id", async () => {

@@ -78,6 +78,7 @@ export async function applyAuthChoiceOpenAI(
   if (params.authChoice === "openai-codex" || params.authChoice === "openai-device-code") {
     let nextConfig = params.config;
     let agentModelOverride: string | undefined;
+    let creds: OAuthCredentials | null = null;
 
     const persistCodexCredentials = async (creds: OAuthCredentials | null) => {
       if (!creds) {
@@ -116,24 +117,25 @@ export async function applyAuthChoiceOpenAI(
           ].join("\n"),
           "OpenAI device code",
         );
-        await persistCodexCredentials(await loginOpenAICodexDeviceCode());
+        creds = await loginOpenAICodexDeviceCode();
       } else {
-        await persistCodexCredentials(
-          await loginOpenAICodexOAuth({
-            prompter: params.prompter,
-            runtime: params.runtime,
-            isRemote: isRemoteEnvironment(),
-            openUrl: async (url) => {
-              await openUrl(url);
-            },
-            localBrowserMessage: "Complete sign-in in browser…",
-          }),
-        );
+        creds = await loginOpenAICodexOAuth({
+          prompter: params.prompter,
+          runtime: params.runtime,
+          isRemote: isRemoteEnvironment(),
+          openUrl: async (url) => {
+            await openUrl(url);
+          },
+          localBrowserMessage: "Complete sign-in in browser…",
+        });
       }
     } catch (error) {
-      params.runtime.error(error instanceof Error ? error.message : String(error));
+      if (params.authChoice === "openai-device-code") {
+        params.runtime.error(error instanceof Error ? error.message : String(error));
+      }
       return { config: nextConfig, agentModelOverride };
     }
+    await persistCodexCredentials(creds);
     return { config: nextConfig, agentModelOverride };
   }
 

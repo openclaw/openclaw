@@ -344,7 +344,11 @@ async function runBuiltInOpenAICodexLogin(params: {
           localBrowserMessage: "Complete sign-in in browser…",
         });
   if (!creds) {
-    throw new Error("OpenAI Codex OAuth did not return credentials.");
+    throw new Error(
+      method === "device-code"
+        ? "Codex CLI device-code login did not return credentials."
+        : "OpenAI Codex OAuth did not return credentials.",
+    );
   }
 
   const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
