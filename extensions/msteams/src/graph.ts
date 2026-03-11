@@ -153,7 +153,7 @@ export async function fetchThreadReplies(params: {
   top?: number;
 }): Promise<GraphThreadMessage[]> {
   const limit = params.top ?? 50;
-  const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies?$top=${limit}&$orderby=createdDateTime asc`;
+  const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies?$top=${limit}&$orderby=${encodeURIComponent("createdDateTime asc")}`;
   try {
     const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token: params.token, path });
     return res.value ?? [];
