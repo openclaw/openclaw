@@ -70,7 +70,7 @@ contract ClawToken is ERC20, Ownable {
         require(amount > 0, "Amount must be > 0");
 
         // Transfer tokens from buyer to this contract (escrow)
-        transferFrom(msg.sender, address(this), amount);
+        _transfer(msg.sender, address(this), amount);
 
         uint256 expires = block.timestamp + escrowTimeout;
 
