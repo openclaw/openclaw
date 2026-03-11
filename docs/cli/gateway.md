@@ -175,6 +175,7 @@ Notes:
 - In inferred auth mode, shell-only `OPENCLAW_GATEWAY_PASSWORD`/`CLAWDBOT_GATEWAY_PASSWORD` does not relax install token requirements; use durable config (`gateway.auth.password` or config `env`) when installing a managed service.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
 - Lifecycle commands accept `--json` for scripting.
+- On macOS, `gateway stop` sends `SIGTERM` to the LaunchAgent job without unloading the plist. This keeps launchd registration intact (`KeepAlive` can restart it).
 
 ## Discover gateways (Bonjour)
 
