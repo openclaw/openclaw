@@ -109,8 +109,6 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand(
       {
         channel: "msteams",
-        appId: "app-id",
-        appPassword: "secret",
         soul: "SOUL.msteams.md",
       },
       runtime,
