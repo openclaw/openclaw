@@ -64,6 +64,7 @@ export type SessionListRow = {
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  spawnedBy?: string;
   transcriptPath?: string;
   messages?: unknown[];
 };
