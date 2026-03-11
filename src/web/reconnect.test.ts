@@ -12,6 +12,10 @@ import {
 describe("web reconnect helpers", () => {
   const cfg: OpenClawConfig = {};
 
+  it("defaults to unlimited reconnect attempts (maxAttempts=0)", () => {
+    expect(DEFAULT_RECONNECT_POLICY.maxAttempts).toBe(0);
+  });
+
   it("resolves sane reconnect defaults with clamps", () => {
     const policy = resolveReconnectPolicy(cfg, {
       initialMs: 100,

@@ -97,59 +97,89 @@ describe("web auto-reply connection", () => {
     expect(() => formatEnvelopeTimestamp(d, " America/Los_Angeles ")).not.toThrow();
   });
 
-  it("handles reconnect progress and max-attempt stop behavior", async () => {
-    for (const scenario of [
-      {
-        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-        expectedCallsAfterFirstClose: 2,
-        closeTwiceAndFinish: false,
-        expectedError: "Retry 1",
-      },
-      {
-        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
-        expectedCallsAfterFirstClose: 2,
-        closeTwiceAndFinish: true,
-        expectedError: "max attempts reached",
-      },
-    ]) {
-      const closeResolvers: Array<() => void> = [];
-      const sleep = vi.fn(async () => {});
-      const listenerFactory = vi.fn(async () => {
-        const onClose = new Promise<void>((res) => {
-          closeResolvers.push(res);
-        });
-        return { close: vi.fn(), onClose };
+  it("handles reconnect progress and reports retries", async () => {
+    const closeResolvers: Array<() => void> = [];
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<void>((res) => {
+        closeResolvers.push(res);
       });
-      const { runtime, controller, run } = startMonitorWebChannel({
-        monitorWebChannelFn: monitorWebChannel as never,
-        listenerFactory,
-        sleep,
-        reconnect: scenario.reconnect,
+      return { close: vi.fn(), onClose };
+    });
+    const { runtime, controller, run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+    closeResolvers.shift()?.();
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    controller.abort();
+    closeResolvers.shift()?.();
+    await Promise.resolve();
+    await run;
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
+  });
+
+  it("enters degraded mode with slow retry instead of stopping when maxAttempts reached", async () => {
+    const closeResolvers: Array<() => void> = [];
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<void>((res) => {
+        closeResolvers.push(res);
       });
+      return { close: vi.fn(), onClose };
+    });
+    const { runtime, controller, run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
+    });
 
-      await Promise.resolve();
-      expect(listenerFactory).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
 
-      closeResolvers.shift()?.();
-      await vi.waitFor(
-        () => {
-          expect(listenerFactory).toHaveBeenCalledTimes(scenario.expectedCallsAfterFirstClose);
-        },
-        { timeout: 250, interval: 2 },
-      );
+    // First close → reconnect attempt 1
+    closeResolvers.shift()?.();
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
 
-      if (scenario.closeTwiceAndFinish) {
-        closeResolvers.shift()?.();
-        await run;
-      } else {
-        controller.abort();
-        closeResolvers.shift()?.();
-        await Promise.resolve();
-        await run;
-      }
+    // Second close → reconnect attempt 2 = maxAttempts → degraded mode
+    closeResolvers.shift()?.();
+    await vi.waitFor(
+      () => {
+        // Should NOT have stopped; should be sleeping in degraded mode
+        // and then retry (listenerFactory called a 3rd time)
+        expect(listenerFactory).toHaveBeenCalledTimes(3);
+      },
+      { timeout: 250, interval: 2 },
+    );
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(scenario.expectedError));
-    }
+    // Now abort to stop the monitor
+    controller.abort();
+    closeResolvers.shift()?.();
+    await run;
+
+    // Should have logged degraded mode, NOT "Stopping web monitoring"
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("degraded mode"));
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
   it("treats status 440 as non-retryable and stops without retrying", async () => {

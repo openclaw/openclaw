@@ -421,6 +421,12 @@ export async function monitorWebChannel(
     reconnectAttempts += 1;
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
+
+    // When maxAttempts is reached, enter degraded mode with a longer cooldown
+    // instead of permanently stopping the monitor loop. A dead listener with
+    // stale "linked" status is worse than slow retries.
+    const DEGRADED_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+    let delay: number;
     if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
       reconnectLogger.warn(
         {
@@ -428,17 +434,21 @@ export async function monitorWebChannel(
           status: statusCode,
           reconnectAttempts,
           maxAttempts: reconnectPolicy.maxAttempts,
+          degradedCooldownMs: DEGRADED_COOLDOWN_MS,
         },
-        "web reconnect: max attempts reached; continuing in degraded mode",
+        "web reconnect: max attempts reached; entering degraded mode with slow retry",
       );
       runtime.error(
-        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
+        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Entering degraded mode — retrying every ${DEGRADED_COOLDOWN_MS / 1000}s.`,
       );
-      await closeListener();
-      break;
+      // Reset counter so the next cycle gets a fresh batch of fast retries
+      // if the connection recovers briefly then drops again.
+      reconnectAttempts = 0;
+      status.reconnectAttempts = reconnectAttempts;
+      delay = DEGRADED_COOLDOWN_MS;
+    } else {
+      delay = computeBackoff(reconnectPolicy, reconnectAttempts);
     }
-
-    const delay = computeBackoff(reconnectPolicy, reconnectAttempts);
     reconnectLogger.info(
       {
         connectionId,
