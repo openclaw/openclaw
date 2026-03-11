@@ -5,7 +5,11 @@ import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolArgsForSidebar,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -33,7 +37,12 @@ export function extractToolCards(message: unknown): ToolCard[] {
     }
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
-    cards.push({ kind: "result", name, text });
+    cards.push({
+      kind: "result",
+      name,
+      args: coerceArgs(item.arguments ?? item.args),
+      text,
+    });
   }
 
   if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
@@ -42,7 +51,7 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
-    cards.push({ kind: "result", name, text });
+    cards.push({ kind: "result", name, text, args: coerceArgs(m.arguments ?? m.args) });
   }
 
   return cards;
@@ -51,19 +60,26 @@ export function extractToolCards(message: unknown): ToolCard[] {
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
+  const argsSections = formatToolArgsForSidebar(card.args);
   const hasText = Boolean(card.text?.trim());
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
+        const headerParts = [`## ${display.label}`];
+        if (argsSections.length > 0) {
+          headerParts.push(
+            ...argsSections.map((section) => `**${section.label}:**\n${section.body}`),
+          );
+        } else if (detail) {
+          headerParts.push(`**Command:** \`${detail}\``);
+        }
+        const header = `${headerParts.join("\n\n")}\n\n`;
         if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          onOpenSidebar!(`${header}${formatToolOutputForSidebar(card.text!)}`);
           return;
         }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+        onOpenSidebar!(`${header}*No output — tool completed successfully.*`);
       }
     : undefined;
 
