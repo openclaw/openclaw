@@ -16,6 +16,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
+export const PERSISTED_IMAGE_BLOCK_MARKER =
+  "[image omitted from persisted transcript; original bytes stay out-of-band]";
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -68,6 +70,33 @@ function normalizePersistedToolResultName(
   return toolResult;
 }
 
+function redactPersistedUserImageBlocks(message: AgentMessage): AgentMessage {
+  if ((message as { role?: unknown }).role !== "user") {
+    return message;
+  }
+  const userMessage = message as Extract<AgentMessage, { role: "user" }>;
+  if (!Array.isArray(userMessage.content)) {
+    return message;
+  }
+
+  let changed = false;
+  const nextContent = userMessage.content.map((block) => {
+    if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "image") {
+      return block;
+    }
+    changed = true;
+    const mimeType = (block as { mimeType?: unknown }).mimeType;
+    const mimeLabel =
+      typeof mimeType === "string" && mimeType.trim().length > 0 ? ` (${mimeType.trim()})` : "";
+    return {
+      type: "text",
+      text: `${PERSISTED_IMAGE_BLOCK_MARKER}${mimeLabel}`,
+    } as (typeof userMessage.content)[number];
+  });
+
+  return changed ? { ...userMessage, content: nextContent } : message;
+}
+
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -111,7 +140,8 @@ export function installSessionToolResultGuard(
   const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
-    return transformer ? transformer(message) : message;
+    const transformed = transformer ? transformer(message) : message;
+    return redactPersistedUserImageBlocks(transformed);
   };
 
   const persistToolResult = (

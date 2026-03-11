@@ -1,7 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import {
+  installSessionToolResultGuard,
+  PERSISTED_IMAGE_BLOCK_MARKER,
+} from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -460,6 +463,37 @@ describe("installSessionToolResultGuard", () => {
       kind: "inter_session",
       sourceTool: "sessions_send",
     });
+  });
+
+  it("replaces persisted user image blocks with transcript-safe markers", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const base64 = Buffer.from("discord-image-secret").toString("base64");
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "[media attached: /tmp/image.png (image/png)]" },
+          { type: "image", data: base64, mimeType: "image/png" },
+        ],
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm)[0] as Extract<AgentMessage, { role: "user" }>;
+    expect(Array.isArray(persisted.content)).toBe(true);
+    const content = persisted.content as Array<{ type: string; text?: string; data?: string }>;
+    expect(content[0]).toMatchObject({
+      type: "text",
+      text: "[media attached: /tmp/image.png (image/png)]",
+    });
+    expect(content[1]).toMatchObject({
+      type: "text",
+      text: `${PERSISTED_IMAGE_BLOCK_MARKER} (image/png)`,
+    });
+    expect(JSON.stringify(persisted)).not.toContain(base64);
+    expect(JSON.stringify(persisted)).not.toContain("discord-image-secret");
   });
 
   // When an assistant message with toolCalls is aborted, no synthetic toolResult
