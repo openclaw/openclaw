@@ -8,6 +8,7 @@ import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
+  getActiveRuntimeWebToolsMetadata,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
@@ -41,6 +42,8 @@ describe("secrets runtime snapshot", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
   });
+
+  const allowInsecureTempSecretFile = process.platform === "win32";
 
   it("resolves env refs for config and auth profiles", async () => {
     const config = asConfig({
@@ -340,7 +343,7 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
-  it("resolves provider-specific refs in web search auto mode", async () => {
+  it("keeps non-selected provider refs inactive in web search auto mode", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
@@ -364,9 +367,19 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.web.search.gemini.apiKey",
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "WEB_SEARCH_GEMINI_API_KEY",
+    });
+    expect(snapshot.webTools.search.selectedProvider).toBe("brave");
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.gemini.apiKey",
+        }),
+      ]),
     );
   });
 
@@ -397,6 +410,71 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "tools.web.search.gemini.apiKey",
     );
+  });
+
+  it("fails fast at startup when selected web search provider ref is unresolved", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+                provider: "gemini",
+                gemini: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow("[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]");
+  });
+
+  it("exposes active runtime web tool metadata as a defensive clone", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    const first = getActiveRuntimeWebToolsMetadata();
+    expect(first?.search.providerConfigured).toBe("gemini");
+    expect(first?.search.selectedProvider).toBe("gemini");
+    expect(first?.search.selectedProviderKeySource).toBe("secretRef");
+    if (!first) {
+      throw new Error("missing runtime web tools metadata");
+    }
+    first.search.providerConfigured = "brave";
+    first.search.selectedProvider = "brave";
+
+    const second = getActiveRuntimeWebToolsMetadata();
+    expect(second?.search.providerConfigured).toBe("gemini");
+    expect(second?.search.selectedProvider).toBe("gemini");
   });
 
   it("resolves file refs via configured file provider", async () => {
@@ -530,6 +608,9 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("keeps active secrets runtime snapshots resolved after config writes", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
     await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
       const configDir = path.join(home, ".openclaw");
       const secretFile = path.join(configDir, "secrets.json");
@@ -567,7 +648,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
@@ -605,7 +691,10 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
-  it("clears active secrets runtime state and throws when refresh fails after a write", async () => {
+  it("keeps last-known-good runtime snapshot active when refresh fails after a write", async () => {
+    if (os.platform() === "win32") {
+      return;
+    }
     await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
       const configDir = path.join(home, ".openclaw");
       const secretFile = path.join(configDir, "secrets.json");
@@ -658,7 +747,12 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           secrets: {
             providers: {
-              default: { source: "file", path: secretFile, mode: "json" },
+              default: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
+              },
             },
           },
           models: {
@@ -686,9 +780,11 @@ describe("secrets runtime snapshot", () => {
         /runtime snapshot refresh failed: simulated secrets runtime refresh failure/i,
       );
 
-      expect(getActiveSecretsRuntimeSnapshot()).toBeNull();
-      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
-      expect(loadConfig().models?.providers?.openai?.apiKey).toEqual({
+      const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
+      expect(activeAfterFailure).not.toBeNull();
+      expect(loadConfig().gateway?.auth).toBeUndefined();
+      expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-file-runtime");
+      expect(activeAfterFailure?.sourceConfig.models?.providers?.openai?.apiKey).toEqual({
         source: "file",
         provider: "default",
         id: "/providers/openai/apiKey",
@@ -697,9 +793,75 @@ describe("secrets runtime snapshot", () => {
       const persistedStore = ensureAuthProfileStore(agentDir).profiles["openai:default"];
       expect(persistedStore).toMatchObject({
         type: "api_key",
-        keyRef: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+        key: "sk-file-runtime",
       });
-      expect("key" in persistedStore ? persistedStore.key : undefined).toBeUndefined();
+    });
+  });
+
+  it("keeps last-known-good web runtime snapshot when reload introduces unresolved active web refs", async () => {
+    await withTempHome("openclaw-secrets-runtime-web-reload-lkg-", async (home) => {
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          tools: {
+            web: {
+              search: {
+                provider: "gemini",
+                gemini: {
+                  apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+                },
+              },
+            },
+          },
+        }),
+        env: {
+          WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-runtime-key", // pragma: allowlist secret
+        },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      });
+
+      activateSecretsRuntimeSnapshot(prepared);
+
+      await expect(
+        writeConfigFile({
+          ...loadConfig(),
+          tools: {
+            web: {
+              search: {
+                provider: "gemini",
+                gemini: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(
+        /runtime snapshot refresh failed: .*WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK/i,
+      );
+
+      const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
+      expect(activeAfterFailure).not.toBeNull();
+      expect(loadConfig().tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-runtime-key");
+      expect(activeAfterFailure?.sourceConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "WEB_SEARCH_GEMINI_API_KEY",
+      });
+      expect(getActiveRuntimeWebToolsMetadata()?.search.selectedProvider).toBe("gemini");
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      ) as OpenClawConfig;
+      expect(persistedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+      });
     });
   });
 
@@ -970,6 +1132,29 @@ describe("secrets runtime snapshot", () => {
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       }),
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
+  });
+
+  it("fails when an active exec ref id contains traversal segments", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          talk: {
+            apiKey: { source: "exec", provider: "vault", id: "a/../b" },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                command: process.execPath,
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(/must not include "\." or "\.\." path segments/i);
   });
 
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {

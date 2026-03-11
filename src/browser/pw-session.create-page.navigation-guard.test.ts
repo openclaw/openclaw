@@ -1,5 +1,6 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import { closePlaywrightBrowserConnection, createPageViaPlaywright } from "./pw-session.js";
@@ -9,7 +10,9 @@ const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl")
 
 function installBrowserMocks() {
   const pageOn = vi.fn();
-  const pageGoto = vi.fn(async () => {});
+  const pageGoto = vi.fn<
+    (...args: unknown[]) => Promise<null | { request: () => Record<string, unknown> }>
+  >(async () => null);
   const pageTitle = vi.fn(async () => "");
   const pageUrl = vi.fn(() => "about:blank");
   const contextOn = vi.fn();
@@ -83,5 +86,28 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).not.toHaveBeenCalled();
+  });
+
+  it("blocks private intermediate redirect hops", async () => {
+    const { pageGoto } = installBrowserMocks();
+    pageGoto.mockResolvedValueOnce({
+      request: () => ({
+        url: () => "https://93.184.216.34/final",
+        redirectedFrom: () => ({
+          url: () => "http://127.0.0.1:18080/internal-hop",
+          redirectedFrom: () => ({
+            url: () => "https://93.184.216.34/start",
+            redirectedFrom: () => null,
+          }),
+        }),
+      }),
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
   });
 });

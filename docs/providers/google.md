@@ -43,11 +43,13 @@ On execution paths that enable API-key rotation (for example media understanding
 and memory embeddings), OpenClaw builds a deduplicated key candidate list from:
 
 1. The currently selected provider credential (if any)
-2. `OPENCLAW_LIVE_GEMINI_KEY`
-3. `GEMINI_API_KEYS` (comma/semicolon list)
-4. `GEMINI_API_KEY`
-5. `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, ...
-6. `GOOGLE_API_KEY` (fallback)
+2. `GEMINI_API_KEYS` (comma/semicolon list)
+3. `GEMINI_API_KEY`
+4. `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, ...
+5. `GOOGLE_API_KEY` (fallback)
+
+`OPENCLAW_LIVE_GEMINI_KEY` is a special live-test override. When set, it does
+not join the rotation pool - it replaces it and forces a single-key run.
 
 Retries rotate only on rate-limit style failures (`429`, quota/resource exhausted).
 

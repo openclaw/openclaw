@@ -950,6 +950,102 @@ public struct NodeEventParams: Codable, Sendable {
     }
 }
 
+public struct NodePendingDrainParams: Codable, Sendable {
+    public let maxitems: Int?
+
+    public init(
+        maxitems: Int?)
+    {
+        self.maxitems = maxitems
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case maxitems = "maxItems"
+    }
+}
+
+public struct NodePendingDrainResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let items: [[String: AnyCodable]]
+    public let hasmore: Bool
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        items: [[String: AnyCodable]],
+        hasmore: Bool)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.items = items
+        self.hasmore = hasmore
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case items
+        case hasmore = "hasMore"
+    }
+}
+
+public struct NodePendingEnqueueParams: Codable, Sendable {
+    public let nodeid: String
+    public let type: String
+    public let priority: String?
+    public let expiresinms: Int?
+    public let wake: Bool?
+
+    public init(
+        nodeid: String,
+        type: String,
+        priority: String?,
+        expiresinms: Int?,
+        wake: Bool?)
+    {
+        self.nodeid = nodeid
+        self.type = type
+        self.priority = priority
+        self.expiresinms = expiresinms
+        self.wake = wake
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case type
+        case priority
+        case expiresinms = "expiresInMs"
+        case wake
+    }
+}
+
+public struct NodePendingEnqueueResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let queued: [String: AnyCodable]
+    public let waketriggered: Bool
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        queued: [String: AnyCodable],
+        waketriggered: Bool)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.queued = queued
+        self.waketriggered = waketriggered
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case queued
+        case waketriggered = "wakeTriggered"
+    }
+}
+
 public struct NodeInvokeRequestEvent: Codable, Sendable {
     public let id: String
     public let nodeid: String
@@ -1241,6 +1337,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
     public let spawndepth: AnyCodable?
+    public let subagentrole: AnyCodable?
+    public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1259,6 +1357,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         model: AnyCodable?,
         spawnedby: AnyCodable?,
         spawndepth: AnyCodable?,
+        subagentrole: AnyCodable?,
+        subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?)
     {
@@ -1276,6 +1376,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.model = model
         self.spawnedby = spawnedby
         self.spawndepth = spawndepth
+        self.subagentrole = subagentrole
+        self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -1295,6 +1397,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         case model
         case spawnedby = "spawnedBy"
         case spawndepth = "spawnDepth"
+        case subagentrole = "subagentRole"
+        case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
@@ -2950,7 +3054,7 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
-    public let command: String
+    public let command: String?
     public let commandargv: [String]?
     public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
@@ -2971,7 +3075,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 
     public init(
         id: String?,
-        command: String,
+        command: String?,
         commandargv: [String]?,
         systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,
@@ -3257,6 +3361,8 @@ public struct ChatSendParams: Codable, Sendable {
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
     public let timeoutms: Int?
+    public let systeminputprovenance: [String: AnyCodable]?
+    public let systemprovenancereceipt: String?
     public let idempotencykey: String
 
     public init(
@@ -3266,6 +3372,8 @@ public struct ChatSendParams: Codable, Sendable {
         deliver: Bool?,
         attachments: [AnyCodable]?,
         timeoutms: Int?,
+        systeminputprovenance: [String: AnyCodable]?,
+        systemprovenancereceipt: String?,
         idempotencykey: String)
     {
         self.sessionkey = sessionkey
@@ -3274,6 +3382,8 @@ public struct ChatSendParams: Codable, Sendable {
         self.deliver = deliver
         self.attachments = attachments
         self.timeoutms = timeoutms
+        self.systeminputprovenance = systeminputprovenance
+        self.systemprovenancereceipt = systemprovenancereceipt
         self.idempotencykey = idempotencykey
     }
 
@@ -3284,6 +3394,8 @@ public struct ChatSendParams: Codable, Sendable {
         case deliver
         case attachments
         case timeoutms = "timeoutMs"
+        case systeminputprovenance = "systemInputProvenance"
+        case systemprovenancereceipt = "systemProvenanceReceipt"
         case idempotencykey = "idempotencyKey"
     }
 }

@@ -142,7 +142,7 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("kimi");
   });
 
-  it("follows priority order — brave wins when multiple keys available", () => {
+  it("follows alphabetical order — brave wins when multiple keys available", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
@@ -150,18 +150,18 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("brave");
   });
 
-  it("gemini wins over perplexity and grok when brave unavailable", () => {
+  it("gemini wins over grok, kimi, and perplexity when brave unavailable", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("gemini");
   });
 
-  it("brave wins over gemini and grok when perplexity unavailable", () => {
-    process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
-    process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
+  it("grok wins over kimi and perplexity when brave and gemini unavailable", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("brave");
+    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
+    process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("grok");
   });
 
   it("explicit provider always wins regardless of keys", () => {

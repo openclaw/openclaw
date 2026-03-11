@@ -93,7 +93,11 @@ jobs:
 
       - name: Setup Swift build tools
         if: matrix.needs_swift_tools
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          brew install xcodegen swiftlint swiftformat
+          swift --version
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

@@ -22,6 +22,7 @@ import { getChromeWebSocketUrl } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -364,6 +365,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         return connected;
       } catch (err) {
         lastErr = err;
+        // Don't retry rate-limit errors; retrying worsens the 429.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("rate limit")) {
+          break;
+        }
         const delay = 250 + attempt * 250;
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -787,8 +793,13 @@ export async function createPageViaPlaywright(opts: {
       url: targetUrl,
       ...navigationPolicy,
     });
-    await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
+    const response = await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
+      return null;
+    });
+    await assertBrowserNavigationRedirectChainAllowed({
+      request: response?.request(),
+      ...navigationPolicy,
     });
     await assertBrowserNavigationResultAllowed({
       url: page.url(),

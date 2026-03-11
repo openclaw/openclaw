@@ -19,6 +19,8 @@ import {
   isFailoverError,
   isTimeoutError,
 } from "./failover-error.js";
+import { logModelFallbackDecision } from "./model-fallback-observation.js";
+import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -32,11 +34,6 @@ import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
-type ModelCandidate = {
-  provider: string;
-  model: string;
-};
-
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
 };
@@ -46,15 +43,6 @@ type ModelFallbackRunFn<T> = (
   model: string,
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
-
-type FallbackAttempt = {
-  provider: string;
-  model: string;
-  error: string;
-  reason?: FailoverReason;
-  status?: number;
-  code?: string;
-};
 
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
@@ -342,10 +330,49 @@ const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
+const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+}
+
+function pruneProbeState(now: number): void {
+  for (const [key, ts] of lastProbeAttempt) {
+    if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
+      lastProbeAttempt.delete(key);
+    }
+  }
+}
+
+function enforceProbeStateCap(): void {
+  while (lastProbeAttempt.size > MAX_PROBE_KEYS) {
+    let oldestKey: string | null = null;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [key, ts] of lastProbeAttempt) {
+      if (ts < oldestTs) {
+        oldestKey = key;
+        oldestTs = ts;
+      }
+    }
+    if (!oldestKey) {
+      break;
+    }
+    lastProbeAttempt.delete(oldestKey);
+  }
+}
+
+function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
+  pruneProbeState(now);
+  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
+  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
+}
+
+function markProbeAttempt(now: number, throttleKey: string): void {
+  pruneProbeState(now);
+  lastProbeAttempt.set(throttleKey, now);
+  enforceProbeStateCap();
 }
 
 function shouldProbePrimaryDuringCooldown(params: {
@@ -360,8 +387,7 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
-  if (params.now - lastProbe < MIN_PROBE_INTERVAL_MS) {
+  if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
   }
 
@@ -379,7 +405,12 @@ export const _probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
+  PROBE_STATE_TTL_MS,
+  MAX_PROBE_KEYS,
   resolveProbeThrottleKey,
+  isProbeThrottleOpen,
+  pruneProbeState,
+  markProbeAttempt,
 } as const;
 
 type CooldownDecision =
@@ -429,11 +460,15 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Probe the primary only when fallbacks
-  // exist; otherwise repeated single-provider probes just churn the disabled
-  // auth state without opening any recovery path.
+  // 402 might have been misclassified. Probe single-provider setups on the
+  // standard throttle so they can recover without a restart; when fallbacks
+  // exist, only probe near cooldown expiry so the fallback chain stays preferred.
   if (inferredReason === "billing") {
-    if (params.isPrimary && params.hasFallbackCandidates && shouldProbe) {
+    const shouldProbeSingleProviderBilling =
+      params.isPrimary &&
+      !params.hasFallbackCandidates &&
+      isProbeThrottleOpen(params.now, params.probeThrottleKey);
+    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
@@ -468,6 +503,7 @@ export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
+  runId?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
@@ -485,12 +521,18 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  const cooldownProbeUsedProviders = new Set<string>();
 
   const hasFallbackCandidates = candidates.length > 1;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    const isPrimary = i === 0;
+    const requestedModel =
+      params.provider === candidate.provider && params.model === candidate.model;
     let runOptions: ModelFallbackRunOptions | undefined;
+    let attemptedDuringCooldown = false;
+    let transientProbeProviderForAttempt: string | null = null;
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -501,9 +543,6 @@ export async function runWithModelFallback<T>(params: {
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
-        const isPrimary = i === 0;
-        const requestedModel =
-          params.provider === candidate.provider && params.model === candidate.model;
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
         const decision = resolveCooldownDecision({
@@ -524,19 +563,86 @@ export async function runWithModelFallback<T>(params: {
             error: decision.error,
             reason: decision.reason,
           });
+          logModelFallbackDecision({
+            decision: "skip_candidate",
+            runId: params.runId,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            reason: decision.reason,
+            error: decision.error,
+            nextCandidate: candidates[i + 1],
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+            profileCount: profileIds.length,
+          });
           continue;
         }
 
         if (decision.markProbe) {
-          lastProbeAttempt.set(probeThrottleKey, now);
+          markProbeAttempt(now, probeThrottleKey);
         }
         if (
           decision.reason === "rate_limit" ||
           decision.reason === "overloaded" ||
           decision.reason === "billing"
         ) {
+          // Probe at most once per provider per fallback run when all profiles
+          // are cooldowned. Re-probing every same-provider candidate can stall
+          // cross-provider fallback on providers with long internal retries.
+          const isTransientCooldownReason =
+            decision.reason === "rate_limit" || decision.reason === "overloaded";
+          if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
+            const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+            attempts.push({
+              provider: candidate.provider,
+              model: candidate.model,
+              error,
+              reason: decision.reason,
+            });
+            logModelFallbackDecision({
+              decision: "skip_candidate",
+              runId: params.runId,
+              requestedProvider: params.provider,
+              requestedModel: params.model,
+              candidate,
+              attempt: i + 1,
+              total: candidates.length,
+              reason: decision.reason,
+              error,
+              nextCandidate: candidates[i + 1],
+              isPrimary,
+              requestedModelMatched: requestedModel,
+              fallbackConfigured: hasFallbackCandidates,
+              profileCount: profileIds.length,
+            });
+            continue;
+          }
           runOptions = { allowTransientCooldownProbe: true };
+          if (isTransientCooldownReason) {
+            transientProbeProviderForAttempt = candidate.provider;
+          }
         }
+        attemptedDuringCooldown = true;
+        logModelFallbackDecision({
+          decision: "probe_cooldown_candidate",
+          runId: params.runId,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          candidate,
+          attempt: i + 1,
+          total: candidates.length,
+          reason: decision.reason,
+          nextCandidate: candidates[i + 1],
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          profileCount: profileIds.length,
+        });
       }
     }
 
@@ -547,6 +653,21 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
+      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
+        logModelFallbackDecision({
+          decision: "candidate_succeeded",
+          runId: params.runId,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          candidate,
+          attempt: i + 1,
+          total: candidates.length,
+          previousAttempts: attempts,
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+      }
       const notFoundAttempt =
         i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
       if (notFoundAttempt) {
@@ -558,6 +679,18 @@ export async function runWithModelFallback<T>(params: {
     }
     const err = attemptRun.error;
     {
+      if (transientProbeProviderForAttempt) {
+        const probeFailureReason = describeFailoverError(err).reason;
+        const shouldPreserveTransientProbeSlot =
+          probeFailureReason === "model_not_found" ||
+          probeFailureReason === "format" ||
+          probeFailureReason === "auth" ||
+          probeFailureReason === "auth_permanent" ||
+          probeFailureReason === "session_expired";
+        if (!shouldPreserveTransientProbeSlot) {
+          cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
+        }
+      }
       // Context overflow errors should be handled by the inner runner's
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
@@ -589,6 +722,23 @@ export async function runWithModelFallback<T>(params: {
         reason: described.reason ?? "unknown",
         status: described.status,
         code: described.code,
+      });
+      logModelFallbackDecision({
+        decision: "candidate_failed",
+        runId: params.runId,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: described.reason,
+        status: described.status,
+        code: described.code,
+        error: described.message,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: hasFallbackCandidates,
       });
       await params.onError?.({
         provider: candidate.provider,

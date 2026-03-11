@@ -1,20 +1,18 @@
 import fs from "node:fs";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
-import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import {
-  buildMkdirpPlan,
-  buildRemovePlan,
-  buildRenamePlan,
-  buildStatPlan,
-  buildWriteCommitPlan,
-  type SandboxFsCommandPlan,
-} from "./fs-bridge-shell-command-plans.js";
+  buildPinnedMkdirpPlan,
+  buildPinnedRemovePlan,
+  buildPinnedRenamePlan,
+  buildPinnedWritePlan,
+} from "./fs-bridge-mutation-helper.js";
+import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
+import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import { normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
@@ -112,33 +110,44 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "write files");
-    await this.pathGuard.assertPathSafety(target, { action: "write files", requireWritable: true });
+    const writeCheck = {
+      target,
+      options: { action: "write files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, writeCheck.options);
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const tempPath = await this.writeFileToTempPath({
-      targetContainerPath: target.containerPath,
-      mkdir: params.mkdir !== false,
-      data: buffer,
+    const pinnedWriteTarget = this.pathGuard.resolvePinnedEntry(target, "write files");
+    await this.runCheckedCommand({
+      ...buildPinnedWritePlan({
+        check: writeCheck,
+        pinned: pinnedWriteTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      stdin: buffer,
       signal: params.signal,
     });
-
-    try {
-      await this.runCheckedCommand({
-        ...buildWriteCommitPlan(target, tempPath),
-        signal: params.signal,
-      });
-    } catch (error) {
-      await this.cleanupTempPath(tempPath, params.signal);
-      throw error;
-    }
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target);
-    await this.runPlannedCommand(buildMkdirpPlan(target, anchoredTarget), params.signal);
+    const mkdirCheck = {
+      target,
+      options: {
+        action: "create directories",
+        requireWritable: true,
+        allowedType: "directory",
+      } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedMkdirpPlan({
+        check: mkdirCheck,
+        pinned: this.pathGuard.resolvePinnedDirectoryEntry(target, "create directories"),
+      }),
+      signal: params.signal,
+    });
   }
 
   async remove(params: {
@@ -150,16 +159,22 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "remove files");
-    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target);
-    await this.runPlannedCommand(
-      buildRemovePlan({
-        target,
-        anchoredTarget,
+    const removeCheck = {
+      target,
+      options: {
+        action: "remove files",
+        requireWritable: true,
+      } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedRemovePlan({
+        check: removeCheck,
+        pinned: this.pathGuard.resolvePinnedEntry(target, "remove files"),
         recursive: params.recursive,
         force: params.force,
       }),
-      params.signal,
-    );
+      signal: params.signal,
+    });
   }
 
   async rename(params: {
@@ -172,17 +187,29 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const to = this.resolveResolvedPath({ filePath: params.to, cwd: params.cwd });
     this.ensureWriteAccess(from, "rename files");
     this.ensureWriteAccess(to, "rename files");
-    const anchoredFrom = await this.pathGuard.resolveAnchoredSandboxEntry(from);
-    const anchoredTo = await this.pathGuard.resolveAnchoredSandboxEntry(to);
-    await this.runPlannedCommand(
-      buildRenamePlan({
-        from,
-        to,
-        anchoredFrom,
-        anchoredTo,
+    const fromCheck = {
+      target: from,
+      options: {
+        action: "rename files",
+        requireWritable: true,
+      } as const,
+    };
+    const toCheck = {
+      target: to,
+      options: {
+        action: "rename files",
+        requireWritable: true,
+      } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedRenamePlan({
+        fromCheck,
+        toCheck,
+        from: this.pathGuard.resolvePinnedEntry(from, "rename files"),
+        to: this.pathGuard.resolvePinnedEntry(to, "rename files"),
       }),
-      params.signal,
-    );
+      signal: params.signal,
+    });
   }
 
   async stat(params: {
@@ -263,58 +290,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal,
   ): Promise<ExecDockerRawResult> {
     return await this.runCheckedCommand({ ...plan, signal });
-  }
-
-  private async writeFileToTempPath(params: {
-    targetContainerPath: string;
-    mkdir: boolean;
-    data: Buffer;
-    signal?: AbortSignal;
-  }): Promise<string> {
-    const script = params.mkdir
-      ? [
-          "set -eu",
-          'target="$1"',
-          'dir=$(dirname -- "$target")',
-          'if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi',
-          'base=$(basename -- "$target")',
-          'tmp=$(mktemp "$dir/.openclaw-write-$base.XXXXXX")',
-          'cat >"$tmp"',
-          'printf "%s\\n" "$tmp"',
-        ].join("\n")
-      : [
-          "set -eu",
-          'target="$1"',
-          'dir=$(dirname -- "$target")',
-          'base=$(basename -- "$target")',
-          'tmp=$(mktemp "$dir/.openclaw-write-$base.XXXXXX")',
-          'cat >"$tmp"',
-          'printf "%s\\n" "$tmp"',
-        ].join("\n");
-    const result = await this.runCommand(script, {
-      args: [params.targetContainerPath],
-      stdin: params.data,
-      signal: params.signal,
-    });
-    const tempPath = result.stdout.toString("utf8").trim().split(/\r?\n/).at(-1)?.trim();
-    if (!tempPath || !tempPath.startsWith("/")) {
-      throw new Error(
-        `Failed to create temporary sandbox write path for ${params.targetContainerPath}`,
-      );
-    }
-    return normalizeContainerPath(tempPath);
-  }
-
-  private async cleanupTempPath(tempPath: string, signal?: AbortSignal): Promise<void> {
-    try {
-      await this.runCommand('set -eu; rm -f -- "$1"', {
-        args: [tempPath],
-        signal,
-        allowFailure: true,
-      });
-    } catch {
-      // Best-effort cleanup only.
-    }
   }
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
