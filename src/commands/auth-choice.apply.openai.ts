@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { readCodexCliCredentials, resolveCodexCliAuthPath } from "../agents/cli-credentials.js";
+import { shortenHomePath } from "../utils.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
@@ -19,6 +24,39 @@ import {
   applyOpenAIProviderConfig,
   OPENAI_DEFAULT_MODEL,
 } from "./openai-model-default.js";
+
+async function resolveOpenAICodexWriteCredentials(
+  params: ApplyAuthChoiceParams,
+  callbackCreds: OAuthCredentials,
+): Promise<OAuthCredentials> {
+  const authStorePath = resolveAuthStorePath(params.agentDir);
+  if (fs.existsSync(authStorePath)) {
+    return callbackCreds;
+  }
+
+  const codexCliCreds = readCodexCliCredentials({ skipKeychain: true });
+  if (!codexCliCreds) {
+    return callbackCreds;
+  }
+
+  const shouldSyncCliAuth = await params.prompter.confirm({
+    message: [
+      `OpenClaw auth store not found: ${shortenHomePath(authStorePath)}`,
+      `OpenAI Codex OAuth was found in ${shortenHomePath(resolveCodexCliAuthPath())}`,
+      "Sync auth.json credentials into this agent now?",
+    ].join("\n"),
+    initialValue: true,
+  });
+  if (!shouldSyncCliAuth) {
+    return callbackCreds;
+  }
+
+  await params.prompter.note(
+    `Syncing OpenAI Codex OAuth from ${shortenHomePath(resolveCodexCliAuthPath())}`,
+    "Auth sync",
+  );
+  return codexCliCreds;
+}
 
 export async function applyAuthChoiceOpenAI(
   params: ApplyAuthChoiceParams,
@@ -96,7 +134,8 @@ export async function applyAuthChoiceOpenAI(
     if (!creds) {
       return { config: nextConfig, agentModelOverride, skipDefaultModelPrompt: true };
     }
-    const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
+    const persistedCreds = await resolveOpenAICodexWriteCredentials(params, creds);
+    const profileId = await writeOAuthCredentials("openai-codex", persistedCreds, params.agentDir, {
       syncSiblingAgents: true,
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {

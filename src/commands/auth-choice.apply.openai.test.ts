@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as openAICodexOAuth from "./openai-codex-oauth.js";
 
@@ -27,12 +29,29 @@ describe("applyAuthChoiceOpenAI", () => {
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "OPENAI_API_KEY",
+    "CODEX_HOME",
   ]);
 
   async function setupTempState() {
     const env = await setupAuthTestEnv("openclaw-openai-");
     lifecycle.setStateDir(env.stateDir);
     return env.agentDir;
+  }
+
+  async function writeCodexCliAuth(stateDir: string, tokens?: { access?: string; refresh?: string }) {
+    const codexHome = path.join(stateDir, "codex-home");
+    process.env.CODEX_HOME = codexHome;
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: tokens?.access ?? "file-access",
+          refresh_token: tokens?.refresh ?? "file-refresh",
+        },
+      }),
+      "utf8",
+    );
   }
 
   afterEach(async () => {
@@ -172,5 +191,95 @@ describe("applyAuthChoiceOpenAI", () => {
       skipDefaultModelPrompt: true,
     });
     expect(loginSpy).toHaveBeenCalled();
+  });
+
+  it("offers to sync Codex auth.json when OAuth succeeds but auth-profiles is missing", async () => {
+    const env = await setupAuthTestEnv("openclaw-openai-");
+    lifecycle.setStateDir(env.stateDir);
+    await writeCodexCliAuth(env.stateDir);
+
+    vi.spyOn(openAICodexOAuth, "loginOpenAICodexOAuth").mockResolvedValueOnce({
+      provider: "openai-codex",
+      access: "callback-access",
+      refresh: "callback-refresh",
+      expires: Date.now() + 60_000,
+      email: "callback@example.com",
+    });
+
+    const confirm = vi.fn(async () => true);
+    const prompter = createWizardPrompter({ confirm }, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: env.agentDir,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: true,
+        message: expect.stringContaining("Sync auth.json credentials into this agent now?"),
+      }),
+    );
+    expect(result?.config.auth?.profiles?.["openai-codex:default"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { access?: string; refresh?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+      access: "file-access",
+      refresh: "file-refresh",
+    });
+  });
+
+  it("uses callback credentials when auth.json sync is declined", async () => {
+    const env = await setupAuthTestEnv("openclaw-openai-");
+    lifecycle.setStateDir(env.stateDir);
+    await writeCodexCliAuth(env.stateDir, {
+      access: "file-access",
+      refresh: "file-refresh",
+    });
+
+    vi.spyOn(openAICodexOAuth, "loginOpenAICodexOAuth").mockResolvedValueOnce({
+      provider: "openai-codex",
+      access: "callback-access",
+      refresh: "callback-refresh",
+      expires: Date.now() + 60_000,
+      email: "callback@example.com",
+    });
+
+    const confirm = vi.fn(async () => false);
+    const prompter = createWizardPrompter({ confirm }, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: env.agentDir,
+    });
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(result?.config.auth?.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { access?: string; refresh?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      access: "callback-access",
+      refresh: "callback-refresh",
+    });
   });
 });
