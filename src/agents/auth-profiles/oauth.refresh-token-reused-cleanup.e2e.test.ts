@@ -3,6 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
+const oauthMocks = vi.hoisted(() => ({
+  getOAuthApiKey: vi.fn(),
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai/oauth")>();
+  return {
+    ...actual,
+    getOAuthApiKey: oauthMocks.getOAuthApiKey,
+  };
+});
+
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { ensureAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
@@ -28,6 +40,7 @@ describe("resolveApiKeyForProfile refresh_token_reused cleanup", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    oauthMocks.getOAuthApiKey.mockReset();
     envSnapshot.restore();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -72,21 +85,14 @@ describe("resolveApiKeyForProfile refresh_token_reused cleanup", () => {
       "utf8",
     );
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        return new Response(
-          JSON.stringify({
-            error: "invalid_grant",
-            error_code: "refresh_token_reused",
-            message: "refresh token has already been used",
-          }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }),
+    oauthMocks.getOAuthApiKey.mockRejectedValue(
+      new Error(
+        JSON.stringify({
+          error: "invalid_grant",
+          error_code: "refresh_token_reused",
+          message: "refresh token has already been used",
+        }),
+      ),
     );
 
     const store = ensureAuthProfileStore(mainAgentDir);
