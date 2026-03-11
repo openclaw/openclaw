@@ -190,6 +190,8 @@ export type GatewayRemoteConfig = {
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
+  /** Whether remote gateway support is enabled. */
+  enabled?: boolean;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
