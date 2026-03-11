@@ -88,6 +88,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
   "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
   "gateway.remote": "Remote Gateway",
+  "gateway.remote.enabled": "Remote Gateway Enabled",
   "gateway.remote.transport": "Remote Gateway Transport",
   "gateway.reload": "Config Reload",
   "gateway.tls": "Gateway TLS",

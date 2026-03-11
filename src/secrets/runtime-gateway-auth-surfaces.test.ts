@@ -161,6 +161,30 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     expect(states["gateway.remote.password"].reason).toContain("gateway.remote.url is configured");
   });
 
+  it("marks remote gateway auth surfaces inactive when gateway.remote.enabled is false", () => {
+    const states = evaluate({
+      gateway: {
+        remote: {
+          enabled: false,
+          url: "wss://gateway.example.com",
+          token: envRef("GW_REMOTE_TOKEN"),
+          password: envRef("GW_REMOTE_PASSWORD"),
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(states["gateway.remote.token"]).toMatchObject({
+      hasSecretRef: true,
+      active: false,
+      reason: "gateway.remote.enabled is false.",
+    });
+    expect(states["gateway.remote.password"]).toMatchObject({
+      hasSecretRef: true,
+      active: false,
+      reason: "gateway.remote.enabled is false.",
+    });
+  });
+
   it("marks gateway.remote.password inactive when password auth cannot win", () => {
     const states = evaluate({
       gateway: {
