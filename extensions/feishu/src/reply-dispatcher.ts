@@ -246,8 +246,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
-        // Start streaming when enabled and using card mode (explicit or auto-detected)
-        if (streamingEnabled && (renderMode === "card" || renderMode === "auto")) {
+        // Don't start streaming here for auto mode - wait until we know the message type
+        // For explicit card mode, we can start early
+        if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
         void typingCallbacks.onReplyStart?.();
@@ -404,10 +405,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!payload.text) {
               return;
             }
-            queueStreamingUpdate(payload.text, {
-              dedupeWithLastPartial: true,
-              mode: "snapshot",
-            });
+            // Start streaming on first partial if we haven't already (auto mode)
+            if (!streaming?.isActive()) {
+              const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(payload.text));
+              if (useCard) {
+                startStreaming();
+              }
+            }
+            if (streaming?.isActive()) {
+              queueStreamingUpdate(payload.text, {
+                dedupeWithLastPartial: true,
+                mode: "snapshot",
+              });
+            }
           }
         : undefined,
     },
