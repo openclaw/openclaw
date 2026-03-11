@@ -221,6 +221,26 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     expect(patchMock).not.toHaveBeenCalled();
   });
 
+  it("does not rename when generated title sanitizes to fallback thread name", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    generateThreadTitleMock.mockResolvedValueOnce("<@123456789012345678> <#987654321098765432>");
+
+    const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } } as OpenClawConfig;
+    const result = await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        baseText: "Need help with deploy rollout",
+        combinedBody: "Need help with deploy rollout",
+        channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
+        cfg,
+        agentId: "main",
+      }),
+    );
+
+    expect(result).toBe("thread1");
+    await flushAsyncWork();
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+
   it("skips thread creation when autoThread is false", async () => {
     const result = await maybeCreateDiscordAutoThread(
       createBaseParams({
