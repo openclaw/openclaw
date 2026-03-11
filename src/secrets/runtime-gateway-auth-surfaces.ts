@@ -146,13 +146,11 @@ export function evaluateGatewayAuthSurfaceStates(params: {
       ? gateway.tailscale
       : undefined;
   const tailscaleRemoteExposure = tailscale?.mode === "serve" || tailscale?.mode === "funnel";
-  const remoteEnabled = remote?.enabled !== false;
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localTokenConfigured;
-  const remoteTokenActive = remoteEnabled && (remoteConfiguredSurface || remoteTokenFallbackActive);
+  const remoteTokenActive = remoteConfiguredSurface || remoteTokenFallbackActive;
   const remotePasswordFallbackActive = !envPassword && !localPasswordConfigured && passwordCanWin;
-  const remotePasswordActive =
-    remoteEnabled && (remoteConfiguredSurface || remotePasswordFallbackActive);
+  const remotePasswordActive = remoteConfiguredSurface || remotePasswordFallbackActive;
 
   const authPasswordReason = (() => {
     if (!auth) {
@@ -210,9 +208,6 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (!remote) {
       return "gateway.remote is not configured.";
     }
-    if (!remoteEnabled) {
-      return "gateway.remote.enabled is false.";
-    }
     if (remoteConfiguredSurface) {
       return `remote surface is active: ${remoteSurfaceReason}.`;
     }
@@ -234,9 +229,6 @@ export function evaluateGatewayAuthSurfaceStates(params: {
   const remotePasswordReason = (() => {
     if (!remote) {
       return "gateway.remote is not configured.";
-    }
-    if (!remoteEnabled) {
-      return "gateway.remote.enabled is false.";
     }
     if (remoteConfiguredSurface) {
       return `remote surface is active: ${remoteSurfaceReason}.`;
