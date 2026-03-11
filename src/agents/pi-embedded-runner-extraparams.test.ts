@@ -1449,6 +1449,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
+  it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai",
+      applyModelId: "gpt-5-mini",
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai",
+        id: "gpt-5-mini",
+        baseUrl: "https://myresource.openai.azure.com/openai/v1",
+      } as unknown as Model<"openai-responses">,
+    });
+    expect(payload.store).toBe(true);
+  });
+
   it("injects configured OpenAI service_tier into Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
