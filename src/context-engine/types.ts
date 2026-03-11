@@ -123,6 +123,8 @@ export interface ContextEngine {
     sessionId: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** The incoming user prompt for this turn (not yet in messages). */
+    prompt?: string;
   }): Promise<AssembleResult>;
 
   /**
