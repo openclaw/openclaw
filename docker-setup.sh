@@ -35,6 +35,8 @@ is_truthy_value() {
 # Check whether the Docker daemon responds within a given timeout (seconds).
 # This wraps the call in a background process and polls for completion,
 # avoiding a hard dependency on the `timeout` command (absent on stock macOS).
+# Returns: 0 = ready, 1 = timed out (daemon may still be starting),
+#          2 = fast failure (e.g. permission denied, invalid DOCKER_HOST).
 docker_is_ready() {
   local wait_secs="${1:-10}"
   docker info >/dev/null 2>&1 &
@@ -43,7 +45,10 @@ docker_is_ready() {
   while [ "$i" -lt "$wait_secs" ]; do
     if ! kill -0 "$pid" 2>/dev/null; then
       wait "$pid" 2>/dev/null
-      return $?
+      local rc=$?
+      # Exited before timeout — if non-zero, it's a fast failure (not a hang).
+      [ "$rc" -eq 0 ] && return 0
+      return 2
     fi
     sleep 1
     i=$((i + 1))
@@ -197,10 +202,21 @@ fi
 
 # Wait for the Docker daemon if it is installed but not yet responsive
 # (common when Docker Desktop is still launching).
-if ! docker_is_ready 10; then
+docker_is_ready 10
+rc=$?
+if [ "$rc" -eq 2 ]; then
+  fail "Docker daemon is not running and returned an immediate error. Check your Docker installation and try again."
+elif [ "$rc" -eq 1 ]; then
   echo "Waiting for Docker daemon to start..."
   start_ts=$(date +%s)
-  while ! docker_is_ready 5; do
+  while true; do
+    docker_is_ready 5
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      break
+    elif [ "$rc" -eq 2 ]; then
+      fail "Docker daemon returned an error. Check your Docker installation and try again."
+    fi
     elapsed=$(( $(date +%s) - start_ts + 10 ))
     if [ "$elapsed" -ge 60 ]; then
       fail "Docker daemon did not start within 60 seconds. Please start Docker Desktop and retry."
