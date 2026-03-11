@@ -49,6 +49,10 @@ async function cloneTemplateDir(templateDir: string, prefix: string): Promise<st
   return cloned;
 }
 
+function extractPromptSkillNames(prompt: string): string[] {
+  return Array.from(prompt.matchAll(/<name>([^<]+)<\/name>/g), (match) => match[1] ?? "");
+}
+
 describe("buildWorkspaceSkillSnapshot", () => {
   it("returns an empty snapshot when skills dirs are missing", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
@@ -158,6 +162,79 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toContain("⚠️ Skills truncated");
     expect(snapshot.prompt.length).toBeLessThan(2000);
+  });
+
+  it("puts priority skills first so they survive low maxSkillsInPrompt limits", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    for (const [name, description] of [
+      ["alpha-skill", "Alpha"],
+      ["beta-skill", "Beta"],
+      ["wechat-reader", "Read WeChat chats"],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description,
+      });
+    }
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            priority: ["wechat-reader", "beta-skill"],
+            limits: {
+              maxSkillsInPrompt: 2,
+              maxSkillsPromptChars: 5_000,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual(["wechat-reader", "beta-skill"]);
+    expect(snapshot.prompt).not.toContain("<name>alpha-skill</name>");
+  });
+
+  it("keeps non-priority skills alphabetized after the pinned skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    for (const [name, description] of [
+      ["delta-skill", "Delta"],
+      ["alpha-skill", "Alpha"],
+      ["wechat-reader", "Read WeChat chats"],
+      ["charlie-skill", "Charlie"],
+    ] as const) {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", name),
+        name,
+        description,
+      });
+    }
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: {
+          skills: {
+            priority: ["wechat-reader"],
+            limits: {
+              maxSkillsInPrompt: 10,
+              maxSkillsPromptChars: 5_000,
+            },
+          },
+        },
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(extractPromptSkillNames(snapshot.prompt)).toEqual([
+      "wechat-reader",
+      "alpha-skill",
+      "charlie-skill",
+      "delta-skill",
+    ]);
   });
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
