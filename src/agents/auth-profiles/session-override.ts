@@ -159,18 +159,25 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   const pickFirstAvailable = () =>
     order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
-  const pickNextAvailable = (active: string) => {
+  const pickNextAvailableWithCanonicalProgress = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
       return pickFirstAvailable();
     }
+    const activeCanonical = resolveCanonicalProfile(active);
+    let firstAvailable: string | undefined;
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) {
+      if (isProfileInCooldown(store, candidate)) {
+        continue;
+      }
+      firstAvailable ??= candidate;
+      const candidateCanonical = resolveCanonicalProfile(candidate);
+      if (candidateCanonical && candidateCanonical !== activeCanonical) {
         return candidate;
       }
     }
-    return order[startIndex] ?? order[0];
+    return firstAvailable ?? order[startIndex] ?? order[0];
   };
 
   const compactionCount = sessionEntry.compactionCount ?? 0;
@@ -192,11 +199,11 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   let next = resolveCanonicalProfile(current);
   if (isNewSession) {
-    next = resolveCanonicalProfile(
-      current ? pickNextAvailable(next ?? current) : pickFirstAvailable(),
-    );
+    next = current ? pickNextAvailableWithCanonicalProgress(next ?? current) : pickFirstAvailable();
+    next = resolveCanonicalProfile(next);
   } else if (current && compactionCount > storedCompaction) {
-    next = resolveCanonicalProfile(pickNextAvailable(next ?? current));
+    next = pickNextAvailableWithCanonicalProgress(next ?? current);
+    next = resolveCanonicalProfile(next);
   } else if (!next || isProfileInCooldown(store, next)) {
     next = resolveCanonicalProfile(pickFirstAvailable());
   }

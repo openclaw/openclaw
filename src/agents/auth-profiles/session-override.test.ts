@@ -262,4 +262,72 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
     });
   });
+
+  it("advances rotation when next raw profile canonicalizes back to the current alias", async () => {
+    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await writeAuthStore(agentDir, {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            email: "josh@example.com",
+            access: "access-token-default",
+          },
+          "openai-codex:token": {
+            type: "oauth",
+            provider: "openai-codex",
+            email: "token@example.com",
+            access: "access-token-token",
+          },
+          "openai-codex:user": {
+            type: "oauth",
+            provider: "openai-codex",
+            email: "josh@example.com",
+            access: "access-token-user",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default", "openai-codex:token", "openai-codex:user"],
+        },
+      });
+
+      const cfg = {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+              email: "josh@example.com",
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s6",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai-codex:user",
+        authProfileOverrideSource: "auto",
+      };
+      const sessionStore = { "agent:main:telegram:direct:8578467390": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg,
+        provider: "openai-codex",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:telegram:direct:8578467390",
+        storePath: undefined,
+        isNewSession: true,
+      });
+
+      expect(resolved).toBe("openai-codex:token");
+      expect(sessionEntry.authProfileOverride).toBe("openai-codex:token");
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    });
+  });
 });
