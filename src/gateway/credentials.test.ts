@@ -158,6 +158,28 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
+  it("ignores remote credentials in local mode when gateway.remote.enabled is false", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          remote: {
+            enabled: false,
+            token: "remote-token",
+            password: "remote-password", // pragma: allowlist secret
+          },
+          auth: {},
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: undefined,
+      password: undefined,
+    });
+  });
+
   it("fails closed when local token SecretRef is unresolved and remote token fallback exists", () => {
     expect(() =>
       resolveGatewayCredentialsFromConfig({
@@ -365,6 +387,32 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved).toEqual({
       token: "remote-token",
       password: "env-password", // pragma: allowlist secret
+    });
+  });
+
+  it("ignores remote credentials in remote mode when gateway.remote.enabled is false", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "remote",
+          auth: {
+            token: "local-token",
+            password: "local-password", // pragma: allowlist secret
+          },
+          remote: {
+            enabled: false,
+            url: "wss://remote.example",
+            token: "remote-token",
+            password: "remote-password", // pragma: allowlist secret
+          },
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: "local-token",
+      password: "local-password", // pragma: allowlist secret
     });
   });
 
