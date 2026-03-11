@@ -815,13 +815,17 @@ export async function handleToolExecutionEnd(
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
     if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
-          toolName,
-          meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-        })
-      ) {
+      const sameAction = isSameToolMutationAction(ctx.state.lastToolError, {
+        toolName,
+        meta,
+        actionFingerprint: callSummary?.actionFingerprint,
+      });
+      // Also clear when the same tool type succeeds on a different target,
+      // which indicates the agent retried the operation successfully (issue #42912).
+      const sameToolRetried =
+        !sameAction &&
+        toolName.trim().toLowerCase() === ctx.state.lastToolError.toolName.trim().toLowerCase();
+      if (sameAction || sameToolRetried) {
         ctx.state.lastToolError = undefined;
       }
     } else {
