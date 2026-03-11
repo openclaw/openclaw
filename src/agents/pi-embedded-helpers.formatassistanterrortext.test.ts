@@ -82,6 +82,12 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("sanitizes Codex error-prefixed JSON payloads", () => {
+    const msg = makeAssistantError(
+      'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"},"sequence_number":2}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
     const result = formatAssistantErrorText(msg);
