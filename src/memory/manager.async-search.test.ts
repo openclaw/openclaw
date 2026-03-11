@@ -59,23 +59,53 @@ describe("memory search async sync", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("does not await sync when searching", async () => {
+  it("awaits sync when searching so results are up-to-date", async () => {
     const cfg = buildConfig();
     manager = await createMemoryManagerOrThrow(cfg);
 
-    const pending = new Promise<void>(() => {});
-    const syncMock = vi.fn(async () => pending);
+    let syncResolved = false;
+    let resolveSync: () => void = () => {};
+    const syncGate = new Promise<void>((resolve) => {
+      resolveSync = resolve;
+    });
+    const syncMock = vi.fn(async () => {
+      await syncGate;
+      syncResolved = true;
+    });
     (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
 
     const activeManager = manager;
     if (!activeManager) {
       throw new Error("manager missing");
     }
-    await activeManager.search("hello");
+
+    // Start search — it should block on sync.
+    const searchPromise = activeManager.search("hello");
+
+    // Sync hasn't resolved yet.
+    await Promise.resolve();
+    expect(syncResolved).toBe(false);
+
+    // Release sync — search should now complete.
+    resolveSync();
+    await searchPromise;
     expect(syncMock).toHaveBeenCalledTimes(1);
+    expect(syncResolved).toBe(true);
   });
 
-  it("waits for in-flight search sync during close", async () => {
+  it("skips sync for empty/whitespace queries", async () => {
+    const cfg = buildConfig();
+    manager = await createMemoryManagerOrThrow(cfg);
+
+    const syncMock = vi.fn(async () => {});
+    (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
+
+    const result = await manager.search("   ");
+    expect(result).toEqual([]);
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it("close waits for pending sync started by search", async () => {
     const cfg = buildConfig();
     let releaseSync = () => {};
     const syncGate = new Promise<void>((resolve) => {
@@ -87,18 +117,21 @@ describe("memory search async sync", () => {
     });
 
     manager = await createMemoryManagerOrThrow(cfg);
-    await manager.search("hello");
 
-    let closed = false;
-    const closePromise = manager.close().then(() => {
-      closed = true;
-    });
+    // search() awaits sync, which blocks on embedBatch → syncGate.
+    // Fire search in the background so we can call close() while sync
+    // is in progress.
+    const searchPromise = manager.search("hello");
 
-    await Promise.resolve();
-    expect(closed).toBe(false);
+    // Give search enough time to enter sync (start embedBatch).
+    await new Promise((r) => setTimeout(r, 100));
 
+    // Release the gate so sync + search complete.
     releaseSync();
-    await closePromise;
+    await searchPromise;
+
+    // close() should succeed cleanly after search + sync have finished.
+    await manager.close();
     manager = null;
   });
 });
