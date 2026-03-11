@@ -15,6 +15,16 @@
     scrollbar-width: none;
   }
 
+  .shell--nav-collapsed .nav,
+  .nav.nav--collapsed {
+    display: none;
+    padding: 0;
+    margin: 0;
+    width: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
   .nav::-webkit-scrollbar {
     display: none;
   }
