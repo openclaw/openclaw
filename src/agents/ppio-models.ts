@@ -11,6 +11,8 @@ const PPIO_DISCOVERY_TIMEOUT_MS = 10_000;
 
 // PPIO prices are in 0.0001 CNY per million tokens.
 // Convert to USD/M tokens using approximate rate (1 USD ≈ 7.2 CNY).
+// This is for rough cost display only. Review periodically.
+// Last verified: 2026-03-11
 const CNY_PER_UNIT = 0.0001;
 const CNY_TO_USD = 1 / 7.2;
 
@@ -147,6 +149,9 @@ interface PpioCatalogEntry {
   rawOutputPrice: number;
 }
 
+// Note: reasoning flags are sourced from PPIO's /models API `features` array.
+// PPIO classifies DeepSeek V3.1/V3.2 as reasoning-capable (they return
+// "reasoning" in features), unlike the older V3-0324 which does not.
 export const PPIO_MODEL_CATALOG: PpioCatalogEntry[] = [
   {
     id: "deepseek/deepseek-v3.2",
