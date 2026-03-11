@@ -77,8 +77,11 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
     for (const key of PROXY_ENV_KEYS) {
-      if (prevProxyEnv[key] == null) delete process.env[key];
-      else process.env[key] = prevProxyEnv[key];
+      if (prevProxyEnv[key] == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prevProxyEnv[key];
+      }
     }
   });
 
