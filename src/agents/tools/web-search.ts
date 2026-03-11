@@ -669,15 +669,26 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   return "brave";
 }
 
-function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
+/**
+ * Generic helper to resolve a provider config from WebSearchConfig.
+ * Validates the search config and extracts the specified provider section.
+ */
+function resolveProviderConfig<T>(
+  search: WebSearchConfig | undefined,
+  providerKey: string,
+): T {
   if (!search || typeof search !== "object") {
-    return {};
+    return {} as T;
   }
-  const brave = "brave" in search ? search.brave : undefined;
-  if (!brave || typeof brave !== "object") {
-    return {};
+  const provider = providerKey in search ? (search as Record<string, unknown>)[providerKey] : undefined;
+  if (!provider || typeof provider !== "object") {
+    return {} as T;
   }
-  return brave as BraveConfig;
+  return provider as T;
+}
+
+function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
+  return resolveProviderConfig<BraveConfig>(search, "brave");
 }
 
 function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
@@ -685,14 +696,7 @@ function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
-  const perplexity = "perplexity" in search ? search.perplexity : undefined;
-  if (!perplexity || typeof perplexity !== "object") {
-    return {};
-  }
-  return perplexity as PerplexityConfig;
+  return resolveProviderConfig<PerplexityConfig>(search, "perplexity");
 }
 
 function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
@@ -824,14 +828,7 @@ function resolvePerplexitySchemaTransportHint(
 }
 
 function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
-  const grok = "grok" in search ? search.grok : undefined;
-  if (!grok || typeof grok !== "object") {
-    return {};
-  }
-  return grok as GrokConfig;
+  return resolveProviderConfig<GrokConfig>(search, "grok");
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
@@ -854,14 +851,7 @@ function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
 }
 
 function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
-  const kimi = "kimi" in search ? search.kimi : undefined;
-  if (!kimi || typeof kimi !== "object") {
-    return {};
-  }
-  return kimi as KimiConfig;
+  return resolveProviderConfig<KimiConfig>(search, "kimi");
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
@@ -890,14 +880,7 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
-  const gemini = "gemini" in search ? search.gemini : undefined;
-  if (!gemini || typeof gemini !== "object") {
-    return {};
-  }
-  return gemini as GeminiConfig;
+  return resolveProviderConfig<GeminiConfig>(search, "gemini");
 }
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
@@ -909,10 +892,31 @@ function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   return fromEnv || undefined;
 }
 
-function resolveGeminiModel(gemini?: GeminiConfig): string {
+/**
+ * Generic helper to resolve a model config with a default fallback.
+ * Extracts the model property from a provider config, trims it, and falls back to the default.
+ */
+function resolveModelConfig<T>(
+  config: T | undefined,
+  defaultModel: string,
+): string {
   const fromConfig =
-    gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
-  return fromConfig || DEFAULT_GEMINI_MODEL;
+    config && "model" in config && typeof config.model === "string"
+      ? config.model.trim()
+      : "";
+  return fromConfig || defaultModel;
+}
+
+function resolveGrokModel(grok?: GrokConfig): string {
+  return resolveModelConfig(grok, DEFAULT_GROK_MODEL);
+}
+
+function resolveKimiModel(kimi?: KimiConfig): string {
+  return resolveModelConfig(kimi, DEFAULT_KIMI_MODEL);
+}
+
+function resolveGeminiModel(gemini?: GeminiConfig): string {
+  return resolveModelConfig(gemini, DEFAULT_GEMINI_MODEL);
 }
 
 async function withTrustedWebSearchEndpoint<T>(
