@@ -7,10 +7,21 @@ const mocks = vi.hoisted(() => ({
   createVpsAwareOAuthHandlers: vi.fn(),
   runOpenAIOAuthTlsPreflight: vi.fn(),
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
+  setGlobalDispatcher: vi.fn(),
+  getGlobalDispatcher: vi.fn(() => ({ kind: "original" })),
+  EnvHttpProxyAgent: vi.fn(function MockEnvHttpProxyAgent(this: unknown) {
+    return { kind: "env-proxy", self: this };
+  }),
 }));
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   loginOpenAICodex: mocks.loginOpenAICodex,
+}));
+
+vi.mock("undici", () => ({
+  EnvHttpProxyAgent: mocks.EnvHttpProxyAgent,
+  getGlobalDispatcher: mocks.getGlobalDispatcher,
+  setGlobalDispatcher: mocks.setGlobalDispatcher,
 }));
 
 vi.mock("./oauth-flow.js", () => ({
@@ -56,10 +67,22 @@ async function runCodexOAuth(params: { isRemote: boolean }) {
 }
 
 describe("loginOpenAICodexOAuth", () => {
+  const PROXY_ENV_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
+  const prevProxyEnv = Object.fromEntries(
+    PROXY_ENV_KEYS.map((key) => [key, process.env[key]]),
+  ) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
     mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
+    for (const key of PROXY_ENV_KEYS) {
+      if (prevProxyEnv[key] == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prevProxyEnv[key];
+      }
+    }
   });
 
   it("returns credentials on successful oauth login", async () => {
@@ -138,6 +161,62 @@ describe("loginOpenAICodexOAuth", () => {
     expect(prompter.note).toHaveBeenCalledWith(
       "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
       "OAuth help",
+    );
+  });
+
+  it("installs EnvHttpProxyAgent around oauth when proxy env is configured", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7890";
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({ onAuth: vi.fn(), onPrompt: vi.fn() });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    await runCodexOAuth({ isRemote: false });
+
+    expect(mocks.EnvHttpProxyAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(mocks.setGlobalDispatcher.mock.calls[0]?.[0]).toMatchObject({ kind: "env-proxy" });
+    expect(mocks.setGlobalDispatcher.mock.calls[1]?.[0]).toEqual({ kind: "original" });
+  });
+
+  it("restores dispatcher after oauth failure under proxy env", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7890";
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({ onAuth: vi.fn(), onPrompt: vi.fn() });
+    mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
+
+    await expect(runCodexOAuth({ isRemote: false })).rejects.toThrow("oauth failed");
+
+    expect(mocks.setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(mocks.setGlobalDispatcher.mock.calls[1]?.[0]).toEqual({ kind: "original" });
+  });
+
+  it("falls back to direct transport when proxy dispatcher setup fails", async () => {
+    process.env.HTTPS_PROXY = "bad-proxy-url";
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.EnvHttpProxyAgent.mockImplementationOnce(() => {
+      throw new Error("invalid proxy url");
+    });
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({ onAuth: vi.fn(), onPrompt: vi.fn() });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { result, runtime } = await runCodexOAuth({ isRemote: false });
+
+    expect(result).toEqual(creds);
+    expect(mocks.setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("proxy dispatcher setup failed; falling back to direct transport"),
     );
   });
 
