@@ -202,6 +202,42 @@ describe("buildInlineProviderModels", () => {
 });
 
 describe("resolveModel", () => {
+  it("defaults model input to text when discovery omits input", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "missing-input",
+      templateModel: {
+        id: "missing-input",
+        name: "missing-input",
+        api: "openai-completions",
+        provider: "custom",
+        baseUrl: "http://localhost:9999",
+        reasoning: false,
+        // NOTE: deliberately omit input to simulate buggy/custom catalogs.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    });
+
+    const result = resolveModel("custom", "missing-input", "/tmp/agent", {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9999",
+            api: "openai-completions",
+            // Intentionally keep this minimal — the discovered model provides the rest.
+            models: [{ id: "missing-input", name: "missing-input" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.error).toBeUndefined();
+    expect(Array.isArray(result.model?.input)).toBe(true);
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
   it("includes provider baseUrl in fallback model", () => {
     const cfg = {
       models: {
