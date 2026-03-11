@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -16,6 +16,13 @@ export type GatewayCredentialMode = "local" | "remote";
 export type GatewayCredentialPrecedence = "env-first" | "config-first";
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
+type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
+
+type GatewayConfiguredCredentialInput = {
+  configured: boolean;
+  value?: string;
+  refPath?: string;
+};
 
 const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
 
@@ -83,6 +90,22 @@ function firstDefined(values: Array<string | undefined>): string | undefined {
 
 function throwUnresolvedGatewaySecretInput(path: string): never {
   throw new GatewaySecretRefUnavailableError(path);
+}
+
+function resolveConfiguredGatewayCredentialInput(params: {
+  value: unknown;
+  defaults?: GatewaySecretDefaults;
+  path: string;
+}): GatewayConfiguredCredentialInput {
+  const ref = resolveSecretInputRef({
+    value: params.value,
+    defaults: params.defaults,
+  }).ref;
+  return {
+    configured: hasConfiguredSecretInput(params.value, params.defaults),
+    value: ref ? undefined : trimToUndefined(params.value),
+    refPath: ref ? params.path : undefined,
+  };
 }
 
 export function readGatewayTokenEnv(
@@ -200,28 +223,34 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
 
-  const localTokenRef = resolveSecretInputRef({
+  const localTokenInput = resolveConfiguredGatewayCredentialInput({
     value: params.cfg.gateway?.auth?.token,
     defaults,
-  }).ref;
-  const localPasswordRef = resolveSecretInputRef({
+    path: "gateway.auth.token",
+  });
+  const localPasswordInput = resolveConfiguredGatewayCredentialInput({
     value: params.cfg.gateway?.auth?.password,
     defaults,
-  }).ref;
-  const remoteTokenRef = resolveSecretInputRef({
+    path: "gateway.auth.password",
+  });
+  const remoteTokenInput = resolveConfiguredGatewayCredentialInput({
     value: remote?.token,
     defaults,
-  }).ref;
-  const remotePasswordRef = resolveSecretInputRef({
+    path: "gateway.remote.token",
+  });
+  const remotePasswordInput = resolveConfiguredGatewayCredentialInput({
     value: remote?.password,
     defaults,
-  }).ref;
-  const remoteToken = remoteTokenRef ? undefined : trimToUndefined(remote?.token);
-  const remotePassword = remotePasswordRef ? undefined : trimToUndefined(remote?.password);
-  const localToken = localTokenRef ? undefined : trimToUndefined(params.cfg.gateway?.auth?.token);
-  const localPassword = localPasswordRef
-    ? undefined
-    : trimToUndefined(params.cfg.gateway?.auth?.password);
+    path: "gateway.remote.password",
+  });
+  const localTokenRef = localTokenInput.refPath;
+  const localPasswordRef = localPasswordInput.refPath;
+  const remoteTokenRef = remoteTokenInput.refPath;
+  const remotePasswordRef = remotePasswordInput.refPath;
+  const remoteToken = remoteTokenInput.value;
+  const remotePassword = remotePasswordInput.value;
+  const localToken = localTokenInput.value;
+  const localPassword = localPasswordInput.value;
 
   const localTokenPrecedence =
     params.localTokenPrecedence ??
@@ -232,8 +261,8 @@ export function resolveGatewayCredentialsFromConfig(params: {
     // In local mode, prefer gateway.auth.token, but also accept gateway.remote.token
     // as a fallback for cron commands and other local gateway clients.
     // This allows users in remote mode to use a single token for all operations.
-    const fallbackToken = localToken ?? remoteToken;
-    const fallbackPassword = localPassword ?? remotePassword;
+    const fallbackToken = localTokenInput.configured ? localToken : remoteToken;
+    const fallbackPassword = localPasswordInput.configured ? localPassword : remotePassword;
     const localResolved = resolveGatewayCredentialsFromValues({
       configToken: fallbackToken,
       configPassword: fallbackPassword,
