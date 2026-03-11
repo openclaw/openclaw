@@ -51,6 +51,21 @@ describe("exec approvals wildcard agent", () => {
       }
     }
   });
+
+  it("merges wildcard denylist entries with agent entries", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        "*": { denylist: [{ pattern: "/usr/bin/rm" }] },
+        main: { denylist: [{ pattern: "/bin/dd", argsMatch: "of=/dev/" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.denylist).toEqual([
+      expect.objectContaining({ pattern: "/usr/bin/rm" }),
+      expect.objectContaining({ pattern: "/bin/dd", argsMatch: "of=/dev/" }),
+    ]);
+  });
 });
 
 describe("exec approvals node host allowlist check", () => {
@@ -279,5 +294,42 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
         expectNoSpreadStringArtifacts(entries ?? []);
       }
     }
+  });
+});
+
+describe("normalizeExecApprovals denylist entries", () => {
+  it("preserves argsMatch and reason metadata", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: {
+        main: {
+          denylist: [
+            { pattern: "/usr/bin/rm", argsMatch: "-rf /", reason: "destructive recursive delete" },
+          ],
+        },
+      },
+    });
+    expect(normalized.agents?.main?.denylist).toEqual([
+      expect.objectContaining({
+        pattern: "/usr/bin/rm",
+        argsMatch: "-rf /",
+        reason: "destructive recursive delete",
+      }),
+    ]);
+  });
+
+  it("coerces bare string denylist entries into structured patterns", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: {
+        main: {
+          denylist: ["/usr/bin/rm", "/bin/dd"] as unknown as ExecAllowlistEntry[],
+        },
+      },
+    });
+    expect(normalized.agents?.main?.denylist?.map((entry) => entry.pattern)).toEqual([
+      "/usr/bin/rm",
+      "/bin/dd",
+    ]);
   });
 });

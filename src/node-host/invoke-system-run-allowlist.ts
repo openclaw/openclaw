@@ -1,7 +1,9 @@
 import {
   analyzeArgvCommand,
   evaluateExecAllowlist,
+  evaluateExecDenylist,
   evaluateShellAllowlist,
+  evaluateShellDenylist,
   resolvePlannedSegmentArgv,
   resolveExecApprovals,
   type ExecAllowlistEntry,
@@ -16,6 +18,8 @@ export type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;
+  denylistMatches: ExecAllowlistEntry[];
+  denylistMatched: boolean;
   segments: ExecCommandSegment[];
 };
 
@@ -45,13 +49,22 @@ export function evaluateSystemRunAllowlist(params: {
       autoAllowSkills: params.autoAllowSkills,
       platform: process.platform,
     });
+    const denylistEval = evaluateShellDenylist({
+      command: params.shellCommand,
+      entries: params.approvals.denylist,
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+    });
     return {
       analysisOk: allowlistEval.analysisOk,
       allowlistMatches: allowlistEval.allowlistMatches,
-      allowlistSatisfied:
-        params.security === "allowlist" && allowlistEval.analysisOk
-          ? allowlistEval.allowlistSatisfied
-          : false,
+      allowlistSatisfied: allowlistEval.analysisOk ? allowlistEval.allowlistSatisfied : false,
+      denylistMatches: denylistEval.denylistMatches,
+      denylistMatched:
+        denylistEval.analysisOk &&
+        denylistEval.denylistMatched &&
+        !(allowlistEval.analysisOk && allowlistEval.allowlistSatisfied),
       segments: allowlistEval.segments,
     };
   }
@@ -67,11 +80,22 @@ export function evaluateSystemRunAllowlist(params: {
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
   });
+  const denylistEval = evaluateExecDenylist({
+    analysis,
+    entries: params.approvals.denylist,
+    cwd: params.cwd,
+    env: params.env,
+    platform: process.platform,
+  });
   return {
     analysisOk: analysis.ok,
     allowlistMatches: allowlistEval.allowlistMatches,
-    allowlistSatisfied:
-      params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
+    allowlistSatisfied: analysis.ok ? allowlistEval.allowlistSatisfied : false,
+    denylistMatches: denylistEval.denylistMatches,
+    denylistMatched:
+      denylistEval.analysisOk &&
+      denylistEval.denylistMatched &&
+      !(analysis.ok && allowlistEval.allowlistSatisfied),
     segments: analysis.segments,
   };
 }

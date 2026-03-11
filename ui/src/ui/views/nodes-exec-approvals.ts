@@ -11,8 +11,8 @@ import {
 } from "./nodes-shared.ts";
 import type { NodesProps } from "./nodes.ts";
 
-type ExecSecurity = "deny" | "allowlist" | "full";
-type ExecAsk = "off" | "on-miss" | "always";
+type ExecSecurity = "deny" | "allowlist" | "denylist" | "full";
+type ExecAsk = "off" | "on-miss" | "on-match" | "always";
 
 type ExecApprovalsResolvedDefaults = {
   security: ExecSecurity;
@@ -41,6 +41,7 @@ type ExecApprovalsState = {
   selectedAgent: Record<string, unknown> | null;
   agents: ExecApprovalsAgentOption[];
   allowlist: ExecApprovalsAllowlistEntry[];
+  denylist: ExecApprovalsAllowlistEntry[];
   target: "gateway" | "node";
   targetNodeId: string | null;
   targetNodes: ExecApprovalsTargetNode[];
@@ -57,24 +58,26 @@ const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
 const SECURITY_OPTIONS: Array<{ value: ExecSecurity; label: string }> = [
   { value: "deny", label: "Deny" },
   { value: "allowlist", label: "Allowlist" },
+  { value: "denylist", label: "Denylist" },
   { value: "full", label: "Full" },
 ];
 
 const ASK_OPTIONS: Array<{ value: ExecAsk; label: string }> = [
   { value: "off", label: "Off" },
   { value: "on-miss", label: "On miss" },
+  { value: "on-match", label: "On match" },
   { value: "always", label: "Always" },
 ];
 
 function normalizeSecurity(value?: string): ExecSecurity {
-  if (value === "allowlist" || value === "full" || value === "deny") {
+  if (value === "allowlist" || value === "denylist" || value === "full" || value === "deny") {
     return value;
   }
   return "deny";
 }
 
 function normalizeAsk(value?: string): ExecAsk {
-  if (value === "always" || value === "off" || value === "on-miss") {
+  if (value === "always" || value === "off" || value === "on-miss" || value === "on-match") {
     return value;
   }
   return "on-miss";
@@ -165,6 +168,9 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
   const allowlist = Array.isArray((selectedAgent as { allowlist?: unknown })?.allowlist)
     ? ((selectedAgent as { allowlist?: ExecApprovalsAllowlistEntry[] }).allowlist ?? [])
     : [];
+  const denylist = Array.isArray((selectedAgent as { denylist?: unknown })?.denylist)
+    ? ((selectedAgent as { denylist?: ExecApprovalsAllowlistEntry[] }).denylist ?? [])
+    : [];
   return {
     ready,
     disabled: props.execApprovalsSaving || props.execApprovalsLoading,
@@ -177,6 +183,7 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
     selectedAgent,
     agents,
     allowlist,
+    denylist,
     target,
     targetNodeId,
     targetNodes,
@@ -226,7 +233,18 @@ export function renderExecApprovals(state: ExecApprovalsState) {
             ${
               state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
                 ? nothing
-                : renderExecApprovalsAllowlist(state)
+                : html`
+                    ${renderExecApprovalsRuleList(state, {
+                      key: "allowlist",
+                      title: "Allowlist",
+                      emptyText: "No allowlist entries yet.",
+                    })}
+                    ${renderExecApprovalsRuleList(state, {
+                      key: "denylist",
+                      title: "Denylist",
+                      emptyText: "No denylist entries yet.",
+                    })}
+                  `
             }
           `
       }
@@ -528,21 +546,28 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
   `;
 }
 
-function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
-  const allowlistPath = ["agents", state.selectedScope, "allowlist"];
-  const entries = state.allowlist;
+function renderExecApprovalsRuleList(
+  state: ExecApprovalsState,
+  params: {
+    key: "allowlist" | "denylist";
+    title: string;
+    emptyText: string;
+  },
+) {
+  const entries = params.key === "allowlist" ? state.allowlist : state.denylist;
+  const listPath = ["agents", state.selectedScope, params.key];
   return html`
     <div class="row" style="margin-top: 18px; justify-content: space-between;">
       <div>
-        <div class="card-title">Allowlist</div>
-        <div class="card-sub">Case-insensitive glob patterns.</div>
+        <div class="card-title">${params.title}</div>
+        <div class="card-sub">Case-insensitive glob patterns, plus optional argument substring.</div>
       </div>
       <button
         class="btn btn--sm"
         ?disabled=${state.disabled}
         @click=${() => {
           const next = [...entries, { pattern: "" }];
-          state.onPatch(allowlistPath, next);
+          state.onPatch(listPath, next);
         }}
       >
         Add pattern
@@ -552,16 +577,17 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
       ${
         entries.length === 0
           ? html`
-              <div class="muted">No allowlist entries yet.</div>
+              <div class="muted">${params.emptyText}</div>
             `
-          : entries.map((entry, index) => renderAllowlistEntry(state, entry, index))
+          : entries.map((entry, index) => renderRuleListEntry(state, params.key, entry, index))
       }
     </div>
   `;
 }
 
-function renderAllowlistEntry(
+function renderRuleListEntry(
   state: ExecApprovalsState,
+  listKey: "allowlist" | "denylist",
   entry: ExecApprovalsAllowlistEntry,
   index: number,
 ) {
@@ -586,9 +612,26 @@ function renderAllowlistEntry(
             @input=${(event: Event) => {
               const target = event.target as HTMLInputElement;
               state.onPatch(
-                ["agents", state.selectedScope, "allowlist", index, "pattern"],
+                ["agents", state.selectedScope, listKey, index, "pattern"],
                 target.value,
               );
+            }}
+          />
+        </label>
+        <label class="field">
+          <span>Args match</span>
+          <input
+            type="text"
+            .value=${entry.argsMatch ?? ""}
+            ?disabled=${state.disabled}
+            @input=${(event: Event) => {
+              const target = event.target as HTMLInputElement;
+              const value = target.value;
+              if (value.trim()) {
+                state.onPatch(["agents", state.selectedScope, listKey, index, "argsMatch"], value);
+              } else {
+                state.onRemove(["agents", state.selectedScope, listKey, index, "argsMatch"]);
+              }
             }}
           />
         </label>
@@ -596,11 +639,12 @@ function renderAllowlistEntry(
           class="btn btn--sm danger"
           ?disabled=${state.disabled}
           @click=${() => {
-            if (state.allowlist.length <= 1) {
-              state.onRemove(["agents", state.selectedScope, "allowlist"]);
+            const entries = listKey === "allowlist" ? state.allowlist : state.denylist;
+            if (entries.length <= 1) {
+              state.onRemove(["agents", state.selectedScope, listKey]);
               return;
             }
-            state.onRemove(["agents", state.selectedScope, "allowlist", index]);
+            state.onRemove(["agents", state.selectedScope, listKey, index]);
           }}
         >
           Remove

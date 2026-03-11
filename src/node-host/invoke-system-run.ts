@@ -49,6 +49,7 @@ type SystemRunDeniedReason =
   | "security=deny"
   | "approval-required"
   | "allowlist-miss"
+  | "denylist-match"
   | "execution-plan-miss"
   | "companion-unavailable"
   | "permission:screenRecording";
@@ -89,6 +90,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylistMatched: boolean;
   segments: ExecCommandSegment[];
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
@@ -114,6 +116,7 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "security=deny":
     case "approval-required":
     case "allowlist-miss":
+    case "denylist-match":
     case "execution-plan-miss":
     case "companion-unavailable":
     case "permission:screenRecording":
@@ -271,19 +274,20 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
-    shellCommand: parsed.shellPayload,
-    argv: parsed.argv,
-    approvals,
-    security,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    cwd: parsed.cwd,
-    env: parsed.env,
-    skillBins: bins,
-    autoAllowSkills,
-  });
+  let { analysisOk, allowlistMatches, allowlistSatisfied, denylistMatched, segments } =
+    evaluateSystemRunAllowlist({
+      shellCommand: parsed.shellPayload,
+      argv: parsed.argv,
+      approvals,
+      security,
+      safeBins,
+      safeBinProfiles,
+      trustedSafeBinDirs,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      skillBins: bins,
+      autoAllowSkills,
+    });
   const isWindows = process.platform === "win32";
   const cmdInvocation = parsed.shellPayload
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
@@ -293,6 +297,7 @@ async function evaluateSystemRunPolicyPhase(
     ask,
     analysisOk,
     allowlistSatisfied,
+    denylistMatched,
     approvalDecision: parsed.approvalDecision,
     approved: parsed.approved,
     isWindows,
@@ -301,6 +306,7 @@ async function evaluateSystemRunPolicyPhase(
   });
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
+  denylistMatched = policy.denylistMatched;
   if (!policy.allowed) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
@@ -363,6 +369,7 @@ async function evaluateSystemRunPolicyPhase(
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
+    denylistMatched,
     segments,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
@@ -451,7 +458,10 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
+  if (
+    phase.policy.approvalDecision === "allow-always" &&
+    (phase.security === "allowlist" || phase.security === "denylist")
+  ) {
     if (phase.policy.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments: phase.segments,

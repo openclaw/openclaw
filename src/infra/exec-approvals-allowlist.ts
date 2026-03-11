@@ -317,6 +317,78 @@ export type ExecAllowlistAnalysis = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+export type ExecDenylistAnalysis = {
+  analysisOk: boolean;
+  denylistMatched: boolean;
+  denylistMatches: ExecAllowlistEntry[];
+  segments: ExecCommandSegment[];
+};
+
+function evaluateExecPatternMatches(params: {
+  analysis: ExecCommandAnalysis;
+  entries: ExecAllowlistEntry[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): ExecDenylistAnalysis {
+  if (!params.analysis.ok || params.analysis.segments.length === 0) {
+    return {
+      analysisOk: false,
+      denylistMatched: false,
+      denylistMatches: [],
+      segments: [],
+    };
+  }
+
+  const matches: ExecAllowlistEntry[] = [];
+  for (const group of resolveAnalysisSegmentGroups(params.analysis)) {
+    for (const segment of group) {
+      const effectiveArgv =
+        segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
+          ? segment.resolution.effectiveArgv
+          : segment.argv;
+      const allowlistSegment =
+        effectiveArgv === segment.argv ? segment : { ...segment, argv: effectiveArgv };
+      const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
+      const candidateResolution =
+        candidatePath && segment.resolution
+          ? { ...segment.resolution, resolvedPath: candidatePath }
+          : segment.resolution;
+      const executableMatch = matchAllowlist(params.entries, candidateResolution, effectiveArgv);
+      const inlineCommand = extractShellWrapperInlineCommand(allowlistSegment.argv);
+      const shellScriptCandidatePath =
+        inlineCommand === null
+          ? resolveShellWrapperScriptCandidatePath({
+              segment: allowlistSegment,
+              cwd: params.cwd,
+            })
+          : undefined;
+      const shellScriptMatch = shellScriptCandidatePath
+        ? matchAllowlist(
+            params.entries,
+            {
+              rawExecutable: shellScriptCandidatePath,
+              resolvedPath: shellScriptCandidatePath,
+              executableName: path.basename(shellScriptCandidatePath),
+            },
+            effectiveArgv,
+          )
+        : null;
+      const match = executableMatch ?? shellScriptMatch;
+      if (match) {
+        matches.push(match);
+      }
+    }
+  }
+
+  return {
+    analysisOk: true,
+    denylistMatched: matches.length > 0,
+    denylistMatches: matches,
+    segments: params.analysis.segments,
+  };
+}
+
 function hasSegmentExecutableMatch(
   segment: ExecCommandSegment,
   predicate: (token: string) => boolean,
@@ -605,5 +677,81 @@ export function evaluateShellAllowlist(
     allowlistMatches,
     segments,
     segmentSatisfiedBy,
+  };
+}
+
+export function evaluateExecDenylist(params: {
+  analysis: ExecCommandAnalysis;
+  entries: ExecAllowlistEntry[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): ExecDenylistAnalysis {
+  return evaluateExecPatternMatches(params);
+}
+
+export function evaluateShellDenylist(params: {
+  command: string;
+  entries: ExecAllowlistEntry[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): ExecDenylistAnalysis {
+  const analysisFailure = (): ExecDenylistAnalysis => ({
+    analysisOk: false,
+    denylistMatched: false,
+    denylistMatches: [],
+    segments: [],
+  });
+
+  if (hasShellLineContinuation(params.command)) {
+    return analysisFailure();
+  }
+
+  const chainParts = isWindowsPlatform(params.platform) ? null : splitCommandChain(params.command);
+  if (!chainParts) {
+    const analysis = analyzeShellCommand({
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+    });
+    return evaluateExecPatternMatches({
+      analysis,
+      entries: params.entries,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+    });
+  }
+
+  const matches: ExecAllowlistEntry[] = [];
+  const segments: ExecCommandSegment[] = [];
+  for (const part of chainParts) {
+    const analysis = analyzeShellCommand({
+      command: part,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+    });
+    if (!analysis.ok) {
+      return analysisFailure();
+    }
+    segments.push(...analysis.segments);
+    const evaluation = evaluateExecPatternMatches({
+      analysis,
+      entries: params.entries,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+    });
+    matches.push(...evaluation.denylistMatches);
+  }
+
+  return {
+    analysisOk: true,
+    denylistMatched: matches.length > 0,
+    denylistMatches: matches,
+    segments,
   };
 }

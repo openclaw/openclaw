@@ -8,8 +8,8 @@ export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
-export type ExecSecurity = "deny" | "allowlist" | "full";
-export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecSecurity = "deny" | "allowlist" | "denylist" | "full";
+export type ExecAsk = "off" | "on-miss" | "on-match" | "always";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
@@ -21,7 +21,12 @@ export function normalizeExecHost(value?: string | null): ExecHost | null {
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "denylist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return null;
@@ -29,7 +34,12 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (
+    normalized === "off" ||
+    normalized === "on-miss" ||
+    normalized === "on-match" ||
+    normalized === "always"
+  ) {
     return normalized;
   }
   return null;
@@ -106,6 +116,8 @@ export type ExecApprovalsDefaults = {
 export type ExecAllowlistEntry = {
   id?: string;
   pattern: string;
+  argsMatch?: string;
+  reason?: string;
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
@@ -113,6 +125,7 @@ export type ExecAllowlistEntry = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  denylist?: ExecAllowlistEntry[];
 };
 
 export type ExecApprovalsFile = {
@@ -140,6 +153,7 @@ export type ExecApprovalsResolved = {
   defaults: Required<ExecApprovalsDefaults>;
   agent: Required<ExecApprovalsDefaults>;
   allowlist: ExecAllowlistEntry[];
+  denylist: ExecAllowlistEntry[];
   file: ExecApprovalsFile;
 };
 
@@ -168,7 +182,7 @@ export function resolveExecApprovalsSocketPath(): string {
   return expandHomePrefix(DEFAULT_SOCKET);
 }
 
-function normalizeAllowlistPattern(value: string | undefined): string | null {
+function normalizeExecRulePattern(value: string | undefined): string | null {
   const trimmed = value?.trim() ?? "";
   return trimmed ? trimmed.toLowerCase() : null;
 }
@@ -178,20 +192,32 @@ function mergeLegacyAgent(
   legacy: ExecApprovalsAgent,
 ): ExecApprovalsAgent {
   const allowlist: ExecAllowlistEntry[] = [];
-  const seen = new Set<string>();
-  const pushEntry = (entry: ExecAllowlistEntry) => {
-    const key = normalizeAllowlistPattern(entry.pattern);
+  const denylist: ExecAllowlistEntry[] = [];
+  const seenAllowlist = new Set<string>();
+  const seenDenylist = new Set<string>();
+  const pushEntry = (
+    entries: ExecAllowlistEntry[],
+    seen: Set<string>,
+    entry: ExecAllowlistEntry,
+  ) => {
+    const key = normalizeExecRulePattern(entry.pattern);
     if (!key || seen.has(key)) {
       return;
     }
     seen.add(key);
-    allowlist.push(entry);
+    entries.push(entry);
   };
   for (const entry of current.allowlist ?? []) {
-    pushEntry(entry);
+    pushEntry(allowlist, seenAllowlist, entry);
   }
   for (const entry of legacy.allowlist ?? []) {
-    pushEntry(entry);
+    pushEntry(allowlist, seenAllowlist, entry);
+  }
+  for (const entry of current.denylist ?? []) {
+    pushEntry(denylist, seenDenylist, entry);
+  }
+  for (const entry of legacy.denylist ?? []) {
+    pushEntry(denylist, seenDenylist, entry);
   }
 
   return {
@@ -200,6 +226,7 @@ function mergeLegacyAgent(
     askFallback: current.askFallback ?? legacy.askFallback,
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
     allowlist: allowlist.length > 0 ? allowlist : undefined,
+    denylist: denylist.length > 0 ? denylist : undefined,
   };
 }
 
@@ -208,15 +235,15 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-// Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
+// Coerce legacy/corrupted rule lists into `ExecAllowlistEntry[]` before we spread
 // entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
-function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
-  if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return Array.isArray(allowlist) ? (allowlist as ExecAllowlistEntry[]) : undefined;
+function coerceRuleEntries(entries: unknown): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return Array.isArray(entries) ? (entries as ExecAllowlistEntry[]) : undefined;
   }
   let changed = false;
   const result: ExecAllowlistEntry[] = [];
-  for (const item of allowlist) {
+  for (const item of entries) {
     if (typeof item === "string") {
       const trimmed = item.trim();
       if (trimmed) {
@@ -236,24 +263,24 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
       changed = true; // dropped invalid entry
     }
   }
-  return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
+  return changed ? (result.length > 0 ? result : undefined) : (entries as ExecAllowlistEntry[]);
 }
 
-function ensureAllowlistIds(
-  allowlist: ExecAllowlistEntry[] | undefined,
+function ensureRuleIds(
+  entries: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
-  if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return allowlist;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return entries;
   }
   let changed = false;
-  const next = allowlist.map((entry) => {
+  const next = entries.map((entry) => {
     if (entry.id) {
       return entry;
     }
     changed = true;
     return { ...entry, id: crypto.randomUUID() };
   });
-  return changed ? next : allowlist;
+  return changed ? next : entries;
 }
 
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -267,10 +294,10 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
-    const coerced = coerceAllowlistEntries(agent.allowlist);
-    const allowlist = ensureAllowlistIds(coerced);
-    if (allowlist !== agent.allowlist) {
-      agents[key] = { ...agent, allowlist };
+    const allowlist = ensureRuleIds(coerceRuleEntries(agent.allowlist));
+    const denylist = ensureRuleIds(coerceRuleEntries(agent.denylist));
+    if (allowlist !== agent.allowlist || denylist !== agent.denylist) {
+      agents[key] = { ...agent, allowlist, denylist };
     }
   }
   const normalized: ExecApprovalsFile = {
@@ -389,14 +416,14 @@ export function ensureExecApprovals(): ExecApprovalsFile {
 }
 
 function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecurity): ExecSecurity {
-  if (value === "allowlist" || value === "full" || value === "deny") {
+  if (value === "allowlist" || value === "denylist" || value === "full" || value === "deny") {
     return value;
   }
   return fallback;
 }
 
 function normalizeAsk(value: ExecAsk | undefined, fallback: ExecAsk): ExecAsk {
-  if (value === "always" || value === "off" || value === "on-miss") {
+  if (value === "always" || value === "off" || value === "on-miss" || value === "on-match") {
     return value;
   }
   return fallback;
@@ -468,6 +495,10 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  const denylist = [
+    ...(Array.isArray(wildcard.denylist) ? wildcard.denylist : []),
+    ...(Array.isArray(agent.denylist) ? agent.denylist : []),
+  ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -477,6 +508,7 @@ export function resolveExecApprovalsFromFile(params: {
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     allowlist,
+    denylist,
     file,
   };
 }
@@ -486,12 +518,14 @@ export function requiresExecApproval(params: {
   security: ExecSecurity;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylistMatched?: boolean;
 }): boolean {
   return (
     params.ask === "always" ||
     (params.ask === "on-miss" &&
       params.security === "allowlist" &&
-      (!params.analysisOk || !params.allowlistSatisfied))
+      (!params.analysisOk || !params.allowlistSatisfied)) ||
+    (params.ask === "on-match" && params.security === "denylist" && params.denylistMatched === true)
   );
 }
 
@@ -545,12 +579,12 @@ export function addAllowlistEntry(
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
-  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, denylist: 2, full: 3 };
   return order[a] <= order[b] ? a : b;
 }
 
 export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
-  const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
+  const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, "on-match": 2, always: 3 };
   return order[a] >= order[b] ? a : b;
 }
 

@@ -11,6 +11,8 @@ export type ExecApprovalsDefaults = {
 export type ExecApprovalsAllowlistEntry = {
   id?: string;
   pattern: string;
+  argsMatch?: string;
+  reason?: string;
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
@@ -18,6 +20,7 @@ export type ExecApprovalsAllowlistEntry = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecApprovalsAllowlistEntry[];
+  denylist?: ExecApprovalsAllowlistEntry[];
 };
 
 export type ExecApprovalsFile = {

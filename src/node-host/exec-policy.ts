@@ -5,6 +5,7 @@ export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 export type SystemRunPolicyDecision = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylistMatched: boolean;
   shellWrapperBlocked: boolean;
   windowsShellWrapperBlocked: boolean;
   requiresAsk: boolean;
@@ -16,7 +17,7 @@ export type SystemRunPolicyDecision = {
     }
   | {
       allowed: false;
-      eventReason: "security=deny" | "approval-required" | "allowlist-miss";
+      eventReason: "security=deny" | "approval-required" | "allowlist-miss" | "denylist-match";
       errorMessage: string;
     }
 );
@@ -54,6 +55,7 @@ export function evaluateSystemRunPolicy(params: {
   ask: ExecAsk;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylistMatched: boolean;
   approvalDecision: ExecApprovalDecision;
   approved?: boolean;
   isWindows: boolean;
@@ -74,6 +76,7 @@ export function evaluateSystemRunPolicy(params: {
       errorMessage: "SYSTEM_RUN_DISABLED: security=deny",
       analysisOk,
       allowlistSatisfied,
+      denylistMatched: params.denylistMatched,
       shellWrapperBlocked,
       windowsShellWrapperBlocked,
       requiresAsk: false,
@@ -87,6 +90,7 @@ export function evaluateSystemRunPolicy(params: {
     security: params.security,
     analysisOk,
     allowlistSatisfied,
+    denylistMatched: params.denylistMatched,
   });
   if (requiresAsk && !approvedByAsk) {
     return {
@@ -95,6 +99,7 @@ export function evaluateSystemRunPolicy(params: {
       errorMessage: "SYSTEM_RUN_DENIED: approval required",
       analysisOk,
       allowlistSatisfied,
+      denylistMatched: params.denylistMatched,
       shellWrapperBlocked,
       windowsShellWrapperBlocked,
       requiresAsk,
@@ -113,6 +118,23 @@ export function evaluateSystemRunPolicy(params: {
       }),
       analysisOk,
       allowlistSatisfied,
+      denylistMatched: params.denylistMatched,
+      shellWrapperBlocked,
+      windowsShellWrapperBlocked,
+      requiresAsk,
+      approvalDecision: params.approvalDecision,
+      approvedByAsk,
+    };
+  }
+
+  if (params.security === "denylist" && params.denylistMatched && !approvedByAsk) {
+    return {
+      allowed: false,
+      eventReason: "denylist-match",
+      errorMessage: "SYSTEM_RUN_DENIED: denylist match",
+      analysisOk,
+      allowlistSatisfied,
+      denylistMatched: params.denylistMatched,
       shellWrapperBlocked,
       windowsShellWrapperBlocked,
       requiresAsk,
@@ -125,6 +147,7 @@ export function evaluateSystemRunPolicy(params: {
     allowed: true,
     analysisOk,
     allowlistSatisfied,
+    denylistMatched: params.denylistMatched,
     shellWrapperBlocked,
     windowsShellWrapperBlocked,
     requiresAsk,
