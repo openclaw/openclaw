@@ -741,10 +741,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const minScore = Math.max(
-      this.qmd.limits.minScore,
-      opts?.minScore ?? this.qmd.limits.minScore,
-    );
+    const minScore = Math.max(this.qmd.limits.minScore, opts?.minScore ?? this.qmd.limits.minScore);
     const collectionNames = this.listManagedCollectionNames();
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
@@ -810,7 +807,12 @@ export class QmdMemoryManager implements MemorySearchManager {
           );
           try {
             if (collectionNames.length > 1) {
-              return await this.runQueryAcrossCollections(trimmed, maxResults, collectionNames, "query");
+              return await this.runQueryAcrossCollections(
+                trimmed,
+                maxResults,
+                collectionNames,
+                "query",
+              );
             }
             const fallbackArgs = this.buildSearchArgs("query", trimmed, maxResults);
             fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
