@@ -219,7 +219,8 @@ export function resolveModelWithRegistry(params: {
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  if (providerConfig || modelId.startsWith("mock-")) {
+  // Only create inline model if explicitly configured in providerConfig.models
+  if (configuredModel) {
     return normalizeResolvedModel({
       provider,
       model: {
@@ -241,6 +242,23 @@ export function resolveModelWithRegistry(params: {
           DEFAULT_CONTEXT_TOKENS,
         headers:
           providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      } as Model<Api>,
+    });
+  }
+
+  // Allow mock models for testing even without providerConfig
+  if (modelId.startsWith("mock-")) {
+    return normalizeResolvedModel({
+      provider,
+      model: {
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        provider,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        maxTokens: DEFAULT_CONTEXT_TOKENS,
       } as Model<Api>,
     });
   }
