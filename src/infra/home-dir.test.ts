@@ -27,6 +27,27 @@ describe("resolveEffectiveHomeDir", () => {
     );
   });
 
+  it("derives home from PREFIX on Android/Termux when HOME is unset", () => {
+    const env = {
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/home")).toBe(
+      path.resolve("/data/data/com.termux/files/home"),
+    );
+  });
+
+  it("prefers HOME over PREFIX-derived path on Termux", () => {
+    const env = {
+      HOME: "/data/data/com.termux/files/home",
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env)).toBe(
+      path.resolve("/data/data/com.termux/files/home"),
+    );
+  });
+
   it("expands OPENCLAW_HOME when set to ~", () => {
     const env = {
       OPENCLAW_HOME: "~/svc",
