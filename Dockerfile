@@ -114,6 +114,8 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package.json .
 COPY --from=build --chown=node:node /app/openclaw.mjs .
+COPY --from=build --chown=node:node /app/openclaw.json ./openclaw.json
+COPY --from=build --chown=node:node /app/.openclaw ./.openclaw
 COPY --from=build --chown=node:node /app/extensions ./extensions
 COPY --from=build --chown=node:node /app/skills ./skills
 COPY --from=build --chown=node:node /app/docs ./docs
