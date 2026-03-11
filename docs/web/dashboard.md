@@ -45,6 +45,8 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 ## If you see “unauthorized” / 1008
 
 - Ensure the gateway is reachable (local: `openclaw status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`).
+- For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints. If auth still fails after that retry, resolve token drift manually.
+- For token drift repair steps, follow [Token drift recovery checklist](/cli/devices#token-drift-recovery-checklist).
 - Retrieve or supply the token from the gateway host:
   - Plaintext config: `openclaw config get gateway.auth.token`
   - SecretRef-managed config: resolve the external secret provider or export `OPENCLAW_GATEWAY_TOKEN` in this shell, then rerun `openclaw dashboard`

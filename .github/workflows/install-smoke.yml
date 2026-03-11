@@ -43,6 +43,8 @@ jobs:
       - name: Set up Docker Builder
         uses: useblacksmith/setup-docker-builder@v1
 
+      # Blacksmith can fall back to the local docker driver, which rejects gha
+      # cache export/import. Keep smoke builds driver-agnostic.
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@v2
         with:
@@ -52,8 +54,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-root-dockerfile
-          cache-to: type=gha,mode=max,scope=install-smoke-root-dockerfile
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -73,8 +73,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-root-dockerfile-ext
-          cache-to: type=gha,mode=max,scope=install-smoke-root-dockerfile-ext
 
       - name: Smoke test Dockerfile with extension build arg
         run: |
@@ -89,8 +87,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-installer-root
-          cache-to: type=gha,mode=max,scope=install-smoke-installer-root
 
       - name: Build installer non-root image
         if: github.event_name != 'pull_request'
@@ -102,8 +98,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-installer-nonroot
-          cache-to: type=gha,mode=max,scope=install-smoke-installer-nonroot
 
       - name: Run installer docker tests
         env:
