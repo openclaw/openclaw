@@ -255,6 +255,13 @@ export function createProfileAvailability({
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     await reconcileProfileRuntime();
+    // For direct WebSocket endpoints (e.g. Browser Use), there's no local Chrome process
+    // to stop. Instead, close the cached Playwright connection to the cloud provider.
+    if (isWebSocketUrl(profile.cdpUrl)) {
+      const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
+      await closePlaywrightBrowserConnection({ cdpUrl: profile.cdpUrl });
+      return { stopped: true };
+    }
     if (capabilities.requiresRelay) {
       const stopped = await stopChromeExtensionRelayServer({
         cdpUrl: profile.cdpUrl,
