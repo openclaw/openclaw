@@ -131,6 +131,7 @@ export function stripInboundMetadata(text: string): string {
   let inFencedJson = false;
   let strippedMetadata = false; // Track if we actually stripped any metadata
   let hasNewFormatMarker = false; // Track if metadata contains _sep marker
+  let jsonLines: string[] = []; // Collect JSON lines for structural parsing
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -157,16 +158,27 @@ export function stripInboundMetadata(text: string): string {
     if (inMetaBlock) {
       if (!inFencedJson && line.trim() === "```json") {
         inFencedJson = true;
+        jsonLines = []; // Reset JSON collector
         continue;
       }
       if (inFencedJson) {
-        // Check for the new format marker in the JSON content
-        if (line.includes('"_sep"')) {
-          hasNewFormatMarker = true;
-        }
         if (line.trim() === "```") {
+          // End of JSON block - parse it structurally to check for _sep marker
+          const jsonText = jsonLines.join("\n").trim();
+          if (jsonText) {
+            try {
+              const parsed = JSON.parse(jsonText);
+              if (parsed && typeof parsed === "object" && "_sep" in parsed) {
+                hasNewFormatMarker = true;
+              }
+            } catch {
+              // Invalid JSON - ignore
+            }
+          }
           inMetaBlock = false;
           inFencedJson = false;
+        } else {
+          jsonLines.push(line);
         }
         continue;
       }
@@ -242,12 +254,23 @@ export function stripLeadingInboundMetadata(text: string): string {
     index++;
     if (index < lines.length && lines[index].trim() === "```json") {
       index++;
+      // Collect JSON lines for structural parsing
+      const jsonLines: string[] = [];
       while (index < lines.length && lines[index].trim() !== "```") {
-        // Check for the new format marker in the JSON content
-        if (lines[index].includes('"_sep"')) {
-          hasNewFormatMarker = true;
-        }
+        jsonLines.push(lines[index]);
         index++;
+      }
+      // Parse JSON structurally to check for _sep marker
+      const jsonText = jsonLines.join("\n").trim();
+      if (jsonText) {
+        try {
+          const parsed = JSON.parse(jsonText);
+          if (parsed && typeof parsed === "object" && "_sep" in parsed) {
+            hasNewFormatMarker = true;
+          }
+        } catch {
+          // Invalid JSON - ignore
+        }
       }
       if (index < lines.length && lines[index].trim() === "```") {
         index++;
