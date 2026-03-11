@@ -65,6 +65,13 @@ describe("hasSessionRelatedCronJobs", () => {
     expect(result).toBe(false);
   });
 
+  it("returns false for an isolated job when agentId is not provided in params", async () => {
+    loadCronStoreMock.mockResolvedValue(makeStore([{ enabled: true, agentId: "main" }]));
+
+    const result = await hasSessionRelatedCronJobs({ sessionKey: "agent:main" });
+    expect(result).toBe(false);
+  });
+
   it("returns false for disabled jobs", async () => {
     loadCronStoreMock.mockResolvedValue(makeStore([{ enabled: false, sessionKey: "agent:main" }]));
 
