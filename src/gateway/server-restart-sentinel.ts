@@ -9,7 +9,9 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   consumeRestartSentinel,
+  formatRestartSentinelInternalContext,
   formatRestartSentinelMessage,
+  formatRestartSentinelUserMessage,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -24,7 +26,12 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   }
   const payload = sentinel.payload;
   const sessionKey = payload.sessionKey?.trim();
+  // Raw diagnostic message (used for system events and enqueue fallbacks).
   const message = formatRestartSentinelMessage(payload);
+  // Human-friendly message for direct user delivery — omits status prefix and doctorHint.
+  const userMessage = formatRestartSentinelUserMessage(payload);
+  // Full technical context injected into the agent's system prompt.
+  const internalContext = formatRestartSentinelInternalContext(payload);
   const summary = summarizeRestartSentinel(payload);
 
   if (!sessionKey) {
@@ -56,7 +63,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;
   if (!channel || !to) {
-    enqueueSystemEvent(message, { sessionKey });
+    enqueueSystemEvent(userMessage, { sessionKey });
     return;
   }
 
@@ -68,7 +75,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     mode: "implicit",
   });
   if (!resolved.ok) {
-    enqueueSystemEvent(message, { sessionKey });
+    enqueueSystemEvent(userMessage, { sessionKey });
     return;
   }
 
@@ -78,7 +85,9 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
-  // Step 1: deliver the restart notice deterministically — model-independent, guaranteed.
+  // Step 1: deliver a human-friendly restart notice deterministically — model-independent,
+  // guaranteed. Uses userMessage (omits raw diagnostic fields like status prefix and
+  // doctorHint) so the user sees a clean message even if the agent turn in Step 2 fails.
   // Slack uses replyToId (thread_ts) for threading; deliverOutboundPayloads does not do
   // this mapping automatically, so we convert here. See #17716.
   const isSlack = channel === "slack";
@@ -93,7 +102,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
       accountId: origin?.accountId,
       replyToId,
       threadId: resolvedThreadId,
-      payloads: [{ text: message }],
+      payloads: [{ text: userMessage }],
       session: outboundSession,
       bestEffort: true,
     });
@@ -102,18 +111,22 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     // If it does throw (channel plugin/runtime error before best-effort handling is applied),
     // enqueue a system event so the user receives the restart notice even on delivery failure.
     // This preserves the prior behaviour where delivery errors in this path produced a fallback event.
-    enqueueSystemEvent(message, { sessionKey });
+    enqueueSystemEvent(userMessage, { sessionKey });
   }
 
   // Step 2: trigger an agent resume turn so the agent can continue autonomously
   // after restart. The model sees the restart context and can respond/take actions.
+  // internalContext is injected via extraSystemPrompt so the agent has full technical
+  // details (kind, status, note, doctorHint) without exposing raw diagnostics as a
+  // user-visible chat message. The agent's reply is what the user ultimately sees.
   // This is safe post-restart: scheduleRestartSentinelWake() runs in the new process
   // with zero in-flight replies, so the pre-restart race condition (ab4a08a82) does
   // not apply here.
   try {
     await agentCommand(
       {
-        message,
+        message: userMessage,
+        extraSystemPrompt: internalContext,
         sessionKey,
         to: resolved.to,
         channel,

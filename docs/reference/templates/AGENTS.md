@@ -214,6 +214,37 @@ Think of it like a human reviewing their journal and updating their mental model
 
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
+## 🔄 Gateway Restarts — Do It Right!
+
+**Never use `openclaw gateway restart` (CLI/shell).** It bypasses the restart sentinel, so you won't auto-resume or notify the user after restart. You'll just sit there silently until someone pings you.
+
+**Always restart via the gateway tool** (action=restart) or via `config.patch`/`config.apply` — these write a sentinel file before restarting, which the new process consumes to wake you up and message the user automatically.
+
+```bash
+# ✅ Correct: restart via gateway tool (action=restart, sessionKey, note)
+# ✅ Correct: config.patch with a key that requires restart (writes sentinel automatically)
+
+# ❌ Wrong: openclaw gateway restart  — no sentinel, silent after restart
+# ❌ Wrong: systemctl --user restart openclaw-gateway.service  — same problem
+```
+
+### Which config keys trigger a real restart vs dynamic reload?
+
+**Full process restart** (sentinel written, agent wakes up):
+
+- `gateway.*`, `discovery.*`, `plugins.*`, `canvasHost.*`
+- Any unrecognized/new config key
+
+**Hot reload** (no restart, no sentinel needed):
+
+- `hooks.*`, `cron.*`, `browser.*`, `models.*`, `agents.defaults.heartbeat`
+
+**Dynamic no-op** (read on next access, no process action):
+
+- `messages.*`, `agents.*`, `tools.*`, `routing.*`, `session.*`, `skills.*`, `secrets.*`, `meta.*`, `identity.*`, `logging.*`, `ui.*`
+
+**Rule of thumb:** If you want a test restart, patch `discovery.mdns.mode` to its current value — it's recognized as a restart-triggering key even if the value is unchanged.
+
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.

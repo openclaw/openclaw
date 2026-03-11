@@ -120,6 +120,29 @@ git commit -m "Add Clawd workspace"
 - **bird** — X/Twitter CLI，无需浏览器即可发推、回复、阅读话题和搜索。
 - **agent-tools** — 用于自动化和辅助脚本的实用工具包。
 
+## 🔄 网关重启 — 正确做法！
+
+**永远不要使用 `openclaw gateway restart`（CLI/shell）。** 这会绕过重启哨兵机制，导致重启后你无法自动恢复，也无法通知用户。你会静静地等待，直到有人 ping 你。
+
+**始终通过 gateway 工具**（action=restart）或 `config.patch`/`config.apply` 触发重启——这些方式会在重启前写入哨兵文件，新进程启动后会消费该文件以唤醒你并自动通知用户。
+
+### 哪些配置键会触发真正的重启？
+
+**完整进程重启**（写入哨兵，代理唤醒）：
+
+- `gateway.*`、`discovery.*`、`plugins.*`、`canvasHost.*`
+- 任何无法识别的新配置键
+
+**热重载**（无需重启，无需哨兵）：
+
+- `hooks.*`、`cron.*`、`browser.*`、`models.*`、`agents.defaults.heartbeat`
+
+**动态无操作**（下次访问时读取，不触发任何进程操作）：
+
+- `messages.*`、`agents.*`、`tools.*`、`routing.*`、`session.*`、`skills.*`、`secrets.*`、`meta.*`
+
+**经验法则：** 如果需要测试重启，将 `discovery.mdns.mode` 修改为当前值——即使值未改变，它也会触发重启流程。
+
 ## 使用说明
 
 - 脚本编写优先使用 `openclaw` CLI；mac 应用处理权限。

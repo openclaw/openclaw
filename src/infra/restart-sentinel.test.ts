@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   consumeRestartSentinel,
-  formatDoctorNonInteractiveHint,
+  formatRestartSentinelInternalContext,
   formatRestartSentinelMessage,
+  formatRestartSentinelUserMessage,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
@@ -157,6 +158,112 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
+  });
+});
+
+describe("formatRestartSentinelUserMessage", () => {
+  it("returns note for successful restart with note", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "testing restart sentinel",
+      doctorHint: "Run: openclaw doctor --non-interactive",
+    };
+    const result = formatRestartSentinelUserMessage(payload);
+    expect(result).toBe("testing restart sentinel");
+    expect(result).not.toContain("Gateway restart");
+    expect(result).not.toContain("config-patch");
+    expect(result).not.toContain("doctor");
+  });
+
+  it("returns generic success message when no note", () => {
+    const payload = {
+      kind: "update" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+    };
+    expect(formatRestartSentinelUserMessage(payload)).toBe("Gateway restarted successfully.");
+  });
+
+  it("returns failure message with note for error status", () => {
+    const payload = {
+      kind: "config-apply" as const,
+      status: "error" as const,
+      ts: Date.now(),
+      message: "disk full",
+    };
+    const result = formatRestartSentinelUserMessage(payload);
+    expect(result).toBe("Gateway restart failed: disk full");
+  });
+
+  it("returns generic failure message for error without note", () => {
+    const payload = {
+      kind: "restart" as const,
+      status: "error" as const,
+      ts: Date.now(),
+    };
+    expect(formatRestartSentinelUserMessage(payload)).toBe("Gateway restart failed.");
+  });
+
+  it("never includes doctorHint", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "applied config",
+      doctorHint: "Run: openclaw doctor --non-interactive",
+    };
+    expect(formatRestartSentinelUserMessage(payload)).not.toContain("doctor");
+    expect(formatRestartSentinelUserMessage(payload)).not.toContain("openclaw");
+  });
+});
+
+describe("formatRestartSentinelInternalContext", () => {
+  it("includes kind, status, note, and doctorHint", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "testing restart sentinel",
+      doctorHint: "Run: openclaw doctor --non-interactive",
+      stats: { mode: "gateway.config-patch", reason: "discovery.mdns.mode changed" },
+    };
+    const result = formatRestartSentinelInternalContext(payload);
+    expect(result).toContain("kind: config-patch");
+    expect(result).toContain("status: ok");
+    expect(result).toContain("note: testing restart sentinel");
+    expect(result).toContain("hint: Run: openclaw doctor");
+    expect(result).toContain("mode: gateway.config-patch");
+    expect(result).toContain("reason: discovery.mdns.mode changed");
+    expect(result).toContain("internal");
+  });
+
+  it("omits empty optional fields", () => {
+    const payload = {
+      kind: "restart" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+    };
+    const result = formatRestartSentinelInternalContext(payload);
+    expect(result).not.toContain("note:");
+    expect(result).not.toContain("hint:");
+    expect(result).not.toContain("reason:");
+    expect(result).not.toContain("mode:");
+  });
+
+  it("omits reason when it duplicates note", () => {
+    const note = "Applying config changes";
+    const payload = {
+      kind: "config-apply" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: note,
+      stats: { reason: note },
+    };
+    const result = formatRestartSentinelInternalContext(payload);
+    const noteOccurrences = result.split(note).length - 1;
+    expect(noteOccurrences).toBe(1);
   });
 });
 

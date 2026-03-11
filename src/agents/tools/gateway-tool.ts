@@ -80,7 +80,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. IMPORTANT: Never use the `openclaw gateway restart` CLI command to restart — it bypasses the restart sentinel so the agent will not auto-resume or notify the user after restart. Always restart via this tool (action=restart) or via config.patch/config.apply, which write the sentinel before restarting. Config keys under gateway.*, discovery.*, plugins.*, and canvasHost.* trigger a real process restart; keys under messages.*, agents.*, tools.*, hooks.*, and most others apply dynamically without a restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
