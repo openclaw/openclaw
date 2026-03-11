@@ -125,7 +125,7 @@ export async function executeNodeHostCommand(
     throw new Error("invalid system.run.prepare response");
   }
   const runArgv = prepared.plan.argv;
-  const runRawCommand = prepared.plan.rawCommand ?? prepared.cmdText;
+  const runRawCommand = prepared.plan.commandText;
   const runCwd = prepared.plan.cwd ?? params.workdir;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
@@ -238,8 +238,6 @@ export async function executeNodeHostCommand(
     // Register first so the returned approval ID is actionable immediately.
     const registration = await registerExecApprovalRequestForHostOrThrow({
       approvalId,
-      command: prepared.cmdText,
-      commandArgv: prepared.plan.argv,
       systemRunPlan: prepared.plan,
       env: nodeEnv,
       workdir: runCwd,
@@ -391,7 +389,7 @@ export async function executeNodeHostCommand(
                   warningText,
                   approvalSlug,
                   approvalId,
-                  command: prepared.cmdText,
+                  command: prepared.plan.commandText,
                   cwd: runCwd,
                   host: "node",
                   nodeId,
