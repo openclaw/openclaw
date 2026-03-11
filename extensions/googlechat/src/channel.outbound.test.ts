@@ -108,6 +108,37 @@ describe("googlechatPlugin outbound threading", () => {
       }),
     );
   });
+
+  it("suppresses thread replies when a resolved account override sets replyToMode off", async () => {
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-account-off",
+    });
+
+    const cfg = createGoogleChatCfg();
+    cfg.channels!.googlechat!.replyToMode = "all";
+    cfg.channels!.googlechat!.accounts = {
+      bota: {
+        replyToMode: "off",
+      },
+    };
+
+    await googlechatPlugin.outbound?.sendText?.({
+      cfg,
+      to: "spaces/AAA",
+      text: "hello",
+      accountId: "botA",
+      replyToId: "spaces/AAA/threads/reply",
+      threadId: "spaces/AAA/threads/thread",
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "hello",
+        thread: undefined,
+      }),
+    );
+  });
 });
 
 describe("googlechatPlugin outbound sendMedia", () => {

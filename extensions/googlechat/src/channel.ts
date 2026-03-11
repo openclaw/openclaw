@@ -95,11 +95,11 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
 });
 
 function resolveGoogleChatThread(params: {
-  cfg: OpenClawConfig;
+  replyToMode?: string | null;
   replyToId?: string | number | null;
   threadId?: string | number | null;
 }): string | undefined {
-  if (params.cfg.channels?.googlechat?.replyToMode === "off") {
+  if (params.replyToMode === "off") {
     return undefined;
   }
   return (params.threadId ?? params.replyToId ?? undefined) as string | undefined;
@@ -370,7 +370,11 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = resolveGoogleChatThread({ cfg, replyToId, threadId });
+      const thread = resolveGoogleChatThread({
+        replyToMode: account.config.replyToMode,
+        replyToId,
+        threadId,
+      });
       const result = await sendGoogleChatMessage({
         account,
         space,
@@ -401,7 +405,11 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = resolveGoogleChatThread({ cfg, replyToId, threadId });
+      const thread = resolveGoogleChatThread({
+        replyToMode: account.config.replyToMode,
+        replyToId,
+        threadId,
+      });
       const runtime = getGoogleChatRuntime();
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
