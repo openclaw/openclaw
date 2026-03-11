@@ -1,4 +1,8 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import {
+  buildUsageErrorSnapshot,
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+} from "./provider-usage.fetch.shared.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
@@ -31,7 +35,10 @@ export async function fetchKilocodeUsage(
     return buildUsageHttpErrorSnapshot({ provider: "kilocode", status: res.status });
   }
 
-  const data = (await res.json()) as KilocodeBalanceResponse;
+  const data = (await res.json().catch(() => null)) as KilocodeBalanceResponse | null;
+  if (!data) {
+    return buildUsageErrorSnapshot("kilocode", "Invalid JSON");
+  }
   const balance = typeof data.balance === "number" ? data.balance : null;
   // Show credit balance as a plan label since Kilo's endpoint returns a dollar
   // amount rather than quota windows with usage percentages.

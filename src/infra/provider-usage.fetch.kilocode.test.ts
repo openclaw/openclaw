@@ -67,6 +67,18 @@ describe("fetchKilocodeUsage", () => {
     expect(result.plan).toBe("$100.00");
   });
 
+  it("returns error snapshot for invalid JSON response", async () => {
+    const mockFetch = createProviderUsageFetch(async () => {
+      const res = new Response("not-json", { status: 200 });
+      return res;
+    });
+
+    const result = await fetchKilocodeUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("Invalid JSON");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("sends Authorization header with Bearer token", async () => {
     let capturedInit: RequestInit | undefined;
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
