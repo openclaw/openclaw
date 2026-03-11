@@ -127,6 +127,47 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
+/**
+ * Human-friendly message for direct user delivery after a gateway restart.
+ * Omits raw diagnostic fields (status prefix, doctorHint) — those belong in
+ * the agent's internal context, not in the user-facing chat message.
+ */
+export function formatRestartSentinelUserMessage(payload: RestartSentinelPayload): string {
+  const note = payload.message?.trim();
+  if (payload.status === "error") {
+    return note ? `Gateway restart failed: ${note}` : "Gateway restart failed.";
+  }
+  return note ?? "Gateway restarted successfully.";
+}
+
+/**
+ * Full technical restart context injected into the agent's system prompt so
+ * it can reason about and respond to the restart without exposing raw
+ * diagnostic text directly in the user-facing chat message.
+ */
+export function formatRestartSentinelInternalContext(payload: RestartSentinelPayload): string {
+  const lines: string[] = [
+    "[Gateway restart context — internal, do not surface raw details to user]",
+    `kind: ${payload.kind}`,
+    `status: ${payload.status}`,
+  ];
+  const note = payload.message?.trim();
+  if (note) {
+    lines.push(`note: ${note}`);
+  }
+  const reason = payload.stats?.reason?.trim();
+  if (reason && reason !== note) {
+    lines.push(`reason: ${reason}`);
+  }
+  if (payload.stats?.mode?.trim()) {
+    lines.push(`mode: ${payload.stats.mode.trim()}`);
+  }
+  if (payload.doctorHint?.trim()) {
+    lines.push(`hint: ${payload.doctorHint.trim()}`);
+  }
+  return lines.join("\n");
+}
+
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   const kind = payload.kind;
   const status = payload.status;

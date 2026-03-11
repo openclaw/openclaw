@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
     },
   })),
   formatRestartSentinelMessage: vi.fn(() => "restart message"),
+  formatRestartSentinelUserMessage: vi.fn(() => "Gateway restarted successfully."),
+  formatRestartSentinelInternalContext: vi.fn(
+    () => "[Gateway restart context — internal]\nkind: restart\nstatus: ok",
+  ),
   summarizeRestartSentinel: vi.fn(() => "restart summary"),
   resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
   parseSessionThreadInfo: vi.fn(() => ({ baseSessionKey: null, threadId: undefined })),
@@ -39,6 +43,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../infra/restart-sentinel.js", () => ({
   consumeRestartSentinel: mocks.consumeRestartSentinel,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
+  formatRestartSentinelUserMessage: mocks.formatRestartSentinelUserMessage,
+  formatRestartSentinelInternalContext: mocks.formatRestartSentinelInternalContext,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
 
@@ -105,21 +111,22 @@ describe("scheduleRestartSentinelWake – two-step delivery + resume", () => {
   it("delivers restart notice directly (model-independent) then resumes agent", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    // Step 1: deterministic delivery
+    // Step 1: deterministic delivery — uses human-friendly userMessage, not raw diagnostic
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
         accountId: "acct-2",
-        payloads: [{ text: "restart message" }],
+        payloads: [{ text: "Gateway restarted successfully." }],
         bestEffort: true,
       }),
     );
 
-    // Step 2: agent resume
+    // Step 2: agent resume — userMessage as prompt, internalContext via extraSystemPrompt
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "restart message",
+        message: "Gateway restarted successfully.",
+        extraSystemPrompt: expect.stringContaining("[Gateway restart context"),
         sessionKey: "agent:main:main",
         to: "+15550002",
         channel: "whatsapp",
@@ -190,7 +197,7 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("Gateway restarted successfully.", {
       sessionKey: "agent:main:main",
     });
   });
@@ -204,7 +211,7 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("Gateway restarted successfully.", {
       sessionKey: "agent:main:main",
     });
   });
@@ -218,7 +225,7 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("Gateway restarted successfully.", {
       sessionKey: "agent:main:main",
     });
   });
@@ -254,7 +261,7 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("Gateway restarted successfully.", {
       sessionKey: "agent:main:main",
     });
     // Resume step must still run after delivery failure
