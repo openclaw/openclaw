@@ -18,7 +18,6 @@ export type MemoryConfig = {
    * Optional namespace for memory isolation.
    *
    * - Leave unset (default): each agent is automatically scoped to its own ID.
-   *   Entries stored by "finn" are only recalled by "finn".
    * - Set to a shared value (e.g. "shared"): multiple agents using the same
    *   namespace value will share a memory pool.
    * - Set to "global": disables scoping entirely — all agents share one pool
