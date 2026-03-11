@@ -610,6 +610,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     vi.advanceTimersByTime(120_000);
+    await Promise.resolve();
     vi.advanceTimersByTime(10_000);
     await monitor;
 
@@ -654,6 +655,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     firstBotStop.mockImplementationOnce(() => new Promise<void>(() => {}));
 
     vi.advanceTimersByTime(120_000);
+    await Promise.resolve();
     vi.advanceTimersByTime(10_000);
     await monitor;
 
