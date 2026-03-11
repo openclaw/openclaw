@@ -145,4 +145,46 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(1111);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
+
+  it("does not let heartbeat metadata overwrite an existing origin label", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "existing-session",
+            updatedAt: 1111,
+            chatType: "direct",
+            channel: "webchat",
+            origin: {
+              provider: "webchat",
+              label: "My App — Project: Dashboard",
+              chatType: "direct",
+              from: "webchat:user-1",
+              to: "webchat:agent",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      ctx: {
+        Provider: "heartbeat",
+        From: "heartbeat",
+        To: "heartbeat",
+        SessionKey: CANONICAL_KEY,
+      },
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.origin?.label).toBe("My App — Project: Dashboard");
+    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("heartbeat");
+  });
 });
