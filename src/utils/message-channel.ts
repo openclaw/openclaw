@@ -17,6 +17,19 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 
+/**
+ * Sentinel channel used when sessions_send injects a message into a target
+ * session. Distinct from INTERNAL_MESSAGE_CHANNEL so that resolveLastChannelRaw
+ * does NOT flip the receiver's route to webchat. Instead it falls through to
+ * the persisted external channel, preserving the receiver's established route.
+ */
+export const INTER_SESSION_CHANNEL = "inter_session" as const;
+export type InterSessionChannel = typeof INTER_SESSION_CHANNEL;
+
+export function isInterSessionChannel(raw?: string | null): boolean {
+  return raw?.trim().toLowerCase() === INTER_SESSION_CHANNEL;
+}
+
 const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
   "slack",
   "telegram",
@@ -97,11 +110,15 @@ export const listDeliverableMessageChannels = (): ChannelId[] =>
 
 export type DeliverableMessageChannel = ChannelId;
 
-export type GatewayMessageChannel = DeliverableMessageChannel | InternalMessageChannel;
+export type GatewayMessageChannel =
+  | DeliverableMessageChannel
+  | InternalMessageChannel
+  | InterSessionChannel;
 
 export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
   ...listDeliverableMessageChannels(),
   INTERNAL_MESSAGE_CHANNEL,
+  INTER_SESSION_CHANNEL,
 ];
 
 export const listGatewayAgentChannelAliases = (): string[] =>

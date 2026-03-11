@@ -1,5 +1,79 @@
 import { describe, expect, it } from "vitest";
+import { INTER_SESSION_CHANNEL } from "../../utils/message-channel.js";
 import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
+
+describe("INTER_SESSION_CHANNEL sentinel routing", () => {
+  it("preserves an established external channel for a main session", () => {
+    // sessions_send uses INTER_SESSION_CHANNEL so the receiver's Discord route
+    // is not flipped to webchat or replaced with the sender's channel.
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        persistedLastChannel: "discord",
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBe("discord");
+  });
+
+  it("does not flip to webchat for a main session (original bug regression)", () => {
+    // Before the fix, INTERNAL_MESSAGE_CHANNEL ("webchat") was injected here,
+    // which caused resolveLastChannelRaw to return "webchat" for main sessions,
+    // overriding the Discord route. INTER_SESSION_CHANNEL must never produce "webchat".
+    const result = resolveLastChannelRaw({
+      originatingChannelRaw: INTER_SESSION_CHANNEL,
+      persistedLastChannel: "discord",
+      sessionKey: "agent:navi:main",
+    });
+    expect(result).not.toBe("webchat");
+    expect(result).toBe("discord");
+  });
+
+  it("falls back to session-key channel hint when no persisted channel is set", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        persistedLastChannel: undefined,
+        sessionKey: "agent:navi:discord:direct:channel:123",
+      }),
+    ).toBe("discord");
+  });
+
+  it("returns undefined when no external route can be determined", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        persistedLastChannel: undefined,
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves the receiver's persisted destination (resolveLastToRaw)", () => {
+    // Threading the sender's to/accountId/threadId would leave the receiver with
+    // a mismatched channel+to pair. The sentinel signals: keep the receiver's own dest.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        originatingToRaw: "channel:sender-discord-channel",
+        persistedLastChannel: "discord",
+        persistedLastTo: "channel:receiver-discord-channel",
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBe("channel:receiver-discord-channel");
+  });
+
+  it("returns undefined from resolveLastToRaw when no persisted destination exists", () => {
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        originatingToRaw: "channel:sender-discord-channel",
+        persistedLastChannel: undefined,
+        persistedLastTo: undefined,
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("session delivery direct-session routing overrides", () => {
   it.each([
