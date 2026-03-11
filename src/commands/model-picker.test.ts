@@ -30,10 +30,10 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
-const getCustomProviderApiKey = vi.hoisted(() => vi.fn(() => undefined));
+const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
-  getCustomProviderApiKey,
+  hasUsableCustomProviderApiKey,
 }));
 
 const OPENROUTER_CATALOG = [
@@ -102,7 +102,7 @@ describe("promptDefaultModel", () => {
     expect(result.config?.models?.providers?.vllm).toMatchObject({
       baseUrl: "http://127.0.0.1:8000/v1",
       api: "openai-completions",
-      apiKey: "VLLM_API_KEY",
+      apiKey: "VLLM_API_KEY", // pragma: allowlist secret
       models: [
         { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "meta-llama/Meta-Llama-3-8B-Instruct" },
       ],

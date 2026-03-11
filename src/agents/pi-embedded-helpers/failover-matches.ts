@@ -1,5 +1,8 @@
 type ErrorPattern = RegExp | string;
 
+const PERIODIC_USAGE_LIMIT_RE =
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
+
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
@@ -11,6 +14,7 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    "tokens per day",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
@@ -36,9 +40,9 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error)\b/i,
-    /\breason:\s*(?:abort|error)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error)\b/i,
+    /\bstop reason:\s*(?:abort|error|malformed_response)\b/i,
+    /\breason:\s*(?:abort|error|malformed_response)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|error|malformed_response)\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -115,6 +119,10 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+}
+
+export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
+  return PERIODIC_USAGE_LIMIT_RE.test(raw);
 }
 
 export function isBillingErrorMessage(raw: string): boolean {

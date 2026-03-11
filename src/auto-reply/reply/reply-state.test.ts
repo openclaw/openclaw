@@ -203,6 +203,10 @@ describe("memory flush settings", () => {
     expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("respects disable flag", () => {
@@ -230,6 +234,10 @@ describe("memory flush settings", () => {
     });
     expect(settings?.prompt).toContain("NO_REPLY");
     expect(settings?.systemPrompt).toContain("NO_REPLY");
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("falls back to defaults when numeric values are invalid", () => {

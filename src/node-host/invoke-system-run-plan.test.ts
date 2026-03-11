@@ -22,7 +22,77 @@ type HardeningCase = {
   expectedArgvChanged?: boolean;
   expectedCmdText?: string;
   checkRawCommandMatchesArgv?: boolean;
+  expectedCommandPreview?: string | null;
 };
+
+type ScriptOperandFixture = {
+  command: string[];
+  scriptPath: string;
+  initialBody: string;
+  expectedArgvIndex: number;
+};
+
+type RuntimeFixture = {
+  name: string;
+  argv: string[];
+  scriptName: string;
+  initialBody: string;
+  expectedArgvIndex: number;
+  binName?: string;
+};
+
+function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
+  if (fixture) {
+    return {
+      command: fixture.argv,
+      scriptPath: path.join(tmp, fixture.scriptName),
+      initialBody: fixture.initialBody,
+      expectedArgvIndex: fixture.expectedArgvIndex,
+    };
+  }
+  if (process.platform === "win32") {
+    return {
+      command: [process.execPath, "./run.js"],
+      scriptPath: path.join(tmp, "run.js"),
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    };
+  }
+  return {
+    command: ["/bin/sh", "./run.sh"],
+    scriptPath: path.join(tmp, "run.sh"),
+    initialBody: "#!/bin/sh\necho SAFE\n",
+    expectedArgvIndex: 1,
+  };
+}
+
+function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
+  const binDir = path.join(tmp, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const runtimePath =
+    process.platform === "win32"
+      ? path.join(binDir, `${params.binName}.cmd`)
+      : path.join(binDir, params.binName);
+  const runtimeBody =
+    process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+  fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
+  if (process.platform !== "win32") {
+    fs.chmodSync(runtimePath, 0o755);
+  }
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    return params.run();
+  } finally {
+    if (oldPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = oldPath;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 describe("hardenApprovedExecutionPaths", () => {
   const cases: HardeningCase[] = [
@@ -31,7 +101,8 @@ describe("hardenApprovedExecutionPaths", () => {
       mode: "build-plan",
       argv: ["env", "sh", "-c", "echo SAFE"],
       expectedArgv: () => ["env", "sh", "-c", "echo SAFE"],
-      expectedCmdText: "echo SAFE",
+      expectedCmdText: 'env sh -c "echo SAFE"',
+      expectedCommandPreview: "echo SAFE",
     },
     {
       name: "preserves dispatch-wrapper argv during approval hardening",
@@ -66,6 +137,16 @@ describe("hardenApprovedExecutionPaths", () => {
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
       checkRawCommandMatchesArgv: true,
+      expectedCommandPreview: null,
+    },
+    {
+      name: "stores full approval text and preview for path-qualified env wrappers",
+      mode: "build-plan",
+      argv: ["./env", "sh", "-c", "echo SAFE"],
+      expectedArgv: () => ["./env", "sh", "-c", "echo SAFE"],
+      expectedCmdText: './env sh -c "echo SAFE"',
+      checkRawCommandMatchesArgv: true,
+      expectedCommandPreview: "echo SAFE",
     },
   ];
 
@@ -94,10 +175,13 @@ describe("hardenApprovedExecutionPaths", () => {
           }
           expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
           if (testCase.expectedCmdText) {
-            expect(prepared.cmdText).toBe(testCase.expectedCmdText);
+            expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
           }
           if (testCase.checkRawCommandMatchesArgv) {
-            expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
+            expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
+          }
+          if ("expectedCommandPreview" in testCase) {
+            expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
           }
           return;
         }
@@ -128,4 +212,179 @@ describe("hardenApprovedExecutionPaths", () => {
       }
     });
   }
+
+  const mutableOperandCases: RuntimeFixture[] = [
+    {
+      name: "python flagged file",
+      binName: "python3",
+      argv: ["python3", "-B", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "lua direct file",
+      binName: "lua",
+      argv: ["lua", "./run.lua"],
+      scriptName: "run.lua",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "pypy direct file",
+      binName: "pypy",
+      argv: ["pypy", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "versioned node alias file",
+      binName: "node20",
+      argv: ["node20", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "bun direct file",
+      binName: "bun",
+      argv: ["bun", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "bun run file",
+      binName: "bun",
+      argv: ["bun", "run", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "deno run file with flags",
+      binName: "deno",
+      argv: ["deno", "run", "-A", "--allow-read", "--", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "bun test file",
+      binName: "bun",
+      argv: ["bun", "test", "./run.test.ts"],
+      scriptName: "run.test.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "deno test file",
+      binName: "deno",
+      argv: ["deno", "test", "./run.test.ts"],
+      scriptName: "run.test.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+  ];
+
+  for (const runtimeCase of mutableOperandCases) {
+    it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
+      withFakeRuntimeBin({
+        binName: runtimeCase.binName!,
+        run: () => {
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+          const fixture = createScriptOperandFixture(tmp, runtimeCase);
+          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+          try {
+            const prepared = buildSystemRunApprovalPlan({
+              command: fixture.command,
+              cwd: tmp,
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
+            expect(prepared.plan.mutableFileOperand).toEqual({
+              argvIndex: fixture.expectedArgvIndex,
+              path: fs.realpathSync(fixture.scriptPath),
+              sha256: expect.any(String),
+            });
+          } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+          }
+        },
+      });
+    });
+  }
+
+  it("captures mutable shell script operands in approval plans", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
+    const fixture = createScriptOperandFixture(tmp);
+    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+    if (process.platform !== "win32") {
+      fs.chmodSync(fixture.scriptPath, 0o755);
+    }
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: fixture.command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.mutableFileOperand).toEqual({
+        argvIndex: fixture.expectedArgvIndex,
+        path: fs.realpathSync(fixture.scriptPath),
+        sha256: expect.any(String),
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects bun package script names that do not bind a concrete file", () => {
+    withFakeRuntimeBin({
+      binName: "bun",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bun-package-script-"));
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["bun", "run", "dev"],
+            cwd: tmp,
+          });
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("rejects deno eval invocations that do not bind a concrete file", () => {
+    withFakeRuntimeBin({
+      binName: "deno",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-deno-eval-"));
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["deno", "eval", "console.log('SAFE')"],
+            cwd: tmp,
+          });
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
 });

@@ -81,7 +81,7 @@ export async function runOnboardingWizard(
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+  let baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
@@ -511,6 +511,16 @@ export async function runOnboardingWizard(
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
+
+  if (opts.skipSearch) {
+    await prompter.note("Skipping search setup.", "Search");
+  } else {
+    const { setupSearch } = await import("../commands/onboard-search.js");
+    nextConfig = await setupSearch(nextConfig, runtime, prompter, {
+      quickstartDefaults: flow === "quickstart",
+      secretInputMode: opts.secretInputMode,
+    });
+  }
 
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");

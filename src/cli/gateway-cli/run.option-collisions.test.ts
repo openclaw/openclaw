@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -192,16 +193,10 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("accepts --auth none override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+  it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
+    await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
 
-    expectAuthOverrideMode("none");
-  });
-
-  it("accepts --auth trusted-proxy override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
-
-    expectAuthOverrideMode("trusted-proxy");
+    expectAuthOverrideMode(mode);
   });
 
   it("prints all supported modes on invalid --auth value", async () => {
@@ -238,5 +233,74 @@ describe("gateway run option collisions", () => {
         bind: "loopback",
       }),
     );
+  });
+
+  it("reads gateway password from --password-file", async () => {
+    await withTempSecretFiles(
+      "openclaw-gateway-run-",
+      { password: "pw_from_file\n" },
+      async ({ passwordFile }) => {
+        await runGatewayCli([
+          "gateway",
+          "run",
+          "--auth",
+          "password",
+          "--password-file",
+          passwordFile ?? "",
+          "--allow-unconfigured",
+        ]);
+      },
+    );
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode: "password",
+          password: "pw_from_file", // pragma: allowlist secret
+        }),
+      }),
+    );
+    expect(runtimeErrors).not.toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
+  });
+
+  it("warns when gateway password is passed inline", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--auth",
+      "password",
+      "--password",
+      "pw_inline",
+      "--allow-unconfigured",
+    ]);
+
+    expect(runtimeErrors).toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
+  });
+
+  it("rejects using both --password and --password-file", async () => {
+    await withTempSecretFiles(
+      "openclaw-gateway-run-",
+      { password: "pw_from_file\n" },
+      async ({ passwordFile }) => {
+        await expect(
+          runGatewayCli([
+            "gateway",
+            "run",
+            "--password",
+            "pw_inline",
+            "--password-file",
+            passwordFile ?? "",
+            "--allow-unconfigured",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+      },
+    );
+
+    expect(runtimeErrors).toContain("Use either --password or --password-file.");
   });
 });
