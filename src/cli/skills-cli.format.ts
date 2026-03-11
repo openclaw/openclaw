@@ -43,8 +43,16 @@ function normalizeSkillEmoji(emoji?: string): string {
   return (emoji ?? "📦").replaceAll("\uFE0E", "\uFE0F");
 }
 
+const REMAINING_ESC_SEQUENCE_REGEX = new RegExp(
+  String.raw`\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
+  "g",
+);
+const JSON_CONTROL_CHAR_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]`, "g");
+
 function sanitizeJsonString(value: string): string {
-  return stripAnsi(value).replace(/[\u007f-\u009f]/g, "");
+  return stripAnsi(value)
+    .replace(REMAINING_ESC_SEQUENCE_REGEX, "")
+    .replace(JSON_CONTROL_CHAR_REGEX, "");
 }
 
 function sanitizeJsonValue(value: unknown): unknown {

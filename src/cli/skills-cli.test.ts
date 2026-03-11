@@ -249,7 +249,7 @@ describe("skills-cli", () => {
         createMockSkill({
           name: "json-skill",
           emoji: "\u001b[31m📧\u001b[0m\u009f",
-          description: "desc\u0093\u001b[33m colored\u001b[0m",
+          description: "desc\u0093\u001b[2J\u001b[33m colored\u001b[0m",
         }),
       ]);
 
@@ -260,6 +260,7 @@ describe("skills-cli", () => {
 
       expect(parsed.skills[0]?.emoji).toBe("📧");
       expect(parsed.skills[0]?.description).toBe("desc colored");
+      expect(output).not.toContain("\\u001b");
     });
 
     it("sanitizes skills info JSON output", () => {
