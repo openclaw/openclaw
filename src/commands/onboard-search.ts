@@ -66,7 +66,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     value: "baidu",
     label: "Baidu Search",
     hint: "Baidu web search",
-    envKeys: ["BAIDU_SEARCH__API_KEY"],
+    envKeys: ["BAIDU_SEARCH_API_KEY"],
     placeholder: "bce-...",
     signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
   },
