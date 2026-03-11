@@ -42,6 +42,14 @@ export type GatewayEvent = {
   seq?: number;
 };
 
+export type GatewayRunWaitResult = {
+  runId: string;
+  status: "ok" | "error" | "timeout";
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+};
+
 type ResolvedGatewayConnection = {
   url: string;
   token?: string;
@@ -262,6 +270,13 @@ export class GatewayChatClient {
   async listModels(): Promise<GatewayModelChoice[]> {
     const res = await this.client.request<{ models?: GatewayModelChoice[] }>("models.list");
     return Array.isArray(res?.models) ? res.models : [];
+  }
+
+  async waitForRun(opts: { runId: string; timeoutMs?: number }): Promise<GatewayRunWaitResult> {
+    return await this.client.request<GatewayRunWaitResult>("agent.wait", {
+      runId: opts.runId,
+      timeoutMs: opts.timeoutMs,
+    });
   }
 }
 

@@ -7,6 +7,7 @@ type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
+  waitForRun?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
@@ -14,6 +15,7 @@ function createHarness(params?: {
   isConnected?: boolean;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
+  const waitForRun = params?.waitForRun ?? vi.fn().mockResolvedValue({ runId: "r1", status: "ok" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
@@ -24,7 +26,7 @@ function createHarness(params?: {
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
 
   const { handleCommand } = createCommandHandlers({
-    client: { sendChat, resetSession } as never,
+    client: { sendChat, waitForRun, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
@@ -53,6 +55,7 @@ function createHarness(params?: {
   return {
     handleCommand,
     sendChat,
+    waitForRun,
     resetSession,
     setSession,
     addUser,
@@ -93,7 +96,8 @@ describe("tui command handlers", () => {
   });
 
   it("forwards unknown slash commands to the gateway", async () => {
-    const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness();
+    const { handleCommand, sendChat, waitForRun, addUser, addSystem, requestRender } =
+      createHarness();
 
     await handleCommand("/context");
 
@@ -105,6 +109,10 @@ describe("tui command handlers", () => {
         message: "/context",
       }),
     );
+    expect(waitForRun).toHaveBeenCalledWith({
+      runId: expect.any(String),
+      timeoutMs: 30_000,
+    });
     expect(requestRender).toHaveBeenCalled();
   });
 
@@ -159,15 +167,60 @@ describe("tui command handlers", () => {
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {
-    const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
-      isConnected: false,
-    });
+    const { handleCommand, sendChat, waitForRun, addUser, addSystem, setActivityStatus } =
+      createHarness({
+        isConnected: false,
+      });
 
     await handleCommand("/context");
 
     expect(sendChat).not.toHaveBeenCalled();
+    expect(waitForRun).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("falls back to agent.wait completion when terminal events never arrive", async () => {
+    const loadHistory = vi.fn().mockResolvedValue(undefined);
+    const setActivityStatus = vi.fn();
+    const waitForRun = vi.fn().mockResolvedValue({ runId: "r1", status: "ok" });
+    const { handleCommand, requestRender } = createHarness({
+      loadHistory,
+      setActivityStatus,
+      waitForRun,
+    });
+
+    await handleCommand("/context");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(waitForRun).toHaveBeenCalledWith({
+      runId: expect.any(String),
+      timeoutMs: 30_000,
+    });
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("surfaces agent.wait errors when fallback detects a failed run", async () => {
+    const waitForRun = vi.fn().mockResolvedValue({
+      runId: "r1",
+      status: "error",
+      error: "model backend hung up",
+    });
+    const setActivityStatus = vi.fn();
+    const { handleCommand, addSystem } = createHarness({
+      waitForRun,
+      setActivityStatus,
+    });
+
+    await handleCommand("/context");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(addSystem).toHaveBeenCalledWith("run error: model backend hung up");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
   });
 });

@@ -498,6 +498,32 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       });
       setActivityStatus("waiting");
       tui.requestRender();
+      void client
+        .waitForRun({
+          runId,
+          timeoutMs: opts.timeoutMs ? Math.max(opts.timeoutMs, 30_000) : 30_000,
+        })
+        .then(async (result) => {
+          if (state.activeChatRunId !== runId) {
+            return;
+          }
+          if (result.status === "timeout") {
+            return;
+          }
+          forgetLocalRunId?.(runId);
+          state.activeChatRunId = null;
+          if (result.status === "ok") {
+            setActivityStatus("idle");
+            await loadHistory();
+          } else {
+            chatLog.addSystem(`run error: ${result.error ?? "unknown"}`);
+            setActivityStatus("error");
+          }
+          tui.requestRender();
+        })
+        .catch(() => {
+          // Keep the event-driven path authoritative; agent.wait is best-effort fallback.
+        });
     } catch (err) {
       if (state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
