@@ -6,6 +6,11 @@ import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+  parseUsageCountedSessionIdFromFileName,
+} from "../config/sessions/artifacts.js";
+import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
@@ -287,6 +292,57 @@ async function scanUsageFile(params: {
   });
 }
 
+export function resolveExistingUsageSessionFile(params: {
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  sessionFile?: string;
+  agentId?: string;
+}): string | undefined {
+  const candidate =
+    params.sessionFile ??
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
+
+  if (candidate && fs.existsSync(candidate)) {
+    return candidate;
+  }
+
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return candidate;
+  }
+
+  try {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent(params.agentId);
+    const baseFileName = `${sessionId}.jsonl`;
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
+      return (
+        entry.isFile() &&
+        (entry.name === baseFileName ||
+          entry.name.startsWith(`${baseFileName}.reset.`) ||
+          entry.name.startsWith(`${baseFileName}.deleted.`))
+      );
+    });
+
+    const primary = entries.find((entry) => entry.name === baseFileName);
+    if (primary) {
+      return path.join(sessionsDir, primary.name);
+    }
+
+    const latestArchive = entries
+      .filter((entry) => isSessionArchiveArtifactName(entry.name))
+      .map((entry) => entry.name)
+      .toSorted((a, b) => b.localeCompare(a))[0];
+
+    return latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
+  } catch {
+    return candidate;
+  }
+}
+
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
@@ -318,7 +374,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -393,7 +449,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
       continue;
     }
 
@@ -409,8 +465,10 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    const sessionId = parseUsageCountedSessionIdFromFileName(entry.name);
+    if (!sessionId) {
+      continue;
+    }
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -468,13 +526,7 @@ export async function loadSessionCostSummary(params: {
   startMs?: number;
   endMs?: number;
 }): Promise<SessionCostSummary | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
+  const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -745,13 +797,7 @@ export async function loadSessionUsageTimeSeries(params: {
   agentId?: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
+  const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -854,13 +900,7 @@ export async function loadSessionLogs(params: {
   agentId?: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
+  const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
