@@ -213,6 +213,10 @@ export function connectGateway(host: GatewayHost) {
       host.lastErrorCode = null;
       host.hello = hello;
       applySnapshot(host, hello);
+
+      // Capability discovery - query gateway for supported features
+      discoverGatewayCapabilities(host as unknown as OpenClawApp);
+
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
@@ -421,4 +425,42 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
     applySessionDefaults(host, snapshot.sessionDefaults);
   }
   host.updateAvailable = snapshot?.updateAvailable ?? null;
+}
+
+// Capability discovery - query gateway for supported features
+async function discoverGatewayCapabilities(host: {
+  client: { request: (method: string, params?: unknown) => Promise<unknown> } | null;
+  connected: boolean;
+  gatewayCapabilities: {
+    models?: string[];
+    thinkingSupported?: boolean;
+    thinkingLevels?: string[];
+    tools?: string[];
+  } | null;
+}) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+
+  try {
+    // Query capabilities from gateway
+    const caps = await host.client.request<{
+      models?: Array<{ id: string; name?: string; description?: string }>;
+      thinking?: { supported?: boolean; levels?: string[] };
+      tools?: string[];
+    }>("gateway.capabilities", {});
+
+    host.gatewayCapabilities = {
+      models: caps?.models?.map((m) => m.id ?? m.name ?? "").filter(Boolean),
+      thinkingSupported: caps?.thinking?.supported ?? false,
+      thinkingLevels: caps?.thinking?.levels ?? ["off", "minimal", "low", "medium", "high"],
+      tools: caps?.tools ?? [],
+    };
+  } catch {
+    // Gateway doesn't support capabilities query - use defaults
+    host.gatewayCapabilities = {
+      thinkingSupported: false,
+      thinkingLevels: ["off", "medium", "high"],
+    };
+  }
 }

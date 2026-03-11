@@ -1714,6 +1714,61 @@
   line-height: 1;
 }
 
+.chat-activity {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.chat-activity__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-activity__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-activity__badge {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+}
+
+.chat-activity__badge svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-activity__count {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-activity__body {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
 /* New messages indicator */
 .chat-new-messages {
   align-self: center;

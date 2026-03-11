@@ -6,6 +6,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { extractToolCards, renderToolCardSidebar } from "../chat/tool-cards.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -81,6 +82,19 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // New: Model & Mode
+  model?: string | null;
+  mode?: string;
+  thinkingEnabled?: boolean;
+  capabilities?: {
+    models?: string[];
+    thinkingSupported?: boolean;
+    thinkingLevels?: string[];
+    tools?: string[];
+  } | null;
+  onModelChange?: (model: string) => void;
+  onModeChange?: (mode: string) => void;
+  onThinkingToggle?: (enabled: boolean) => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -259,6 +273,21 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const activityCards = (Array.isArray(props.toolMessages) ? props.toolMessages : []).flatMap((m) =>
+    extractToolCards(m),
+  );
+  const hasSearchActivity = activityCards.some((card) =>
+    /search|web|browser|fetch|crawl/i.test(card.name),
+  );
+  const activityLabel = isBusy
+    ? activityCards.length > 0
+      ? hasSearchActivity
+        ? "Searching"
+        : "Using tools"
+      : "Thinking"
+    : activityCards.length > 0
+      ? "Activity"
+      : null;
   const thread = html`
     <div
       class="chat-thread"
@@ -266,52 +295,57 @@ export function renderChat(props: ChatProps) {
       aria-live="polite"
       @scroll=${props.onChatScroll}
     >
-      ${
-        props.loading
-          ? html`
-              <div class="muted">Loading chat…</div>
-            `
-          : nothing
-      }
-      ${repeat(
-        buildChatItems(props),
-        (item) => item.key,
-        (item) => {
-          if (item.kind === "divider") {
-            return html`
-              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
-                <span class="chat-divider__line"></span>
-                <span class="chat-divider__label">${item.label}</span>
-                <span class="chat-divider__line"></span>
-              </div>
-            `;
-          }
+      <div class="chat-thread-inner">
+        ${
+          props.loading
+            ? html`
+                <div class="chat-loading">
+                  <div class="chat-loading__spinner"></div>
+                  <span>Loading conversation…</span>
+                </div>
+              `
+            : nothing
+        }
+        ${repeat(
+          buildChatItems(props),
+          (item) => item.key,
+          (item) => {
+            if (item.kind === "divider") {
+              return html`
+                <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+                  <span class="chat-divider__line"></span>
+                  <span class="chat-divider__label">${item.label}</span>
+                  <span class="chat-divider__line"></span>
+                </div>
+              `;
+            }
 
-          if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity);
-          }
+            if (item.kind === "reading-indicator") {
+              return renderReadingIndicatorGroup(assistantIdentity);
+            }
 
-          if (item.kind === "stream") {
-            return renderStreamingGroup(
-              item.text,
-              item.startedAt,
-              props.onOpenSidebar,
-              assistantIdentity,
-            );
-          }
+            if (item.kind === "stream") {
+              return renderStreamingGroup(
+                item.text,
+                item.startedAt,
+                props.onOpenSidebar,
+                assistantIdentity,
+              );
+            }
 
-          if (item.kind === "group") {
-            return renderMessageGroup(item, {
-              onOpenSidebar: props.onOpenSidebar,
-              showReasoning,
-              assistantName: props.assistantName,
-              assistantAvatar: assistantIdentity.avatar,
-            });
-          }
+            if (item.kind === "group") {
+              return renderMessageGroup(item, {
+                onOpenSidebar: props.onOpenSidebar,
+                showReasoning,
+                assistantName: props.assistantName,
+                assistantAvatar: assistantIdentity.avatar,
+              });
+            }
 
-          return nothing;
-        },
-      )}
+            return nothing;
+          },
+        )}
+      </div>
     </div>
   `;
 
@@ -406,6 +440,30 @@ export function renderChat(props: ChatProps) {
 
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
+      ${
+        activityLabel
+          ? html`
+              <details class="chat-activity" ?open=${isBusy}>
+                <summary class="chat-activity__summary">
+                  <span class="chat-activity__badge">${icons.zap}</span>
+                  <span>${activityLabel}</span>
+                  ${
+                    activityCards.length > 0
+                      ? html`<span class="chat-activity__count">${activityCards.length}</span>`
+                      : nothing
+                  }
+                </summary>
+                <div class="chat-activity__body">
+                  ${
+                    activityCards.length > 0
+                      ? activityCards.map((card) => renderToolCardSidebar(card, props.onOpenSidebar))
+                      : html`<div class="muted">Waiting for tool activity...</div>`
+                  }
+                </div>
+              </details>
+            `
+          : nothing
+      }
 
       ${
         props.showNewMessages
@@ -423,10 +481,67 @@ export function renderChat(props: ChatProps) {
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
-        <div class="chat-compose__row">
-          <label class="field chat-compose__field">
-            <span>Message</span>
+        <div class="chat-compose__inner">
+          <!-- Toolbar with mode, model, thinking -->
+          <div class="chat-compose__toolbar">
+            <!-- Model selector -->
+            ${props.capabilities?.models ? html`
+              <button
+                class="compose-model-chip"
+                @click=${() => {}}
+                title="Select model"
+              >
+                <span>${props.model || "Auto"}</span>
+                ${icons.chevronDown}
+              </button>
+            ` : nothing}
+
+            <!-- Mode selector -->
+            <button
+              class="compose-mode-chip"
+              @click=${() => {}}
+              title="Select mode"
+            >
+              ${icons.sparkles}
+              <span>${props.mode || "Smart"}</span>
+              ${icons.chevronDown}
+            </button>
+
+            <!-- Thinking toggle (only if supported) -->
+            ${props.capabilities?.thinkingSupported ? html`
+              <button
+                class="compose-toolbar__btn ${props.thinkingEnabled ? "active" : ""}"
+                @click=${() => props.onThinkingToggle?.(!props.thinkingEnabled)}
+                title="${props.thinkingEnabled ? "Disable thinking" : "Enable thinking"}"
+              >
+                ${icons.brain}
+              </button>
+            ` : nothing}
+
+            <div style="flex: 1"></div>
+
+            <!-- Plus menu -->
+            <button
+              class="compose-toolbar__btn"
+              @click=${() => {}}
+              title="Add files or use tools"
+            >
+              ${icons.plus}
+            </button>
+          </div>
+
+          <!-- Input area -->
+          <div class="chat-compose__input-wrapper">
+            <button
+              class="compose-attachment-btn"
+              @click=${() => {}}
+              title="Attach files"
+            >
+              ${icons.paperclip}
+            </button>
+
             <textarea
+              class="compose-textarea"
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
@@ -440,7 +555,7 @@ export function renderChat(props: ChatProps) {
                 }
                 if (e.shiftKey) {
                   return;
-                } // Allow Shift+Enter for line breaks
+                }
                 if (!props.connected) {
                   return;
                 }
@@ -457,21 +572,14 @@ export function renderChat(props: ChatProps) {
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
-          </label>
-          <div class="chat-compose__actions">
+
             <button
-              class="btn"
-              ?disabled=${!props.connected || (!canAbort && props.sending)}
-              @click=${canAbort ? props.onAbort : props.onNewSession}
-            >
-              ${canAbort ? "Stop" : "New session"}
-            </button>
-            <button
-              class="btn primary"
-              ?disabled=${!props.connected}
+              class="compose-send-btn"
+              ?disabled=${!props.connected || (!canCompose && !props.draft)}
               @click=${props.onSend}
+              title="Send message"
             >
-              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+              ${icons.send}
             </button>
           </div>
         </div>
@@ -532,7 +640,6 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
-  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -573,25 +680,16 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  // Interleave stream segments and tool cards in order. Each segment
-  // contains text that was streaming before the corresponding tool started.
-  // This ensures correct visual ordering: text → tool → text → tool → ...
+  // Keep streaming text in the main transcript and move tool activity
+  // into the dedicated expandable Activity panel.
   const segments = props.streamSegments ?? [];
-  const maxLen = Math.max(segments.length, tools.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].text.trim().length > 0) {
       items.push({
         kind: "stream" as const,
         key: `stream-seg:${props.sessionKey}:${i}`,
         text: segments[i].text,
         startedAt: segments[i].ts,
-      });
-    }
-    if (i < tools.length) {
-      items.push({
-        kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
       });
     }
   }
