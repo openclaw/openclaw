@@ -59,7 +59,10 @@ function inferPayloadIfMissing(raw: Record<string, unknown>) {
   return false;
 }
 
-function copyTopLevelAgentTurnFields(raw: Record<string, unknown>, payload: Record<string, unknown>) {
+function copyTopLevelAgentTurnFields(
+  raw: Record<string, unknown>,
+  payload: Record<string, unknown>,
+) {
   let mutated = false;
 
   const copyTrimmedString = (field: "model" | "thinking" | "criticSpec") => {

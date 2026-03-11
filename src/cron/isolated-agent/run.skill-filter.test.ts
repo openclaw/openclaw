@@ -155,11 +155,11 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("critic loop gate", () => {
     it("returns deterministic needs_replan outcome when score is below threshold", async () => {
       const result = await runCronIsolatedAgentTurn(
-        makeParams({
+        makeSkillParams({
           cfg: {
             cron: { criticLoop: { enabled: true, minScore: 0.9 } },
           },
-          job: makeJob({
+          job: makeSkillJob({
             payload: {
               kind: "agentTurn",
               message: "test",
@@ -191,7 +191,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       const result = await runCronIsolatedAgentTurn(
-        makeParams({
+        makeSkillParams({
           cfg: {
             cron: {
               criticLoop: {
@@ -202,7 +202,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
               },
             },
           },
-          job: makeJob({
+          job: makeSkillJob({
             payload: {
               kind: "agentTurn",
               message: "test",
@@ -223,9 +223,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     it("keeps default behavior when critic loop is disabled", async () => {
       const result = await runCronIsolatedAgentTurn(
-        makeParams({
+        makeSkillParams({
           cfg: { cron: { criticLoop: { enabled: false } } },
-          job: makeJob({
+          job: makeSkillJob({
             payload: {
               kind: "agentTurn",
               message: "test",
