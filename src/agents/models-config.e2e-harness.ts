@@ -114,6 +114,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "VENICE_API_KEY",
   "VLLM_API_KEY",
   "XIAOMI_API_KEY",
+  "PPIO_API_KEY",
   // Avoid ambient AWS creds unintentionally enabling Bedrock discovery.
   "AWS_ACCESS_KEY_ID",
   "AWS_CONFIG_FILE",
