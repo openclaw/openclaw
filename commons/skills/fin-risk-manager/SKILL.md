@@ -1,5 +1,6 @@
 ---
 name: fin-risk-manager
+status: draft
 description: "Risk management suite - position sizing, Value-at-Risk, stress testing, correlation analysis, and risk-adjusted performance metrics for institutional-grade portfolio risk control."
 metadata:
   {

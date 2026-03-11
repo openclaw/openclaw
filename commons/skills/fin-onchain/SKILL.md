@@ -1,5 +1,6 @@
 ---
 name: fin-onchain
+status: draft
 description: "On-chain analytics - blockchain valuation metrics, DeFi protocol analysis, whale tracking, yield comparison, and token unlock impact assessment."
 metadata:
   {

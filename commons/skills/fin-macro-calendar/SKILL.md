@@ -1,5 +1,6 @@
 ---
 name: fin-macro-calendar
+status: draft
 description: "Macroeconomic calendar and regime analysis - economic event tracking, earnings dates, macro regime classification, cross-market impact cascades, and portfolio event exposure."
 metadata:
   {

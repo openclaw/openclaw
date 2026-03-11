@@ -1,5 +1,6 @@
 ---
 name: fin-news-intel
+status: draft
 description: "Financial news intelligence - multi-source sentiment scoring, event impact analysis, historical analogies, and personalized portfolio-aware digests."
 metadata:
   {

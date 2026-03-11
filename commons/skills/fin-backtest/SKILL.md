@@ -1,5 +1,6 @@
 ---
 name: fin-backtest
+status: draft
 description: "Strategy backtesting engine - test trading strategies against historical data, compute performance metrics, optimize parameters, and run Monte Carlo simulations."
 metadata:
   {
