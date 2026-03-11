@@ -74,6 +74,39 @@ describe("langfuse agent hook payload safety", () => {
     expect(redactPayload({ nested: null })).toEqual({ nested: null });
   });
 
+  it("replaces over-depth payload branches with a safe sentinel", () => {
+    const payload = {
+      level0: {
+        level1: {
+          level2: {
+            level3: {
+              level4: {
+                level5: {
+                  token: "secret-token",
+                  long: "x".repeat(5_000),
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(redactPayload(payload)).toEqual({
+      level0: {
+        level1: {
+          level2: {
+            level3: {
+              level4: {
+                level5: "[max depth exceeded]",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("does not throw on circular-like or deeply nested values", () => {
     const deep: Record<string, unknown> = {};
     let cur = deep;
@@ -196,6 +229,53 @@ describe("langfuse agent hooks — tool span lifecycle via emitAgentEvent", () =
     expect(spanEndFn).toHaveBeenCalledWith(
       expect.objectContaining({ statusMessage: expect.stringContaining("run ended") }),
     );
+  });
+
+  it("captures tool errors even when result is unserializable", async () => {
+    initializeLangfuseAgentHooks();
+
+    const mockTrace = makeMockTrace();
+    const spanCaptureErrorFn = vi.fn();
+    const spanHandle = {
+      ...makeNoopHandle(),
+      captureError: spanCaptureErrorFn,
+    };
+    (mockTrace.span as ReturnType<typeof vi.fn>).mockReturnValueOnce(spanHandle);
+
+    const runId = "run-tool-error-789";
+    const toolCallId = "tc-003";
+
+    await withLangfuseRequestScope({ trace: mockTrace, requestName: "test" }, async () => {
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: { phase: "start", name: "exec", toolCallId, args: { command: "ls" } },
+      });
+    });
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    circular.big = 123n;
+
+    await withLangfuseRequestScope({ trace: mockTrace, requestName: "test" }, async () => {
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "exec",
+          toolCallId,
+          isError: true,
+          result: circular,
+        },
+      });
+    });
+
+    expect(spanCaptureErrorFn).toHaveBeenCalledWith(
+      "[unserializable tool error]",
+      expect.objectContaining({ toolCallId, runId, durationMs: expect.any(Number) }),
+    );
+    expect(() => clearRunToolSpans(runId)).not.toThrow();
   });
 
   it("tool span is not opened outside a request scope", () => {
