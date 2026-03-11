@@ -721,6 +721,7 @@ function startSweeper() {
     void sweepSubagentRuns();
   }, 60_000);
   sweeper.unref?.();
+  log.debug("Stall sweeper started (interval)");
 }
 
 function stopSweeper() {
@@ -729,6 +730,7 @@ function stopSweeper() {
   }
   clearInterval(sweeper);
   sweeper = null;
+  log.debug("Stall sweeper stopped");
 }
 
 /**
@@ -738,6 +740,7 @@ function stopSweeper() {
  */
 async function checkStallRecovery() {
   const now = Date.now();
+  log.debug(`Sweep: checking ${subagentRuns.size} active runs`);
   for (const [runId, entry] of subagentRuns.entries()) {
     // Only check active runs (no endedAt).
     if (typeof entry.endedAt === "number") {
@@ -760,7 +763,7 @@ async function checkStallRecovery() {
       const timeSinceNudgeMs = now - entry.stallNudgedAt;
       if (timeSinceNudgeMs >= killSeconds * 1000) {
         const idleSec = Math.round(idleMs / 1000);
-        log.info(
+        log.warn(
           `Stall kill: runId=${runId} child=${entry.childSessionKey} idle=${idleSec}s nudgedAgo=${Math.round(timeSinceNudgeMs / 1000)}s`,
         );
         // Use completeSubagentRun with stall-specific outcome for proper announce flow.
@@ -779,8 +782,8 @@ async function checkStallRecovery() {
           if (childSessionId) {
             abortEmbeddedPiRun(childSessionId);
           }
-        } catch {
-          /* best effort */
+        } catch (err) {
+          log.debug(`Stall kill: embedded abort failed (best-effort)`, { runId, err });
         }
         continue;
       }
@@ -798,9 +801,14 @@ async function checkStallRecovery() {
         const childSessionId = resolveChildSessionId(entry.childSessionKey);
         if (childSessionId) {
           nudged = queueEmbeddedPiMessage(childSessionId, nudgeMessage);
+          if (nudged) {
+            log.info(
+              `Stall nudge delivered (embedded): runId=${runId} child=${entry.childSessionKey}`,
+            );
+          }
         }
-      } catch {
-        /* best effort */
+      } catch (err) {
+        log.debug(`Stall nudge: embedded delivery failed, trying gateway fallback`, { runId, err });
       }
 
       if (!nudged) {
@@ -816,8 +824,11 @@ async function checkStallRecovery() {
             timeoutMs: 10_000,
           });
           nudged = true;
+          log.info(
+            `Stall nudge delivered (gateway fallback): runId=${runId} child=${entry.childSessionKey}`,
+          );
         } catch {
-          log.warn(`Stall nudge delivery failed: runId=${runId}`);
+          log.warn(`Stall nudge delivery failed: runId=${runId} child=${entry.childSessionKey}`);
         }
       }
 
@@ -893,6 +904,9 @@ function ensureListener() {
             entry.lastToolCallAt = evt.ts || Date.now();
             // Clear nudge state — activity detected after nudge means agent recovered.
             if (entry.stallNudgedAt) {
+              log.info(
+                `Stall recovered: runId=${evt.runId} child=${entry.childSessionKey} — tool activity resumed after nudge`,
+              );
               entry.stallNudgedAt = undefined;
             }
             persistSubagentRuns();
