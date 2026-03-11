@@ -27,6 +27,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "modelstudioApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "modelHubApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -199,6 +200,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--modelstudio-api-key",
     cliOption: "--modelstudio-api-key <key>",
     description: "Alibaba Cloud Model Studio Coding Plan API key (Global/Intl)",
+  },
+  {
+    optionKey: "modelHubApiKey",
+    authChoice: "model-hub-api-key",
+    cliFlag: "--model-hub-api-key",
+    cliOption: "--model-hub-api-key <key>",
+    description: "Model Hub API key",
   },
   {
     optionKey: "volcengineApiKey",

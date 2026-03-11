@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import { MODEL_HUB_BASE_URL } from "../providers/model-hub-shared.js";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
@@ -9,6 +10,7 @@ import {
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
+import { discoverModelHubModels } from "./model-hub-models.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
@@ -286,6 +288,19 @@ export async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConf
   const models = await discoverKilocodeModels();
   return {
     baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+/**
+ * Build the Model Hub provider with dynamic model discovery from the
+ * `/v1/models` endpoint. Falls back to the static catalog on failure.
+ */
+export async function buildModelHubProviderWithDiscovery(apiKey?: string): Promise<ProviderConfig> {
+  const models = await discoverModelHubModels(apiKey);
+  return {
+    baseUrl: MODEL_HUB_BASE_URL,
     api: "openai-completions",
     models,
   };
