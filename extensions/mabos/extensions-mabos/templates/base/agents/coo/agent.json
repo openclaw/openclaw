@@ -1,0 +1,12 @@
+{
+  "id": "coo",
+  "name": "Chief Operating Officer",
+  "bdi": {
+    "commitmentStrategy": "single-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 60,
+      "quickCheckMinutes": 15
+    },
+    "reasoningMethods": ["means-ends", "heuristic", "temporal", "causal"]
+  }
+}

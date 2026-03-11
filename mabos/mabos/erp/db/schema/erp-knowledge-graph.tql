@@ -1,0 +1,130 @@
+define
+
+# ── Attributes ────────────────────────────────────────────────────────
+attribute customer-id, value string;
+attribute product-id, value string;
+attribute supplier-id, value string;
+attribute campaign-id, value string;
+attribute project-id, value string;
+attribute goal-id, value string;
+attribute agent-id, value string;
+attribute node-id, value string;
+attribute rule-id, value string;
+attribute contract-id, value string;
+attribute dept-id, value string;
+attribute name, value string;
+attribute email, value string;
+attribute sku, value string;
+attribute category, value string;
+attribute segment, value string;
+attribute lifecycle-stage, value string;
+attribute lifetime-value, value double;
+attribute price, value double;
+attribute rating, value double;
+attribute status, value string;
+attribute channel, value string;
+attribute priority, value integer;
+attribute description, value string;
+attribute target-value, value double;
+attribute current-value, value double;
+attribute domain, value string;
+attribute role, value string;
+attribute node-type, value string;
+attribute location, value string;
+attribute severity, value string;
+attribute title, value string;
+attribute party, value string;
+attribute quantity, value integer;
+attribute purchased-at, value datetime;
+attribute lead-time, value integer;
+attribute unit-cost, value double;
+attribute contribution, value double;
+attribute transit-time, value integer;
+attribute cost, value double;
+
+# ── Entities ──────────────────────────────────────────────────────────
+entity customer,
+  owns customer-id @key, owns name, owns email, owns segment,
+  owns lifecycle-stage, owns lifetime-value;
+
+entity product,
+  owns product-id @key, owns sku, owns name, owns category, owns price;
+
+entity supplier,
+  owns supplier-id @key, owns name, owns rating, owns category;
+
+entity campaign,
+  owns campaign-id @key, owns name, owns status, owns channel;
+
+entity project,
+  owns project-id @key, owns name, owns status, owns priority;
+
+entity goal,
+  owns goal-id @key, owns description, owns target-value,
+  owns current-value, owns domain;
+
+entity agent,
+  owns agent-id @key, owns name, owns role;
+
+entity supply-node,
+  owns node-id @key, owns name, owns node-type, owns location;
+
+entity compliance-rule,
+  owns rule-id @key, owns name, owns severity, owns domain;
+
+entity contract,
+  owns contract-id @key, owns title, owns status, owns party;
+
+entity department,
+  owns dept-id @key, owns name;
+
+# ── Relations ─────────────────────────────────────────────────────────
+relation purchased,
+  relates buyer, relates item, owns quantity, owns purchased-at;
+customer plays purchased:buyer;
+product plays purchased:item;
+
+relation supplies,
+  relates vendor, relates item, owns lead-time, owns unit-cost;
+supplier plays supplies:vendor;
+product plays supplies:item;
+
+relation targets,
+  relates campaign-source, relates audience;
+campaign plays targets:campaign-source;
+customer plays targets:audience;
+
+relation advances,
+  relates campaign-driver, relates goal-target, owns contribution;
+campaign plays advances:campaign-driver;
+project plays advances:campaign-driver;
+goal plays advances:goal-target;
+
+relation depends-on,
+  relates dependent, relates dependency;
+project plays depends-on:dependent;
+project plays depends-on:dependency;
+campaign plays depends-on:dependent;
+
+relation assigned-to,
+  relates assignee, relates work-item;
+agent plays assigned-to:assignee;
+project plays assigned-to:work-item;
+campaign plays assigned-to:work-item;
+
+relation governed-by,
+  relates governed-entity, relates rule;
+product plays governed-by:governed-entity;
+contract plays governed-by:governed-entity;
+supplier plays governed-by:governed-entity;
+compliance-rule plays governed-by:rule;
+
+relation supply-route,
+  relates origin, relates destination, owns transit-time, owns cost;
+supply-node plays supply-route:origin;
+supply-node plays supply-route:destination;
+
+relation belongs-to,
+  relates member, relates group;
+agent plays belongs-to:member;
+department plays belongs-to:group;

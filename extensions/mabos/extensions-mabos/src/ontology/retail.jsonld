@@ -1,0 +1,428 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "retail": "https://mabos.io/ontology/retail/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/retail",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/business-core",
+  "rdfs:label": "Retail Domain Ontology",
+  "rdfs:comment": "Domain concepts for brick-and-mortar, pop-up, and hybrid retail businesses with physical locations",
+  "@graph": [
+    {
+      "@id": "retail:Store",
+      "@type": "owl:Class",
+      "rdfs:label": "Store/Location",
+      "rdfs:comment": "A physical retail location with address, hours, and staff",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "store/location",
+      "sbvr:definition": "Store is a physical retail location that has an address, hours, and staff",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:PointOfSale",
+      "@type": "owl:Class",
+      "rdfs:label": "Point of Sale",
+      "rdfs:comment": "A POS terminal or register for processing in-store transactions",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "point of sale",
+      "sbvr:definition": "Point of Sale is a terminal or register that processes in-store transactions",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Product",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Product",
+      "rdfs:label": "Product",
+      "rdfs:comment": "A physical product sold in-store with barcode/UPC, shelf placement, and pricing",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "product",
+      "sbvr:definition": "Product is a physical item that is sold in-store with barcode/UPC, shelf placement, and pricing",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Shelf",
+      "@type": "owl:Class",
+      "rdfs:label": "Shelf/Display",
+      "rdfs:comment": "A physical display area within the store for product merchandising",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "shelf/display",
+      "sbvr:definition": "Shelf is a physical display area that is within the store for product merchandising",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Planogram",
+      "@type": "owl:Class",
+      "rdfs:label": "Planogram",
+      "rdfs:comment": "A visual diagram of product placement on shelves optimized for sales and customer flow",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "planogram",
+      "sbvr:definition": "Planogram is a visual diagram that specifies product placement on shelves optimized for sales and customer flow",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Promotion",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:MarketingCampaign",
+      "rdfs:label": "Promotion",
+      "rdfs:comment": "An in-store promotion: BOGO, clearance, seasonal sale, endcap feature",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "promotion",
+      "sbvr:definition": "Promotion is an in-store promotional activity that includes BOGO, clearance, seasonal sale, or endcap feature",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:LoyaltyProgram",
+      "@type": "owl:Class",
+      "rdfs:label": "Loyalty Program",
+      "rdfs:comment": "A customer retention program with points, tiers, and rewards",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "loyalty program",
+      "sbvr:definition": "Loyalty Program is a customer retention program that offers points, tiers, and rewards",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:LoyaltyMember",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Customer",
+      "rdfs:label": "Loyalty Member",
+      "rdfs:comment": "A customer enrolled in the loyalty program with accumulated points and tier",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "loyalty member",
+      "sbvr:definition": "Loyalty Member is a customer that is enrolled in a loyalty program with accumulated points and tier",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Vendor",
+      "@type": "owl:Class",
+      "rdfs:label": "Vendor",
+      "rdfs:comment": "A wholesale supplier or distributor providing products to the store",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "vendor",
+      "sbvr:definition": "Vendor is a wholesale supplier or distributor that provides products to the store",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:PurchaseOrder",
+      "@type": "owl:Class",
+      "rdfs:label": "Purchase Order",
+      "rdfs:comment": "An order placed with a vendor for inventory replenishment",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "purchase order",
+      "sbvr:definition": "Purchase Order is an order that is placed with a vendor for inventory replenishment",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Employee",
+      "@type": "owl:Class",
+      "rdfs:label": "Employee",
+      "rdfs:comment": "A store staff member with role, schedule, and performance metrics",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "employee",
+      "sbvr:definition": "Employee is a store staff member that has a role, schedule, and performance metrics",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Shift",
+      "@type": "owl:Class",
+      "rdfs:label": "Shift",
+      "rdfs:comment": "A scheduled work period for a store employee",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "shift",
+      "sbvr:definition": "Shift is a scheduled work period that is assigned to a store employee",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:SeasonalEvent",
+      "@type": "owl:Class",
+      "rdfs:label": "Seasonal Event",
+      "rdfs:comment": "A calendar-driven event affecting demand (holidays, back-to-school, summer, etc.)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "seasonal event",
+      "sbvr:definition": "Seasonal Event is a calendar-driven event that affects demand patterns",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:CustomerSegment",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Audience",
+      "rdfs:label": "Customer Segment",
+      "rdfs:comment": "A demographic or behavioral segment of store customers",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "customer segment",
+      "sbvr:definition": "Customer Segment is a demographic or behavioral grouping that categorizes store customers",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:StoreLayout",
+      "@type": "owl:Class",
+      "rdfs:label": "Store Layout",
+      "rdfs:comment": "The physical floor plan and department arrangement of the store",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "store layout",
+      "sbvr:definition": "Store Layout is a physical floor plan that defines the department arrangement of the store",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Department",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Department",
+      "rdfs:label": "Store Department",
+      "rdfs:comment": "A section of the store dedicated to a product category (produce, electronics, apparel)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "store department",
+      "sbvr:definition": "Store Department is a section of the store that is dedicated to a product category",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:InventoryCount",
+      "@type": "owl:Class",
+      "rdfs:label": "Inventory Count",
+      "rdfs:comment": "A physical inventory audit with expected vs. actual counts and variance",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "inventory count",
+      "sbvr:definition": "Inventory Count is a physical audit that compares expected vs. actual counts and identifies variance",
+      "sbvr:vocabulary": "retail"
+    },
+    {
+      "@id": "retail:Receipt",
+      "@type": "owl:Class",
+      "rdfs:label": "Receipt",
+      "rdfs:comment": "A transaction receipt with items, payment method, and loyalty points earned",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "receipt",
+      "sbvr:definition": "Receipt is a transaction record that lists items, payment method, and loyalty points earned",
+      "sbvr:vocabulary": "retail"
+    },
+
+    { "@id": "retail:footTraffic", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:integer", "rdfs:comment": "Daily average foot traffic (visitors entering the store)" },
+    { "@id": "retail:salesPerSqFt", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:decimal", "rdfs:comment": "Revenue per square foot of selling space" },
+    { "@id": "retail:shrinkageRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:float", "rdfs:comment": "Inventory loss rate from theft, damage, or admin error 0.0-1.0" },
+    { "@id": "retail:turnoverRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Product", "rdfs:range": "xsd:float", "rdfs:comment": "Inventory turnover rate — times stock is sold and replaced per period" },
+    { "@id": "retail:basketSize", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:decimal", "rdfs:comment": "Average transaction value (basket size)" },
+    { "@id": "retail:itemsPerTransaction", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:float", "rdfs:comment": "Average number of items per transaction" },
+    { "@id": "retail:conversionRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of visitors who make a purchase 0.0-1.0" },
+    { "@id": "retail:laborCostPercent", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:float", "rdfs:comment": "Labor cost as percentage of revenue 0.0-1.0" },
+    { "@id": "retail:rentPerSqFt", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:decimal", "rdfs:comment": "Monthly rent per square foot" },
+    { "@id": "retail:storeArea", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Store", "rdfs:range": "xsd:integer", "rdfs:comment": "Total store area in square feet" },
+    { "@id": "retail:loyaltyPoints", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:LoyaltyMember", "rdfs:range": "xsd:integer", "rdfs:comment": "Current accumulated loyalty points" },
+    { "@id": "retail:loyaltyTier", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:LoyaltyMember", "rdfs:range": "xsd:string", "rdfs:comment": "Current loyalty tier (bronze, silver, gold, platinum)" },
+    { "@id": "retail:employeeEfficiency", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Employee", "rdfs:range": "xsd:float", "rdfs:comment": "Sales per labor hour for this employee" },
+    { "@id": "retail:daysOnHand", "@type": "owl:DatatypeProperty", "rdfs:domain": "retail:Product", "rdfs:range": "xsd:integer", "rdfs:comment": "Days of inventory on hand at current sell-through rate" },
+
+    {
+      "@id": "retail:locatedAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Store",
+      "rdfs:range": "xsd:string",
+      "rdfs:comment": "Physical address of the store",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Store is located at address",
+      "sbvr:roles": [
+        { "sbvr:roleName": "located store", "sbvr:rolePlayer": "retail:Store" },
+        { "sbvr:roleName": "store address", "sbvr:rolePlayer": "xsd:string" }
+      ]
+    },
+    {
+      "@id": "retail:soldAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Product",
+      "rdfs:range": "retail:Store",
+      "rdfs:comment": "Stores where this product is available",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is sold at Store",
+      "sbvr:roles": [
+        { "sbvr:roleName": "available product", "sbvr:rolePlayer": "retail:Product" },
+        { "sbvr:roleName": "selling store", "sbvr:rolePlayer": "retail:Store" }
+      ]
+    },
+    {
+      "@id": "retail:suppliedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Product",
+      "rdfs:range": "retail:Vendor",
+      "rdfs:comment": "The vendor supplying this product",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is supplied by Vendor",
+      "sbvr:roles": [
+        { "sbvr:roleName": "supplied product", "sbvr:rolePlayer": "retail:Product" },
+        { "sbvr:roleName": "supplying vendor", "sbvr:rolePlayer": "retail:Vendor" }
+      ]
+    },
+    {
+      "@id": "retail:orderedFrom",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:PurchaseOrder",
+      "rdfs:range": "retail:Vendor",
+      "rdfs:comment": "The vendor this PO was placed with",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "PurchaseOrder is ordered from Vendor",
+      "sbvr:roles": [
+        { "sbvr:roleName": "placed order", "sbvr:rolePlayer": "retail:PurchaseOrder" },
+        { "sbvr:roleName": "order vendor", "sbvr:rolePlayer": "retail:Vendor" }
+      ]
+    },
+    {
+      "@id": "retail:orderedFor",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:PurchaseOrder",
+      "rdfs:range": "retail:Store",
+      "rdfs:comment": "The store this PO is replenishing",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "PurchaseOrder is ordered for Store",
+      "sbvr:roles": [
+        { "sbvr:roleName": "replenishment order", "sbvr:rolePlayer": "retail:PurchaseOrder" },
+        { "sbvr:roleName": "replenished store", "sbvr:rolePlayer": "retail:Store" }
+      ]
+    },
+    {
+      "@id": "retail:placedOnShelf",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Product",
+      "rdfs:range": "retail:Shelf",
+      "rdfs:comment": "The shelf/display where this product is merchandised",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is placed on Shelf",
+      "sbvr:roles": [
+        { "sbvr:roleName": "shelved product", "sbvr:rolePlayer": "retail:Product" },
+        { "sbvr:roleName": "display shelf", "sbvr:rolePlayer": "retail:Shelf" }
+      ]
+    },
+    {
+      "@id": "retail:shelfInDepartment",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Shelf",
+      "rdfs:range": "retail:Department",
+      "rdfs:comment": "The department this shelf belongs to",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Shelf is in Department",
+      "sbvr:roles": [
+        { "sbvr:roleName": "department shelf", "sbvr:rolePlayer": "retail:Shelf" },
+        { "sbvr:roleName": "containing department", "sbvr:rolePlayer": "retail:Department" }
+      ]
+    },
+    {
+      "@id": "retail:followsPlanogram",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Shelf",
+      "rdfs:range": "retail:Planogram",
+      "rdfs:comment": "The planogram governing product placement",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Shelf follows Planogram",
+      "sbvr:roles": [
+        { "sbvr:roleName": "governed shelf", "sbvr:rolePlayer": "retail:Shelf" },
+        { "sbvr:roleName": "governing planogram", "sbvr:rolePlayer": "retail:Planogram" }
+      ]
+    },
+    {
+      "@id": "retail:worksAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Employee",
+      "rdfs:range": "retail:Store",
+      "rdfs:comment": "The store this employee works at",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Employee works at Store",
+      "sbvr:roles": [
+        { "sbvr:roleName": "working employee", "sbvr:rolePlayer": "retail:Employee" },
+        { "sbvr:roleName": "workplace store", "sbvr:rolePlayer": "retail:Store" }
+      ]
+    },
+    {
+      "@id": "retail:hasShift",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Employee",
+      "rdfs:range": "retail:Shift",
+      "rdfs:comment": "Shifts scheduled for this employee",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Employee has Shift",
+      "sbvr:roles": [
+        { "sbvr:roleName": "scheduled employee", "sbvr:rolePlayer": "retail:Employee" },
+        { "sbvr:roleName": "employee shift", "sbvr:rolePlayer": "retail:Shift" }
+      ]
+    },
+    {
+      "@id": "retail:enrolledIn",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:LoyaltyMember",
+      "rdfs:range": "retail:LoyaltyProgram",
+      "rdfs:comment": "The loyalty program this member is enrolled in",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "LoyaltyMember is enrolled in LoyaltyProgram",
+      "sbvr:roles": [
+        { "sbvr:roleName": "enrolled member", "sbvr:rolePlayer": "retail:LoyaltyMember" },
+        { "sbvr:roleName": "membership program", "sbvr:rolePlayer": "retail:LoyaltyProgram" }
+      ]
+    },
+    {
+      "@id": "retail:processedAt",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Receipt",
+      "rdfs:range": "retail:PointOfSale",
+      "rdfs:comment": "The POS terminal that processed this transaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Receipt is processed at PointOfSale",
+      "sbvr:roles": [
+        { "sbvr:roleName": "processed receipt", "sbvr:rolePlayer": "retail:Receipt" },
+        { "sbvr:roleName": "processing terminal", "sbvr:rolePlayer": "retail:PointOfSale" }
+      ]
+    },
+    {
+      "@id": "retail:affectedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Product",
+      "rdfs:range": "retail:SeasonalEvent",
+      "rdfs:comment": "Seasonal events that affect demand for this product",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Product is affected by SeasonalEvent",
+      "sbvr:roles": [
+        { "sbvr:roleName": "affected product", "sbvr:rolePlayer": "retail:Product" },
+        { "sbvr:roleName": "affecting event", "sbvr:rolePlayer": "retail:SeasonalEvent" }
+      ]
+    },
+    {
+      "@id": "retail:targetsSegment",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Promotion",
+      "rdfs:range": "retail:CustomerSegment",
+      "rdfs:comment": "Customer segments targeted by this promotion",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Promotion targets CustomerSegment",
+      "sbvr:roles": [
+        { "sbvr:roleName": "targeting promotion", "sbvr:rolePlayer": "retail:Promotion" },
+        { "sbvr:roleName": "targeted segment", "sbvr:rolePlayer": "retail:CustomerSegment" }
+      ]
+    },
+    {
+      "@id": "retail:hasLayout",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "retail:Store",
+      "rdfs:range": "retail:StoreLayout",
+      "rdfs:comment": "The floor plan layout of this store",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Store has StoreLayout",
+      "sbvr:roles": [
+        { "sbvr:roleName": "laid-out store", "sbvr:rolePlayer": "retail:Store" },
+        { "sbvr:roleName": "store layout", "sbvr:rolePlayer": "retail:StoreLayout" }
+      ]
+    }
+  ]
+}

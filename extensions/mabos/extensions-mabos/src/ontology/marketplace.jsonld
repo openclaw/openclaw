@@ -1,0 +1,440 @@
+{
+  "@context": {
+    "mabos": "https://mabos.io/ontology/",
+    "mkt": "https://mabos.io/ontology/marketplace/",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "sbvr": "https://mabos.io/ontology/sbvr/"
+  },
+  "@id": "https://mabos.io/ontology/marketplace",
+  "@type": "owl:Ontology",
+  "owl:imports": "https://mabos.io/ontology/business-core",
+  "rdfs:label": "Marketplace Domain Ontology",
+  "rdfs:comment": "Domain concepts for two-sided and multi-sided marketplace businesses connecting buyers and sellers",
+  "@graph": [
+    {
+      "@id": "mkt:Seller",
+      "@type": "owl:Class",
+      "rdfs:label": "Seller",
+      "rdfs:comment": "A supply-side participant who lists and sells goods or services on the platform",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "seller",
+      "sbvr:definition": "Seller is a supply-side participant that lists and sells goods or services on the platform",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Buyer",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Customer",
+      "rdfs:label": "Buyer",
+      "rdfs:comment": "A demand-side participant who purchases from sellers on the platform",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "buyer",
+      "sbvr:definition": "Buyer is a demand-side participant that purchases from sellers on the platform",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Listing",
+      "@type": "owl:Class",
+      "rdfs:label": "Listing",
+      "rdfs:comment": "An item or service offered for sale by a seller with price, description, and media",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "listing",
+      "sbvr:definition": "Listing is an item or service that is offered for sale by a seller with price, description, and media",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Transaction",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:Transaction",
+      "rdfs:label": "Transaction",
+      "rdfs:comment": "A completed purchase between buyer and seller facilitated by the platform",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "transaction",
+      "sbvr:definition": "Transaction is a completed purchase that occurs between buyer and seller and is facilitated by the platform",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Review",
+      "@type": "owl:Class",
+      "rdfs:label": "Review",
+      "rdfs:comment": "A rating and feedback from buyer to seller (or vice versa) after a transaction",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "review",
+      "sbvr:definition": "Review is a rating and feedback that is given from buyer to seller or vice versa after a transaction",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Dispute",
+      "@type": "owl:Class",
+      "rdfs:label": "Dispute",
+      "rdfs:comment": "A contested transaction requiring platform mediation and resolution",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "dispute",
+      "sbvr:definition": "Dispute is a contested transaction that requires platform mediation and resolution",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Commission",
+      "@type": "owl:Class",
+      "rdfs:label": "Commission",
+      "rdfs:comment": "The platform's fee on a transaction, calculated from the take rate",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "commission",
+      "sbvr:definition": "Commission is a platform fee that is calculated from the take rate on a transaction",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:TrustScore",
+      "@type": "owl:Class",
+      "rdfs:label": "Trust Score",
+      "rdfs:comment": "A composite reputation metric based on reviews, completion rate, and dispute history",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "trust score",
+      "sbvr:definition": "Trust Score is a composite reputation metric that is based on reviews, completion rate, and dispute history",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Category",
+      "@type": "owl:Class",
+      "rdfs:label": "Category",
+      "rdfs:comment": "A hierarchical classification for organizing listings",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "category",
+      "sbvr:definition": "Category is a hierarchical classification that organizes listings on the marketplace",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Escrow",
+      "@type": "owl:Class",
+      "rdfs:label": "Escrow",
+      "rdfs:comment": "A held payment released upon delivery confirmation or dispute resolution",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "escrow",
+      "sbvr:definition": "Escrow is a held payment that is released upon delivery confirmation or dispute resolution",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Payout",
+      "@type": "owl:Class",
+      "rdfs:label": "Payout",
+      "rdfs:comment": "A disbursement of funds to a seller after commission deduction and hold period",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "payout",
+      "sbvr:definition": "Payout is a disbursement of funds that is sent to a seller after commission deduction and hold period",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Verification",
+      "@type": "owl:Class",
+      "rdfs:label": "Verification",
+      "rdfs:comment": "Identity or quality verification of a seller (KYC, background check, portfolio review)",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "verification",
+      "sbvr:definition": "Verification is an identity or quality check that validates a seller through KYC, background check, or portfolio review",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:SearchQuery",
+      "@type": "owl:Class",
+      "rdfs:label": "Search Query",
+      "rdfs:comment": "A buyer search with keywords, filters, and result ranking for marketplace discovery",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "search query",
+      "sbvr:definition": "Search Query is a buyer search that has keywords, filters, and result ranking for marketplace discovery",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Recommendation",
+      "@type": "owl:Class",
+      "rdfs:label": "Recommendation",
+      "rdfs:comment": "An algorithmic suggestion of listings to a buyer based on behavior and preferences",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "recommendation",
+      "sbvr:definition": "Recommendation is an algorithmic suggestion that presents listings to a buyer based on behavior and preferences",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Promotion",
+      "@type": "owl:Class",
+      "rdfs:subClassOf": "mabos:MarketingCampaign",
+      "rdfs:label": "Promotion",
+      "rdfs:comment": "A seller or platform promotion to boost listing visibility",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "promotion",
+      "sbvr:definition": "Promotion is a seller or platform action that boosts listing visibility",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:SellerTier",
+      "@type": "owl:Class",
+      "rdfs:label": "Seller Tier",
+      "rdfs:comment": "A seller classification (bronze/silver/gold/platinum) with benefits and requirements",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "seller tier",
+      "sbvr:definition": "Seller Tier is a classification that ranks sellers with associated benefits and requirements",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Message",
+      "@type": "owl:Class",
+      "rdfs:label": "Message",
+      "rdfs:comment": "An in-platform message between buyer and seller for pre/post-transaction communication",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "message",
+      "sbvr:definition": "Message is an in-platform communication that occurs between buyer and seller for pre or post-transaction purposes",
+      "sbvr:vocabulary": "marketplace"
+    },
+    {
+      "@id": "mkt:Offer",
+      "@type": "owl:Class",
+      "rdfs:label": "Offer",
+      "rdfs:comment": "A buyer's price offer on a listing, subject to seller acceptance",
+      "sbvr:conceptType": "NounConcept",
+      "sbvr:designation": "offer",
+      "sbvr:definition": "Offer is a buyer's price proposal that is made on a listing and is subject to seller acceptance",
+      "sbvr:vocabulary": "marketplace"
+    },
+
+    { "@id": "mkt:takeRate", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Platform take rate (commission percentage) 0.0-1.0" },
+    { "@id": "mkt:gmv", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:decimal", "rdfs:comment": "Gross Merchandise Value — total value of transactions before commission" },
+    { "@id": "mkt:netRevenue", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:decimal", "rdfs:comment": "Platform revenue after commission (GMV x take rate)" },
+    { "@id": "mkt:sellerRating", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Seller", "rdfs:range": "xsd:float", "rdfs:comment": "Average seller rating 0.0-5.0" },
+    { "@id": "mkt:buyerRating", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Buyer", "rdfs:range": "xsd:float", "rdfs:comment": "Average buyer rating 0.0-5.0" },
+    { "@id": "mkt:liquidity", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Supply-demand match ratio — percentage of searches resulting in transactions" },
+    { "@id": "mkt:completionRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Seller", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of accepted orders successfully completed 0.0-1.0" },
+    { "@id": "mkt:responseTime", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Seller", "rdfs:range": "xsd:integer", "rdfs:comment": "Average response time to buyer inquiries in minutes" },
+    { "@id": "mkt:disputeRate", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of transactions resulting in disputes 0.0-1.0" },
+    { "@id": "mkt:repeatPurchaseRate", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Buyer", "rdfs:range": "xsd:float", "rdfs:comment": "Percentage of buyers making repeat purchases 0.0-1.0" },
+    { "@id": "mkt:listingCount", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Seller", "rdfs:range": "xsd:integer", "rdfs:comment": "Number of active listings from this seller" },
+    { "@id": "mkt:viewsToTransaction", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Listing", "rdfs:range": "xsd:float", "rdfs:comment": "View-to-transaction conversion rate 0.0-1.0" },
+    { "@id": "mkt:averageTransactionValue", "@type": "owl:DatatypeProperty", "rdfs:range": "xsd:decimal", "rdfs:comment": "Average transaction value across the platform" },
+    { "@id": "mkt:payoutDelay", "@type": "owl:DatatypeProperty", "rdfs:domain": "mkt:Payout", "rdfs:range": "xsd:integer", "rdfs:comment": "Days between transaction and payout release" },
+
+    {
+      "@id": "mkt:listedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Listing",
+      "rdfs:range": "mkt:Seller",
+      "rdfs:comment": "The seller who created this listing",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Listing is listed by Seller",
+      "sbvr:roles": [
+        { "sbvr:roleName": "created listing", "sbvr:rolePlayer": "mkt:Listing" },
+        { "sbvr:roleName": "listing seller", "sbvr:rolePlayer": "mkt:Seller" }
+      ]
+    },
+    {
+      "@id": "mkt:purchasedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Transaction",
+      "rdfs:range": "mkt:Buyer",
+      "rdfs:comment": "The buyer who completed this transaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Transaction is purchased by Buyer",
+      "sbvr:roles": [
+        { "sbvr:roleName": "purchased transaction", "sbvr:rolePlayer": "mkt:Transaction" },
+        { "sbvr:roleName": "purchasing buyer", "sbvr:rolePlayer": "mkt:Buyer" }
+      ]
+    },
+    {
+      "@id": "mkt:soldBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Transaction",
+      "rdfs:range": "mkt:Seller",
+      "rdfs:comment": "The seller in this transaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Transaction is sold by Seller",
+      "sbvr:roles": [
+        { "sbvr:roleName": "sold transaction", "sbvr:rolePlayer": "mkt:Transaction" },
+        { "sbvr:roleName": "selling seller", "sbvr:rolePlayer": "mkt:Seller" }
+      ]
+    },
+    {
+      "@id": "mkt:forListing",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Transaction",
+      "rdfs:range": "mkt:Listing",
+      "rdfs:comment": "The listing that was transacted",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Transaction is for Listing",
+      "sbvr:roles": [
+        { "sbvr:roleName": "listing transaction", "sbvr:rolePlayer": "mkt:Transaction" },
+        { "sbvr:roleName": "transacted listing", "sbvr:rolePlayer": "mkt:Listing" }
+      ]
+    },
+    {
+      "@id": "mkt:reviewOf",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Review",
+      "rdfs:range": "mkt:Transaction",
+      "rdfs:comment": "The transaction this review is about",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Review is review of Transaction",
+      "sbvr:roles": [
+        { "sbvr:roleName": "transaction review", "sbvr:rolePlayer": "mkt:Review" },
+        { "sbvr:roleName": "reviewed transaction", "sbvr:rolePlayer": "mkt:Transaction" }
+      ]
+    },
+    {
+      "@id": "mkt:reviewBySeller",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Review",
+      "rdfs:range": "mkt:Seller",
+      "rdfs:comment": "Seller who wrote this review (of a buyer)",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Review is written by Seller",
+      "sbvr:roles": [
+        { "sbvr:roleName": "seller review", "sbvr:rolePlayer": "mkt:Review" },
+        { "sbvr:roleName": "reviewing seller", "sbvr:rolePlayer": "mkt:Seller" }
+      ]
+    },
+    {
+      "@id": "mkt:reviewByBuyer",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Review",
+      "rdfs:range": "mkt:Buyer",
+      "rdfs:comment": "Buyer who wrote this review (of a seller)",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Review is written by Buyer",
+      "sbvr:roles": [
+        { "sbvr:roleName": "buyer review", "sbvr:rolePlayer": "mkt:Review" },
+        { "sbvr:roleName": "reviewing buyer", "sbvr:rolePlayer": "mkt:Buyer" }
+      ]
+    },
+    {
+      "@id": "mkt:disputeOn",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Dispute",
+      "rdfs:range": "mkt:Transaction",
+      "rdfs:comment": "The transaction being disputed",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Dispute is on Transaction",
+      "sbvr:roles": [
+        { "sbvr:roleName": "transaction dispute", "sbvr:rolePlayer": "mkt:Dispute" },
+        { "sbvr:roleName": "disputed transaction", "sbvr:rolePlayer": "mkt:Transaction" }
+      ]
+    },
+    {
+      "@id": "mkt:heldInEscrow",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Transaction",
+      "rdfs:range": "mkt:Escrow",
+      "rdfs:comment": "The escrow holding funds for this transaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Transaction is held in Escrow",
+      "sbvr:roles": [
+        { "sbvr:roleName": "escrowed transaction", "sbvr:rolePlayer": "mkt:Transaction" },
+        { "sbvr:roleName": "holding escrow", "sbvr:rolePlayer": "mkt:Escrow" }
+      ]
+    },
+    {
+      "@id": "mkt:paidOut",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Transaction",
+      "rdfs:range": "mkt:Payout",
+      "rdfs:comment": "The payout disbursed for this transaction",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Transaction is paid out as Payout",
+      "sbvr:roles": [
+        { "sbvr:roleName": "paid transaction", "sbvr:rolePlayer": "mkt:Transaction" },
+        { "sbvr:roleName": "transaction payout", "sbvr:rolePlayer": "mkt:Payout" }
+      ]
+    },
+    {
+      "@id": "mkt:inCategory",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Listing",
+      "rdfs:range": "mkt:Category",
+      "rdfs:comment": "The category this listing is filed under",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Listing is in Category",
+      "sbvr:roles": [
+        { "sbvr:roleName": "categorized listing", "sbvr:rolePlayer": "mkt:Listing" },
+        { "sbvr:roleName": "listing category", "sbvr:rolePlayer": "mkt:Category" }
+      ]
+    },
+    {
+      "@id": "mkt:hasParentCategory",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Category",
+      "rdfs:range": "mkt:Category",
+      "rdfs:comment": "Parent in the category hierarchy",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Category has parent Category",
+      "sbvr:roles": [
+        { "sbvr:roleName": "child category", "sbvr:rolePlayer": "mkt:Category" },
+        { "sbvr:roleName": "parent category", "sbvr:rolePlayer": "mkt:Category" }
+      ]
+    },
+    {
+      "@id": "mkt:verifiedBy",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Seller",
+      "rdfs:range": "mkt:Verification",
+      "rdfs:comment": "Verification the seller has completed",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Seller is verified by Verification",
+      "sbvr:roles": [
+        { "sbvr:roleName": "verified seller", "sbvr:rolePlayer": "mkt:Seller" },
+        { "sbvr:roleName": "seller verification", "sbvr:rolePlayer": "mkt:Verification" }
+      ]
+    },
+    {
+      "@id": "mkt:hasTier",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Seller",
+      "rdfs:range": "mkt:SellerTier",
+      "rdfs:comment": "The seller's current tier level",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Seller has SellerTier",
+      "sbvr:roles": [
+        { "sbvr:roleName": "tiered seller", "sbvr:rolePlayer": "mkt:Seller" },
+        { "sbvr:roleName": "seller tier", "sbvr:rolePlayer": "mkt:SellerTier" }
+      ]
+    },
+    {
+      "@id": "mkt:madeOffer",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Buyer",
+      "rdfs:range": "mkt:Offer",
+      "rdfs:comment": "Price offers made by this buyer",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Buyer made Offer",
+      "sbvr:roles": [
+        { "sbvr:roleName": "offering buyer", "sbvr:rolePlayer": "mkt:Buyer" },
+        { "sbvr:roleName": "buyer offer", "sbvr:rolePlayer": "mkt:Offer" }
+      ]
+    },
+    {
+      "@id": "mkt:offerOnListing",
+      "@type": "owl:ObjectProperty",
+      "rdfs:domain": "mkt:Offer",
+      "rdfs:range": "mkt:Listing",
+      "rdfs:comment": "The listing this offer is for",
+      "sbvr:conceptType": "FactType",
+      "sbvr:arity": 2,
+      "sbvr:reading": "Offer is on Listing",
+      "sbvr:roles": [
+        { "sbvr:roleName": "listing offer", "sbvr:rolePlayer": "mkt:Offer" },
+        { "sbvr:roleName": "offered listing", "sbvr:rolePlayer": "mkt:Listing" }
+      ]
+    }
+  ]
+}

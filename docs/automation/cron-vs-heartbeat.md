@@ -62,7 +62,7 @@ The agent reads this on each heartbeat and handles all items in one turn.
     defaults: {
       heartbeat: {
         every: "30m", // interval
-        target: "last", // explicit alert delivery target (default is "none")
+        target: "last", // where to deliver alerts
         activeHours: { start: "08:00", end: "22:00" }, // optional
       },
     },

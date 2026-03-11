@@ -1,0 +1,174 @@
+@layer components {
+  /* ── Events: Circle shapes ── */
+  .bpmn-event {
+    @apply rounded-full flex items-center justify-center transition-all;
+    width: var(--bpmn-event-size);
+    height: var(--bpmn-event-size);
+  }
+  .bpmn-event-start {
+    @apply border-2;
+    width: var(--bpmn-event-size);
+    height: var(--bpmn-event-size);
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bpmn-event-start-bg);
+    border-color: var(--bpmn-event-start-border);
+    transition: all 150ms;
+  }
+  .bpmn-event-intermediate {
+    width: var(--bpmn-event-size);
+    height: var(--bpmn-event-size);
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bpmn-event-intermediate-bg);
+    border: 2px double var(--bpmn-event-intermediate-border);
+    outline: 2px solid var(--bpmn-event-intermediate-border);
+    outline-offset: -5px;
+    transition: all 150ms;
+  }
+  .bpmn-event-end {
+    width: var(--bpmn-event-size);
+    height: var(--bpmn-event-size);
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bpmn-event-end-bg);
+    border: 3px solid var(--bpmn-event-end-border);
+    transition: all 150ms;
+  }
+
+  /* ── Tasks: Rounded rectangle ── */
+  .bpmn-task {
+    @apply rounded-lg border px-3 py-2 text-xs cursor-pointer;
+    width: var(--bpmn-task-w);
+    min-height: var(--bpmn-task-h);
+    background: var(--bpmn-task-bg);
+    border-color: var(--bpmn-task-border);
+    color: var(--text-primary);
+    transition: all 150ms;
+  }
+  .bpmn-task:hover {
+    border-color: var(--bpmn-task-hover);
+  }
+  .bpmn-task[data-selected="true"] {
+    border-color: var(--bpmn-task-selected);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--bpmn-task-selected) 25%, transparent);
+  }
+
+  /* Task type icon badges */
+  .bpmn-task-icon {
+    @apply absolute top-1.5 left-1.5 w-4 h-4;
+    color: var(--text-muted);
+  }
+
+  /* Loop/multi-instance markers (bottom center) */
+  .bpmn-task-marker {
+    @apply absolute bottom-1 left-1/2 -translate-x-1/2 flex gap-0.5;
+  }
+
+  /* ── Gateways: Diamond (rotated square) ── */
+  .bpmn-gateway {
+    @apply flex items-center justify-center cursor-pointer;
+    width: var(--bpmn-gateway-size);
+    height: var(--bpmn-gateway-size);
+    background: var(--bpmn-gateway-bg);
+    border: 2px solid var(--bpmn-gateway-border);
+    transform: rotate(45deg);
+    transition: all 150ms;
+  }
+  .bpmn-gateway-inner {
+    transform: rotate(-45deg);
+    @apply flex items-center justify-center text-sm font-bold;
+    color: var(--bpmn-gateway-border);
+  }
+
+  /* ── Sub-processes: Rounded rect with expand marker ── */
+  .bpmn-subprocess {
+    @apply rounded-lg border-2 border-dashed p-2 cursor-pointer relative;
+    background: var(--bpmn-subprocess-bg);
+    border-color: var(--bpmn-subprocess-border);
+    min-width: 200px;
+    min-height: 120px;
+    transition: all 150ms;
+  }
+  .bpmn-subprocess-marker {
+    @apply absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2
+           w-5 h-5 rounded-sm border flex items-center justify-center
+           text-[10px] font-bold cursor-pointer;
+    background: var(--bg-card);
+    border-color: var(--bpmn-subprocess-border);
+    color: var(--text-secondary);
+  }
+
+  /* ── Pools: Horizontal container with header ── */
+  .bpmn-pool {
+    @apply border rounded-lg overflow-hidden;
+    background: var(--bpmn-pool-bg);
+    border-color: var(--bpmn-pool-border);
+  }
+  .bpmn-pool-header {
+    @apply flex items-center justify-center font-medium text-xs;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    width: var(--bpmn-pool-header-w);
+    background: var(--bpmn-pool-header);
+    color: var(--text-primary);
+  }
+
+  /* ── Lanes: Horizontal band ── */
+  .bpmn-lane {
+    @apply border-b relative;
+    border-color: var(--bpmn-lane-border);
+    min-height: 120px;
+  }
+  .bpmn-lane-label {
+    @apply absolute left-0 top-0 bottom-0 flex items-center justify-center
+           text-[10px] font-medium px-1;
+    writing-mode: vertical-rl;
+    background: var(--bpmn-lane-label-bg);
+    color: var(--text-secondary);
+    width: 24px;
+  }
+
+  /* ── Data Objects: Dog-eared rectangle ── */
+  .bpmn-data {
+    @apply relative border text-xs cursor-pointer;
+    width: 48px;
+    min-height: 60px;
+    background: var(--bpmn-data-bg);
+    border-color: var(--bpmn-data-border);
+    color: var(--text-secondary);
+    clip-path: polygon(0 0, 75% 0, 100% 20%, 100% 100%, 0 100%);
+  }
+
+  /* ── Text Annotations: Open bracket ── */
+  .bpmn-annotation {
+    @apply text-xs italic pl-2;
+    border-left: 2px solid var(--bpmn-annotation-color);
+    color: var(--bpmn-annotation-color);
+    min-width: 80px;
+  }
+
+  /* ── Validation overlay ── */
+  .bpmn-invalid {
+    border-color: var(--bpmn-invalid-border) !important;
+    background: var(--bpmn-invalid-bg) !important;
+  }
+  .bpmn-invalid-badge {
+    @apply absolute -top-2 -right-2 w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white;
+    background: var(--accent-red);
+  }
+
+  /* ── Selection & interaction states ── */
+  .bpmn-selected {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-blue) 40%, transparent);
+  }
+  .bpmn-drop-target {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 50%, transparent);
+  }
+}

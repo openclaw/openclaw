@@ -1,0 +1,12 @@
+{
+  "id": "cmo",
+  "name": "Chief Marketing Officer",
+  "bdi": {
+    "commitmentStrategy": "open-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 120,
+      "quickCheckMinutes": 30
+    },
+    "reasoningMethods": ["bayesian", "analogical", "stakeholder-analysis"]
+  }
+}

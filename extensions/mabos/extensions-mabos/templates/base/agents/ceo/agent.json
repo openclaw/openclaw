@@ -1,0 +1,12 @@
+{
+  "id": "ceo",
+  "name": "Chief Executive Officer",
+  "bdi": {
+    "commitmentStrategy": "open-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 240,
+      "quickCheckMinutes": 30
+    },
+    "reasoningMethods": ["stakeholder-analysis", "game-theory", "means-ends", "decision-theory"]
+  }
+}

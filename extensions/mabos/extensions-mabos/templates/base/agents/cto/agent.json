@@ -1,0 +1,12 @@
+{
+  "id": "cto",
+  "name": "Chief Technology Officer",
+  "bdi": {
+    "commitmentStrategy": "open-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 120,
+      "quickCheckMinutes": 30
+    },
+    "reasoningMethods": ["deductive", "causal", "analogical"]
+  }
+}

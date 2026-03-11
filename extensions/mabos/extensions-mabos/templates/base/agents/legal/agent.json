@@ -1,0 +1,12 @@
+{
+  "id": "legal",
+  "name": "Legal Counsel",
+  "bdi": {
+    "commitmentStrategy": "single-minded",
+    "cycleFrequency": {
+      "fullCycleMinutes": 240,
+      "quickCheckMinutes": 60
+    },
+    "reasoningMethods": ["deductive", "rule-based", "ethical"]
+  }
+}
