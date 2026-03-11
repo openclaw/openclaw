@@ -86,33 +86,17 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
-### OpenCode Zen
+### OpenCode
 
-- Provider: `opencode`
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
-- Example model: `opencode/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice opencode-zen`
+- Zen runtime provider: `opencode`
+- Go runtime provider: `opencode-go`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
+- CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
 {
   agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
-}
-```
-
-### OpenCode Go
-
-- Provider: `opencode-go`
-- Auth: `OPENCODE_API_KEY`
-- Example model: `opencode-go/kimi-k2.5`
-- CLI: `openclaw onboard --auth-choice opencode-go`
-- Model routing:
-  - `opencode-go/kimi-k2.5` and `opencode-go/glm-5` use OpenAI-compatible chat/completions
-  - `opencode-go/minimax-m2.5` uses Anthropic messages
-- OpenCode Go is separate from Zen and does not rewrite or replace `opencode/...` refs
-
-```json5
-{
-  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.5" } } },
 }
 ```
 

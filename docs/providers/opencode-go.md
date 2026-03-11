@@ -1,16 +1,16 @@
 ---
-summary: "Use OpenCode Go (Kimi, GLM, MiniMax) with OpenClaw"
+summary: "Use the OpenCode Go catalog with the shared OpenCode setup"
 read_when:
-  - You want OpenCode Go for model access
-  - You want OpenCode Go without changing OpenCode Zen behavior
+  - You want the OpenCode Go catalog
+  - You need the runtime model refs for Go-hosted models
 title: "OpenCode Go"
 ---
 
 # OpenCode Go
 
-OpenCode Go is a separate OpenCode provider path for the Go-hosted model catalog.
-It is configured with the `opencode-go` provider id and does **not** replace or
-change [OpenCode Zen](/providers/opencode).
+OpenCode Go is the Go catalog within [OpenCode](/providers/opencode).
+It uses the same `OPENCODE_API_KEY` as the Zen catalog, but keeps the runtime
+provider id `opencode-go` so upstream per-model routing stays correct.
 
 ## Supported models
 
@@ -37,16 +37,9 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 
 ## Routing behavior
 
-OpenCode Go uses two transport shapes internally:
-
-- `kimi-k2.5` and `glm-5` use an OpenAI-compatible chat/completions flow
-- `minimax-m2.5` uses an Anthropic messages flow
-
-OpenClaw handles that routing automatically when the model ref uses
-`opencode-go/...`.
+OpenClaw handles per-model routing automatically when the model ref uses `opencode-go/...`.
 
 ## Notes
 
-- Auth defaults to `OPENCODE_API_KEY`.
-- OpenCode Go is additive. Existing `opencode/...` Zen configs stay unchanged.
-- If you want the curated Zen catalog instead, use [OpenCode Zen](/providers/opencode).
+- Use [OpenCode](/providers/opencode) for the shared onboarding and catalog overview.
+- Runtime refs stay explicit: `opencode/...` for Zen, `opencode-go/...` for Go.
