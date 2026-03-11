@@ -55,6 +55,12 @@ export const SessionSchema = z
     parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    systemEvents: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),

@@ -86,6 +86,9 @@ export async function drainFormattedSystemEvents(params: {
 
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
+  if (params.cfg.session?.systemEvents?.enabled === false) {
+    return undefined;
+  }
   systemLines.push(
     ...queued
       .map((event) => {

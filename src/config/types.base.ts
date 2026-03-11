@@ -125,6 +125,11 @@ export type SessionConfig = {
   parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  /** Controls whether queued system events are injected into the next turn. */
+  systemEvents?: {
+    /** Default: true. Set false to drop queued system events instead of prepending them. */
+    enabled?: boolean;
+  };
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;

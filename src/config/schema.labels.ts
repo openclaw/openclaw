@@ -183,6 +183,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
   "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
   "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
+  "session.systemEvents": "Session System Events",
+  "session.systemEvents.enabled": "Inject Session System Events",
   "tools.elevated": "Elevated Tool Access",
   "tools.elevated.enabled": "Enable Elevated Tool Access",
   "tools.elevated.allowFrom": "Elevated Tool Allow Rules",

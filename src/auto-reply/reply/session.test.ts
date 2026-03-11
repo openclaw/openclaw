@@ -11,7 +11,11 @@ import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -1582,6 +1586,27 @@ describe("drainFormattedSystemEvents", () => {
       resetSystemEventsForTest();
       vi.useRealTimers();
     }
+  });
+
+  it("drops queued system events when session.systemEvents.enabled=false", async () => {
+    enqueueSystemEvent("exec started: brew install", { sessionKey: "agent:main:main" });
+
+    const result = await drainFormattedSystemEvents({
+      cfg: {
+        session: {
+          systemEvents: {
+            enabled: false,
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+
+    expect(result).toBeUndefined();
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    resetSystemEventsForTest();
   });
 });
 

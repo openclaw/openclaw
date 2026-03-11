@@ -1120,6 +1120,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
+  "session.systemEvents":
+    "Controls whether queued system events are injected into the next user-visible turn. Disable this when exec/tool lifecycle notices add too much conversational noise.",
+  "session.systemEvents.enabled":
+    "When true (default), queued system events are prepended as trusted System: lines on the next turn. Set false to silently drop queued system events instead of injecting them into the conversation.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":
