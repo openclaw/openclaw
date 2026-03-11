@@ -101,7 +101,7 @@ describe("hardenApprovedExecutionPaths", () => {
       mode: "build-plan",
       argv: ["env", "sh", "-c", "echo SAFE"],
       expectedArgv: () => ["env", "sh", "-c", "echo SAFE"],
-      expectedCmdText: "echo SAFE",
+      expectedCmdText: 'env sh -c "echo SAFE"',
       expectedCommandPreview: "echo SAFE",
     },
     {
@@ -144,7 +144,7 @@ describe("hardenApprovedExecutionPaths", () => {
       mode: "build-plan",
       argv: ["./env", "sh", "-c", "echo SAFE"],
       expectedArgv: () => ["./env", "sh", "-c", "echo SAFE"],
-      expectedCmdText: "echo SAFE",
+      expectedCmdText: './env sh -c "echo SAFE"',
       checkRawCommandMatchesArgv: true,
       expectedCommandPreview: "echo SAFE",
     },
@@ -175,10 +175,10 @@ describe("hardenApprovedExecutionPaths", () => {
           }
           expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
           if (testCase.expectedCmdText) {
-            expect(prepared.cmdText).toBe(testCase.expectedCmdText);
+            expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
           }
           if (testCase.checkRawCommandMatchesArgv) {
-            expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
+            expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
           }
           if ("expectedCommandPreview" in testCase) {
             expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
