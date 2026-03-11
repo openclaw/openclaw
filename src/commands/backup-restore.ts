@@ -188,6 +188,10 @@ function isDirectoryArchiveEntryType(type: string): boolean {
   return type === "Directory";
 }
 
+function isPayloadArchiveEntryType(type: string): boolean {
+  return isFileArchiveEntryType(type) || isDirectoryArchiveEntryType(type);
+}
+
 function buildCoveredAssetArchivePath(params: {
   kind: BackupAssetKind;
   coveredSourcePath: string;
@@ -223,9 +227,13 @@ function buildCoveredAssetArchivePath(params: {
       const candidate = path.posix.join(params.stateArchivePath, toArchiveSubpath(relative));
       const exactEntryType = params.entryTypeByPath.get(candidate);
       const hasExactEntry = typeof exactEntryType === "string";
-      const hasNestedEntry = [...params.entryPaths].some(
-        (entryPath) => entryPath !== candidate && isArchivePathWithin(entryPath, candidate),
-      );
+      const hasNestedEntry = [...params.entryPaths].some((entryPath) => {
+        if (entryPath === candidate || !isArchivePathWithin(entryPath, candidate)) {
+          return false;
+        }
+        const nestedEntryType = params.entryTypeByPath.get(entryPath);
+        return typeof nestedEntryType === "string" && isPayloadArchiveEntryType(nestedEntryType);
+      });
       if (params.kind === "config") {
         if (
           hasExactEntry &&

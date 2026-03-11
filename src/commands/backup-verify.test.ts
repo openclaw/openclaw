@@ -197,6 +197,59 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("fails when the manifest contains duplicate singleton assets", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-duplicate-assets-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const payloadA = path.join(root, "payload", "posix", "tmp", ".openclaw-a");
+      const payloadB = path.join(root, "payload", "posix", "tmp", ".openclaw-b");
+      await fs.mkdir(payloadA, { recursive: true });
+      await fs.mkdir(payloadB, { recursive: true });
+      await fs.writeFile(path.join(payloadA, "state.txt"), "a\n", "utf8");
+      await fs.writeFile(path.join(payloadB, "state.txt"), "b\n", "utf8");
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw-a",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw-a`,
+          },
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw-b",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw-b`,
+          },
+        ],
+      };
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        "utf8",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /duplicate state assets/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when the manifest references a missing asset payload", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-asset-"));
     const archivePath = path.join(tempDir, "broken.tar.gz");

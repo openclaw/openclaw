@@ -149,6 +149,8 @@ function parseManifest(raw: string): BackupManifest {
   }
 
   const assets: BackupManifestAsset[] = [];
+  const seenSingletonKinds = new Set<string>();
+  const seenAssetEntries = new Set<string>();
   for (const asset of parsed.assets) {
     if (!isRecord(asset)) {
       throw new Error("Backup manifest contains a non-object asset.");
@@ -165,10 +167,25 @@ function parseManifest(raw: string): BackupManifest {
     if (typeof asset.archivePath !== "string" || !asset.archivePath.trim()) {
       throw new Error("Backup manifest asset is missing archivePath.");
     }
+    if (asset.kind !== "workspace") {
+      if (seenSingletonKinds.has(asset.kind)) {
+        throw new Error(`Backup manifest contains duplicate ${asset.kind} assets.`);
+      }
+      seenSingletonKinds.add(asset.kind);
+    }
+    const sourcePath = asset.sourcePath.trim();
+    const archivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
+    const duplicateEntryKey = `${asset.kind}\u0000${sourcePath}\u0000${archivePath}`;
+    if (seenAssetEntries.has(duplicateEntryKey)) {
+      throw new Error(
+        `Backup manifest contains duplicate asset entry: ${asset.kind} ${sourcePath}`,
+      );
+    }
+    seenAssetEntries.add(duplicateEntryKey);
     assets.push({
       kind: asset.kind,
-      sourcePath: asset.sourcePath,
-      archivePath: asset.archivePath,
+      sourcePath,
+      archivePath,
     });
   }
 
