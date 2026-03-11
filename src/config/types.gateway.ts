@@ -186,6 +186,8 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
+  /** If false, disable remote credential fallback surfaces. */
+  enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
