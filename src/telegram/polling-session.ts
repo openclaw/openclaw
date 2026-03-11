@@ -187,22 +187,27 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
-    bot.api.config.use((prev, method, payload, signal) => {
+    bot.api.config.use(async (prev, method, payload, signal) => {
       if (method === "getUpdates") {
         lastGetUpdatesAt = Date.now();
-        // Reset backoff after a successful getUpdates cycle so that
+      }
+      const result = await prev(method, payload, signal);
+      if (method === "getUpdates") {
+        // Reset backoff after a *successful* getUpdates response so that
         // transient network blips don't permanently inflate the delay.
         this.#restartAttempts = 0;
       }
-      return prev(method, payload, signal);
+      return result;
     });
 
     const runner = run(bot, this.opts.runnerOptions);
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
     let stopPromise: Promise<void> | undefined;
-    let stalledRestart = false;
+    let restartReason: "stall" | "zombie" | undefined;
+    let stopRequested = false;
     const stopRunner = () => {
+      stopRequested = true;
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
         .then(() => undefined)
@@ -238,7 +243,7 @@ export class TelegramPollingSession {
       // --- existing transport-level stall check ---
       const elapsed = Date.now() - lastGetUpdatesAt;
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
-        stalledRestart = true;
+        restartReason = "stall";
         this.opts.log(
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
         );
@@ -256,14 +261,14 @@ export class TelegramPollingSession {
           accountId: this.opts.accountId,
         });
         const lastInbound = activity.inboundAt;
-        // Only check if we have ever received a message AND enough time
-        // has passed since the polling cycle started (avoid false
-        // positives during quiet periods right after startup).
-        if (lastInbound !== null) {
+        // Only check if we received a message *during this cycle* and it
+        // has since gone stale.  The `lastInbound >= pollingStartedAt`
+        // guard prevents false positives from cross-cycle timestamps
+        // (the channel-activity singleton persists across restarts).
+        if (lastInbound !== null && lastInbound >= pollingStartedAt) {
           const inboundAge = Date.now() - lastInbound;
-          const sinceStart = Date.now() - pollingStartedAt;
-          if (inboundAge > zombieTimeoutMs && sinceStart > zombieTimeoutMs) {
-            stalledRestart = true;
+          if (inboundAge > zombieTimeoutMs) {
+            restartReason = "zombie";
             this.opts.log(
               `[telegram] Zombie polling detected (last inbound ${formatDurationPrecise(inboundAge)} ago, threshold ${formatDurationPrecise(zombieTimeoutMs)}); forcing restart.`,
             );
@@ -276,24 +281,41 @@ export class TelegramPollingSession {
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
-      // Race runner.task() against a drain timeout.  If runner.stop() was
-      // called (e.g. by the stall/zombie watchdog) but the grammY runner's
-      // task promise never settles, we force-break out after a timeout so
-      // the outer loop can create a fresh bot + runner.
+      // Wait for the runner task to complete, but guard against hangs.
+      // If runner.stop() was called (e.g. by the stall/zombie watchdog) but
+      // the grammY runner's task promise never settles, we force-break out
+      // after a timeout so the outer loop can create a fresh bot + runner.
       const taskPromise = runner.task() ?? Promise.resolve();
       let drainTimedOut = false;
+      // The drain timer only activates once stopRequested is true.
+      // During healthy polling, runner.task() stays pending (that's normal)
+      // and the drain timer never fires.
       const drainTimer = new Promise<void>((resolve) => {
-        const t = setTimeout(() => {
-          drainTimedOut = true;
-          resolve();
-        }, RUNNER_TASK_DRAIN_TIMEOUT_MS);
-        if (typeof t === "object" && "unref" in t) {
-          t.unref();
+        const checkInterval = setInterval(() => {
+          if (!stopRequested) {
+            return;
+          }
+          clearInterval(checkInterval);
+          const t = setTimeout(() => {
+            drainTimedOut = true;
+            resolve();
+          }, RUNNER_TASK_DRAIN_TIMEOUT_MS);
+          if (typeof t === "object" && "unref" in t) {
+            t.unref();
+          }
+          // Cancel the timer early if runner.task() settles on its own.
+          taskPromise.then(
+            () => clearTimeout(t),
+            () => clearTimeout(t),
+          );
+        }, 1000);
+        if (typeof checkInterval === "object" && "unref" in checkInterval) {
+          checkInterval.unref();
         }
-        // Cancel the timer early if runner.task() settles on its own.
+        // Also cancel the check interval if taskPromise settles normally.
         taskPromise.then(
-          () => clearTimeout(t),
-          () => clearTimeout(t),
+          () => clearInterval(checkInterval),
+          () => clearInterval(checkInterval),
         );
       });
       // Wrap taskPromise so rejections don't escape Promise.race unhandled.
@@ -320,11 +342,14 @@ export class TelegramPollingSession {
       if (this.opts.abortSignal?.aborted) {
         return "exit";
       }
-      const reason = stalledRestart
-        ? "polling stall detected"
-        : this.#forceRestarted
-          ? "unhandled network error"
-          : "runner stopped (maxRetryTime exceeded or graceful stop)";
+      const reason =
+        restartReason === "stall"
+          ? "polling stall detected"
+          : restartReason === "zombie"
+            ? "zombie polling detected"
+            : this.#forceRestarted
+              ? "unhandled network error"
+              : "runner stopped (maxRetryTime exceeded or graceful stop)";
       this.#forceRestarted = false;
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
