@@ -9,7 +9,7 @@ describe("buildInboundMediaNote", () => {
       MediaType: "image/png",
       MediaUrl: "/tmp/a.png",
     });
-    expect(note).toBe("[media attached: /tmp/a.png (image/png) | /tmp/a.png]");
+    expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
   });
 
   it("formats multiple MediaPaths as numbered media notes", () => {
@@ -20,9 +20,9 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe(
       [
         "[media attached: 3 files]",
-        "[media attached 1/3: /tmp/a.png | /tmp/a.png]",
-        "[media attached 2/3: /tmp/b.png | /tmp/b.png]",
-        "[media attached 3/3: /tmp/c.png | /tmp/c.png]",
+        "[media attached 1/3: /tmp/a.png]",
+        "[media attached 2/3: /tmp/b.png]",
+        "[media attached 3/3: /tmp/c.png]",
       ].join("\n"),
     );
   });
