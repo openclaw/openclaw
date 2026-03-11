@@ -179,6 +179,12 @@ describe("web_search brave language param normalization", () => {
     expect(normalizeBraveLanguageParams({ search_lang: "zhtw" })).toEqual({
       invalidField: "search_lang",
     });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-foobar" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-hanst-cn" })).toEqual({
+      invalidField: "search_lang",
+    });
     expect(normalizeBraveLanguageParams({ search_lang: `zh-${"a".repeat(80)}` })).toEqual({
       invalidField: "search_lang",
     });

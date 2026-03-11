@@ -1014,6 +1014,10 @@ function resolveSearchCount(value: unknown, fallback: number): number {
   return clamped;
 }
 
+function isChineseRegionSubtag(value: string): boolean {
+  return /^[a-z]{2}$|^\d{3}$/.test(value);
+}
+
 function canonicalizeChineseSearchLang(value: string): string {
   const lowered = value.toLowerCase();
 
@@ -1043,15 +1047,27 @@ function canonicalizeChineseSearchLang(value: string): string {
   }
 
   const parts = normalized.split("-");
-  if (parts.includes("hant")) {
-    return "zh-hant";
-  }
-  if (parts.includes("hans")) {
-    return "zh-hans";
+  if (parts.length < 2 || parts.length > 3) {
+    return lowered;
   }
 
-  const region = parts[1];
-  if (region === "tw" || region === "hk" || region === "mo") {
+  const firstSubtag = parts[1];
+  const secondSubtag = parts[2];
+
+  // Script-driven forms: zh-Hans and zh-Hant (optionally with a region tail).
+  if (firstSubtag === "hans" || firstSubtag === "hant") {
+    if (secondSubtag && !isChineseRegionSubtag(secondSubtag)) {
+      return lowered;
+    }
+    return firstSubtag === "hant" ? "zh-hant" : "zh-hans";
+  }
+
+  // Region-driven forms: zh-CN, zh-TW, zh_HK, etc. Reject arbitrary subtags.
+  if (!isChineseRegionSubtag(firstSubtag) || secondSubtag) {
+    return lowered;
+  }
+
+  if (firstSubtag === "tw" || firstSubtag === "hk" || firstSubtag === "mo") {
     return "zh-hant";
   }
   return "zh-hans";
