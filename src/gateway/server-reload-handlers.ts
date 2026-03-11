@@ -6,7 +6,7 @@ import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../conf
 import { isRestartEnabled } from "../config/commands.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { clearSessionModelFields } from "../config/sessions/store.js";
+import { archiveAndHandoffOnModelChange, clearSessionModelFields } from "../config/sessions/store.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -116,24 +116,42 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.resetSessionModels) {
       const agentIds = listAgentIds(nextConfig);
+      let totalArchived = 0;
+      let totalHandoffs = 0;
       let totalCleared = 0;
       for (const agentId of agentIds) {
         try {
           const storePath = resolveStorePath(nextConfig.session?.store, { agentId });
-          const cleared = await clearSessionModelFields(storePath);
-          totalCleared += cleared;
+          const result = await archiveAndHandoffOnModelChange({
+            storePath,
+            newModel: nextConfig.agents?.defaults?.model,
+          });
+          totalArchived += result.archived;
+          totalHandoffs += result.handoffs;
         } catch (err) {
-          // Session store may not exist yet for some agents — ignore ENOENT.
           if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            // Fall back to clearing model fields only if handoff fails.
+            try {
+              const storePath = resolveStorePath(nextConfig.session?.store, { agentId });
+              const cleared = await clearSessionModelFields(storePath);
+              totalCleared += cleared;
+            } catch {
+              // best-effort
+            }
             params.logReload.warn(
-              `failed to clear session models for agent ${agentId}: ${String(err)}`,
+              `failed to archive/handoff sessions for agent ${agentId}: ${String(err)}`,
             );
           }
         }
       }
+      if (totalArchived > 0 || totalHandoffs > 0) {
+        params.logReload.info(
+          `model change: archived ${totalArchived} session(s), created ${totalHandoffs} handoff(s) for new default model`,
+        );
+      }
       if (totalCleared > 0) {
         params.logReload.info(
-          `cleared persisted model from ${totalCleared} session(s) to pick up new default model`,
+          `cleared persisted model from ${totalCleared} session(s) (fallback)`,
         );
       }
     }

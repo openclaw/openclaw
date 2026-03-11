@@ -43,7 +43,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
+import { buildHandoffAwareResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -290,7 +290,13 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
+  const baseBodyFinal = isBareSessionReset
+    ? buildHandoffAwareResetPrompt({
+        cfg,
+        storePath,
+        sessionKey,
+      })
+    : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
