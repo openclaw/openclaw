@@ -18,6 +18,14 @@ const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 
 /**
+ * Maximum time to wait for `runner.task()` to settle after `runner.stop()`
+ * has been called.  If the grammY runner hangs (stop doesn't resolve the
+ * task promise), we force-break out of the polling cycle so `runUntilAbort`
+ * can create a fresh bot + runner.
+ */
+const RUNNER_TASK_DRAIN_TIMEOUT_MS = 30_000;
+
+/**
  * Maximum time the polling loop can run without any inbound message before
  * we treat the connection as a zombie and force a restart.  This catches
  * the case where `getUpdates` calls succeed on schedule (so the existing
@@ -268,7 +276,47 @@ export class TelegramPollingSession {
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
-      await runner.task();
+      // Race runner.task() against a drain timeout.  If runner.stop() was
+      // called (e.g. by the stall/zombie watchdog) but the grammY runner's
+      // task promise never settles, we force-break out after a timeout so
+      // the outer loop can create a fresh bot + runner.
+      const taskPromise = runner.task() ?? Promise.resolve();
+      let drainTimedOut = false;
+      const drainTimer = new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          drainTimedOut = true;
+          resolve();
+        }, RUNNER_TASK_DRAIN_TIMEOUT_MS);
+        if (typeof t === "object" && "unref" in t) {
+          t.unref();
+        }
+        // Cancel the timer early if runner.task() settles on its own.
+        taskPromise.then(
+          () => clearTimeout(t),
+          () => clearTimeout(t),
+        );
+      });
+      // Wrap taskPromise so rejections don't escape Promise.race unhandled.
+      const safeTask = taskPromise.then(
+        () => {},
+        () => {},
+      );
+      await Promise.race([safeTask, drainTimer]);
+
+      if (drainTimedOut) {
+        // runner.task() hung — force restart.
+        this.opts.log(
+          `[telegram] runner.task() did not settle within ${formatDurationPrecise(RUNNER_TASK_DRAIN_TIMEOUT_MS)} after stop; forcing restart.`,
+        );
+        this.#forceRestarted = false;
+        const shouldRestart = await this.#waitBeforeRestart(
+          (delay) => `Telegram polling runner hung; restarting in ${delay}.`,
+        );
+        return shouldRestart ? "continue" : "exit";
+      }
+      // Task settled — re-await to propagate the original result/error.
+      await taskPromise;
+
       if (this.opts.abortSignal?.aborted) {
         return "exit";
       }
