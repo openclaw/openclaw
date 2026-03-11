@@ -244,6 +244,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/allowlist store account scoping: keep `/allowlist ... --store` writes scoped to the selected account and clear legacy unscoped entries when removing default-account store access, preventing cross-account default allowlist bleed-through from legacy pairing-store reads. Thanks @tdjackey for reporting and @vincentkoc for the fix.
 - Security/Nostr: harden profile mutation/import loopback guards by failing closed on non-loopback forwarded client headers (`x-forwarded-for` / `x-real-ip`) and rejecting `sec-fetch-site: cross-site`; adds regression coverage for proxy-forwarded and browser cross-site mutation attempts.
 - CLI/bootstrap Node version hint maintenance: replace hardcoded nvm `22` instructions in `openclaw.mjs` with `MIN_NODE_MAJOR` interpolation so future minimum-Node bumps keep startup guidance in sync automatically. (#39056) Thanks @onstash.
+- Auth/status display: clear stale access-token expiry values from auto-renewable OAuth profiles so `openclaw models auth status` no longer shows misleading "ok — expires in 0m" for credentials with a valid refresh token. (#43122, fixes #42721)
 
 ## 2026.3.2
 

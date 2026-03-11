@@ -63,6 +63,11 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["anthropic:expired"]).toBe("ok");
     expect(statuses["anthropic:api"]).toBe("static");
 
+    // Genuinely valid "ok" profile preserves its real expiry values
+    const okProfile = summary.profiles.find((p) => p.profileId === "anthropic:ok");
+    expect(okProfile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(okProfile?.remainingMs).toBe(DEFAULT_OAUTH_WARN_MS + 60_000);
+
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
     expect(provider?.status).toBe("ok");
   });
@@ -90,6 +95,41 @@ describe("buildAuthHealthSummary", () => {
     const statuses = profileStatuses(summary);
 
     expect(statuses["google:no-refresh"]).toBe("expired");
+  });
+
+  it("clears stale expiry for refreshable expired/expiring OAuth profiles", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "anthropic:expired-refreshable": {
+          type: "oauth" as const,
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh",
+          expires: now - 86_400_000,
+        },
+        "anthropic:expiring-refreshable": {
+          type: "oauth" as const,
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh",
+          expires: now + 10_000,
+        },
+      },
+    };
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+    const expired = summary.profiles.find((p) => p.profileId === "anthropic:expired-refreshable");
+    expect(expired?.status).toBe("ok");
+    expect(expired?.expiresAt).toBeUndefined();
+    expect(expired?.remainingMs).toBeUndefined();
+    const expiring = summary.profiles.find((p) => p.profileId === "anthropic:expiring-refreshable");
+    expect(expiring?.status).toBe("ok");
+    expect(expiring?.expiresAt).toBeUndefined();
+    expect(expiring?.remainingMs).toBeUndefined();
   });
 
   it("marks token profiles with invalid expires as missing with reason code", () => {

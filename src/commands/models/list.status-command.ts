@@ -618,7 +618,9 @@ export async function modelsStatusCommand(
             ? ""
             : profile.expiresAt
               ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
-              : " expires unknown";
+              : profile.status !== "ok"
+                ? " expires unknown"
+                : "";
         runtime.log(`  - ${label} ${status}${expiry}`);
       }
     }
