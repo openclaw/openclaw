@@ -20,7 +20,6 @@ import {
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
   isNumericTargetId,
@@ -43,6 +42,7 @@ import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
+import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
@@ -595,8 +595,8 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: chunkTextForOutbound,
-    chunkerMode: "text",
+    chunker: (text, limit) => getZalouserRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
     textChunkLimit: 2000,
     sendPayload: async (ctx) =>
       await sendPayloadWithChunkedTextAndMedia({
@@ -613,6 +613,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       const result = await sendMessageZalouser(target.threadId, text, {
         profile: account.profile,
         isGroup: target.isGroup,
+        textMode: "markdown",
       });
       return buildChannelSendResult("zalouser", result);
     },
@@ -624,6 +625,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         isGroup: target.isGroup,
         mediaUrl,
         mediaLocalRoots,
+        textMode: "markdown",
       });
       return buildChannelSendResult("zalouser", result);
     },

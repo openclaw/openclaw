@@ -1,3 +1,4 @@
+import { parseZalouserTextStyles } from "./text-styles.js";
 import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
 import {
   sendZaloDeliveredEvent,
@@ -16,6 +17,14 @@ export async function sendMessageZalouser(
   text: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
+  if (options.textMode === "markdown") {
+    const formatted = parseZalouserTextStyles(text);
+    return await sendZaloTextMessage(threadId, formatted.text, {
+      ...options,
+      textStyles: formatted.styles.length > 0 ? formatted.styles : undefined,
+    });
+  }
+
   return await sendZaloTextMessage(threadId, text, options);
 }
 
@@ -24,7 +33,7 @@ export async function sendImageZalouser(
   imageUrl: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
-  return await sendZaloTextMessage(threadId, options.caption ?? "", {
+  return await sendMessageZalouser(threadId, options.caption ?? "", {
     ...options,
     mediaUrl: imageUrl,
   });

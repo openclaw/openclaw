@@ -16,6 +16,7 @@ import {
   sendZaloTextMessage,
   sendZaloTypingEvent,
 } from "./zalo-js.js";
+import { TextStyle } from "./zca-client.js";
 
 vi.mock("./zalo-js.js", () => ({
   sendZaloTextMessage: vi.fn(),
@@ -43,36 +44,68 @@ describe("zalouser send helpers", () => {
     mockSendSeen.mockReset();
   });
 
-  it("delegates text send to JS transport", async () => {
+  it("keeps plain text literal by default", async () => {
     mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-1" });
 
-    const result = await sendMessageZalouser("thread-1", "hello", {
+    const result = await sendMessageZalouser("thread-1", "**hello**", {
       profile: "default",
       isGroup: true,
     });
 
-    expect(mockSendText).toHaveBeenCalledWith("thread-1", "hello", {
-      profile: "default",
-      isGroup: true,
-    });
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-1",
+      "**hello**",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: true,
+      }),
+    );
     expect(result).toEqual({ ok: true, messageId: "mid-1" });
   });
 
-  it("maps image helper to media send", async () => {
+  it("formats markdown text when markdown mode is enabled", async () => {
+    mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-1b" });
+
+    await sendMessageZalouser("thread-1", "**hello**", {
+      profile: "default",
+      isGroup: true,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-1",
+      "hello",
+      expect.objectContaining({
+        profile: "default",
+        isGroup: true,
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 5, st: TextStyle.Bold }],
+      }),
+    );
+  });
+
+  it("formats image captions in markdown mode", async () => {
     mockSendText.mockResolvedValueOnce({ ok: true, messageId: "mid-2" });
 
     await sendImageZalouser("thread-2", "https://example.com/a.png", {
       profile: "p2",
-      caption: "cap",
+      caption: "_cap_",
       isGroup: false,
+      textMode: "markdown",
     });
 
-    expect(mockSendText).toHaveBeenCalledWith("thread-2", "cap", {
-      profile: "p2",
-      caption: "cap",
-      isGroup: false,
-      mediaUrl: "https://example.com/a.png",
-    });
+    expect(mockSendText).toHaveBeenCalledWith(
+      "thread-2",
+      "cap",
+      expect.objectContaining({
+        profile: "p2",
+        caption: "_cap_",
+        isGroup: false,
+        mediaUrl: "https://example.com/a.png",
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 3, st: TextStyle.Italic }],
+      }),
+    );
   });
 
   it("delegates link helper to JS transport", async () => {

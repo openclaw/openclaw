@@ -713,6 +713,7 @@ async function deliverZalouserReply(params: {
         profile,
         mediaUrl,
         isGroup,
+        textMode: "markdown",
       });
       statusSink?.({ lastOutboundAt: Date.now() });
     },
@@ -734,7 +735,11 @@ async function deliverZalouserReply(params: {
     logVerbose(core, runtime, `Sending ${chunks.length} text chunk(s) to ${chatId}`);
     for (const chunk of chunks) {
       try {
-        await sendMessageZalouser(chatId, chunk, { profile, isGroup });
+        await sendMessageZalouser(chatId, chunk, {
+          profile,
+          isGroup,
+          textMode: "markdown",
+        });
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error(`Zalouser message send failed: ${String(err)}`);

@@ -1,10 +1,12 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
 import {
   installSendPayloadContractSuite,
   primeSendMock,
 } from "../../../src/test-utils/send-payload-contract.js";
 import { zalouserPlugin } from "./channel.js";
+import { setZalouserRuntime } from "./runtime.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
@@ -38,6 +40,13 @@ describe("zalouserPlugin outbound sendPayload", () => {
   let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>;
 
   beforeEach(async () => {
+    setZalouserRuntime({
+      channel: {
+        text: {
+          chunkMarkdownText,
+        },
+      },
+    } as never);
     const mod = await import("./send.js");
     mockedSend = vi.mocked(mod.sendMessageZalouser);
     mockedSend.mockClear();
@@ -55,7 +64,7 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(mockedSend).toHaveBeenCalledWith(
       "1471383327500481391",
       "hello group",
-      expect.objectContaining({ isGroup: true }),
+      expect.objectContaining({ isGroup: true, textMode: "markdown" }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g1" });
   });
@@ -71,7 +80,7 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(mockedSend).toHaveBeenCalledWith(
       "987654321",
       "hello",
-      expect.objectContaining({ isGroup: false }),
+      expect.objectContaining({ isGroup: false, textMode: "markdown" }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-d1" });
   });
@@ -87,9 +96,24 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(mockedSend).toHaveBeenCalledWith(
       "g-1471383327500481391",
       "hello native group",
-      expect.objectContaining({ isGroup: true }),
+      expect.objectContaining({ isGroup: true, textMode: "markdown" }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g-native" });
+  });
+
+  it("uses markdown-aware chunking for long fenced code payloads", async () => {
+    const codeLine = "const value = 1234567890;";
+    const text = `\`\`\`ts\n${Array.from({ length: 140 }, () => codeLine).join("\n")}\n\`\`\``;
+    const expectedChunks = chunkMarkdownText(text, 2000);
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-code" });
+
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text }),
+      to: "987654321",
+    });
+
+    expect(mockedSend.mock.calls.map((call) => call[1])).toEqual(expectedChunks);
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-code" });
   });
 
   installSendPayloadContractSuite({
