@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
+const NGROK_COMMAND_TIMEOUT_MS = 30_000;
+const NGROK_AVAILABILITY_TIMEOUT_MS = 5_000;
+
 /**
  * Tunnel configuration for exposing the webhook server.
  */
@@ -169,6 +172,25 @@ async function runNgrokCommand(args: string[]): Promise<string> {
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      proc.kill("SIGKILL");
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error(`ngrok command timed out after ${NGROK_COMMAND_TIMEOUT_MS}ms`));
+    }, NGROK_COMMAND_TIMEOUT_MS);
+    timeout.unref?.();
+
+    const finishReject = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    };
 
     proc.stdout.on("data", (data) => {
       stdout += data.toString();
@@ -178,6 +200,11 @@ async function runNgrokCommand(args: string[]): Promise<string> {
     });
 
     proc.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       if (code === 0) {
         resolve(stdout);
       } else {
@@ -185,7 +212,9 @@ async function runNgrokCommand(args: string[]): Promise<string> {
       }
     });
 
-    proc.on("error", reject);
+    proc.on("error", (error) => {
+      finishReject(error instanceof Error ? error : new Error(String(error)));
+    });
   });
 }
 
@@ -197,12 +226,32 @@ export async function isNgrokAvailable(): Promise<boolean> {
     const proc = spawn("ngrok", ["version"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let settled = false;
+    const timeout = setTimeout(() => {
+      proc.kill("SIGKILL");
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(false);
+    }, NGROK_AVAILABILITY_TIMEOUT_MS);
+    timeout.unref?.();
 
     proc.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       resolve(code === 0);
     });
 
     proc.on("error", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       resolve(false);
     });
   });
