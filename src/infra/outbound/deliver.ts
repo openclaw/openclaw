@@ -23,7 +23,6 @@ function buildFooterText(cfg: OpenClawConfig): string | null {
   return `🧠 当前模型：unknown`;
 }
 
-
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";

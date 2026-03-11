@@ -88,7 +88,7 @@ export type OpenClawConfig = {
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
     };
-  
+
     footer?: {
       /** Enable footer display on outgoing messages. */
       enabled?: boolean;
@@ -97,7 +97,7 @@ export type OpenClawConfig = {
       /** Custom footer template. Use {model} as placeholder for model name. */
       template?: string;
     };
-};
+  };
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
