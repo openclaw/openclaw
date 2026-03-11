@@ -73,7 +73,7 @@ function isEvergreenMemoryPath(filePath: string): boolean {
   if (normalized === "MEMORY.md" || normalized === "memory.md") {
     return true;
   }
-  if (!normalized.startsWith("memory/")) {
+  if (!normalized.toLowerCase().startsWith("memory/")) {
     return false;
   }
   return !DATED_MEMORY_PATH_RE.test(normalized);
