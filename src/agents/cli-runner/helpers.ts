@@ -38,6 +38,8 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function buildSystemPrompt(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -171,7 +173,11 @@ function pickSessionId(
   for (const field of fields) {
     const value = parsed[field];
     if (typeof value === "string" && value.trim()) {
-      return value.trim();
+      const trimmed = value.trim();
+      if (backend.sessionIdFormat === "uuid" && !UUID_RE.test(trimmed)) {
+        continue;
+      }
+      return trimmed;
     }
   }
   return undefined;

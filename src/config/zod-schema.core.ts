@@ -466,6 +466,7 @@ export const CliBackendSchema = z
       .union([z.literal("always"), z.literal("existing"), z.literal("none")])
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
+    sessionIdFormat: z.union([z.literal("any"), z.literal("uuid")]).optional(),
     systemPromptArg: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
     systemPromptWhen: z

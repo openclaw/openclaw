@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCliBackendConfig } from "./cli-backends.js";
 import { runCliAgent } from "./cli-runner.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import { parseCliJson, parseCliJsonl, resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
@@ -55,6 +56,48 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
     cancel: vi.fn(),
   };
 }
+
+describe("CLI session id parsing", () => {
+  it("ignores non-UUID session ids for claude-cli outputs", () => {
+    const backend = resolveCliBackendConfig("claude-cli")?.config;
+
+    expect(backend).toBeTruthy();
+    expect(
+      parseCliJson('{"session_id":"rate-limited","message":{"text":"hello"}}', backend!),
+    ).toMatchObject({
+      text: "hello",
+      sessionId: undefined,
+    });
+  });
+
+  it("keeps valid UUID session ids for claude-cli outputs", () => {
+    const backend = resolveCliBackendConfig("claude-cli")?.config;
+    const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+
+    expect(backend).toBeTruthy();
+    expect(
+      parseCliJson(`{"session_id":"${sessionId}","message":{"text":"hello"}}`, backend!),
+    ).toMatchObject({
+      text: "hello",
+      sessionId,
+    });
+  });
+
+  it("keeps non-UUID thread ids for codex-cli jsonl outputs", () => {
+    const backend = resolveCliBackendConfig("codex-cli")?.config;
+
+    expect(backend).toBeTruthy();
+    expect(
+      parseCliJsonl(
+        '{"thread_id":"thread_123"}\n{"item":{"type":"message","text":"hello"}}',
+        backend!,
+      ),
+    ).toMatchObject({
+      text: "hello",
+      sessionId: "thread_123",
+    });
+  });
+});
 
 describe("runCliAgent with process supervisor", () => {
   beforeEach(() => {

@@ -56,6 +56,7 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   sessionArg: "--session-id",
   sessionMode: "always",
   sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  sessionIdFormat: "uuid",
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
   systemPromptWhen: "first",
@@ -139,6 +140,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     modelAliases: { ...base.modelAliases, ...override.modelAliases },
     clearEnv: Array.from(new Set([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])])),
     sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
+    sessionIdFormat: override.sessionIdFormat ?? base.sessionIdFormat,
     sessionArgs: override.sessionArgs ?? base.sessionArgs,
     resumeArgs: override.resumeArgs ?? base.resumeArgs,
     reliability: {

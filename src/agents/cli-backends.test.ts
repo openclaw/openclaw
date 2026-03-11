@@ -65,6 +65,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
+    expect(resolved?.config.sessionIdFormat).toBe("uuid");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
@@ -90,6 +91,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
+    expect(resolved?.config.sessionIdFormat).toBe("uuid");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
@@ -164,5 +166,25 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     ]);
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
+  });
+
+  it("allows overriding claude session id parsing back to any string", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              sessionIdFormat: "any",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.sessionIdFormat).toBe("any");
   });
 });
