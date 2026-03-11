@@ -130,15 +130,11 @@ export async function modelsAuthCleanCommand(
   }
 
   // Load the store for inspection (collect storeProfileIds and storeOrder).
-  // During dry-run: readOnly:true — no writes of any kind, including legacy migration.
-  // During actual cleanup: readOnly:false — allows the one-time legacy auth.json →
-  // auth-profiles.json migration to persist before updateAuthProfileStoreWithLock's
-  // ensureAuthStoreFile can create an empty placeholder (which would cause the
-  // write-enabled load inside the lock to find an empty store and skip all removals).
-  // The write-enabled load for profile mutations is still deferred to
-  // updateAuthProfileStoreWithLock; this probe only triggers migration when needed.
-  // (#2914491523, #2914711181)
-  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: opts.dryRun === true };
+  // Probe phase is always readOnly:true — a write-capable store must never be opened
+  // before guards pass and cleanup is confirmed to proceed. A separate write-enabled
+  // load is deferred to after all guards pass (see below) to trigger legacy migration.
+  // (#2914491523, #2914711181, #2915530629)
+  const storeLoadOpts = { allowKeychainPrompt: false, readOnly: true };
   const store = isMainAgentDir
     ? ensureAuthProfileStore(agentDir, storeLoadOpts)
     : loadAgentLocalAuthProfileStore(agentDir, storeLoadOpts);
@@ -250,6 +246,19 @@ export async function modelsAuthCleanCommand(
       runtime.log("\n(dry run -- no changes written)");
     }
     return;
+  }
+
+  // Trigger legacy auth.json → auth-profiles.json migration with a write-enabled
+  // load now that all guards have passed and cleanup is confirmed to proceed.
+  // The probe above used readOnly:true (suppressing migration writes); running a
+  // readOnly:false load here ensures the legacy store is persisted before
+  // updateAuthProfileStoreWithLock's ensureAuthStoreFile can create an empty
+  // placeholder (which would cause the lock-internal load to see an empty store
+  // and skip all profile removals). (#2914491523, #2914711181)
+  if (isMainAgentDir) {
+    ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false, readOnly: false });
+  } else {
+    loadAgentLocalAuthProfileStore(agentDir, { allowKeychainPrompt: false, readOnly: false });
   }
 
   // Track actual removals inside the lock (concurrent gateway writes may have
