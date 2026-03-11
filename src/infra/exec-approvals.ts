@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  normalizeFilesystemPermissionsConfig,
+  resolveFilesystemPermissions,
+  type FilesystemPermissionsConfig,
+  type ResolvedFilesystemPermissions,
+} from "./filesystem-permissions.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
@@ -101,6 +107,10 @@ export type ExecApprovalsDefaults = {
   autoAllowSkills?: boolean;
 };
 
+export type ExecApprovalsPermissions = {
+  filesystem?: FilesystemPermissionsConfig;
+};
+
 export type ExecAllowlistEntry = {
   id?: string;
   pattern: string;
@@ -119,6 +129,7 @@ export type ExecApprovalsFile = {
     path?: string;
     token?: string;
   };
+  permissions?: ExecApprovalsPermissions;
   defaults?: ExecApprovalsDefaults;
   agents?: Record<string, ExecApprovalsAgent>;
 };
@@ -138,6 +149,9 @@ export type ExecApprovalsResolved = {
   defaults: Required<ExecApprovalsDefaults>;
   agent: Required<ExecApprovalsDefaults>;
   allowlist: ExecAllowlistEntry[];
+  permissions: {
+    filesystem?: ResolvedFilesystemPermissions;
+  };
   file: ExecApprovalsFile;
 };
 
@@ -277,6 +291,11 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       path: socketPath && socketPath.length > 0 ? socketPath : undefined,
       token: token && token.length > 0 ? token : undefined,
     },
+    permissions: file.permissions
+      ? {
+          filesystem: normalizeFilesystemPermissionsConfig(file.permissions.filesystem),
+        }
+      : undefined,
     defaults: {
       security: file.defaults?.security,
       ask: file.defaults?.ask,
@@ -466,6 +485,7 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  const filesystemPermissions = resolveFilesystemPermissions(file.permissions?.filesystem);
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -475,6 +495,7 @@ export function resolveExecApprovalsFromFile(params: {
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     allowlist,
+    permissions: filesystemPermissions ? { filesystem: filesystemPermissions } : {},
     file,
   };
 }

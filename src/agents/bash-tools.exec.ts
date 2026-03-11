@@ -10,6 +10,7 @@ import {
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { assertExecFilesystemPermissions } from "./bash-tools.exec-fs-permissions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -398,6 +399,13 @@ export function createExecTool(
       } else {
         applyPathPrepend(env, defaultPathPrepend);
       }
+
+      assertExecFilesystemPermissions({
+        command: params.command,
+        cwd: workdir,
+        env,
+        permissions: defaults?.filesystemPermissions,
+      });
 
       if (host === "node") {
         return executeNodeHostCommand({

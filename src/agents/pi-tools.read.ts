@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
+  assertFilesystemPathPermission,
+  type FilesystemPermissionOperation,
+  type ResolvedFilesystemPermissions,
+} from "../infra/filesystem-permissions.js";
+import {
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -352,6 +357,45 @@ async function normalizeReadImageResult(
 
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
+}
+
+export function wrapToolFilesystemPermissionsGuard(
+  tool: AnyAgentTool,
+  options: {
+    permissions?: ResolvedFilesystemPermissions;
+    operation: FilesystemPermissionOperation;
+    root: string;
+    containerWorkdir?: string;
+  },
+): AnyAgentTool {
+  if (!options.permissions) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath = typeof record?.path === "string" ? record.path.trim() : "";
+      if (filePath) {
+        const sandboxPath = mapContainerPathToWorkspaceRoot({
+          filePath,
+          root: options.root,
+          containerWorkdir: options.containerWorkdir,
+        });
+        assertFilesystemPathPermission({
+          permissions: options.permissions,
+          targetPath: sandboxPath,
+          operation: options.operation,
+          cwd: options.root,
+          context: tool.name,
+        });
+      }
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
 }
 
 function mapContainerPathToWorkspaceRoot(params: {

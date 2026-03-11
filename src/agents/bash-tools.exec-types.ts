@@ -1,5 +1,6 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { ResolvedFilesystemPermissions } from "../infra/filesystem-permissions.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 export type ExecToolDefaults = {
@@ -27,6 +28,7 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  filesystemPermissions?: ResolvedFilesystemPermissions;
 };
 
 export type ExecElevatedDefaults = {

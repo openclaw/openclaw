@@ -53,6 +53,30 @@ describe("exec approvals wildcard agent", () => {
   });
 });
 
+describe("exec approvals filesystem permissions", () => {
+  it("resolves top-level filesystem permissions map", () => {
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        permissions: {
+          filesystem: {
+            rules: {
+              "/workspace/**": "rw-",
+            },
+            default: "---",
+          },
+        },
+        agents: {},
+      },
+      agentId: "main",
+    });
+    expect(resolved.permissions.filesystem).toBeDefined();
+    expect(resolved.permissions.filesystem?.rules[0]?.pattern).toBe("/workspace/**");
+    expect(resolved.permissions.filesystem?.rules[0]?.bits).toBe("rw-");
+    expect(resolved.permissions.filesystem?.defaultBits).toBe("---");
+  });
+});
+
 describe("exec approvals node host allowlist check", () => {
   // These tests verify the allowlist satisfaction logic used by the node host path
   // The node host checks: matchAllowlist() || isSafeBinUsage() for each command segment

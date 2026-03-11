@@ -4,6 +4,10 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
+import {
+  assertFilesystemPathPermission,
+  type ResolvedFilesystemPermissions,
+} from "../infra/filesystem-permissions.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
@@ -73,6 +77,7 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  filesystemPermissions?: ResolvedFilesystemPermissions;
   signal?: AbortSignal;
 };
 
@@ -83,7 +88,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    filesystemPermissions?: ResolvedFilesystemPermissions;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -111,6 +121,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        filesystemPermissions: options.filesystemPermissions,
         signal,
       });
 
@@ -152,6 +163,13 @@ export async function applyPatch(
 
     if (hunk.kind === "add") {
       const target = await resolvePatchPath(hunk.path, options);
+      assertFilesystemPathPermission({
+        permissions: options.filesystemPermissions,
+        targetPath: target.resolved,
+        operation: "write",
+        cwd: options.cwd,
+        context: "apply_patch add",
+      });
       await ensureDir(target.resolved, fileOps);
       await fileOps.writeFile(target.resolved, hunk.contents);
       recordSummary(summary, seen, "added", target.display);
@@ -160,18 +178,39 @@ export async function applyPatch(
 
     if (hunk.kind === "delete") {
       const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
+      assertFilesystemPathPermission({
+        permissions: options.filesystemPermissions,
+        targetPath: target.resolved,
+        operation: "write",
+        cwd: options.cwd,
+        context: "apply_patch delete",
+      });
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
     const target = await resolvePatchPath(hunk.path, options);
+    assertFilesystemPathPermission({
+      permissions: options.filesystemPermissions,
+      targetPath: target.resolved,
+      operation: "write",
+      cwd: options.cwd,
+      context: "apply_patch update",
+    });
     const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
       readFile: (path) => fileOps.readFile(path),
     });
 
     if (hunk.movePath) {
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
+      assertFilesystemPathPermission({
+        permissions: options.filesystemPermissions,
+        targetPath: moveTarget.resolved,
+        operation: "write",
+        cwd: options.cwd,
+        context: "apply_patch move",
+      });
       await ensureDir(moveTarget.resolved, fileOps);
       await fileOps.writeFile(moveTarget.resolved, applied);
       await fileOps.remove(target.resolved);

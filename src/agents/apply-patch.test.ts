@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveFilesystemPermissions } from "../infra/filesystem-permissions.js";
 import { applyPatch } from "./apply-patch.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -114,6 +115,44 @@ describe("applyPatch", () => {
       } finally {
         await fs.rm(escapedPath, { force: true });
       }
+    });
+  });
+
+  it("enforces filesystem permission rules when provided", async () => {
+    await withTempDir(async (dir) => {
+      const allowedDir = path.join(dir, "allowed");
+      await fs.mkdir(allowedDir, { recursive: true });
+      const permissions = resolveFilesystemPermissions({
+        rules: {
+          [`${allowedDir}/**`]: "rw-",
+        },
+        default: "---",
+      });
+      expect(permissions).toBeDefined();
+
+      const deniedPatch = `*** Begin Patch
+*** Add File: blocked.txt
++blocked
+*** End Patch`;
+      await expect(
+        applyPatch(deniedPatch, {
+          cwd: dir,
+          workspaceOnly: false,
+          filesystemPermissions: permissions,
+        }),
+      ).rejects.toThrow(/filesystem permission denied \(w\)/);
+
+      const allowedPatch = `*** Begin Patch
+*** Add File: allowed/ok.txt
++ok
+*** End Patch`;
+      await expect(
+        applyPatch(allowedPatch, {
+          cwd: dir,
+          workspaceOnly: false,
+          filesystemPermissions: permissions,
+        }),
+      ).resolves.toBeDefined();
     });
   });
 

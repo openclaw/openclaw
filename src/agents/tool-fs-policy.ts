@@ -1,13 +1,19 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ResolvedFilesystemPermissions } from "../infra/filesystem-permissions.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ToolFsPolicy = {
   workspaceOnly: boolean;
+  permissions?: ResolvedFilesystemPermissions;
 };
 
-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
+export function createToolFsPolicy(params: {
+  workspaceOnly?: boolean;
+  permissions?: ResolvedFilesystemPermissions;
+}): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,
+    permissions: params.permissions,
   };
 }
 
