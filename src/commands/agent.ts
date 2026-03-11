@@ -36,6 +36,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
@@ -139,11 +140,32 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   params.sessionStore[params.sessionKey] = persisted;
 }
 
-function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
+function resolveFallbackRetryPrompt(params: {
+  body: string;
+  isFallbackRetry: boolean;
+  previousFailureReason?: FailoverReason;
+}): string {
+  // Fallback retries only fire on thrown errors (not partial streaming results),
+  // so the original prompt is always safe to re-send. The orphaned-user-message
+  // repair in attempt.ts handles any residual duplicate user turns.
+  return params.body;
+}
+
+function resolveRetryImages(params: {
+  images: AgentCommandOpts["images"];
+  isFallbackRetry: boolean;
+  previousFailureReason?: FailoverReason;
+}): AgentCommandOpts["images"] {
   if (!params.isFallbackRetry) {
-    return params.body;
+    return params.images;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  // Format errors may be caused by image payloads the fallback model
+  // doesn't support — strip as a safety measure.
+  if (params.previousFailureReason === "format") {
+    return undefined;
+  }
+  // All other reasons: model never processed or rejected the images.
+  return params.images;
 }
 
 function prependInternalEventContext(
@@ -344,10 +366,12 @@ function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  previousFailureReason?: FailoverReason;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    previousFailureReason: params.previousFailureReason,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -374,7 +398,11 @@ function runAgentAttempt(params: {
         cliSessionId: nextCliSessionId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
+        images: resolveRetryImages({
+          images: params.opts.images,
+          isFallbackRetry: params.isFallbackRetry,
+          previousFailureReason: params.previousFailureReason,
+        }),
         streamParams: params.opts.streamParams,
       });
     return runCliWithSession(cliSessionId).catch(async (err) => {
@@ -478,7 +506,11 @@ function runAgentAttempt(params: {
     config: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
+    images: resolveRetryImages({
+      images: params.opts.images,
+      isFallbackRetry: params.isFallbackRetry,
+      previousFailureReason: params.previousFailureReason,
+    }),
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
@@ -1135,6 +1167,7 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            previousFailureReason: runOptions?.previousFailureReason,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
@@ -1254,3 +1287,6 @@ export async function agentCommandFromIngress(
     deps,
   );
 }
+
+/** @internal – exposed for unit tests only */
+export const _testInternals = { resolveFallbackRetryPrompt, resolveRetryImages } as const;
