@@ -42,6 +42,8 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+const SERVER_ERROR_USER_MESSAGE =
+  "The AI service returned a server error. Please try again in a moment.";
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
@@ -51,6 +53,19 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
     return OVERLOADED_ERROR_USER_MESSAGE;
   }
   return undefined;
+}
+
+function shouldHideServerErrorDetails(info: ApiErrorInfo): boolean {
+  if ((info.type ?? "").toLowerCase() !== "server_error") {
+    return false;
+  }
+  const message = info.message ?? "";
+  return (
+    /an error occurred while processing your request/i.test(message) ||
+    /contact us through our help center/i.test(message) ||
+    /help\.openai\.com/i.test(message) ||
+    /\brequest id\b/i.test(message)
+  );
 }
 
 function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -214,10 +229,10 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 
 // Allow provider-wrapped API payloads such as "Ollama API error 400: {...}".
 const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)(?:\s+\d{3})?[:\s-]+/i;
+  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex(?:\s+cli)?\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
+  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex(?:\s+cli)?\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
@@ -549,6 +564,13 @@ function parseApiErrorPayload(raw: string): ErrorPayload | null {
   if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
     candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
   }
+  const firstBraceIndex = trimmed.indexOf("{");
+  if (firstBraceIndex > 0) {
+    const prefix = trimmed.slice(0, firstBraceIndex);
+    if (/\b(?:error|failed)\b/i.test(prefix)) {
+      candidates.push(trimmed.slice(firstBraceIndex).trim());
+    }
+  }
   for (const candidate of candidates) {
     if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
       continue;
@@ -664,6 +686,9 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
   const info = parseApiErrorInfo(trimmed);
   if (info?.message) {
+    if (shouldHideServerErrorDetails(info)) {
+      return SERVER_ERROR_USER_MESSAGE;
+    }
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
     const type = info.type ? ` ${info.type}` : "";
     const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
