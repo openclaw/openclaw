@@ -1,4 +1,5 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import type { ExecHighRiskSafetyConfig } from "../infra/exec-high-risk-safety.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
@@ -6,6 +7,7 @@ export type ExecToolDefaults = {
   host?: ExecHost;
   security?: ExecSecurity;
   ask?: ExecAsk;
+  highRiskConfirmation?: ExecHighRiskSafetyConfig;
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];

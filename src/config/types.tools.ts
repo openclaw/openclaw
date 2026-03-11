@@ -226,6 +226,21 @@ export function parseToolsBySenderTypedKey(
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
+  /** High-risk exec confirmation policy. */
+  highRiskConfirmation?: {
+    /** Enable confirmation prompts for high-risk commands (default: false). */
+    enabled?: boolean;
+    /** Command names considered high-risk (default: rm,mv,cp,dd,format,truncate). */
+    commands?: string[];
+    audit?: {
+      /** Persist high-risk approval decisions to a local log file (default: true). */
+      enabled?: boolean;
+      /** Audit log destination path (default: ~/.openclaw/safety.log). */
+      file?: string;
+      /** Log mode: full command text or minimal command-name only. */
+      mode?: "full" | "minimal";
+    };
+  };
   /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";
   /** Exec security mode (default: deny). */

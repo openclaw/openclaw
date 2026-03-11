@@ -57,6 +57,8 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  forceHighRiskApproval?: boolean;
+  onHighRiskDecision?: (decision: "approved" | "rejected", reason: string) => void | Promise<void>;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -130,7 +132,8 @@ export async function processGatewayAllowlist(
       allowlistSatisfied,
     }) ||
     requiresHeredocApproval ||
-    obfuscation.detected;
+    obfuscation.detected ||
+    params.forceHighRiskApproval === true;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -158,20 +161,26 @@ export async function processGatewayAllowlist(
     let preResolvedDecision = defaultPreResolvedDecision;
 
     // Register first so the returned approval ID is actionable immediately.
-    const registration = await registerExecApprovalRequestForHostOrThrow({
-      approvalId,
-      command: params.command,
-      workdir: params.workdir,
-      host: "gateway",
-      security: hostSecurity,
-      ask: hostAsk,
-      ...buildExecApprovalRequesterContext({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }),
-      resolvedPath,
-      ...buildExecApprovalTurnSourceContext(params),
-    });
+    let registration: Awaited<ReturnType<typeof registerExecApprovalRequestForHostOrThrow>>;
+    try {
+      registration = await registerExecApprovalRequestForHostOrThrow({
+        approvalId,
+        command: params.command,
+        workdir: params.workdir,
+        host: "gateway",
+        security: hostSecurity,
+        ask: hostAsk,
+        ...buildExecApprovalRequesterContext({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }),
+        resolvedPath,
+        ...buildExecApprovalTurnSourceContext(params),
+      });
+    } catch (err) {
+      await params.onHighRiskDecision?.("rejected", "approval-registration-failed");
+      throw err;
+    }
     expiresAtMs = registration.expiresAtMs;
     preResolvedDecision = registration.finalDecision;
 
@@ -189,6 +198,7 @@ export async function processGatewayAllowlist(
           ),
       });
       if (decision === undefined) {
+        await params.onHighRiskDecision?.("rejected", "approval-request-failed");
         return;
       }
 
@@ -200,7 +210,10 @@ export async function processGatewayAllowlist(
       let approvedByAsk = baseDecision.approvedByAsk;
       let deniedReason = baseDecision.deniedReason;
 
-      if (baseDecision.timedOut && askFallback === "allowlist") {
+      if (params.forceHighRiskApproval === true && baseDecision.timedOut) {
+        deniedReason = "approval-timeout (high-risk)";
+        approvedByAsk = false;
+      } else if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
           deniedReason = "approval-timeout (allowlist-miss)";
         } else {
@@ -230,6 +243,7 @@ export async function processGatewayAllowlist(
       }
 
       if (deniedReason) {
+        await params.onHighRiskDecision?.("rejected", deniedReason);
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
           {
@@ -239,6 +253,14 @@ export async function processGatewayAllowlist(
         );
         return;
       }
+
+      const approvedReason =
+        decision === "allow-once" || decision === "allow-always"
+          ? decision
+          : baseDecision.timedOut
+            ? "approval-timeout-fallback"
+            : "approved";
+      await params.onHighRiskDecision?.("approved", approvedReason);
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 

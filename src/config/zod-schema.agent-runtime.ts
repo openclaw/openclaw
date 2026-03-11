@@ -400,7 +400,26 @@ const ToolExecSafeBinProfileSchema = z
   })
   .strict();
 
+const ToolExecHighRiskAuditSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    file: z.string().optional(),
+    mode: z.enum(["full", "minimal"]).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolExecHighRiskConfirmationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    commands: z.array(z.string()).optional(),
+    audit: ToolExecHighRiskAuditSchema,
+  })
+  .strict()
+  .optional();
+
 const ToolExecBaseShape = {
+  highRiskConfirmation: ToolExecHighRiskConfirmationSchema,
   host: z.enum(["sandbox", "gateway", "node"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),

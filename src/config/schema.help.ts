@@ -310,6 +310,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
+  "tools.exec.highRiskConfirmation":
+    "Optional confirmation guardrail for high-risk shell commands such as rm, mv, and cp. Keep disabled for legacy behavior, and enable when you need explicit destructive-command approvals.",
+  "tools.exec.highRiskConfirmation.enabled":
+    "Enables confirmation prompts before high-risk exec commands can run (default: false). Turn this on in shared or safety-sensitive environments to reduce accidental data loss.",
+  "tools.exec.highRiskConfirmation.commands":
+    "Command names treated as high-risk for confirmation checks (default: rm, mv, cp, dd, format, truncate). Add or remove entries to fit your environment-specific destructive operations.",
+  "tools.exec.highRiskConfirmation.audit":
+    "Audit log settings for high-risk command confirmations. Use this to keep a local record of approval decisions for review and incident response.",
+  "tools.exec.highRiskConfirmation.audit.enabled":
+    "When true (default), writes high-risk approval outcomes to the configured safety log file.",
+  "tools.exec.highRiskConfirmation.audit.file":
+    "Path for high-risk confirmation audit logs (default: ~/.openclaw/safety.log). Use a writable local path with retention policy appropriate for your operations.",
+  "tools.exec.highRiskConfirmation.audit.mode":
+    'Audit payload mode for high-risk logs: "full" records full command text, while "minimal" records command names only to reduce sensitive argument exposure.',
   "tools.agentToAgent":
     "Policy for allowing agent-to-agent tool calls and constraining which target agents can be reached. Keep disabled or tightly scoped unless cross-agent orchestration is intentionally enabled.",
   "tools.agentToAgent.enabled":

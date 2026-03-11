@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  appendExecHighRiskAuditLog,
+  matchHighRiskExecCommand,
+  resolveExecHighRiskSafetyConfig,
+} from "../infra/exec-high-risk-safety.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -9,18 +14,31 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { markBackgrounded } from "./bash-process-registry.js";
+import { markBackgrounded, tail } from "./bash-process-registry.js";
+import {
+  buildExecApprovalRequesterContext,
+  buildExecApprovalTurnSourceContext,
+  registerExecApprovalRequestForHostOrThrow,
+} from "./bash-tools.exec-approval-request.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
+  createDefaultExecApprovalRequestContext,
+  resolveApprovalDecisionOrUndefined,
+} from "./bash-tools.exec-host-shared.js";
+import {
   DEFAULT_MAX_OUTPUT,
+  DEFAULT_NOTIFY_TAIL_CHARS,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
   applyPathPrepend,
+  createApprovalSlug,
+  emitExecSystemEvent,
   applyShellPath,
   normalizeExecAsk,
   normalizeExecHost,
   normalizeExecSecurity,
+  normalizeNotifyOutput,
   normalizePathPrepend,
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
@@ -148,6 +166,211 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+type SandboxHighRiskApprovalParams = {
+  command: string;
+  workdir: string;
+  env: Record<string, string>;
+  sandbox?: ExecToolDefaults["sandbox"];
+  containerWorkdir: string | null;
+  usePty: boolean;
+  timeoutSec: number | null;
+  maxOutput: number;
+  pendingMaxOutput: number;
+  warnings: string[];
+  scopeKey?: string;
+  notifySessionKey?: string;
+  approvalRunningNoticeMs: number;
+  security: NonNullable<ExecToolDefaults["security"]>;
+  ask: NonNullable<ExecToolDefaults["ask"]>;
+  agentId?: string;
+  sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+  matchedCommands: string[];
+  highRiskSafety: ReturnType<typeof resolveExecHighRiskSafetyConfig>;
+};
+
+async function createSandboxHighRiskPendingResult(
+  params: SandboxHighRiskApprovalParams,
+): Promise<AgentToolResult<ExecToolDetails>> {
+  const {
+    approvalId,
+    approvalSlug,
+    contextKey,
+    noticeSeconds,
+    warningText,
+    expiresAtMs: defaultExpiresAtMs,
+    preResolvedDecision: defaultPreResolvedDecision,
+  } = createDefaultExecApprovalRequestContext({
+    warnings: params.warnings,
+    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+    createApprovalSlug,
+  });
+  let expiresAtMs = defaultExpiresAtMs;
+  let preResolvedDecision = defaultPreResolvedDecision;
+
+  const registration = await registerExecApprovalRequestForHostOrThrow({
+    approvalId,
+    command: params.command,
+    workdir: params.workdir,
+    host: "gateway",
+    security: params.security,
+    ask: params.ask,
+    ...buildExecApprovalRequesterContext({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    }),
+    ...buildExecApprovalTurnSourceContext({
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceThreadId: params.turnSourceThreadId,
+    }),
+  });
+  expiresAtMs = registration.expiresAtMs;
+  preResolvedDecision = registration.finalDecision;
+
+  void (async () => {
+    const decision = await resolveApprovalDecisionOrUndefined({
+      approvalId,
+      preResolvedDecision,
+      onFailure: () =>
+        emitExecSystemEvent(
+          `Exec denied (sandbox id=${approvalId}, approval-request-failed): ${params.command}`,
+          { sessionKey: params.notifySessionKey, contextKey },
+        ),
+    });
+    if (decision === undefined) {
+      await appendExecHighRiskAuditLog({
+        safety: params.highRiskSafety,
+        host: "sandbox",
+        command: params.command,
+        matchedCommands: params.matchedCommands,
+        decision: "rejected",
+        reason: "approval-request-failed",
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+      });
+      return;
+    }
+    const approved = decision === "allow-once" || decision === "allow-always";
+    if (!approved) {
+      const reason = decision === "deny" ? "user-denied" : "approval-timeout (high-risk)";
+      await appendExecHighRiskAuditLog({
+        safety: params.highRiskSafety,
+        host: "sandbox",
+        command: params.command,
+        matchedCommands: params.matchedCommands,
+        decision: "rejected",
+        reason,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+      });
+      emitExecSystemEvent(`Exec denied (sandbox id=${approvalId}, ${reason}): ${params.command}`, {
+        sessionKey: params.notifySessionKey,
+        contextKey,
+      });
+      return;
+    }
+
+    await appendExecHighRiskAuditLog({
+      safety: params.highRiskSafety,
+      host: "sandbox",
+      command: params.command,
+      matchedCommands: params.matchedCommands,
+      decision: "approved",
+      reason: decision,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceThreadId: params.turnSourceThreadId,
+    });
+
+    let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
+    try {
+      run = await runExecProcess({
+        command: params.command,
+        workdir: params.workdir,
+        env: params.env,
+        sandbox: params.sandbox,
+        containerWorkdir: params.containerWorkdir,
+        usePty: params.usePty,
+        warnings: params.warnings,
+        maxOutput: params.maxOutput,
+        pendingMaxOutput: params.pendingMaxOutput,
+        notifyOnExit: false,
+        notifyOnExitEmptySuccess: false,
+        scopeKey: params.scopeKey,
+        sessionKey: params.notifySessionKey,
+        timeoutSec: params.timeoutSec,
+      });
+    } catch {
+      emitExecSystemEvent(
+        `Exec denied (sandbox id=${approvalId}, spawn-failed): ${params.command}`,
+        {
+          sessionKey: params.notifySessionKey,
+          contextKey,
+        },
+      );
+      return;
+    }
+
+    markBackgrounded(run.session);
+
+    let runningTimer: NodeJS.Timeout | null = null;
+    if (params.approvalRunningNoticeMs > 0) {
+      runningTimer = setTimeout(() => {
+        emitExecSystemEvent(
+          `Exec running (sandbox id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${params.command}`,
+          { sessionKey: params.notifySessionKey, contextKey },
+        );
+      }, params.approvalRunningNoticeMs);
+    }
+    const outcome = await run.promise;
+    if (runningTimer) {
+      clearTimeout(runningTimer);
+    }
+    const output = normalizeNotifyOutput(tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS));
+    const exitLabel = outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
+    const summary = output
+      ? `Exec finished (sandbox id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
+      : `Exec finished (sandbox id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
+    emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
+  })();
+
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `${warningText}Approval required (id ${approvalSlug}). ` +
+          "Approve to run; updates will arrive after completion.",
+      },
+    ],
+    details: {
+      status: "approval-pending",
+      approvalId,
+      approvalSlug,
+      expiresAtMs,
+      host: "sandbox",
+      command: params.command,
+      cwd: params.workdir,
+    },
+  };
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -199,6 +422,7 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const highRiskSafety = resolveExecHighRiskSafetyConfig(defaults?.highRiskConfirmation);
 
   return {
     name: "exec",
@@ -399,6 +623,42 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      const highRiskMatch =
+        highRiskSafety.enabled && highRiskSafety.commands.length > 0
+          ? matchHighRiskExecCommand({
+              command: params.command,
+              cwd: workdir,
+              env,
+              platform: host === "node" ? null : process.platform,
+              commands: highRiskSafety.commands,
+            })
+          : null;
+      const forceHighRiskApproval = Boolean(highRiskMatch);
+      if (highRiskMatch) {
+        warnings.push(
+          `Warning: high-risk command detected (${highRiskMatch.matchedCommands.join(", ")}); explicit approval is required.`,
+        );
+      }
+      const logHighRiskDecision = async (decision: "approved" | "rejected", reason: string) => {
+        if (!highRiskMatch) {
+          return;
+        }
+        await appendExecHighRiskAuditLog({
+          safety: highRiskSafety,
+          host,
+          command: params.command,
+          matchedCommands: highRiskMatch.matchedCommands,
+          decision,
+          reason,
+          agentId,
+          sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+        });
+      };
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -421,10 +681,17 @@ export function createExecTool(
           warnings,
           notifySessionKey,
           trustedSafeBinDirs,
+          forceHighRiskApproval,
+          onHighRiskDecision:
+            highRiskMatch && forceHighRiskApproval
+              ? async (decision, reason) => {
+                  await logHighRiskDecision(decision, reason);
+                }
+              : undefined,
         });
       }
 
-      if (host === "gateway" && !bypassApprovals) {
+      if (host === "gateway" && (!bypassApprovals || forceHighRiskApproval)) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
           workdir,
@@ -449,6 +716,13 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          forceHighRiskApproval,
+          onHighRiskDecision:
+            highRiskMatch && forceHighRiskApproval
+              ? async (decision, reason) => {
+                  await logHighRiskDecision(decision, reason);
+                }
+              : undefined,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
@@ -468,6 +742,34 @@ export function createExecTool(
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
       await validateScriptFileForShellBleed({ command: params.command, workdir });
+
+      if (host === "sandbox" && highRiskMatch) {
+        return await createSandboxHighRiskPendingResult({
+          command: params.command,
+          workdir,
+          env,
+          sandbox,
+          containerWorkdir: containerWorkdir ?? null,
+          usePty,
+          timeoutSec: effectiveTimeout,
+          maxOutput,
+          pendingMaxOutput,
+          warnings,
+          scopeKey: defaults?.scopeKey,
+          notifySessionKey,
+          approvalRunningNoticeMs,
+          security,
+          ask: "always",
+          agentId,
+          sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          matchedCommands: highRiskMatch.matchedCommands,
+          highRiskSafety,
+        });
+      }
 
       const run = await runExecProcess({
         command: params.command,

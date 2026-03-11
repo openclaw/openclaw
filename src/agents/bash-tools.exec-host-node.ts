@@ -49,6 +49,8 @@ export type ExecuteNodeHostCommandParams = {
   warnings: string[];
   notifySessionKey?: string;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  forceHighRiskApproval?: boolean;
+  onHighRiskDecision?: (decision: "approved" | "rejected", reason: string) => void | Promise<void>;
 };
 
 export async function executeNodeHostCommand(
@@ -177,7 +179,9 @@ export async function executeNodeHostCommand(
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,
-    }) || obfuscation.detected;
+    }) ||
+    obfuscation.detected ||
+    params.forceHighRiskApproval === true;
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
@@ -224,23 +228,29 @@ export async function executeNodeHostCommand(
     let preResolvedDecision = defaultPreResolvedDecision;
 
     // Register first so the returned approval ID is actionable immediately.
-    const registration = await registerExecApprovalRequestForHostOrThrow({
-      approvalId,
-      command: prepared.cmdText,
-      commandArgv: prepared.plan.argv,
-      systemRunPlan: prepared.plan,
-      env: nodeEnv,
-      workdir: runCwd,
-      host: "node",
-      nodeId,
-      security: hostSecurity,
-      ask: hostAsk,
-      ...buildExecApprovalRequesterContext({
-        agentId: runAgentId,
-        sessionKey: runSessionKey,
-      }),
-      ...buildExecApprovalTurnSourceContext(params),
-    });
+    let registration: Awaited<ReturnType<typeof registerExecApprovalRequestForHostOrThrow>>;
+    try {
+      registration = await registerExecApprovalRequestForHostOrThrow({
+        approvalId,
+        command: prepared.cmdText,
+        commandArgv: prepared.plan.argv,
+        systemRunPlan: prepared.plan,
+        env: nodeEnv,
+        workdir: runCwd,
+        host: "node",
+        nodeId,
+        security: hostSecurity,
+        ask: hostAsk,
+        ...buildExecApprovalRequesterContext({
+          agentId: runAgentId,
+          sessionKey: runSessionKey,
+        }),
+        ...buildExecApprovalTurnSourceContext(params),
+      });
+    } catch (err) {
+      await params.onHighRiskDecision?.("rejected", "approval-registration-failed");
+      throw err;
+    }
     expiresAtMs = registration.expiresAtMs;
     preResolvedDecision = registration.finalDecision;
 
@@ -255,6 +265,7 @@ export async function executeNodeHostCommand(
           ),
       });
       if (decision === undefined) {
+        await params.onHighRiskDecision?.("rejected", "approval-request-failed");
         return;
       }
 
@@ -267,7 +278,10 @@ export async function executeNodeHostCommand(
       let approvalDecision: "allow-once" | "allow-always" | null = null;
       let deniedReason = baseDecision.deniedReason;
 
-      if (baseDecision.timedOut && askFallback === "full" && approvedByAsk) {
+      if (params.forceHighRiskApproval === true && baseDecision.timedOut) {
+        deniedReason = "approval-timeout (high-risk)";
+        approvedByAsk = false;
+      } else if (baseDecision.timedOut && askFallback === "full" && approvedByAsk) {
         approvalDecision = "allow-once";
       } else if (decision === "allow-once") {
         approvedByAsk = true;
@@ -278,6 +292,7 @@ export async function executeNodeHostCommand(
       }
 
       if (deniedReason) {
+        await params.onHighRiskDecision?.("rejected", deniedReason);
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, ${deniedReason}): ${params.command}`,
           {
@@ -287,6 +302,14 @@ export async function executeNodeHostCommand(
         );
         return;
       }
+
+      const approvedReason =
+        decision === "allow-once" || decision === "allow-always"
+          ? decision
+          : baseDecision.timedOut
+            ? "approval-timeout-fallback"
+            : "approved";
+      await params.onHighRiskDecision?.("approved", approvedReason);
 
       let runningTimer: NodeJS.Timeout | null = null;
       if (params.approvalRunningNoticeMs > 0) {

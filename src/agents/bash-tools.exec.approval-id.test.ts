@@ -187,6 +187,35 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
+  it("still prompts for high-risk commands when ask=off", async () => {
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      highRiskConfirmation: {
+        enabled: true,
+      },
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call3-risk", { command: "rm -rf ./tmp", elevated: true });
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
+    expect(calls).toContain("exec.approval.waitDecision");
+  });
+
   it("uses exec-approvals ask=off to suppress gateway prompts", async () => {
     const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
     await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
@@ -392,6 +421,60 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call5", { command: "echo hi | sh" });
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => nodeInvokeCommands.includes("system.run")).toBe(false);
+  });
+
+  it("denies high-risk node command on approval timeout", async () => {
+    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
+    await fs.writeFile(
+      approvalsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {
+            main: { security: "full", ask: "off", askFallback: "full" },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const nodeInvokeCommands: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: "approval-id" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return {};
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command) {
+          nodeInvokeCommands.push(invoke.command);
+        }
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        return { payload: { success: true, stdout: "should-not-run" } };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      highRiskConfirmation: {
+        enabled: true,
+      },
+    });
+
+    const result = await tool.execute("call5b", { command: "rm -rf ./tmp" });
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => nodeInvokeCommands.includes("system.run")).toBe(false);
   });

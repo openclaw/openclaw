@@ -1,6 +1,6 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { ExecToolConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -134,7 +134,25 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const globalExec = cfg?.tools?.exec;
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
+  const globalRisk = globalExec?.highRiskConfirmation;
+  const agentRisk = agentExec?.highRiskConfirmation;
+  const mergedHighRisk: ExecToolConfig["highRiskConfirmation"] =
+    globalRisk || agentRisk
+      ? {
+          enabled: agentRisk?.enabled ?? globalRisk?.enabled,
+          commands: agentRisk?.commands ?? globalRisk?.commands,
+          audit:
+            globalRisk?.audit || agentRisk?.audit
+              ? {
+                  enabled: agentRisk?.audit?.enabled ?? globalRisk?.audit?.enabled,
+                  file: agentRisk?.audit?.file ?? globalRisk?.audit?.file,
+                  mode: agentRisk?.audit?.mode ?? globalRisk?.audit?.mode,
+                }
+              : undefined,
+        }
+      : undefined;
   return {
+    highRiskConfirmation: mergedHighRisk,
     host: agentExec?.host ?? globalExec?.host,
     security: agentExec?.security ?? globalExec?.security,
     ask: agentExec?.ask ?? globalExec?.ask,
@@ -393,6 +411,7 @@ export function createOpenClawCodingTools(options?: {
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = createExecTool({
     ...execDefaults,
+    highRiskConfirmation: options?.exec?.highRiskConfirmation ?? execConfig.highRiskConfirmation,
     host: options?.exec?.host ?? execConfig.host,
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
