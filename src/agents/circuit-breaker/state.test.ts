@@ -23,8 +23,10 @@ describe("isCircuitBreakerTripped", () => {
     expect(isCircuitBreakerTripped(entry, undefined)).toBe(false);
   });
 
-  it("returns false when consecutiveErrors is not set", () => {
+  it("returns false when tripped with pause but no cooldownUntil (uses default threshold)", () => {
     const entry = makeEntry({ cbTrippedAt: Date.now() });
+    // Config without consecutiveErrors uses default threshold; tripped but
+    // no cooldownUntil means actions haven't executed yet — not blocking.
     expect(isCircuitBreakerTripped(entry, { action: "pause" })).toBe(false);
   });
 
@@ -90,10 +92,13 @@ describe("recordCircuitBreakerError", () => {
     expect(entry.cbErrorCount).toBeUndefined();
   });
 
-  it("does nothing when consecutiveErrors is not set", () => {
+  it("uses default threshold when consecutiveErrors is not set", () => {
     const entry = makeEntry();
-    const result = recordCircuitBreakerError(entry, { action: "pause" }, "timeout");
+    const result = recordCircuitBreakerError(entry, { action: "pause" }, "timeout", 1000);
     expect(result.tripped).toBe(false);
+    // Should record the error using default threshold of 5.
+    expect(entry.cbErrorCount).toBe(1);
+    expect(entry.cbLastErrorAt).toBe(1000);
   });
 
   it("increments error count", () => {

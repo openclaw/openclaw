@@ -37,7 +37,7 @@ export function isCircuitBreakerTripped(
   config: CircuitBreakerConfig | undefined,
   now?: number,
 ): boolean {
-  if (!config || !config.consecutiveErrors) {
+  if (!config) {
     return false;
   }
   if (typeof entry.cbTrippedAt !== "number") {
@@ -79,7 +79,7 @@ export function recordCircuitBreakerError(
   reason: string,
   now?: number,
 ): { tripped: boolean } {
-  if (!config || !config.consecutiveErrors) {
+  if (!config) {
     return { tripped: false };
   }
 

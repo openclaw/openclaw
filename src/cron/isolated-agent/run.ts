@@ -536,7 +536,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Circuit breaker: skip if session is tripped.
   const cbConfig = resolveCircuitBreakerConfig(cfgWithAgentDefaults, agentId);
   if (isCircuitBreakerTripped(cronSession.sessionEntry, cbConfig)) {
-    return withRunSession({ status: "error", error: "circuit-breaker: session paused" });
+    return withRunSession({ status: "skipped", error: "circuit-breaker: session paused" });
   }
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>> | undefined;
@@ -708,7 +708,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isModelError) {
       const failoverReason = isFailoverError(err)
         ? (describeFailoverError(err).reason ?? "unknown")
-        : "timeout";
+        : "context_overflow";
       const { tripped } = recordCircuitBreakerError(
         cronSession.sessionEntry,
         cbConfig,

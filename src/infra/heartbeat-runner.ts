@@ -800,6 +800,16 @@ export async function runHeartbeatOnce(opts: {
     // Circuit breaker: clear error count on successful model call.
     if (entry) {
       clearCircuitBreakerErrors(entry);
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            store[sessionKey] = { ...current, ...entry };
+          }
+        });
+      } catch {
+        // Best-effort persistence.
+      }
     }
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -1022,7 +1032,7 @@ export async function runHeartbeatOnce(opts: {
     if (entry && isModelError) {
       const failoverReason = isFailoverError(err)
         ? (describeFailoverError(err).reason ?? "unknown")
-        : "timeout";
+        : "context_overflow";
       const { tripped } = recordCircuitBreakerError(entry, cbConfig, failoverReason, Date.now());
       if (tripped) {
         await executeCircuitBreakerActions({
