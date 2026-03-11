@@ -230,6 +230,7 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
+  const inboundThreadId = message.thread?.name;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: rawBody,
@@ -250,8 +251,10 @@ async function processMessageWithPipeline(params: {
     Surface: "googlechat",
     MessageSid: message.name,
     MessageSidFull: message.name,
-    ReplyToId: message.thread?.name,
-    ReplyToIdFull: message.thread?.name,
+    CurrentMessageId: inboundThreadId ?? message.name,
+    ReplyToId: inboundThreadId,
+    ReplyToIdFull: inboundThreadId,
+    MessageThreadId: inboundThreadId,
     MediaPath: mediaPath,
     MediaType: mediaType,
     MediaUrl: mediaPath,
@@ -295,7 +298,6 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -375,6 +377,8 @@ async function deliverGoogleChatReply(params: {
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
+  const resolvedThreadId = payload.replyToId?.trim() || undefined;
+  let typingPlaceholderName = typingMessageName;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -383,28 +387,37 @@ async function deliverGoogleChatReply(params: {
 
   if (mediaList.length > 0) {
     let suppressCaption = false;
-    if (typingMessageName) {
+    if (typingPlaceholderName) {
       try {
         await deleteGoogleChatMessage({
           account,
-          messageName: typingMessageName,
+          messageName: typingPlaceholderName,
         });
+        typingPlaceholderName = undefined;
       } catch (err) {
         runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-        const fallbackText = payload.text?.trim()
-          ? payload.text
-          : mediaList.length > 1
-            ? "Sent attachments."
-            : "Sent attachment.";
-        try {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: fallbackText,
-          });
-          suppressCaption = Boolean(payload.text?.trim());
-        } catch (updateErr) {
-          runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
+        if (resolvedThreadId) {
+          // Avoid updating the root-level typing placeholder when the real reply belongs in a thread.
+          typingPlaceholderName = undefined;
+        } else {
+          const placeholderName = typingPlaceholderName;
+          if (placeholderName) {
+            const fallbackText = payload.text?.trim()
+              ? payload.text
+              : mediaList.length > 1
+                ? "Sent attachments."
+                : "Sent attachment.";
+            try {
+              await updateGoogleChatMessage({
+                account,
+                messageName: placeholderName,
+                text: fallbackText,
+              });
+              suppressCaption = Boolean(payload.text?.trim());
+            } catch (updateErr) {
+              runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
+            }
+          }
         }
       }
     }
@@ -431,7 +444,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: resolvedThreadId,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -448,14 +461,26 @@ async function deliverGoogleChatReply(params: {
     const chunkLimit = account.config.textChunkLimit ?? 4000;
     const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
     const chunks = core.channel.text.chunkMarkdownTextWithMode(payload.text, chunkLimit, chunkMode);
+    let editableTypingMessageName = typingMessageName;
+    if (editableTypingMessageName && resolvedThreadId) {
+      try {
+        await deleteGoogleChatMessage({
+          account,
+          messageName: editableTypingMessageName,
+        });
+      } catch (err) {
+        runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+      }
+      editableTypingMessageName = undefined;
+    }
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       try {
         // Edit typing message with first chunk if available
-        if (i === 0 && typingMessageName) {
+        if (i === 0 && editableTypingMessageName) {
           await updateGoogleChatMessage({
             account,
-            messageName: typingMessageName,
+            messageName: editableTypingMessageName,
             text: chunk,
           });
         } else {
@@ -463,7 +488,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: resolvedThreadId,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });

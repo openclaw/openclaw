@@ -40,6 +40,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  resolveCurrentReplyReferenceId,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -405,8 +406,7 @@ export async function runAgentTurnWithFallback(params: {
               onBlockReply: params.opts?.onBlockReply
                 ? createBlockReplyDeliveryHandler({
                     onBlockReply: params.opts.onBlockReply,
-                    currentMessageId:
-                      params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+                    currentMessageId: resolveCurrentReplyReferenceId(params.sessionCtx),
                     normalizeStreamingText,
                     applyReplyToMode: params.applyReplyToMode,
                     normalizeMediaPaths: normalizeReplyMediaPaths,

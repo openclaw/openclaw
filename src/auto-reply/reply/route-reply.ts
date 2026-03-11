@@ -130,7 +130,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const resolvedReplyToId =
     replyToId ??
     (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
-  const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
+  const resolvedThreadId =
+    channelId === "slack" || channelId === "googlechat" ? null : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).

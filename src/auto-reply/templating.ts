@@ -51,6 +51,11 @@ export type MsgContext = {
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
+  /**
+   * Provider-specific reply/reference id for the current turn.
+   * Some channels reply to thread ids instead of message ids.
+   */
+  CurrentMessageId?: string | number;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;

@@ -191,4 +191,56 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
+
+  it("uses CurrentMessageId for Google Chat threading when replyToMode is all", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "thread me" }],
+      replyToMode: "all",
+      replyToChannel: "googlechat",
+      currentMessageId: "spaces/AAA/threads/thread-1",
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "thread me",
+      replyToId: "spaces/AAA/threads/thread-1",
+    });
+  });
+
+  it("threads only the first Google Chat payload when replyToMode is first", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "one" }, { text: "two" }],
+      replyToMode: "first",
+      replyToChannel: "googlechat",
+      currentMessageId: "spaces/AAA/threads/thread-2",
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "one",
+      replyToId: "spaces/AAA/threads/thread-2",
+    });
+    expect(replyPayloads[1]).toMatchObject({
+      text: "two",
+      replyToId: undefined,
+    });
+  });
+
+  it("suppresses implicit Google Chat threading when replyToMode is off", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "root reply" }],
+      replyToMode: "off",
+      replyToChannel: "googlechat",
+      currentMessageId: "spaces/AAA/threads/thread-3",
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "root reply",
+      replyToId: undefined,
+    });
+  });
 });
