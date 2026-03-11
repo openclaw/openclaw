@@ -101,6 +101,18 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.isError).toBe(true);
   });
 
+  it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: "insufficient credits for embedding model",
+        content: [{ type: "text", text: "Handle payment required errors in your API." }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "Handle payment required errors in your API.");
+  });
+
   it("suppresses raw error JSON even when errorMessage is missing", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
