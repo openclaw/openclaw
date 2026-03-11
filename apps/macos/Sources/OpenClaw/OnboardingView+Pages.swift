@@ -510,6 +510,8 @@ extension OnboardingView {
             return ("wrench.and.screwdriver.fill", .orange)
         case .passwordRequired:
             return ("lock.slash.fill", .orange)
+        case .pairingRequired:
+            return ("link.badge.plus", .orange)
         }
     }
 

@@ -7,6 +7,7 @@ enum RemoteGatewayAuthIssue: Equatable {
     case tokenMismatch
     case gatewayTokenNotConfigured
     case passwordRequired
+    case pairingRequired
 
     init?(error: Error) {
         guard let authError = error as? GatewayConnectAuthError else {
@@ -21,6 +22,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             self = .gatewayTokenNotConfigured
         case .authPasswordMissing, .authPasswordMismatch, .authPasswordNotConfigured:
             self = .passwordRequired
+        case .pairingRequired:
+            self = .pairingRequired
         default:
             return nil
         }
@@ -30,7 +33,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         switch self {
         case .tokenRequired, .tokenMismatch:
             true
-        case .gatewayTokenNotConfigured, .passwordRequired:
+        case .gatewayTokenNotConfigured, .passwordRequired, .pairingRequired:
             false
         }
     }
@@ -45,6 +48,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             "This gateway host needs token setup"
         case .passwordRequired:
             "This gateway is using unsupported auth"
+        case .pairingRequired:
+            "This device needs pairing approval"
         }
     }
 
@@ -58,6 +63,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. If the gateway uses an environment variable instead, set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
         case .passwordRequired:
             "This onboarding flow does not support password auth yet. Reconfigure the gateway to use token auth, then retry."
+        case .pairingRequired:
+            "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
         }
     }
 
@@ -65,6 +72,8 @@ enum RemoteGatewayAuthIssue: Equatable {
         switch self {
         case .tokenRequired, .gatewayTokenNotConfigured:
             "No token yet? Generate one on the gateway host with `openclaw doctor --generate-gateway-token`, then set it as `gateway.auth.token`."
+        case .pairingRequired:
+            "If you do not have another paired OpenClaw client yet, approve the pending request on the gateway host with `openclaw devices approve`."
         case .tokenMismatch, .passwordRequired:
             nil
         }
@@ -80,6 +89,8 @@ enum RemoteGatewayAuthIssue: Equatable {
             "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
         case .passwordRequired:
             "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
+        case .pairingRequired:
+            "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again."
         }
     }
 }

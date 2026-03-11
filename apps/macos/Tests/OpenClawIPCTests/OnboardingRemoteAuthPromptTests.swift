@@ -21,6 +21,10 @@ struct OnboardingRemoteAuthPromptTests {
             message: "password missing",
             detailCode: GatewayConnectAuthDetailCode.authPasswordMissing.rawValue,
             canRetryWithDeviceToken: false)
+        let pairingRequired = GatewayConnectAuthError(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            canRetryWithDeviceToken: false)
         let unknown = GatewayConnectAuthError(
             message: "other",
             detailCode: "SOMETHING_ELSE",
@@ -30,6 +34,7 @@ struct OnboardingRemoteAuthPromptTests {
         #expect(RemoteGatewayAuthIssue(error: tokenMismatch) == .tokenMismatch)
         #expect(RemoteGatewayAuthIssue(error: tokenNotConfigured) == .gatewayTokenNotConfigured)
         #expect(RemoteGatewayAuthIssue(error: passwordMissing) == .passwordRequired)
+        #expect(RemoteGatewayAuthIssue(error: pairingRequired) == .pairingRequired)
         #expect(RemoteGatewayAuthIssue(error: unknown) == nil)
     }
 
@@ -83,6 +88,20 @@ struct OnboardingRemoteAuthPromptTests {
             remoteToken: "",
             remoteTokenUnsupported: false,
             authIssue: .gatewayTokenNotConfigured) == false)
+        #expect(OnboardingView.shouldShowRemoteTokenField(
+            showAdvancedConnection: false,
+            remoteToken: "",
+            remoteTokenUnsupported: false,
+            authIssue: .pairingRequired) == false)
+    }
+
+    @Test func `pairing required copy points users to pair approve`() {
+        let issue = RemoteGatewayAuthIssue.pairingRequired
+
+        #expect(issue.title == "This device needs pairing approval")
+        #expect(issue.body.contains("`/pair approve`"))
+        #expect(issue.statusMessage.contains("/pair approve"))
+        #expect(issue.footnote?.contains("`openclaw devices approve`") == true)
     }
 
     @Test func `paired device success copy explains auth source`() {
