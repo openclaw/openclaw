@@ -317,7 +317,9 @@ async function writeArchiveWithSignal(params: {
     let settled = false;
 
     const finish = (err?: unknown) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       signal.removeEventListener("abort", onAbort);
       pack.removeListener("error", onPackError);
