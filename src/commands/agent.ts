@@ -1074,6 +1074,7 @@ async function agentCommandInternal(
         sessionId,
         sessionKey: sessionKey ?? sessionId,
         sessionEntry,
+        storePath,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
