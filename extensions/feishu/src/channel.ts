@@ -370,19 +370,24 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         const isMultiAccount = accountsMap != null && Object.keys(accountsMap).length > 0;
         // Determine whether dmPolicy was implicitly left to the default:
         //
-        // Multi-account: the per-account slot holds dmPolicy only when explicitly set;
-        // undefined means the account inherits the default. Skip the warning only when
-        // the root-level feishu config itself carries an explicit non-pairing value
-        // (e.g. dmPolicy: 'open' at the top level), which is inherited by all named accounts.
+        // Multi-account: warn only when neither the root nor the account explicitly set dmPolicy.
+        // Root-level dmPolicy is inherited by all named accounts, so any explicit root setting
+        // (including 'open', 'pairing', or 'allowlist') should suppress the migration warning.
         //
         // Single-account: AJV / schema validation does not inject default values into the
         // raw config object, so the field may be undefined even when the runtime falls back
-        // to 'pairing' via `feishuCfg?.dmPolicy ?? 'pairing'` in bot.ts. Warn whenever
-        // dmPolicy is absent (undefined) or is already the new default ('pairing'), and
-        // skip only when the user has explicitly opted in with 'open' or 'allowlist'.
+        // to 'pairing' via `feishuCfg?.dmPolicy ?? 'pairing'` in bot.ts. Detect implicit config
+        // by key presence (explicit vs absent) to avoid false positives when users intentionally
+        // configured dmPolicy: 'pairing'.
+        const rootHasDmPolicy =
+          rawFeishu != null && Object.prototype.hasOwnProperty.call(rawFeishu, "dmPolicy");
+        const accountHasDmPolicy =
+          isMultiAccount &&
+          accountsMap?.[ctx.accountId] != null &&
+          Object.prototype.hasOwnProperty.call(accountsMap[ctx.accountId]!, "dmPolicy");
         const dmPolicyImplicit = isMultiAccount
-          ? accountsMap[ctx.accountId]?.dmPolicy === undefined && rawFeishu?.dmPolicy !== "open"
-          : rawFeishu?.dmPolicy === undefined || rawFeishu?.dmPolicy === "pairing";
+          ? !rootHasDmPolicy && !accountHasDmPolicy
+          : !rootHasDmPolicy;
         if (dmPolicyImplicit) {
           warnedDmPolicyMigration.add(ctx.accountId);
           ctx.log?.warn(
