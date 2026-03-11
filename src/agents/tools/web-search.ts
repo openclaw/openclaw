@@ -2232,5 +2232,6 @@ export const __testing = {
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
+  resolveBraveBaseUrl,
   mapBraveLlmContextResults,
 } as const;
