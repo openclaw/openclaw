@@ -8,7 +8,7 @@ import { fileExists } from "./archive.js";
  * when updating a package.  These are user-created configuration files that
  * are not part of the distributed package itself.
  */
-const PRESERVED_FILES = [".env"];
+export const PRESERVED_FILES = [".env"];
 
 export async function installPackageDir(params: {
   sourceDir: string;

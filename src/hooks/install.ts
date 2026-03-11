@@ -9,7 +9,7 @@ import {
   resolveArchiveKind,
   resolvePackedRootDir,
 } from "../infra/archive.js";
-import { installPackageDir } from "../infra/install-package-dir.js";
+import { PRESERVED_FILES, installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -308,6 +308,20 @@ async function installHookFromDir(params: {
   }
 
   if (backupDir) {
+    for (const file of PRESERVED_FILES) {
+      const backupFile = path.join(backupDir, file);
+      const targetFile = path.join(targetDir, file);
+      try {
+        await fs.copyFile(backupFile, targetFile);
+        logger.info?.(`Preserved ${file} from previous installation.`);
+      } catch (err) {
+        // Ignore if file didn't exist in backup, but log other errors
+        if ((err as { code?: string }).code !== "ENOENT") {
+          logger.info?.(`Failed to preserve ${file}: ${String(err)}`);
+        }
+      }
+    }
+
     await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
