@@ -282,11 +282,12 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
+    runIsolatedAgentJob: async ({ job, message, abortSignal, mode }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      // Use a per-job lane so a single stuck isolated run cannot block all cron jobs
-      // when cron.maxConcurrentRuns=1 (CronService already enforces run concurrency).
-      const cronJobLane = `cron:${job.id}`;
+      // Keep manual force runs in the shared "cron" lane so they still honor
+      // cron.maxConcurrentRuns. Due/startup runs use per-job lanes so one stuck
+      // isolated run cannot starve unrelated jobs.
+      const cronLane = mode === "force" ? "cron" : `cron:${job.id}`;
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
@@ -295,7 +296,7 @@ export function buildGatewayCronService(params: {
         abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
-        lane: cronJobLane,
+        lane: cronLane,
       });
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {

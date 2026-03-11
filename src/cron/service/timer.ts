@@ -22,7 +22,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronEvent, CronRunMode, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
@@ -53,17 +53,18 @@ type TimedCronRunOutcome = CronRunOutcome &
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
+  opts?: { mode?: CronRunMode },
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
+    return await executeJobCore(state, job, undefined, opts);
   }
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
+      executeJobCore(state, job, runAbortController.signal, opts),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
           runAbortController.abort(timeoutErrorMessage());
@@ -924,6 +925,7 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
+  opts?: { mode?: CronRunMode },
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
@@ -1052,6 +1054,7 @@ export async function executeJobCore(
     job,
     message: job.payload.message,
     abortSignal,
+    mode: opts?.mode ?? "due",
   });
 
   if (abortSignal?.aborted) {
@@ -1120,7 +1123,7 @@ export async function executeJob(
   state: CronServiceState,
   job: CronJob,
   _nowMs: number,
-  _opts: { forced: boolean },
+  opts: { forced: boolean },
 ) {
   if (!job.state) {
     job.state = {};
@@ -1136,7 +1139,9 @@ export async function executeJob(
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
-    coreResult = await executeJobCore(state, job);
+    coreResult = await executeJobCore(state, job, undefined, {
+      mode: opts.forced ? "force" : "due",
+    });
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }

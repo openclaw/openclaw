@@ -387,7 +387,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    coreResult = await executeJobCoreWithTimeout(state, executionJob, { mode: mode ?? "due" });
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }

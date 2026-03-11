@@ -440,7 +440,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("uses per-job lane for isolated cron runs", async () => {
+  test("uses shared cron lane for force-run isolated cron runs", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-lane-",
       cronEnabled: false,
@@ -464,6 +464,54 @@ describe("gateway server cron", () => {
 
       expect(cronIsolatedRun).toHaveBeenCalled();
       const call = (cronIsolatedRun.mock.calls.at(-1) as unknown[] | undefined)?.[0] as
+        | {
+            lane?: unknown;
+            sessionKey?: unknown;
+            job?: { id?: unknown };
+          }
+        | undefined;
+      expect(call?.job?.id).toBe(jobId);
+      expect(call?.sessionKey).toBe(`cron:${jobId}`);
+      expect(call?.lane).toBe("cron");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("uses per-job lane for due isolated cron runs", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-lane-due-",
+      cronEnabled: true,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockClear();
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "isolated due lane test",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(Date.now() + 50).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      await waitForCondition(
+        () =>
+          cronIsolatedRun.mock.calls.some((call) => {
+            const payload = call[0] as { job?: { id?: unknown } } | undefined;
+            return payload?.job?.id === jobId;
+          }),
+        CRON_WAIT_TIMEOUT_MS,
+      );
+
+      const call = cronIsolatedRun.mock.calls.find((entry) => {
+        const payload = entry[0] as { job?: { id?: unknown } } | undefined;
+        return payload?.job?.id === jobId;
+      })?.[0] as
         | {
             lane?: unknown;
             sessionKey?: unknown;
