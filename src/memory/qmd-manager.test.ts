@@ -90,6 +90,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
 import { requireNodeSqlite } from "./sqlite.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -2684,7 +2685,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("sets busy_timeout on qmd sqlite connections", async () => {
+  it.skipIf(!HAS_NODE_SQLITE)("sets busy_timeout on qmd sqlite connections", async () => {
     const { manager } = await createManager();
     const indexPath = (manager as unknown as { indexPath: string }).indexPath;
     await fs.mkdir(path.dirname(indexPath), { recursive: true });

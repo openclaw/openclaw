@@ -6,6 +6,7 @@ import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js"
 import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 import "./test-runtime-mocks.js";
 
 const embedBatch = vi.fn(async (_texts: string[]) => [] as number[][]);
@@ -19,7 +20,7 @@ vi.mock("./embeddings.js", () => ({
     }),
 }));
 
-describe("memory indexing with OpenAI batches", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory indexing with OpenAI batches", () => {
   let fixtureRoot: string;
   let workspaceDir: string;
   let memoryDir: string;

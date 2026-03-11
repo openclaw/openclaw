@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
 const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
@@ -18,7 +19,7 @@ vi.mock("./embeddings.js", () => ({
     }),
 }));
 
-describe("memory search async sync", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory search async sync", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;

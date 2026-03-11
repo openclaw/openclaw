@@ -12,6 +12,7 @@ import type {
   OpenAiEmbeddingClient,
 } from "./embeddings.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
@@ -58,7 +59,7 @@ function buildConfig(params: {
   } as OpenClawConfig;
 }
 
-describe("memory manager mistral provider wiring", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory manager mistral provider wiring", () => {
   let workspaceDir = "";
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;

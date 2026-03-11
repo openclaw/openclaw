@@ -63,20 +63,48 @@ export function clearStaleVllmDefaultModel(cfg: OpenClawConfig): OpenClawConfig 
       : typeof defaultModel === "object" && "primary" in defaultModel
         ? defaultModel.primary
         : undefined;
+  const filteredFallbacks =
+    typeof defaultModel === "object" && "fallbacks" in defaultModel
+      ? Array.isArray(defaultModel.fallbacks)
+        ? defaultModel.fallbacks.filter((modelRef) => isAvailableModelRef(cfg, modelRef))
+        : []
+      : undefined;
   const parsed = primaryRaw ? parseModelRef(primaryRaw, DEFAULT_PROVIDER) : null;
-  if (!parsed || !isManagedVllmProvider(parsed.provider)) {
-    return cfg;
-  }
-  if (cfg.models?.providers?.[parsed.provider]) {
-    return cfg;
+  if (
+    !parsed ||
+    !isManagedVllmProvider(parsed.provider) ||
+    cfg.models?.providers?.[parsed.provider]
+  ) {
+    if (filteredFallbacks === undefined) {
+      return cfg;
+    }
+
+    const existingFallbacks = Array.isArray(defaultModel.fallbacks) ? defaultModel.fallbacks : [];
+    if (filteredFallbacks.length === existingFallbacks.length) {
+      return cfg;
+    }
+
+    const defaults = { ...cfg.agents?.defaults };
+    defaults.model = {
+      ...(filteredFallbacks.length > 0 ? { fallbacks: filteredFallbacks } : {}),
+      primary:
+        typeof defaultModel === "object" && "primary" in defaultModel
+          ? defaultModel.primary
+          : (primaryRaw ?? ""),
+    };
+
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults,
+      },
+    };
   }
 
   const defaults = { ...cfg.agents?.defaults };
-  if (typeof defaultModel === "object" && "fallbacks" in defaultModel) {
-    const fallbacks = Array.isArray(defaultModel.fallbacks)
-      ? defaultModel.fallbacks.filter((modelRef) => isAvailableModelRef(cfg, modelRef))
-      : [];
-    const [nextPrimary, ...remainingFallbacks] = fallbacks;
+  if (filteredFallbacks !== undefined) {
+    const [nextPrimary, ...remainingFallbacks] = filteredFallbacks;
     if (nextPrimary) {
       defaults.model = {
         ...(remainingFallbacks.length > 0 ? { fallbacks: remainingFallbacks } : {}),

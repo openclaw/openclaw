@@ -254,11 +254,18 @@ function updateVllmProviderConfig(params: {
   providerKey: string;
   baseUrl: string;
   models: ModelDefinitionConfig[];
+  apiKey?: string;
 }): OpenClawConfig {
   const providers = { ...params.cfg.models?.providers };
   const existingProvider = providers[params.providerKey];
+  const { apiKey: existingApiKey, ...restProvider } = existingProvider ?? {};
   providers[params.providerKey] = {
-    ...existingProvider,
+    ...restProvider,
+    ...(params.apiKey
+      ? { apiKey: params.apiKey }
+      : existingApiKey
+        ? { apiKey: existingApiKey }
+        : {}),
     baseUrl: params.baseUrl,
     api: "openai-completions",
     models: params.models,
@@ -452,6 +459,7 @@ async function configureEndpoint(params: {
     providerKey,
     baseUrl,
     models,
+    ...(apiKey ? { apiKey } : {}),
   });
 
   return {

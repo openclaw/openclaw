@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
@@ -27,7 +28,7 @@ const fx = installEmbeddingManagerFixture({
 });
 const { embedBatch } = fx;
 
-describe("memory embedding batches", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory embedding batches", () => {
   it("splits large files across multiple embedding batches", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerLarge = fx.getManagerLarge();

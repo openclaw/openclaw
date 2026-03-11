@@ -7,8 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
-describe("memory manager readonly recovery", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;

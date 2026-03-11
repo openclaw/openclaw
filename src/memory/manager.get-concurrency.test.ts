@@ -8,6 +8,7 @@ import {
   closeAllMemoryIndexManagers,
   MemoryIndexManager as RawMemoryIndexManager,
 } from "./manager.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 import "./test-runtime-mocks.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -34,7 +35,7 @@ vi.mock("./embeddings.js", () => ({
   },
 }));
 
-describe("memory manager cache hydration", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory manager cache hydration", () => {
   let workspaceDir = "";
 
   beforeEach(async () => {

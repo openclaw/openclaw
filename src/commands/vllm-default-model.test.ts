@@ -49,4 +49,25 @@ describe("clearStaleVllmDefaultModel", () => {
       fallbacks: ["anthropic/claude-sonnet-4-5"],
     });
   });
+
+  it("prunes stale managed vLLM fallbacks even when primary is non-vLLM", () => {
+    const next = clearStaleVllmDefaultModel({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-5",
+            fallbacks: ["vllm/model-a", "vllm-2/model-b", "openai/gpt-5.3-codex"],
+          },
+        },
+      },
+      models: {
+        providers: {},
+      },
+    } satisfies OpenClawConfig);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-5",
+      fallbacks: ["openai/gpt-5.3-codex"],
+    });
+  });
 });

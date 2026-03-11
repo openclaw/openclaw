@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 const { watchMock } = vi.hoisted(() => ({
   watchMock: vi.fn(() => ({
@@ -33,7 +34,7 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
-describe("memory watcher config", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
   let workspaceDir = "";
   let extraDir = "";
