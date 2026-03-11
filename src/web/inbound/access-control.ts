@@ -74,6 +74,20 @@ export async function checkInboundAccessControl(params: {
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const isSamePhone = params.from === params.selfE164;
   const isSelfChat = account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom);
+  // Self-chat mode: absolute isolation — only process messages from the owner's own phone.
+  // This guard must run before group/DM policy evaluation to ensure no non-self message
+  // ever reaches downstream processing (mention gating, debounce, auto-reply, etc.).
+  if (isSelfChat && !isSamePhone && params.selfE164 !== null) {
+    logVerbose(
+      `Blocked non-self message in self-chat mode: from=${params.from} selfE164=${params.selfE164 ?? "null"} group=${params.group}`,
+    );
+    return {
+      allowed: false,
+      shouldMarkRead: false,
+      isSelfChat,
+      resolvedAccountId: account.accountId,
+    };
+  }
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
       ? params.pairingGraceMs
