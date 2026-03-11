@@ -63,7 +63,10 @@ export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
   return trimmed;
 }
 
-export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
+export function resolveReceiveIdType(
+  id: string,
+  defaultType?: "chat_id" | "open_id" | "user_id",
+): "chat_id" | "open_id" | "user_id" {
   const trimmed = id.trim();
   const lowered = trimmed.toLowerCase();
   if (
@@ -86,7 +89,8 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
   if (trimmed.startsWith(OPEN_ID_PREFIX)) {
     return "open_id";
   }
-  return "user_id";
+  // When no explicit prefix, use configured default or fallback to user_id
+  return defaultType ?? "user_id";
 }
 
 export function looksLikeFeishuId(raw: string): boolean {

@@ -97,6 +97,16 @@ const FeishuToolsConfigSchema = z
   .optional();
 
 /**
+ * Message defaults for Feishu send operations.
+ */
+const MessageDefaultsSchema = z
+  .object({
+    receive_id_type: z.enum(["chat_id", "email", "open_id", "union_id", "user_id"]).optional(),
+  })
+  .strict()
+  .optional();
+
+/**
  * Group session scope for routing Feishu group messages.
  * - "group" (default): one session per group chat
  * - "group_sender": one session per (group + sender)
@@ -221,6 +231,8 @@ export const FeishuConfigSchema = z
     // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
+    // Message defaults
+    messageDefaults: MessageDefaultsSchema,
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })

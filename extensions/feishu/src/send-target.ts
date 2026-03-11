@@ -21,9 +21,11 @@ export function resolveFeishuSendTarget(params: {
   // Preserve explicit routing prefixes (chat/group/user/dm/open_id) when present.
   // normalizeFeishuTarget strips these prefixes, so infer type from the raw target first.
   const withoutProviderPrefix = target.replace(/^(feishu|lark):/i, "");
+  // Use messageDefaults.receive_id_type if configured, otherwise infer from ID
+  const defaultReceiveIdType = account.config.messageDefaults?.receive_id_type;
   return {
     client,
     receiveId,
-    receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
+    receiveIdType: resolveReceiveIdType(withoutProviderPrefix, defaultReceiveIdType),
   };
 }
