@@ -17,7 +17,7 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolvePromptModeForSession } from "../../routing/session-key.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
@@ -77,10 +77,7 @@ export function buildSystemPrompt(params: {
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   // cron and subagent sessions use minimal mode — suppress heartbeat instructions
-  const promptMode: PromptMode =
-    isCronSessionKey(params.sessionKey) || isSubagentSessionKey(params.sessionKey)
-      ? "minimal"
-      : "full";
+  const promptMode: PromptMode = resolvePromptModeForSession(params.sessionKey);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
