@@ -84,7 +84,7 @@ describe("provider-usage.format", () => {
       updatedAt: now,
       providers: [
         {
-          provider: "kilocode",
+          provider: "zai",
           displayName: "Kilo",
           windows: [],
           plan: "$5.00",
@@ -129,7 +129,7 @@ describe("provider-usage.format", () => {
           windows: [],
         },
         {
-          provider: "kilocode",
+          provider: "zai",
           displayName: "Kilo",
           windows: [],
           plan: "$5.00",
