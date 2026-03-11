@@ -3,6 +3,7 @@ import {
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
+import { isWebSocketUrl } from "./cdp.helpers.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -16,6 +17,7 @@ import {
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { hasActivePlaywrightConnection } from "./pw-session.js";
 import {
   CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
@@ -60,11 +62,20 @@ export function createProfileAvailability({
     });
 
   const isReachable = async (timeoutMs?: number) => {
+    // For direct WebSocket endpoints (e.g. Browser Use), each raw CDP health check
+    // opens a new WebSocket which may provision a new browser session. Check the
+    // cached Playwright connection instead — it reflects the actual connection state.
+    if (isWebSocketUrl(profile.cdpUrl)) {
+      return hasActivePlaywrightConnection(profile.cdpUrl);
+    }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (isWebSocketUrl(profile.cdpUrl)) {
+      return hasActivePlaywrightConnection(profile.cdpUrl);
+    }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };

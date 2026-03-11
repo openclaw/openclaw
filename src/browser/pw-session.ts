@@ -119,6 +119,13 @@ const MAX_NETWORK_REQUESTS = 500;
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 
+/**
+ * Returns true if there is an active cached Playwright connection for the given CDP URL.
+ */
+export function hasActivePlaywrightConnection(cdpUrl: string): boolean {
+  return cachedByCdpUrl.has(cdpUrl.replace(/\/$/, ""));
+}
+
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
 }
