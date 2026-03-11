@@ -87,6 +87,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "mistral":
+      return search?.mistral?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
   }
@@ -148,6 +150,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "mistral":
+      search.mistral = { ...search.mistral, apiKey: key };
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };

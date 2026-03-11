@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -1664,37 +1665,48 @@ async function runMistralSearch(params: {
 }): Promise<{ content: string; citations: Array<{ url: string; title: string }> }> {
   let agent_id = params.agentId;
   if (!agent_id) {
-    // Create agent for web-searching tool
-    const agentRes = await withTrustedWebSearchEndpoint(
-      {
-        url: `${MISTRAL_API_BASE_URL}/agents`,
-        timeoutSeconds: params.timeoutSeconds,
-        init: {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${params.apiKey}`,
-            "Content-Type": "application/json",
+    const hash = createHash("md5").update(params.apiKey).digest("hex");
+    const dynamicCacheKey = `mistral_agent_${hash}_${params.model}`; // prevents invalid/unauthroized reuse across different user contexts
+    const cachedAgent = readCache(SEARCH_CACHE, dynamicCacheKey);
+    if (cachedAgent?.cached) {
+      agent_id = cachedAgent.value.id as string;
+    } else {
+      // Create + cache new agent for web-searching tool
+      const agentRes = await withTrustedWebSearchEndpoint(
+        {
+          url: `${MISTRAL_API_BASE_URL}/agents`,
+          timeoutSeconds: params.timeoutSeconds,
+          init: {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${params.apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: params.model,
+              description:
+                "Agent able to search information over the web, such as news, weather, sport results...",
+              name: "Websearch Agent",
+              instructions:
+                "You have the ability to perform web searches with `web_search` to find up-to-date information.",
+              tools: [MISTRAL_WEB_SEARCH_TOOL],
+            }),
           },
-          body: JSON.stringify({
-            model: params.model,
-            description:
-              "Agent able to search information over the web, such as news, weather, sport results...",
-            name: "Websearch Agent",
-            instructions:
-              "You have the ability to perform web searches with `web_search` to find up-to-date information.",
-            tools: [MISTRAL_WEB_SEARCH_TOOL],
-          }),
         },
-      },
-      async (res) => {
-        if (!res.ok) {
-          return await throwWebSearchApiError(res, "Mistral agent creation");
-        }
-        const data = (await res.json()) as { id?: string };
-        return data.id || undefined; // Extract agent id
-      },
-    );
-    agent_id = agentRes;
+        async (res) => {
+          if (!res.ok) {
+            return await throwWebSearchApiError(res, "Mistral agent creation");
+          }
+          const data = (await res.json()) as { id?: string };
+          return data.id || undefined; // Extract agent id
+        },
+      );
+      if (!agentRes) {
+        throw new Error("Mistral agent creation succeeded but returned no agent id");
+      }
+      agent_id = agentRes;
+      writeCache(SEARCH_CACHE, dynamicCacheKey, { id: agent_id }, 3600000); // TTL: 1 hour
+    }
   }
 
   return await withTrustedWebSearchEndpoint(
@@ -1721,7 +1733,7 @@ async function runMistralSearch(params: {
 
       const data = (await res.json()) as MistralSearchResponse;
 
-      const rawContent = data.outputs.filter((o) => o.type === "message.output")[0].content ?? [];
+      const rawContent = data.outputs.filter((o) => o.type === "message.output")[0]?.content ?? [];
       const messageOutputContentChunks = Array.isArray(rawContent)
         ? rawContent
         : [{ type: "text" as const, text: rawContent }]; // string content means endpoint refused web-search tool (normal conversation)
@@ -1730,7 +1742,7 @@ async function runMistralSearch(params: {
         messageOutputContentChunks
           .filter((chunk) => chunk.type === "text")
           .map((chunk) => chunk.text)
-          .join(" ") ?? "No response";
+          .join(" ") || "No response";
       const citations = messageOutputContentChunks
         .filter((chunk) => chunk.type === "tool_reference")
         .map((chunk) => ({ title: chunk.title!, url: chunk.url ?? "" }));
@@ -1780,7 +1792,7 @@ async function runWebSearch(params: {
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : params.provider === "mistral"
-              ? (params.mistralModel ?? DEFAULT_MISTRAL_MODEL)
+              ? `${params.mistralModel ?? DEFAULT_MISTRAL_MODEL}:${params.mistralAgentId ?? ""}`
               : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"

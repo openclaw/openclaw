@@ -484,7 +484,7 @@ export type ToolsConfig = {
       /** Mistral-specific configuration (used when provider="mistral"). */
       mistral?: {
         /** Mistral API key (defaults to MISTRAL_API_KEY env var). */
-        apiKey?: string;
+        apiKey?: SecretInput;
         /** Model to use (default: "mistral-medium-latest"). */
         model?: string;
         agentId?: string;
