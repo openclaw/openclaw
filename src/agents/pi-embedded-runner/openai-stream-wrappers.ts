@@ -44,7 +44,7 @@ function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: { supportsStore?: boolean; supportsPromptCacheKey?: boolean };
 }): boolean {
   if (model.compat?.supportsStore === false) {
     return false;
@@ -87,7 +87,7 @@ function shouldEnableOpenAIResponsesServerCompaction(
     api?: unknown;
     provider?: unknown;
     baseUrl?: unknown;
-    compat?: { supportsStore?: boolean };
+    compat?: { supportsStore?: boolean; supportsPromptCacheKey?: boolean };
   },
   extraParams: Record<string, unknown> | undefined,
 ): boolean {
@@ -105,7 +105,10 @@ function shouldEnableOpenAIResponsesServerCompaction(
 }
 
 function shouldStripResponsesStore(
-  model: { api?: unknown; compat?: { supportsStore?: boolean } },
+  model: {
+    api?: unknown;
+    compat?: { supportsStore?: boolean; supportsPromptCacheKey?: boolean };
+  },
   forceStore: boolean,
 ): boolean {
   if (forceStore) {
@@ -117,10 +120,21 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
+function shouldStripResponsesPromptCacheKey(model: {
+  api?: unknown;
+  compat?: { supportsStore?: boolean; supportsPromptCacheKey?: boolean };
+}): boolean {
+  if (typeof model.api !== "string") {
+    return false;
+  }
+  return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsPromptCacheKey === false;
+}
+
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
   stripStore: boolean;
+  stripPromptCacheKey: boolean;
   useServerCompaction: boolean;
   compactThreshold: number;
 }): void {
@@ -129,6 +143,9 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   }
   if (params.stripStore) {
     delete params.payloadObj.store;
+  }
+  if (params.stripPromptCacheKey) {
+    delete params.payloadObj.prompt_cache_key;
   }
   if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
     params.payloadObj.context_management = [
@@ -177,7 +194,8 @@ export function createOpenAIResponsesContextManagementWrapper(
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
-    if (!forceStore && !useServerCompaction && !stripStore) {
+    const stripPromptCacheKey = shouldStripResponsesPromptCacheKey(model);
+    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCacheKey) {
       return underlying(model, context, options);
     }
 
@@ -193,6 +211,7 @@ export function createOpenAIResponsesContextManagementWrapper(
             payloadObj: payload as Record<string, unknown>,
             forceStore,
             stripStore,
+            stripPromptCacheKey,
             useServerCompaction,
             compactThreshold,
           });

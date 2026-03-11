@@ -1706,6 +1706,32 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
+  it("strips prompt_cache_key from payload for responses models that declare supportsPromptCacheKey=false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-openai-responses",
+      applyModelId: "doubao-seed-2-0-pro-260215",
+      model: {
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        id: "doubao-seed-2-0-pro-260215",
+        name: "doubao-seed-2-0-pro-260215",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+        compat: { supportsPromptCacheKey: false },
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-123",
+      },
+    });
+    expect(payload.store).toBe(false);
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+  });
+
   it("keeps existing context_management when stripping store for supportsStore=false models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "custom-openai-responses",

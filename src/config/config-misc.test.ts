@@ -44,6 +44,31 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("models.providers.*.models.*.compat.supportsPromptCacheKey", () => {
+  it("accepts boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          volcengine: {
+            baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+            api: "openai-responses",
+            models: [
+              {
+                id: "doubao-seed-2-0-pro-260215",
+                name: "doubao-seed-2-0-pro-260215",
+                compat: {
+                  supportsPromptCacheKey: false,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
