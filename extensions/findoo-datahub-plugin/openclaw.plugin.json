@@ -30,5 +30,28 @@
         "maximum": 120000
       }
     }
+  },
+  "uiHints": {
+    "datahubApiKey": {
+      "label": "API Key",
+      "help": "DataHub API 密钥。默认使用内置 dev key，生产环境请替换。",
+      "sensitive": true,
+      "placeholder": "98ffa5c5-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    },
+    "datahubApiUrl": {
+      "label": "API URL",
+      "help": "DataHub REST API 地址，仅自建实例需修改。",
+      "advanced": true
+    },
+    "datahubUsername": {
+      "label": "Username",
+      "help": "HTTP Basic Auth 用户名，默认 admin。",
+      "advanced": true
+    },
+    "requestTimeoutMs": {
+      "label": "Request Timeout (ms)",
+      "help": "API 请求超时时间，默认 30 秒。",
+      "advanced": true
+    }
   }
 }
