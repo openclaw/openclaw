@@ -75,4 +75,44 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not report already-canonical payload kinds as legacy kind migrations", () => {
+    const jobs = [
+      {
+        id: "canonical-kind",
+        schedule: { kind: "every", everyMs: 60_000 },
+        state: {},
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    expect(jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "ping",
+    });
+  });
+
+  it("trims unknown payload kinds without lowercasing them", () => {
+    const jobs = [
+      {
+        id: "trim-unknown-kind",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: " customEvent ",
+          text: "ping",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect((jobs[0]?.payload as Record<string, unknown> | undefined)?.kind).toBe("customEvent");
+  });
 });
