@@ -200,6 +200,7 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
+  enabled?: boolean;
 };
 
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
