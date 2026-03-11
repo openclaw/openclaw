@@ -650,6 +650,64 @@ describe("agentCommand", () => {
     });
   });
 
+  it("strips images on cross-provider fallback retry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:image-strip": {
+          sessionId: "session-image-strip",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-image-strip", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      const fakeImages = [{ type: "image" as const, data: "abc", mimeType: "image/png" }];
+      await agentCommand(
+        {
+          message: "describe this image",
+          sessionKey: "agent:main:subagent:image-strip",
+          images: fakeImages,
+        },
+        runtime,
+      );
+
+      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      expect(calls).toHaveLength(2);
+      // First attempt (anthropic) should receive images
+      expect(calls[0]?.[0]?.images).toBe(fakeImages);
+      // Second attempt (openai, cross-provider) should have images stripped
+      expect(calls[1]?.[0]?.images).toBeUndefined();
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1084,6 +1142,10 @@ describe("resolveRetryImages", () => {
 
   it("strips images on cross-provider fallback even without format error", () => {
     expect(resolveRetryImages(fakeImages, true, "timeout", "anthropic", "google")).toBeUndefined();
+  });
+
+  it("strips images on cross-provider fallback even when previousFailureReason is undefined", () => {
+    expect(resolveRetryImages(fakeImages, true, undefined, "anthropic", "openai")).toBeUndefined();
   });
 
   it("strips images on same-provider format error (existing behavior)", () => {
