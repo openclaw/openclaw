@@ -507,6 +507,10 @@ test('EXEC_POLL_PREAMBLE is prepended to step task before spawn', async (t) => {
 
   assert.ok(receivedPrompts.length === 1, 'spawn called once');
   assert.ok(
+    receivedPrompts[0].includes('yieldMs=300000'),
+    'preamble instructs agent to use yieldMs=300000 for long commands',
+  );
+  assert.ok(
     receivedPrompts[0].includes('Command still running'),
     'preamble with exec-poll instruction prepended',
   );
