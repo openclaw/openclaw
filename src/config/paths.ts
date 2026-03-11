@@ -263,16 +263,34 @@ export function resolveOAuthPath(
   return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
+function parseGatewayPortEnvValue(raw: string | undefined): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
+  // for example `127.0.0.1:18789`. In that case, use the published host port suffix.
+  const suffix = trimmed.slice(trimmed.lastIndexOf(":") + 1);
+  if (!/^\d+$/.test(suffix)) {
+    return null;
+  }
+  const parsed = Number.parseInt(suffix, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function resolveGatewayPort(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
   const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
-  if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+  const envPort = parseGatewayPortEnvValue(envRaw);
+  if (envPort !== null) {
+    return envPort;
   }
   const configPort = cfg?.gateway?.port;
   if (typeof configPort === "number" && Number.isFinite(configPort)) {
