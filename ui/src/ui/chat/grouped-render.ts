@@ -222,6 +222,18 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
+function handleMarkdownImageClick(event: Event) {
+  const target = event.target;
+  if (!(target instanceof HTMLImageElement)) {
+    return;
+  }
+  const rawUrl = target.dataset.openclawImageUrl;
+  if (!rawUrl) {
+    return;
+  }
+  openExternalUrlSafe(rawUrl, { allowDataImage: true });
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
@@ -279,7 +291,13 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div
+              class="chat-text"
+              dir="${detectTextDirection(markdown)}"
+              @click=${handleMarkdownImageClick}
+            >
+              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+            </div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

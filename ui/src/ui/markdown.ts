@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
+import { resolveSafeExternalUrl } from "./open-external-url.ts";
 
 const allowedTags = [
   "a",
@@ -31,7 +32,17 @@ const allowedTags = [
   "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const allowedAttrs = [
+  "class",
+  "href",
+  "rel",
+  "target",
+  "title",
+  "start",
+  "src",
+  "alt",
+  "data-openclaw-image-url",
+];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
@@ -43,7 +54,7 @@ const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
-const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const FALLBACK_MARKDOWN_BASE_HREF = "https://control-ui.invalid/";
 const markdownCache = new Map<string, string>();
 
 function getCachedMarkdown(key: string): string | null {
@@ -141,10 +152,15 @@ htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null }) => {
   const label = normalizeMarkdownImageLabel(token.text);
   const href = token.href?.trim() ?? "";
-  if (!INLINE_DATA_IMAGE_RE.test(href)) {
+  const safeUrl = resolveSafeExternalUrl(
+    href,
+    typeof window !== "undefined" ? window.location.href : FALLBACK_MARKDOWN_BASE_HREF,
+    { allowDataImage: true },
+  );
+  if (!safeUrl) {
     return escapeHtml(label);
   }
-  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  return `<img class="chat-message-image" src="${escapeHtml(safeUrl)}" alt="${escapeHtml(label)}" data-openclaw-image-url="${escapeHtml(safeUrl)}">`;
 };
 
 function normalizeMarkdownImageLabel(text?: string | null): string {

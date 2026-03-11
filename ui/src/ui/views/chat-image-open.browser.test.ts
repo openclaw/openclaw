@@ -15,6 +15,14 @@ function renderAssistantImage(url: string) {
   };
 }
 
+function renderAssistantMarkdownImage(url: string) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: `![Inline image](${url})` }],
+    timestamp: Date.now(),
+  };
+}
+
 describe("chat image open safety", () => {
   it("opens safe image URLs in a hardened new tab", async () => {
     const app = mountApp("/chat");
@@ -66,5 +74,27 @@ describe("chat image open safety", () => {
     image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders and opens safe markdown image URLs", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    app.chatMessages = [renderAssistantMarkdownImage("https://example.com/inline.png")];
+    await app.updateComplete;
+
+    const image = app.querySelector<HTMLImageElement>(".chat-text .chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("https://example.com/inline.png");
+
+    image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://example.com/inline.png",
+      "_blank",
+      "noopener,noreferrer",
+    );
   });
 });
