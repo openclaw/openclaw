@@ -1067,6 +1067,11 @@ export async function backupRestoreCommand(
       archivePath: pinnedArchivePath,
       includeWorkspace,
     });
+    if (restorePlan.items.length === 0) {
+      throw new Error(
+        "Backup archive does not contain any restorable assets for the current restore options.",
+      );
+    }
 
     await assertRestoreTargetsReady({
       archivePath,

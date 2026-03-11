@@ -896,6 +896,72 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("rejects restores when the current restore options exclude every verified asset", async () => {
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-empty-assets-"),
+    );
+    const archivePath = path.join(archiveDir, "workspace-only.tar.gz");
+
+    try {
+      const sourceWorkspace = path.join(sourceHome.home, "workspace-only");
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(archiveDir, rootName);
+      const workspaceArchiveRelativePath = path.join(
+        "payload",
+        "posix",
+        sourceWorkspace.replace(/^\/+/u, ""),
+      );
+      const workspacePayloadDir = path.join(root, workspaceArchiveRelativePath);
+      await fs.mkdir(root, { recursive: true });
+      await fs.mkdir(workspacePayloadDir, { recursive: true });
+      await fs.writeFile(path.join(workspacePayloadDir, "SOUL.md"), "# soul\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: rootName,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [sourceWorkspace],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: sourceWorkspace,
+                archivePath: `${rootName}/${workspaceArchiveRelativePath.replaceAll(path.sep, "/")}`,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: archiveDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const targetHome = await createExtraHome("openclaw-backup-restore-empty-assets-home-");
+      setActiveHome(targetHome);
+
+      await expect(
+        backupRestoreCommand(runtime, {
+          archive: archivePath,
+          includeWorkspace: false,
+        }),
+      ).rejects.toThrow(/does not contain any restorable assets/i);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces restore conflicts during dry-run", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(

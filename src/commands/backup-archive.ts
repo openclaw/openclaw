@@ -143,6 +143,9 @@ function parseManifest(raw: string): BackupManifest {
   if (!Array.isArray(parsed.assets)) {
     throw new Error("Backup manifest is missing assets.");
   }
+  if (parsed.assets.length === 0) {
+    throw new Error("Backup manifest assets must not be empty.");
+  }
 
   const assets: BackupManifestAsset[] = [];
   for (const asset of parsed.assets) {
