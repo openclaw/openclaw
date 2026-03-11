@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
+import { launchAgentPlistExists, repairLaunchAgentBootstrap } from "../../daemon/launchd.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
@@ -180,6 +181,28 @@ async function restartGatewayWithoutServiceManager(port: number) {
   };
 }
 
+async function startGatewayLaunchAgentBootstrap(service = resolveGatewayService()) {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const plistExists = await launchAgentPlistExists(process.env);
+  if (!plistExists) {
+    return null;
+  }
+  const repair = await repairLaunchAgentBootstrap({ env: process.env });
+  if (!repair.ok) {
+    throw new Error(`LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`);
+  }
+  const loaded = await service.isLoaded({ env: process.env });
+  if (!loaded) {
+    throw new Error("LaunchAgent bootstrap did not load the gateway service");
+  }
+  return {
+    result: "started" as const,
+    message: "Gateway LaunchAgent bootstrapped from existing plist.",
+  };
+}
+
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -191,11 +214,13 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  const service = resolveGatewayService();
   return await runServiceStart({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service,
     renderStartHints: renderGatewayServiceStartHints,
     opts,
+    onNotLoaded: async () => startGatewayLaunchAgentBootstrap(service),
   });
 }
 

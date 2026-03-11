@@ -25,9 +25,11 @@ type RestartParams = {
 const service = {
   readCommand: vi.fn(),
   restart: vi.fn(),
+  isLoaded: vi.fn(),
 };
 
 const runServiceRestart = vi.fn();
+const runServiceStart = vi.fn();
 const runServiceStop = vi.fn();
 const waitForGatewayHealthyListener = vi.fn();
 const waitForGatewayHealthyRestart = vi.fn();
@@ -48,6 +50,8 @@ const probeGateway = vi.fn<
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const launchAgentPlistExists = vi.fn();
+const repairLaunchAgentBootstrap = vi.fn();
 
 vi.mock("node:fs", () => ({
   default: {
@@ -85,6 +89,11 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
 
+vi.mock("../../daemon/launchd.js", () => ({
+  launchAgentPlistExists,
+  repairLaunchAgentBootstrap,
+}));
+
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
@@ -97,7 +106,7 @@ vi.mock("./restart-health.js", () => ({
 
 vi.mock("./lifecycle-core.js", () => ({
   runServiceRestart,
-  runServiceStart: vi.fn(),
+  runServiceStart,
   runServiceStop,
   runServiceUninstall: vi.fn(),
 }));
@@ -113,6 +122,8 @@ describe("runDaemonRestart health checks", () => {
   beforeEach(() => {
     service.readCommand.mockReset();
     service.restart.mockReset();
+    service.isLoaded.mockReset();
+    runServiceStart.mockReset();
     runServiceRestart.mockReset();
     runServiceStop.mockReset();
     waitForGatewayHealthyListener.mockReset();
@@ -125,6 +136,8 @@ describe("runDaemonRestart health checks", () => {
     probeGateway.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    launchAgentPlistExists.mockReset();
+    repairLaunchAgentBootstrap.mockReset();
     mockReadFileSync.mockReset();
     mockSpawnSync.mockReset();
 
@@ -132,6 +145,9 @@ describe("runDaemonRestart health checks", () => {
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
+    service.isLoaded.mockResolvedValue(true);
+    launchAgentPlistExists.mockResolvedValue(true);
+    repairLaunchAgentBootstrap.mockResolvedValue({ ok: true });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -148,6 +164,7 @@ describe("runDaemonRestart health checks", () => {
       return true;
     });
     runServiceStop.mockResolvedValue(undefined);
+    runServiceStart.mockResolvedValue(undefined);
     waitForGatewayHealthyListener.mockResolvedValue({
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -202,6 +219,20 @@ describe("runDaemonRestart health checks", () => {
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("bootstraps the macOS LaunchAgent when start sees a not-loaded service", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    runServiceStart.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
+      await params.onNotLoaded?.();
+    });
+
+    const { runDaemonStart } = await import("./lifecycle.js");
+    await runDaemonStart({ json: true });
+
+    expect(launchAgentPlistExists).toHaveBeenCalledWith(process.env);
+    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
+    expect(service.isLoaded).toHaveBeenCalledWith({ env: process.env });
   });
 
   it("fails restart when gateway remains unhealthy", async () => {
