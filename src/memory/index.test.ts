@@ -6,6 +6,7 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import "./test-runtime-mocks.js";
 
 let embedBatchCalls = 0;
+let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -15,18 +16,43 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta];
   };
   return {
-    createEmbeddingProvider: async (options: { model?: string }) => ({
-      requestedProvider: "openai",
-      provider: {
-        id: "mock",
-        model: options.model ?? "mock-embed",
-        embedQuery: async (text: string) => embedText(text),
-        embedBatch: async (texts: string[]) => {
-          embedBatchCalls += 1;
-          return texts.map(embedText);
+    createEmbeddingProvider: async (options: {
+      provider?: string;
+      model?: string;
+      outputDimensionality?: number;
+    }) => {
+      providerCalls.push({
+        provider: options.provider,
+        model: options.model,
+        outputDimensionality: options.outputDimensionality,
+      });
+      const providerId = options.provider === "gemini" ? "gemini" : "mock";
+      const model = options.model ?? "mock-embed";
+      return {
+        requestedProvider: options.provider ?? "openai",
+        provider: {
+          id: providerId,
+          model,
+          embedQuery: async (text: string) => embedText(text),
+          embedBatch: async (texts: string[]) => {
+            embedBatchCalls += 1;
+            return texts.map(embedText);
+          },
         },
-      },
-    }),
+        ...(providerId === "gemini"
+          ? {
+              gemini: {
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                headers: {},
+                model,
+                modelPath: `models/${model}`,
+                apiKeys: ["test-key"],
+                outputDimensionality: options.outputDimensionality,
+              },
+            }
+          : {}),
+      };
+    },
   };
 });
 
@@ -93,6 +119,7 @@ describe("memory index", () => {
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     embedBatchCalls = 0;
+    providerCalls = [];
 
     // Keep the workspace stable to allow manager reuse across tests.
     await fs.mkdir(memoryDir, { recursive: true });
@@ -119,7 +146,9 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
+    provider?: "openai" | "gemini";
     model?: string;
+    outputDimensionality?: number;
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
     minScore?: number;
@@ -130,8 +159,9 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: "openai",
+            provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
+            outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
@@ -339,6 +369,67 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
     const status = secondManager.status();
     expect(status.files).toBeGreaterThan(0);
+    await secondManager.close?.();
+  });
+
+  it("passes Gemini outputDimensionality from config into the provider", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 1536,
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+
+    expect(
+      providerCalls.some(
+        (call) =>
+          call.provider === "gemini" &&
+          call.model === "gemini-embedding-2-preview" &&
+          call.outputDimensionality === 1536,
+      ),
+    ).toBe(true);
+    await manager.close?.();
+  });
+
+  it("reindexes when Gemini outputDimensionality changes", async () => {
+    const base = createCfg({
+      storePath: indexModelPath,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 3072,
+    });
+    const baseAgents = base.agents!;
+    const baseDefaults = baseAgents.defaults!;
+    const baseMemorySearch = baseDefaults.memorySearch!;
+
+    const first = await getMemorySearchManager({ cfg: base, agentId: "main" });
+    const firstManager = requireManager(first);
+    await firstManager.sync?.({ reason: "test" });
+    const callsAfterFirstSync = embedBatchCalls;
+    await firstManager.close?.();
+
+    const second = await getMemorySearchManager({
+      cfg: {
+        ...base,
+        agents: {
+          ...baseAgents,
+          defaults: {
+            ...baseDefaults,
+            memorySearch: {
+              ...baseMemorySearch,
+              outputDimensionality: 768,
+            },
+          },
+        },
+      },
+      agentId: "main",
+    });
+    const secondManager = requireManager(second);
+    await secondManager.sync?.({ reason: "test" });
+    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
     await secondManager.close?.();
   });
 
