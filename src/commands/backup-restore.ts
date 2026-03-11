@@ -302,6 +302,7 @@ function resolveCoveredSourcePath(
 function buildCoveredAssetManifestEntries(params: {
   verifiedArchive: Awaited<ReturnType<typeof readVerifiedBackupArchive>>;
   currentStateDir: string;
+  currentStateCanonicalDir?: string;
   currentConfigPath: string;
   currentOauthDir: string;
 }): BackupManifestAsset[] {
@@ -332,6 +333,7 @@ function buildCoveredAssetManifestEntries(params: {
     const activeRelativePath = resolvePathRelativeToStateDir({
       targetPath: activeTargetPath,
       stateDir: params.currentStateDir,
+      stateCanonicalDir: params.currentStateCanonicalDir,
     });
     if (coveredRelativePath && activeRelativePath && coveredRelativePath === activeRelativePath) {
       continue;
@@ -549,6 +551,7 @@ async function buildRestoreItems(params: {
   const verifiedArchive = await readVerifiedBackupArchive(params.archivePath);
   const manifest = verifiedArchive.manifest;
   const currentStateDir = path.resolve(resolveStateDir());
+  const currentStateCanonicalDir = await canonicalizePath(currentStateDir);
   const currentConfigPath = path.resolve(resolveConfigPath());
   const currentOauthDir = path.resolve(resolveOAuthDir());
 
@@ -568,6 +571,7 @@ async function buildRestoreItems(params: {
     ...buildCoveredAssetManifestEntries({
       verifiedArchive,
       currentStateDir,
+      currentStateCanonicalDir,
       currentConfigPath,
       currentOauthDir,
     }),

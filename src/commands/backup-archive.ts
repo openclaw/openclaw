@@ -310,6 +310,10 @@ function isDirectoryArchiveEntryType(type: string): boolean {
   return type === "Directory";
 }
 
+function isPayloadArchiveEntryType(type: string): boolean {
+  return isFileArchiveEntryType(type) || isDirectoryArchiveEntryType(type);
+}
+
 function verifyManifestAgainstEntries(
   manifest: BackupManifest,
   entries: ArchiveEntryRecord[],
@@ -338,8 +342,11 @@ function verifyManifestAgainstEntries(
     }
     const exactEntry = entryByPath.get(assetArchivePath);
     const exact = Boolean(exactEntry);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
+    const nested = entries.some(
+      (entry) =>
+        entry.normalized !== assetArchivePath &&
+        isPayloadArchiveEntryType(entry.type) &&
+        isArchivePathWithin(entry.normalized, assetArchivePath),
     );
     if (isFileAssetKind(asset.kind)) {
       if (!exact || !exactEntry || !isFileArchiveEntryType(exactEntry.type) || nested) {

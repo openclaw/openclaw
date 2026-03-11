@@ -421,6 +421,66 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("skips covered synthesis when active targets are under a canonicalized state alias", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-current-alias-"),
+    );
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.mkdir(path.join(sourceStateDir, "credentials"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({ profile: "covered-current-alias" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials", "oauth.json"), "{}", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-covered-current-home-");
+      const targetStateRealDir = path.join(targetHome, "state-real");
+      const targetStateAliasDir = path.join(targetHome, "state-link");
+      const targetConfigPath = path.join(targetStateRealDir, "openclaw.json");
+      const targetOauthDir = path.join(targetStateRealDir, "credentials");
+      await fs.mkdir(targetOauthDir, { recursive: true });
+      await fs.symlink(targetStateRealDir, targetStateAliasDir);
+
+      process.env.HOME = targetHome;
+      process.env.USERPROFILE = targetHome;
+      process.env.OPENCLAW_STATE_DIR = targetStateAliasDir;
+      process.env.OPENCLAW_CONFIG_PATH = targetConfigPath;
+      process.env.OPENCLAW_OAUTH_DIR = targetOauthDir;
+      clearConfigCache();
+
+      await fs.writeFile(path.join(targetStateRealDir, "state.txt"), "old\n", "utf8");
+      await fs.writeFile(targetConfigPath, '{"profile":"old"}\n', "utf8");
+      await fs.writeFile(path.join(targetOauthDir, "oauth.json"), '{"old":true}\n', "utf8");
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+        includeWorkspace: false,
+      });
+
+      expect(restored.restored.map((asset) => asset.kind)).toEqual(["state"]);
+      expect(await fs.readFile(targetConfigPath, "utf8")).toContain("covered-current-alias");
+      expect(await fs.readFile(path.join(targetOauthDir, "oauth.json"), "utf8")).toBe("{}");
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("restores legacy covered config and credentials from manifest paths", async () => {
     const sourceStateDir = path.join(sourceHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(
