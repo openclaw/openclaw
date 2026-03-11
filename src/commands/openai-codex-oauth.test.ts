@@ -192,6 +192,31 @@ describe("loginOpenAICodexOAuth", () => {
     expect(mocks.setGlobalDispatcher.mock.calls[1]?.[0]).toEqual({ kind: "original" });
   });
 
+  it("falls back to direct transport when proxy dispatcher setup fails", async () => {
+    process.env.HTTPS_PROXY = "bad-proxy-url";
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.EnvHttpProxyAgent.mockImplementationOnce(() => {
+      throw new Error("invalid proxy url");
+    });
+    mocks.createVpsAwareOAuthHandlers.mockReturnValue({ onAuth: vi.fn(), onPrompt: vi.fn() });
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { result, runtime } = await runCodexOAuth({ isRemote: false });
+
+    expect(result).toEqual(creds);
+    expect(mocks.setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("proxy dispatcher setup failed; falling back to direct transport"),
+    );
+  });
+
   it("continues OAuth flow on non-certificate preflight failures", async () => {
     const creds = {
       provider: "openai-codex" as const,

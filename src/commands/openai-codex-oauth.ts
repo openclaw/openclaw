@@ -18,15 +18,29 @@ function hasConfiguredProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   });
 }
 
-async function withTemporaryProxyDispatcher<T>(work: () => Promise<T>): Promise<T> {
+async function withTemporaryProxyDispatcher<T>(params: {
+  work: () => Promise<T>;
+  runtime: RuntimeEnv;
+}): Promise<T> {
   if (!hasConfiguredProxyEnv()) {
-    return work();
+    return params.work();
   }
 
-  const previous = getGlobalDispatcher();
-  setGlobalDispatcher(new EnvHttpProxyAgent());
+  let previous: ReturnType<typeof getGlobalDispatcher>;
+  let proxyDispatcher: EnvHttpProxyAgent;
   try {
-    return await work();
+    previous = getGlobalDispatcher();
+    proxyDispatcher = new EnvHttpProxyAgent();
+  } catch (err) {
+    params.runtime.log(
+      `[openai-codex-oauth] proxy dispatcher setup failed; falling back to direct transport: ${String(err)}`,
+    );
+    return params.work();
+  }
+
+  setGlobalDispatcher(proxyDispatcher);
+  try {
+    return await params.work();
   } finally {
     setGlobalDispatcher(previous);
   }
@@ -74,13 +88,15 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
 
-    const creds = await withTemporaryProxyDispatcher(() =>
-      loginOpenAICodex({
-        onAuth: baseOnAuth,
-        onPrompt,
-        onProgress: (msg: string) => spin.update(msg),
-      }),
-    );
+    const creds = await withTemporaryProxyDispatcher({
+      runtime,
+      work: () =>
+        loginOpenAICodex({
+          onAuth: baseOnAuth,
+          onPrompt,
+          onProgress: (msg: string) => spin.update(msg),
+        }),
+    });
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
