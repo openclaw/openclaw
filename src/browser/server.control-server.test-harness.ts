@@ -104,6 +104,14 @@ const pwMocks = vi.hoisted(() => ({
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  snapshotAriaViaPlaywright: vi.fn(async () => ({
+    nodes: [{ role: "button", name: "x" }],
+  })),
+  snapshotRoleViaPlaywright: vi.fn(async () => ({
+    snapshot: "ok",
+    refs: {},
+    stats: { lines: 1, chars: 2, refs: 0, interactive: 0 },
+  })),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
@@ -161,6 +169,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
         defaultProfile: "openclaw",
         profiles: {
           openclaw: { cdpPort: state.testPort + 1, color: "#FF4500" },
+          chrome: {
+            cdpPort: state.testPort + 1,
+            color: "#00AA00",
+            driver: "extension",
+          },
         },
       },
     }),
