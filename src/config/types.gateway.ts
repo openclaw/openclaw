@@ -211,6 +211,17 @@ export type GatewayReloadConfig = {
   debounceMs?: number;
 };
 
+export type GatewayRestartRecoveryConfig = {
+  /**
+   * If true, when gateway startup observes a restart sentinel (for example from
+   * `gateway restart`, `config patch`, or `config apply`), attempt to resume
+   * in-flight agent runs that were accepted before the restart.
+   *
+   * Default: false.
+   */
+  resumeInflightAgentRuns?: boolean;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -391,6 +402,7 @@ export type GatewayConfig = {
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
+  restartRecovery?: GatewayRestartRecoveryConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   nodes?: GatewayNodesConfig;

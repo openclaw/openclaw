@@ -12,6 +12,7 @@ const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const resetEmbeddedRunTrackingForRestart = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
@@ -53,6 +54,7 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
     abortEmbeddedPiRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
+  resetEmbeddedRunTrackingForRestart: () => resetEmbeddedRunTrackingForRestart(),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -269,6 +271,7 @@ describe("runGatewayLoop", () => {
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(resetEmbeddedRunTrackingForRestart).toHaveBeenCalledTimes(1);
 
       sigusr1();
 
@@ -281,6 +284,7 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(resetEmbeddedRunTrackingForRestart).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();
@@ -320,6 +324,29 @@ describe("runGatewayLoop", () => {
       expect(lockRelease).toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+    });
+  });
+
+  it("exits on supervised restart even when the launch helper reports a detail", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+        mode: "supervised",
+        detail: "launchctl kickstart failed",
+      });
+
+      const { runtime, exited } = await createSignaledLoopHarness();
+      process.emit("SIGUSR1");
+
+      await exited;
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        "restart mode: full process restart (supervisor restart)",
+      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        expect.stringContaining("launchctl kickstart failed"),
+      );
     });
   });
 
