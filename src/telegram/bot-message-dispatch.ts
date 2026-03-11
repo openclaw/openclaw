@@ -588,6 +588,7 @@ export const dispatchTelegramMessage = async ({
               } else {
                 toolSummaryLines.length = 0;
               }
+              return;
             }
             try {
               await editMessageTelegram(chatId, toolSummaryMessageId, safeAggregated, {
