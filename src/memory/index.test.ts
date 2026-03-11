@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,27 +7,86 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import "./test-runtime-mocks.js";
 
 let embedBatchCalls = 0;
+let embedBatchInputCalls = 0;
+let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
     const alpha = lower.split("alpha").length - 1;
     const beta = lower.split("beta").length - 1;
-    return [alpha, beta];
+    const image = lower.split("image").length - 1;
+    const audio = lower.split("audio").length - 1;
+    return [alpha, beta, image, audio];
   };
   return {
-    createEmbeddingProvider: async (options: { model?: string }) => ({
-      requestedProvider: "openai",
-      provider: {
-        id: "mock",
-        model: options.model ?? "mock-embed",
-        embedQuery: async (text: string) => embedText(text),
-        embedBatch: async (texts: string[]) => {
-          embedBatchCalls += 1;
-          return texts.map(embedText);
+    createEmbeddingProvider: async (options: {
+      provider?: string;
+      model?: string;
+      outputDimensionality?: number;
+    }) => {
+      providerCalls.push({
+        provider: options.provider,
+        model: options.model,
+        outputDimensionality: options.outputDimensionality,
+      });
+      const providerId = options.provider === "gemini" ? "gemini" : "mock";
+      const model = options.model ?? "mock-embed";
+      return {
+        requestedProvider: options.provider ?? "openai",
+        provider: {
+          id: providerId,
+          model,
+          embedQuery: async (text: string) => embedText(text),
+          embedBatch: async (texts: string[]) => {
+            embedBatchCalls += 1;
+            return texts.map(embedText);
+          },
+          ...(providerId === "gemini"
+            ? {
+                embedBatchInputs: async (
+                  inputs: Array<{
+                    text: string;
+                    parts?: Array<
+                      | { type: "text"; text: string }
+                      | { type: "inline-data"; mimeType: string; data: string }
+                    >;
+                  }>,
+                ) => {
+                  embedBatchInputCalls += 1;
+                  return inputs.map((input) => {
+                    const inlineData = input.parts?.find((part) => part.type === "inline-data");
+                    if (inlineData?.type === "inline-data" && inlineData.data.length > 9000) {
+                      throw new Error("payload too large");
+                    }
+                    const mimeType =
+                      inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
+                    if (mimeType?.startsWith("image/")) {
+                      return [0, 0, 1, 0];
+                    }
+                    if (mimeType?.startsWith("audio/")) {
+                      return [0, 0, 0, 1];
+                    }
+                    return embedText(input.text);
+                  });
+                },
+              }
+            : {}),
         },
-      },
-    }),
+        ...(providerId === "gemini"
+          ? {
+              gemini: {
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                headers: {},
+                model,
+                modelPath: `models/${model}`,
+                apiKeys: ["test-key"],
+                outputDimensionality: options.outputDimensionality,
+              },
+            }
+          : {}),
+      };
+    },
   };
 });
 
@@ -38,6 +98,7 @@ describe("memory index", () => {
   let indexVectorPath = "";
   let indexMainPath = "";
   let indexExtraPath = "";
+  let indexMultimodalPath = "";
   let indexStatusPath = "";
   let indexSourceChangePath = "";
   let indexModelPath = "";
@@ -71,6 +132,7 @@ describe("memory index", () => {
     indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
     indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
+    indexMultimodalPath = path.join(workspaceDir, "index-multimodal.sqlite");
     indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
     indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
@@ -93,6 +155,8 @@ describe("memory index", () => {
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     embedBatchCalls = 0;
+    embedBatchInputCalls = 0;
+    providerCalls = [];
 
     // Keep the workspace stable to allow manager reuse across tests.
     await fs.mkdir(memoryDir, { recursive: true });
@@ -119,7 +183,14 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
+    provider?: "openai" | "gemini";
     model?: string;
+    outputDimensionality?: number;
+    multimodal?: {
+      enabled?: boolean;
+      modalities?: Array<"image" | "audio" | "all">;
+      maxFileBytes?: number;
+    };
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
     minScore?: number;
@@ -130,8 +201,9 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: "openai",
+            provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
+            outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
@@ -142,6 +214,7 @@ describe("memory index", () => {
             },
             cache: params.cacheEnabled ? { enabled: true } : undefined,
             extraPaths: params.extraPaths,
+            multimodal: params.multimodal,
             sources: params.sources,
             experimental: { sessionMemory: params.sessionMemory ?? false },
           },
@@ -215,6 +288,103 @@ describe("memory index", () => {
         }),
       ]),
     );
+  });
+
+  it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
+    const mediaDir = path.join(workspaceDir, "media-memory");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
+    await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
+
+    const cfg = createCfg({
+      storePath: indexMultimodalPath,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image", "audio"] },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    expect(embedBatchInputCalls).toBeGreaterThan(0);
+
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+
+    const audioResults = await manager.search("audio");
+    expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
+  });
+
+  it("skips oversized multimodal inputs without aborting sync", async () => {
+    const mediaDir = path.join(workspaceDir, "media-oversize");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "huge.png"), Buffer.alloc(7000, 1));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-oversize-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await manager.sync({ reason: "test" });
+
+    expect(embedBatchInputCalls).toBeGreaterThan(0);
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("huge.png"))).toBe(false);
+
+    const alphaResults = await manager.search("alpha");
+    expect(alphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+
+    await manager.close?.();
+  });
+
+  it("reindexes a multimodal file after a transient mid-sync disappearance", async () => {
+    const mediaDir = path.join(workspaceDir, "media-race");
+    const imagePath = path.join(mediaDir, "diagram.png");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(imagePath, Buffer.from("png"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-race-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const realReadFile = fs.readFile.bind(fs);
+    let imageReads = 0;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const [targetPath] = args;
+      if (typeof targetPath === "string" && targetPath === imagePath) {
+        imageReads += 1;
+        if (imageReads === 2) {
+          const err = Object.assign(
+            new Error(`ENOENT: no such file or directory, open '${imagePath}'`),
+            {
+              code: "ENOENT",
+            },
+          ) as NodeJS.ErrnoException;
+          throw err;
+        }
+      }
+      return await realReadFile(...args);
+    });
+
+    await manager.sync({ reason: "test" });
+    readSpy.mockRestore();
+
+    const callsAfterFirstSync = embedBatchInputCalls;
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    await manager.sync({ reason: "test" });
+
+    expect(embedBatchInputCalls).toBeGreaterThan(callsAfterFirstSync);
+    const results = await manager.search("image");
+    expect(results.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+
+    await manager.close?.();
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {
@@ -339,6 +509,143 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
     const status = secondManager.status();
     expect(status.files).toBeGreaterThan(0);
+    await secondManager.close?.();
+  });
+
+  it("passes Gemini outputDimensionality from config into the provider", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 1536,
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+
+    expect(
+      providerCalls.some(
+        (call) =>
+          call.provider === "gemini" &&
+          call.model === "gemini-embedding-2-preview" &&
+          call.outputDimensionality === 1536,
+      ),
+    ).toBe(true);
+    await manager.close?.();
+  });
+
+  it("reindexes when Gemini outputDimensionality changes", async () => {
+    const base = createCfg({
+      storePath: indexModelPath,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      outputDimensionality: 3072,
+    });
+    const baseAgents = base.agents!;
+    const baseDefaults = baseAgents.defaults!;
+    const baseMemorySearch = baseDefaults.memorySearch!;
+
+    const first = await getMemorySearchManager({ cfg: base, agentId: "main" });
+    const firstManager = requireManager(first);
+    await firstManager.sync?.({ reason: "test" });
+    const callsAfterFirstSync = embedBatchCalls;
+    await firstManager.close?.();
+
+    const second = await getMemorySearchManager({
+      cfg: {
+        ...base,
+        agents: {
+          ...baseAgents,
+          defaults: {
+            ...baseDefaults,
+            memorySearch: {
+              ...baseMemorySearch,
+              outputDimensionality: 768,
+            },
+          },
+        },
+      },
+      agentId: "main",
+    });
+    const secondManager = requireManager(second);
+    await secondManager.sync?.({ reason: "test" });
+    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
+    await secondManager.close?.();
+  });
+
+  it("reindexes when extraPaths change", async () => {
+    const storePath = path.join(workspaceDir, `index-scope-extra-${randomUUID()}.sqlite`);
+    const firstExtraDir = path.join(workspaceDir, "scope-extra-a");
+    const secondExtraDir = path.join(workspaceDir, "scope-extra-b");
+    await fs.rm(firstExtraDir, { recursive: true, force: true });
+    await fs.rm(secondExtraDir, { recursive: true, force: true });
+    await fs.mkdir(firstExtraDir, { recursive: true });
+    await fs.mkdir(secondExtraDir, { recursive: true });
+    await fs.writeFile(path.join(firstExtraDir, "a.md"), "alpha only");
+    await fs.writeFile(path.join(secondExtraDir, "b.md"), "beta only");
+
+    const first = await getMemorySearchManager({
+      cfg: createCfg({
+        storePath,
+        extraPaths: [firstExtraDir],
+      }),
+      agentId: "main",
+    });
+    const firstManager = requireManager(first);
+    await firstManager.sync?.({ reason: "test" });
+    await firstManager.close?.();
+
+    const second = await getMemorySearchManager({
+      cfg: createCfg({
+        storePath,
+        extraPaths: [secondExtraDir],
+      }),
+      agentId: "main",
+    });
+    const secondManager = requireManager(second);
+    await secondManager.sync?.({ reason: "test" });
+    const results = await secondManager.search("beta");
+    expect(results.some((result) => result.path.endsWith("scope-extra-b/b.md"))).toBe(true);
+    expect(results.some((result) => result.path.endsWith("scope-extra-a/a.md"))).toBe(false);
+    await secondManager.close?.();
+  });
+
+  it("reindexes when multimodal settings change", async () => {
+    const storePath = path.join(workspaceDir, `index-scope-multimodal-${randomUUID()}.sqlite`);
+    const mediaDir = path.join(workspaceDir, "scope-media");
+    await fs.rm(mediaDir, { recursive: true, force: true });
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
+
+    const first = await getMemorySearchManager({
+      cfg: createCfg({
+        storePath,
+        provider: "gemini",
+        model: "gemini-embedding-2-preview",
+        extraPaths: [mediaDir],
+      }),
+      agentId: "main",
+    });
+    const firstManager = requireManager(first);
+    await firstManager.sync?.({ reason: "test" });
+    const multimodalCallsAfterFirstSync = embedBatchInputCalls;
+    await firstManager.close?.();
+
+    const second = await getMemorySearchManager({
+      cfg: createCfg({
+        storePath,
+        provider: "gemini",
+        model: "gemini-embedding-2-preview",
+        extraPaths: [mediaDir],
+        multimodal: { enabled: true, modalities: ["image"] },
+      }),
+      agentId: "main",
+    });
+    const secondManager = requireManager(second);
+    await secondManager.sync?.({ reason: "test" });
+    expect(embedBatchInputCalls).toBeGreaterThan(multimodalCallsAfterFirstSync);
+    const results = await secondManager.search("image");
+    expect(results.some((result) => result.path.endsWith("scope-media/diagram.png"))).toBe(true);
     await secondManager.close?.();
   });
 
