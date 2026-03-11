@@ -587,6 +587,7 @@ describe("exec approval handlers", () => {
           argv: ["/usr/bin/echo", "ok"],
           cwd: "/real/cwd",
           rawCommand: "/usr/bin/echo ok",
+          commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
         },
@@ -596,6 +597,7 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).toBe("/usr/bin/echo ok");
+    expect(request["commandPreview"]).toBe("echo ok");
     expect(request["commandArgv"]).toEqual(["/usr/bin/echo", "ok"]);
     expect(request["cwd"]).toBe("/real/cwd");
     expect(request["agentId"]).toBe("main");
@@ -604,9 +606,36 @@ describe("exec approval handlers", () => {
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
       rawCommand: "/usr/bin/echo ok",
+      commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("derives a command preview from the fallback command for older node plans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "jq --version",
+        commandArgv: ["./env", "sh", "-c", "jq --version"],
+        systemRunPlan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/real/cwd",
+          rawCommand: './env sh -c "jq --version"',
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe('./env sh -c "jq --version"');
+    expect(request["commandPreview"]).toBe("jq --version");
   });
 
   it("accepts resolve during broadcast", async () => {

@@ -96,6 +96,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
           argv: Type.Array(Type.String()),
           cwd: Type.Union([Type.String(), Type.Null()]),
           rawCommand: Type.Union([Type.String(), Type.Null()]),
+          commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           agentId: Type.Union([Type.String(), Type.Null()]),
           sessionKey: Type.Union([Type.String(), Type.Null()]),
           mutableFileOperand: Type.Optional(

@@ -12,6 +12,7 @@ type SystemRunApprovalRequestContext = {
   plan: SystemRunApprovalPlan | null;
   commandArgv: string[] | undefined;
   commandText: string;
+  commandPreview: string | null;
   cwd: string | null;
   agentId: string | null;
   sessionKey: string | null;
@@ -35,6 +36,17 @@ type SystemRunApprovalRuntimeContext =
 
 function normalizeCommandText(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function normalizeCommandPreview(
+  value: string | null | undefined,
+  authoritative: string,
+): string | null {
+  const preview = normalizeNonEmptyString(value);
+  if (!preview || preview === authoritative) {
+    return null;
+  }
+  return preview;
 }
 
 export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayload | null {
@@ -63,10 +75,14 @@ export function resolveSystemRunApprovalRequestContext(params: {
   const plan = host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;
   const fallbackArgv = normalizeStringArray(params.commandArgv);
   const fallbackCommand = normalizeCommandText(params.command);
+  const commandText = plan ? (plan.rawCommand ?? formatExecCommand(plan.argv)) : fallbackCommand;
   return {
     plan,
     commandArgv: plan?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
-    commandText: plan ? (plan.rawCommand ?? formatExecCommand(plan.argv)) : fallbackCommand,
+    commandText,
+    commandPreview: plan
+      ? normalizeCommandPreview(plan.commandPreview ?? fallbackCommand, commandText)
+      : null,
     cwd: plan?.cwd ?? normalizeNonEmptyString(params.cwd),
     agentId: plan?.agentId ?? normalizeNonEmptyString(params.agentId),
     sessionKey: plan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
