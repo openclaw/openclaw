@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Pilot Home</title>
+  </head>
+  <body>
+    <main class="pilot-page">
+      <header class="pilot-heading">
+        <div>
+          <p class="pilot-kicker">Moore Bass Pilot</p>
+          <h1 data-testid="pilot-home-title">Pilot Home</h1>
+          <p>Track source-pack readiness and launch project-scoped workspaces.</p>
+        </div>
+        <a class="pilot-button" data-testid="pilot-home-new-project" href="/pilot/project/">
+          New pilot project
+        </a>
+      </header>
+
+      <section class="pilot-grid">
+        <article class="pilot-card">
+          <h2 data-testid="pilot-dashboard-card-source-health-title">Source pack health</h2>
+          <p>Approved versus blocked source families from the latest discovery baseline.</p>
+          <p class="metric" id="pilot-source-health-value">0 approved / 0 blocked</p>
+        </article>
+        <article class="pilot-card">
+          <h2>Blocked source families</h2>
+          <p>Families that still need legal or QA sign-off before ingestion.</p>
+          <p class="metric" id="pilot-blocked-sources-value">0</p>
+        </article>
+        <article class="pilot-card">
+          <h2>Active projects</h2>
+          <p>Projects with an active session key bound to chat and runner surfaces.</p>
+          <p class="metric" id="pilot-active-projects-value">0</p>
+        </article>
+      </section>
+
+      <section class="pilot-panel">
+        <h2>Recent pilot projects</h2>
+        <p class="pilot-meta">Creating a project captures parcel context and mints a dedicated session key.</p>
+        <ul class="pilot-list" id="pilot-home-project-list"></ul>
+      </section>
+    </main>
+    <script type="module" src="/src/pilot/home.ts"></script>
+  </body>
+</html>

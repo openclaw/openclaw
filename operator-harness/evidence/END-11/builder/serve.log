@@ -1,0 +1,12 @@
+
+> openclaw@2026.3.9 ui:dev /Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-11/builder
+> node scripts/ui.js dev --host 127.0.0.1 --port 41499
+
+
+> openclaw-control-ui@ dev /Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-11/builder/ui
+> vite --host 127.0.0.1 --port 41499
+
+
+  VITE v7.3.1  ready in 147 ms
+
+  ➜  Local:   http://127.0.0.1:41499/

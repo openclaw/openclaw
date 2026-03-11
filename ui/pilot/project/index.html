@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Pilot Project Setup</title>
+  </head>
+  <body>
+    <main class="pilot-page">
+      <header class="pilot-heading">
+        <div>
+          <p class="pilot-kicker">Pilot Intake</p>
+          <h1>New Pilot Project Setup</h1>
+          <p>Capture parcel context once and reuse it across chat and runner workflows.</p>
+        </div>
+        <a class="pilot-button secondary" href="/pilot/">Back to Pilot Home</a>
+      </header>
+
+      <section class="pilot-panel">
+        <form class="pilot-form" id="pilot-project-form">
+          <div class="pilot-field">
+            <label for="pilot-project-parcel">Parcel ID</label>
+            <input
+              id="pilot-project-parcel"
+              data-testid="pilot-project-parcel-input"
+              type="text"
+              placeholder="APN 123-456-789"
+              autocomplete="off"
+              required
+            />
+          </div>
+
+          <div class="pilot-field">
+            <label for="pilot-project-address">Site address</label>
+            <input
+              id="pilot-project-address"
+              data-testid="pilot-project-address-input"
+              type="text"
+              placeholder="100 Main St, Austin, TX"
+              autocomplete="street-address"
+              required
+            />
+          </div>
+
+          <div class="pilot-field">
+            <label for="pilot-project-scope">Scope objective</label>
+            <textarea
+              id="pilot-project-scope"
+              data-testid="pilot-project-scope-input"
+              placeholder="Civil entitlement due diligence"
+              required
+            ></textarea>
+          </div>
+
+          <p class="pilot-error" id="pilot-project-error" role="alert"></p>
+
+          <div class="pilot-actions">
+            <button class="pilot-button" data-testid="pilot-project-create" type="submit">
+              Create Project and Bind Context
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="pilot-panel pilot-summary" id="pilot-project-summary" hidden>
+        <h2 data-testid="pilot-project-summary-title">Pilot project created</h2>
+        <dl>
+          <div>
+            <dt>Parcel ID</dt>
+            <dd id="pilot-summary-parcel"></dd>
+          </div>
+          <div>
+            <dt>Address</dt>
+            <dd id="pilot-summary-address"></dd>
+          </div>
+          <div>
+            <dt>Scope</dt>
+            <dd id="pilot-summary-scope"></dd>
+          </div>
+          <div>
+            <dt>Inferred jurisdiction</dt>
+            <dd id="pilot-summary-jurisdiction"></dd>
+          </div>
+          <div>
+            <dt>Bound session key</dt>
+            <dd id="pilot-summary-session"></dd>
+          </div>
+        </dl>
+
+        <div class="pilot-actions">
+          <a
+            class="pilot-button"
+            id="pilot-project-launch-chat-link"
+            data-testid="pilot-project-launch-chat"
+            href="/chat"
+          >
+            Launch project workspace
+          </a>
+          <a
+            class="pilot-button secondary"
+            id="pilot-project-launch-runner-link"
+            href="/cron"
+          >
+            Open runner workspace
+          </a>
+        </div>
+
+        <p class="pilot-meta">Context packet that is bound to this project session:</p>
+        <pre class="pilot-code" id="pilot-project-context"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/pilot/project.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,257 @@
+:root {
+  color-scheme: light;
+  --pilot-bg: #f6f7fb;
+  --pilot-surface: #ffffff;
+  --pilot-ink: #1f2430;
+  --pilot-muted: #5b6475;
+  --pilot-accent: #1256d8;
+  --pilot-border: #d9deea;
+  --pilot-shadow: 0 18px 45px -36px rgba(12, 22, 47, 0.55);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  color: var(--pilot-ink);
+  background: radial-gradient(circle at 16% 8%, #e7eefc 0, transparent 42%),
+    radial-gradient(circle at 82% 0%, #eef3ff 0, transparent 38%), var(--pilot-bg);
+}
+
+.pilot-page {
+  width: min(1080px, 100% - 2.5rem);
+  margin: 2rem auto 3rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.pilot-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pilot-kicker {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--pilot-muted);
+}
+
+.pilot-heading h1 {
+  margin: 0.3rem 0 0;
+  font-size: clamp(1.7rem, 2.2vw, 2.4rem);
+}
+
+.pilot-heading p {
+  margin: 0.4rem 0 0;
+  color: var(--pilot-muted);
+}
+
+.pilot-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.pilot-card,
+.pilot-panel {
+  background: var(--pilot-surface);
+  border: 1px solid var(--pilot-border);
+  border-radius: 14px;
+  box-shadow: var(--pilot-shadow);
+}
+
+.pilot-card {
+  padding: 1rem 1.1rem;
+}
+
+.pilot-card h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.pilot-card p {
+  margin: 0.55rem 0 0;
+  color: var(--pilot-muted);
+}
+
+.pilot-card .metric {
+  margin-top: 0.75rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--pilot-accent);
+}
+
+.pilot-panel {
+  padding: 1.2rem;
+}
+
+.pilot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.pilot-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--pilot-accent);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0.62rem 1.1rem;
+  cursor: pointer;
+}
+
+.pilot-button.secondary {
+  background: #fff;
+  border-color: var(--pilot-border);
+  color: var(--pilot-ink);
+}
+
+.pilot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.pilot-list-item {
+  border: 1px solid var(--pilot-border);
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: #fbfcff;
+}
+
+.pilot-list-item h3 {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+.pilot-list-item p {
+  margin: 0.45rem 0 0;
+  color: var(--pilot-muted);
+  font-size: 0.92rem;
+}
+
+.pilot-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pilot-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.pilot-field label {
+  font-size: 0.87rem;
+  font-weight: 700;
+  color: var(--pilot-muted);
+}
+
+.pilot-field input,
+.pilot-field textarea {
+  width: 100%;
+  border: 1px solid var(--pilot-border);
+  border-radius: 10px;
+  padding: 0.65rem 0.8rem;
+  font: inherit;
+  color: var(--pilot-ink);
+  background: #fff;
+}
+
+.pilot-field textarea {
+  min-height: 106px;
+  resize: vertical;
+}
+
+.pilot-field input:focus,
+.pilot-field textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--pilot-accent), white 72%);
+  border-color: color-mix(in srgb, var(--pilot-accent), white 50%);
+}
+
+.pilot-error {
+  color: #ad2130;
+  font-size: 0.89rem;
+  margin: 0;
+}
+
+.pilot-summary {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.pilot-summary h2 {
+  margin: 0;
+}
+
+.pilot-summary dl {
+  margin: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.pilot-summary dt {
+  font-size: 0.77rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pilot-muted);
+}
+
+.pilot-summary dd {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.pilot-code {
+  margin: 0;
+  border-radius: 12px;
+  border: 1px solid var(--pilot-border);
+  background: #f5f8ff;
+  padding: 0.8rem;
+  white-space: pre-wrap;
+  line-height: 1.35;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Courier New", monospace;
+  font-size: 0.82rem;
+}
+
+.pilot-meta {
+  margin: 0;
+  color: var(--pilot-muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 720px) {
+  .pilot-page {
+    width: min(1080px, 100% - 1.1rem);
+    margin-top: 1.1rem;
+  }
+
+  .pilot-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .pilot-actions {
+    width: 100%;
+  }
+
+  .pilot-button {
+    width: 100%;
+  }
+}
