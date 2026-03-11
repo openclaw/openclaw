@@ -817,7 +817,7 @@
     },
     {
       "source": "/ja-JP/:path*",
-      "destination": "/ja/:path*h"
+      "destination": "/ja/:path*"
     }
   ],
   "navigation": {
