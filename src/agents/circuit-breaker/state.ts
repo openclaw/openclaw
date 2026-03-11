@@ -104,13 +104,19 @@ export function recordCircuitBreakerError(
 /**
  * Clear all circuit breaker state on a successful run.
  * Called after a model call succeeds — resets the session to closed state.
+ * Returns `true` when any cb field was actually present (state changed).
  */
-export function clearCircuitBreakerErrors(entry: SessionEntry): void {
+export function clearCircuitBreakerErrors(entry: SessionEntry): boolean {
+  const had =
+    entry.cbErrorCount !== undefined ||
+    entry.cbTrippedAt !== undefined ||
+    entry.cbCooldownUntil !== undefined;
   delete entry.cbErrorCount;
   delete entry.cbLastErrorAt;
   delete entry.cbLastErrorReason;
   delete entry.cbTrippedAt;
   delete entry.cbCooldownUntil;
+  return had;
 }
 
 /**

@@ -798,20 +798,16 @@ export async function runHeartbeatOnce(opts: {
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     // Circuit breaker: clear error count on successful model call.
-    if (entry) {
-      const hadCbState = typeof entry.cbErrorCount === "number";
-      clearCircuitBreakerErrors(entry);
-      if (hadCbState) {
-        try {
-          await updateSessionStore(storePath, (store) => {
-            const current = store[sessionKey];
-            if (current) {
-              clearCircuitBreakerErrors(current);
-            }
-          });
-        } catch {
-          // Best-effort persistence.
-        }
+    if (entry && clearCircuitBreakerErrors(entry)) {
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            clearCircuitBreakerErrors(current);
+          }
+        });
+      } catch {
+        // Best-effort persistence.
       }
     }
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
