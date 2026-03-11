@@ -140,6 +140,18 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.kimi?.apiKey).toBe("sk-moonshot");
   });
 
+  it("sets provider and key for minimax", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "minimax",
+      textValue: "minimax-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("minimax");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.minimax?.apiKey).toBe("minimax-test-key");
+  });
+
   it("shows missing-key note when no key is provided and no env var", async () => {
     const original = process.env.BRAVE_API_KEY;
     delete process.env.BRAVE_API_KEY;
@@ -273,6 +285,38 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
+  it("uses MINIMAX_OAUTH_TOKEN ref when available in secretInputMode=ref", async () => {
+    const originalApiKey = process.env.MINIMAX_API_KEY;
+    const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
+    delete process.env.MINIMAX_API_KEY;
+    process.env.MINIMAX_OAUTH_TOKEN = "oauth-token-present"; // pragma: allowlist secret
+    try {
+      const cfg: OpenClawConfig = {};
+      const { prompter } = createPrompter({ selectValue: "minimax" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        secretInputMode: "ref", // pragma: allowlist secret
+      });
+      expect(result.tools?.web?.search?.provider).toBe("minimax");
+      expect(result.tools?.web?.search?.minimax?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "MINIMAX_OAUTH_TOKEN", // pragma: allowlist secret
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = originalApiKey;
+      }
+      if (originalOauthToken === undefined) {
+        delete process.env.MINIMAX_OAUTH_TOKEN;
+      } else {
+        process.env.MINIMAX_OAUTH_TOKEN = originalOauthToken;
+      }
+    }
+  });
+
   it("stores plaintext key when secretInputMode is unset", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -283,9 +327,9 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 5 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(5);
+  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity"]);
+    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "minimax", "perplexity"]);
   });
 });

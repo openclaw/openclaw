@@ -659,9 +659,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
+  "tools.web.search.enabled": "Enable the web_search tool (requires provider credentials).",
   "tools.web.search.provider":
-    'Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). Auto-detected from available API keys if omitted.',
+    'Search provider ("brave", "gemini", "grok", "kimi", "minimax", or "perplexity"). Auto-detected from available credentials if omitted.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
@@ -678,6 +678,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.kimi.baseUrl":
     'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
   "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
+  "tools.web.search.minimax.apiKey":
+    "MiniMax credential for coding_plan search (fallback: MINIMAX_API_KEY or MINIMAX_OAUTH_TOKEN env var).",
   "tools.web.search.perplexity.apiKey":
     "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
   "tools.web.search.perplexity.baseUrl":

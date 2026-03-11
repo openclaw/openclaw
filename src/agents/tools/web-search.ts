@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "minimax", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -39,6 +39,8 @@ const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const DEFAULT_MINIMAX_API_HOST = "https://api.minimax.io";
+const MINIMAX_SEARCH_PATH = "/v1/coding_plan/search";
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -333,6 +335,10 @@ type KimiConfig = {
   model?: string;
 };
 
+type MinimaxConfig = {
+  apiKey?: string;
+};
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -390,6 +396,24 @@ type KimiSearchResponse = {
     url?: string;
     content?: string;
   }>;
+};
+
+type MinimaxBaseResponse = {
+  status_code?: number;
+  status_msg?: string;
+};
+
+type MinimaxSearchResult = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  date?: string;
+};
+
+type MinimaxSearchResponse = {
+  base_resp?: MinimaxBaseResponse;
+  organic?: MinimaxSearchResult[];
+  related_searches?: string[];
 };
 
 type PerplexitySearchResponse = {
@@ -593,6 +617,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "minimax") {
+    return {
+      error: "missing_minimax_api_key",
+      message:
+        "web_search (minimax) needs credentials. Set MINIMAX_API_KEY or MINIMAX_OAUTH_TOKEN in the Gateway environment, or configure tools.web.search.minimax.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -617,6 +649,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "minimax") {
+    return "minimax";
   }
   if (raw === "perplexity") {
     return "perplexity";
@@ -654,6 +689,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "kimi" from available API keys',
       );
       return "kimi";
+    }
+    // MiniMax
+    const minimaxConfig = resolveMinimaxConfig(search);
+    if (resolveMinimaxApiKey(minimaxConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "minimax" from available API keys',
+      );
+      return "minimax";
     }
     // Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
@@ -887,6 +930,42 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveMinimaxConfig(search?: WebSearchConfig): MinimaxConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const minimax = "minimax" in search ? search.minimax : undefined;
+  if (!minimax || typeof minimax !== "object") {
+    return {};
+  }
+  return minimax as MinimaxConfig;
+}
+
+function resolveMinimaxApiKey(minimax?: MinimaxConfig): string | undefined {
+  const fromConfig = normalizeApiKey(minimax?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnvApiKey = normalizeApiKey(process.env.MINIMAX_API_KEY);
+  if (fromEnvApiKey) {
+    return fromEnvApiKey;
+  }
+  const fromEnvOauthToken = normalizeApiKey(process.env.MINIMAX_OAUTH_TOKEN);
+  return fromEnvOauthToken || undefined;
+}
+
+function resolveMinimaxApiHost(): string {
+  const raw = normalizeSecretInput(process.env.MINIMAX_API_HOST) || DEFAULT_MINIMAX_API_HOST;
+  try {
+    return new URL(raw).origin;
+  } catch {}
+  try {
+    return new URL(`https://${raw}`).origin;
+  } catch {
+    return DEFAULT_MINIMAX_API_HOST;
+  }
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1510,6 +1589,80 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runMinimaxSearch(params: {
+  query: string;
+  apiKey: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<{
+  results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    published?: string;
+    siteName?: string;
+  }>;
+  relatedSearches?: string[];
+}> {
+  const endpoint = new URL(MINIMAX_SEARCH_PATH, resolveMinimaxApiHost());
+  endpoint.searchParams.set("q", params.query);
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "MM-API-Source": "OpenClaw",
+        },
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "MiniMax");
+      }
+
+      let data: MinimaxSearchResponse;
+      try {
+        data = (await res.json()) as MinimaxSearchResponse;
+      } catch (error) {
+        throw new Error(`MiniMax API returned invalid JSON: ${String(error)}`, { cause: error });
+      }
+
+      const baseResp = data.base_resp ?? {};
+      const code = typeof baseResp.status_code === "number" ? baseResp.status_code : 0;
+      if (code !== 0) {
+        const msg = typeof baseResp.status_msg === "string" ? baseResp.status_msg.trim() : "";
+        throw new Error(`MiniMax API error (${code})${msg ? `: ${msg}` : ""}`);
+      }
+
+      const results = (data.organic ?? []).slice(0, params.count).map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.link ?? "";
+        const snippet = entry.snippet ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          published: entry.date ?? undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
+      const relatedSearches = (data.related_searches ?? [])
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => item.length > 0);
+
+      return {
+        results,
+        relatedSearches: relatedSearches.length > 0 ? relatedSearches : undefined,
+      };
+    },
+  );
+}
+
 function mapBraveLlmContextResults(
   data: BraveLlmContextResponse,
 ): { url: string; title: string; snippets: string[]; siteName?: string }[] {
@@ -1743,6 +1896,32 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "minimax") {
+    const { results, relatedSearches } = await runMinimaxSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results,
+      ...(relatedSearches ? { relatedSearches } : {}),
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider === "gemini") {
     const geminiResult = await runGeminiSearch({
       query: params.query,
@@ -1909,6 +2088,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const minimaxConfig = resolveMinimaxConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1921,11 +2101,13 @@ export function createWebSearchTool(options?: {
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
         : provider === "kimi"
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+          : provider === "minimax"
+            ? "Search the web using MiniMax Coding Plan Search. Returns organic web results with snippets."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1947,9 +2129,11 @@ export function createWebSearchTool(options?: {
             ? resolveGrokApiKey(grokConfig)
             : provider === "kimi"
               ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+              : provider === "minimax"
+                ? resolveMinimaxApiKey(minimaxConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2215,6 +2399,7 @@ export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveMinimaxApiKey,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,

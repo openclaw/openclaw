@@ -4,7 +4,7 @@ import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "minimax" | "perplexity";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -62,6 +62,9 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
   if (provider === "kimi") {
     return config.tools?.web?.search?.kimi?.apiKey;
   }
+  if (provider === "minimax") {
+    return config.tools?.web?.search?.minimax?.apiKey;
+  }
   return config.tools?.web?.search?.perplexity?.apiKey;
 }
 
@@ -110,6 +113,11 @@ describe("runtime web tools resolution", () => {
       resolvedKey: "kimi-provider-key",
     },
     {
+      provider: "minimax" as const,
+      envRefId: "MINIMAX_PROVIDER_REF",
+      resolvedKey: "minimax-provider-key",
+    },
+    {
       provider: "perplexity" as const,
       envRefId: "PERPLEXITY_PROVIDER_REF",
       resolvedKey: "pplx-provider-key",
@@ -154,6 +162,9 @@ describe("runtime web tools resolution", () => {
               kimi: {
                 apiKey: { source: "env", provider: "default", id: "KIMI_REF" },
               },
+              minimax: {
+                apiKey: { source: "env", provider: "default", id: "MINIMAX_REF" },
+              },
               perplexity: {
                 apiKey: { source: "env", provider: "default", id: "PERPLEXITY_REF" },
               },
@@ -166,6 +177,7 @@ describe("runtime web tools resolution", () => {
         GEMINI_REF: "gemini-precedence-key",
         GROK_REF: "grok-precedence-key",
         KIMI_REF: "kimi-precedence-key",
+        MINIMAX_REF: "minimax-precedence-key",
         PERPLEXITY_REF: "pplx-precedence-key",
       },
     });
@@ -178,6 +190,7 @@ describe("runtime web tools resolution", () => {
         expect.objectContaining({ path: "tools.web.search.gemini.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.grok.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.kimi.apiKey" }),
+        expect.objectContaining({ path: "tools.web.search.minimax.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.perplexity.apiKey" }),
       ]),
     );
@@ -223,6 +236,32 @@ describe("runtime web tools resolution", () => {
         }),
       ]),
     );
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("accepts MINIMAX_OAUTH_TOKEN as minimax credentials", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("minimax");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("minimax-oauth-token");
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
     );
