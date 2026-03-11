@@ -1,10 +1,16 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -53,10 +59,9 @@ function expectEmbeddedProviderModel(expected: { provider: string; model: string
   expect(call?.model).toBe(expected.model);
 }
 
-async function readSessionEntry(storePath: string, key: string) {
-  const raw = await fs.readFile(storePath, "utf-8");
-  const store = JSON.parse(raw) as Record<string, { sessionId?: string; label?: string }>;
-  return store[key];
+function readSessionEntry(storePath: string, key: string) {
+  const store = loadSessionStore(storePath);
+  return store[key] as { sessionId?: string; label?: string } | undefined;
 }
 
 const DEFAULT_MESSAGE = "do it";
@@ -162,6 +167,8 @@ async function runStoredOverrideAndExpectModel(params: {
 }
 
 describe("runCronIsolatedAgentTurn", () => {
+  useSessionStoreTestDb();
+
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
@@ -566,21 +573,23 @@ describe("runCronIsolatedAgentTurn", () => {
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      const store = loadSessionStore(storePath) as Record<string, Record<string, unknown>>;
       store["agent:main:cron:job-1"] = {
         sessionId: "old",
         updatedAt: Date.now(),
         label: "Nightly digest",
       };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      saveSessionEntriesToDb(
+        extractAgentIdFromStorePath(storePath),
+        store as Record<string, SessionEntry>,
+      );
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
         message: "ping",
         storePath,
       });
-      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+      const entry = readSessionEntry(storePath, "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
     });

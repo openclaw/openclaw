@@ -1,8 +1,13 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createCliDeps,
   expectDirectTelegramDelivery,
@@ -192,6 +197,8 @@ async function assertExplicitTelegramTargetDelivery(params: {
 }
 
 describe("runCronIsolatedAgentTurn", () => {
+  useSessionStoreTestDb();
+
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
   });
@@ -253,23 +260,15 @@ describe("runCronIsolatedAgentTurn", () => {
   it("routes threaded announce targets through direct delivery", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:main": {
-              sessionId: "main-session",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastTo: "123",
-              lastThreadId: 42,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      saveSessionEntriesToDb(extractAgentIdFromStorePath(storePath), {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "123",
+          lastThreadId: 42,
+        },
+      } as Record<string, SessionEntry>);
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "Final weather summary" }]);
       const res = await runTelegramAnnounceTurn({

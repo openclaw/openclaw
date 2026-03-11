@@ -5,6 +5,12 @@ import type { App } from "@slack/bolt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../../../config/sessions/store-sqlite.js";
+import { useSessionStoreTestDb } from "../../../config/sessions/test-helpers.sqlite.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -14,6 +20,7 @@ import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
+  useSessionStoreTestDb();
   let fixtureRoot = "";
   let caseId = 0;
 
@@ -474,10 +481,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       baseSessionKey: route.sessionKey,
       threadId: "200.000",
     });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
-    );
+    saveSessionEntriesToDb(extractAgentIdFromStorePath(storePath), {
+      [threadKeys.sessionKey]: { updatedAt: Date.now() } as SessionEntry,
+    });
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "200.000" }],

@@ -2,6 +2,7 @@ import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -98,6 +99,8 @@ async function runTurn(home: string, options: TurnOptions = {}) {
 // ---------------------------------------------------------------------------
 
 describe("cron model formatting and precedence edge cases", () => {
+  useSessionStoreTestDb();
+
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);

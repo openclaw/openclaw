@@ -3,7 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
+
+useSessionStoreTestDb();
 
 const baseRequest = {
   id: "req-1",
@@ -246,19 +254,15 @@ describe("exec approval forwarder", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-forwarder-test-"));
     try {
       const storePath = path.join(tmpDir, "sessions.json");
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          "agent:main:main": {
-            updatedAt: 1,
-            channel: "slack",
-            to: "U1",
-            lastChannel: "slack",
-            lastTo: "U1",
-          },
-        }),
-        "utf-8",
-      );
+      saveSessionEntriesToDb(extractAgentIdFromStorePath(storePath), {
+        "agent:main:main": {
+          updatedAt: 1,
+          channel: "slack",
+          to: "U1",
+          lastChannel: "slack",
+          lastTo: "U1",
+        } as SessionEntry,
+      });
 
       const cfg = {
         session: { store: storePath },

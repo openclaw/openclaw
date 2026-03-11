@@ -55,6 +55,24 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`state-db init failed: ${String(err)}`);
   }
 
+  // One-shot migration: JSON session stores → SQLite.
+  try {
+    const { migrateSessionStoresToSqlite } = await import("../config/sessions/store-migrate.js");
+    const results = migrateSessionStoresToSqlite();
+    const migrated = results.filter((r) => r.migrated && r.entriesCount > 0);
+    if (migrated.length > 0) {
+      params.log.info(
+        `[state-db] Migrated sessions for ${migrated.length} agent(s) from JSON to SQLite`,
+      );
+    }
+    const failed = results.filter((r) => !r.migrated);
+    for (const f of failed) {
+      params.log.warn(`[state-db] Session migration failed for agent ${f.agent}: ${f.error}`);
+    }
+  } catch (err) {
+    params.log.warn(`[state-db] Session JSON→SQLite migration failed: ${String(err)}`);
+  }
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);

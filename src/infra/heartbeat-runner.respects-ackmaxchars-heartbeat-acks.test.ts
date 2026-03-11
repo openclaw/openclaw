@@ -1,6 +1,11 @@
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -15,6 +20,8 @@ vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 installHeartbeatRunnerTestRuntime();
 
 describe("runHeartbeatOnce ack handling", () => {
+  useSessionStoreTestDb();
+
   const WHATSAPP_GROUP = "120363140186826074@g.us";
   const TELEGRAM_GROUP = "-1001234567890";
 
@@ -310,15 +317,14 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       replySpy.mockImplementationOnce(async () => {
-        const raw = await fs.readFile(storePath, "utf-8");
-        const parsed = JSON.parse(raw) as Record<string, { updatedAt?: number } | undefined>;
+        const parsed = loadSessionStore(storePath);
         if (parsed[sessionKey]) {
           parsed[sessionKey] = {
             ...parsed[sessionKey],
             updatedAt: bumpedUpdatedAt,
           };
         }
-        await fs.writeFile(storePath, JSON.stringify(parsed, null, 2));
+        saveSessionEntriesToDb(extractAgentIdFromStorePath(storePath), parsed);
         return { text: "" };
       });
 
@@ -327,10 +333,7 @@ describe("runHeartbeatOnce ack handling", () => {
         deps: makeWhatsAppDeps(),
       });
 
-      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { updatedAt?: number } | undefined
-      >;
+      const finalStore = loadSessionStore(storePath);
       expect(finalStore[sessionKey]?.updatedAt).toBe(bumpedUpdatedAt);
     });
   });

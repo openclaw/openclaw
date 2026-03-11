@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronJob } from "./types.js";
 
 export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -28,7 +33,8 @@ export async function writeSessionStoreEntries(
   const dir = path.join(home, ".openclaw", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  const agentId = extractAgentIdFromStorePath(storePath);
+  saveSessionEntriesToDb(agentId, entries as Record<string, SessionEntry>);
   return storePath;
 }
 

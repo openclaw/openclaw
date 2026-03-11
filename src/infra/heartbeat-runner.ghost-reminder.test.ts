@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -23,6 +24,8 @@ afterEach(() => {
 });
 
 describe("Ghost reminder bug (issue #13317)", () => {
+  useSessionStoreTestDb();
+
   const createHeartbeatDeps = (replyText: string) => {
     const sendTelegram = vi.fn().mockResolvedValue({
       messageId: "m1",

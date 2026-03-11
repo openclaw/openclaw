@@ -7,6 +7,11 @@ import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -24,16 +29,14 @@ export async function seedSessionStore(
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      [sessionKey]: {
-        sessionId: session.sessionId ?? "sid",
-        updatedAt: session.updatedAt ?? Date.now(),
-        ...session,
-      },
-    }),
-  );
+  const agentId = extractAgentIdFromStorePath(storePath);
+  saveSessionEntriesToDb(agentId, {
+    [sessionKey]: {
+      sessionId: session.sessionId ?? "sid",
+      updatedAt: session.updatedAt ?? Date.now(),
+      ...session,
+    } as SessionEntry,
+  });
 }
 
 export async function seedMainSessionStore(

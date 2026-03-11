@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +8,8 @@ import {
   recordSessionMetaFromInbound,
   updateLastRoute,
 } from "../sessions.js";
+import { useSessionStoreTestDb } from "./test-helpers.sqlite.js";
+import type { SessionEntry } from "./types.js";
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
@@ -25,24 +26,24 @@ function createInboundContext(): MsgContext {
   };
 }
 
+let caseId = 0;
+
 describe("session store key normalization", () => {
-  let tempDir = "";
+  const testDb = useSessionStoreTestDb();
   let storePath = "";
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-key-normalize-"));
-    storePath = path.join(tempDir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
+  beforeEach(() => {
+    const agentId = `key-norm-${caseId++}`;
+    storePath = path.join(os.tmpdir(), "agents", agentId, "sessions", "sessions.json");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     clearSessionStoreCacheForTest();
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("records inbound metadata under a canonical lowercase key", async () => {
+    testDb.seed(storePath, {});
+
     await recordSessionMetaFromInbound({
       storePath,
       sessionKey: MIXED_CASE_KEY,
@@ -55,6 +56,8 @@ describe("session store key normalization", () => {
   });
 
   it("does not create a duplicate mixed-case key when last route is updated", async () => {
+    testDb.seed(storePath, {});
+
     await recordSessionMetaFromInbound({
       storePath,
       sessionKey: CANONICAL_KEY,
@@ -79,23 +82,14 @@ describe("session store key normalization", () => {
   });
 
   it("migrates legacy mixed-case entries to the canonical key on update", async () => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [MIXED_CASE_KEY]: {
-            sessionId: "legacy-session",
-            updatedAt: 1,
-            chatType: "direct",
-            channel: "webchat",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    clearSessionStoreCacheForTest();
+    testDb.seed(storePath, {
+      [MIXED_CASE_KEY]: {
+        sessionId: "legacy-session",
+        updatedAt: 1,
+        chatType: "direct",
+        channel: "webchat",
+      } as SessionEntry,
+    });
 
     await updateLastRoute({
       storePath,
@@ -110,29 +104,20 @@ describe("session store key normalization", () => {
   });
 
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [CANONICAL_KEY]: {
-            sessionId: "existing-session",
-            updatedAt: 1111,
-            chatType: "direct",
-            channel: "webchat",
-            origin: {
-              provider: "webchat",
-              chatType: "direct",
-              from: "WebChat:User-1",
-              to: "webchat:user-1",
-            },
-          },
+    testDb.seed(storePath, {
+      [CANONICAL_KEY]: {
+        sessionId: "existing-session",
+        updatedAt: 1111,
+        chatType: "direct",
+        channel: "webchat",
+        origin: {
+          provider: "webchat",
+          chatType: "direct",
+          from: "WebChat:User-1",
+          to: "webchat:user-1",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    clearSessionStoreCacheForTest();
+      } as SessionEntry,
+    });
 
     await recordSessionMetaFromInbound({
       storePath,

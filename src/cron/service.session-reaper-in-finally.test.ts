@@ -1,6 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  extractAgentIdFromStorePath,
+  saveSessionEntriesToDb,
+} from "../config/sessions/store-sqlite.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import { useSessionStoreTestDb } from "../config/sessions/test-helpers.sqlite.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
@@ -30,6 +37,8 @@ function createDueIsolatedJob(params: { id: string; nowMs: number }): CronJob {
 }
 
 describe("CronService - session reaper runs in finally block (#31946)", () => {
+  useSessionStoreTestDb();
+
   beforeEach(() => {
     noopLogger.debug.mockClear();
     noopLogger.info.mockClear();
@@ -131,16 +140,12 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
 
     // Seed an expired cron-run session entry that should be pruned by the reaper.
     await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
-    await fs.writeFile(
-      sessionStorePath,
-      JSON.stringify({
-        "agent:agent-default:cron:failing-job:run:stale": {
-          sessionId: "session-stale",
-          updatedAt: now - 3 * 24 * 3_600_000,
-        },
-      }),
-      "utf-8",
-    );
+    saveSessionEntriesToDb(extractAgentIdFromStorePath(sessionStorePath), {
+      "agent:agent-default:cron:failing-job:run:stale": {
+        sessionId: "session-stale",
+        updatedAt: now - 3 * 24 * 3_600_000,
+      } as SessionEntry,
+    });
 
     const state = createCronServiceState({
       storePath: store.storePath,
@@ -155,10 +160,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
 
     await expect(onTimer(state)).rejects.toThrow("Failed to parse cron store");
 
-    const updatedSessionStore = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-      string,
-      unknown
-    >;
+    const updatedSessionStore = loadSessionStore(sessionStorePath);
     expect(updatedSessionStore).toEqual({});
     expect(state.running).toBe(false);
   });

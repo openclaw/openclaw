@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import { useSessionStoreTestDb } from "./test-helpers.sqlite.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
@@ -20,12 +21,14 @@ const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll("
 let fixtureRoot = "";
 let fixtureCount = 0;
 
+const testDb = useSessionStoreTestDb();
+
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyEnforcedMaintenanceConfig(mock: ReturnType<typeof vi.fn>) {
+  mock.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -37,8 +40,8 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
   });
 }
 
-function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyCappedMaintenanceConfig(mock: ReturnType<typeof vi.fn>) {
+  mock.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -50,10 +53,16 @@ function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) 
   });
 }
 
-async function createCaseDir(prefix: string): Promise<string> {
-  const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
+/**
+ * Create a case dir that follows the agents/{id}/sessions pattern
+ * so extractAgentIdFromStorePath works correctly.
+ */
+async function createCaseDir(prefix: string): Promise<{ sessionsDir: string; storePath: string }> {
+  const agentId = `${prefix}-${fixtureCount++}`;
+  const sessionsDir = path.join(fixtureRoot, "agents", agentId, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const storePath = path.join(sessionsDir, "sessions.json");
+  return { sessionsDir, storePath };
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -64,7 +73,7 @@ function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry
 }
 
 describe("Integration: saveSessionStore with pruning", () => {
-  let testDir: string;
+  let sessionsDir: string;
   let storePath: string;
   let savedCacheTtl: string | undefined;
 
@@ -77,11 +86,11 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   beforeEach(async () => {
-    testDir = await createCaseDir("pruning-integ");
-    storePath = path.join(testDir, "sessions.json");
+    const caseDir = await createCaseDir("pruning-integ");
+    sessionsDir = caseDir.sessionsDir;
+    storePath = caseDir.storePath;
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
-    clearSessionStoreCacheForTest();
     mockLoadConfig.mockClear();
   });
 
@@ -99,6 +108,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const store = createStaleAndFreshStore();
+    testDb.seed(storePath, store);
 
     await saveSessionStore(storePath, store);
 
@@ -117,8 +127,9 @@ describe("Integration: saveSessionStore with pruning", () => {
       stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
       fresh: { sessionId: freshSessionId, updatedAt: now },
     };
-    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
-    const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
+    testDb.seed(storePath, store);
+    const staleTranscript = path.join(sessionsDir, `${staleSessionId}.jsonl`);
+    const freshTranscript = path.join(sessionsDir, `${freshSessionId}.jsonl`);
     await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
     await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
 
@@ -129,7 +140,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
     await expect(fs.stat(staleTranscript)).rejects.toThrow();
     await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
-    const dirEntries = await fs.readdir(testDir);
+    const dirEntries = await fs.readdir(sessionsDir);
     const archived = dirEntries.filter((entry) =>
       entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
     );
@@ -145,20 +156,21 @@ describe("Integration: saveSessionStore with pruning", () => {
       stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
       fresh: { sessionId: "fresh-session", updatedAt: now },
     };
+    testDb.seed(storePath, store);
 
-    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    const staleTranscript = path.join(sessionsDir, `${staleSessionId}.jsonl`);
     await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
 
     const oldArchived = path.join(
-      testDir,
+      sessionsDir,
       `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,
     );
     const recentArchived = path.join(
-      testDir,
+      sessionsDir,
       `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
     );
     const bakArchived = path.join(
-      testDir,
+      sessionsDir,
       `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
     );
     await fs.writeFile(oldArchived, "old", "utf-8");
@@ -189,12 +201,13 @@ describe("Integration: saveSessionStore with pruning", () => {
     const store: Record<string, SessionEntry> = {
       fresh: { sessionId: "fresh-session", updatedAt: now },
     };
+    testDb.seed(storePath, store);
     const oldReset = path.join(
-      testDir,
+      sessionsDir,
       `old-reset.jsonl.reset.${archiveTimestamp(now - 10 * DAY_MS)}`,
     );
     const freshReset = path.join(
-      testDir,
+      sessionsDir,
       `fresh-reset.jsonl.reset.${archiveTimestamp(now - 1 * DAY_MS)}`,
     );
     await fs.writeFile(oldReset, "old", "utf-8");
@@ -219,6 +232,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const store = createStaleAndFreshStore();
+    testDb.seed(storePath, store);
 
     await saveSessionStore(storePath, store);
 
@@ -238,8 +252,9 @@ describe("Integration: saveSessionStore with pruning", () => {
       oldest: { sessionId: oldestSessionId, updatedAt: now - DAY_MS },
       newest: { sessionId: newestSessionId, updatedAt: now },
     };
-    const oldestTranscript = path.join(testDir, `${oldestSessionId}.jsonl`);
-    const newestTranscript = path.join(testDir, `${newestSessionId}.jsonl`);
+    testDb.seed(storePath, store);
+    const oldestTranscript = path.join(sessionsDir, `${oldestSessionId}.jsonl`);
+    const newestTranscript = path.join(sessionsDir, `${newestSessionId}.jsonl`);
     await fs.writeFile(oldestTranscript, '{"type":"session"}\n', "utf-8");
     await fs.writeFile(newestTranscript, '{"type":"session"}\n', "utf-8");
 
@@ -250,7 +265,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.newest).toBeDefined();
     await expect(fs.stat(oldestTranscript)).rejects.toThrow();
     await expect(fs.stat(newestTranscript)).resolves.toBeDefined();
-    const files = await fs.readdir(testDir);
+    const files = await fs.readdir(sessionsDir);
     expect(files.some((name) => name.startsWith(`${oldestSessionId}.jsonl.deleted.`))).toBe(true);
   });
 
@@ -269,7 +284,8 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
       newest: { sessionId: "inside", updatedAt: now },
     };
-    await fs.writeFile(path.join(testDir, "inside.jsonl"), '{"type":"session"}\n', "utf-8");
+    testDb.seed(storePath, store);
+    await fs.writeFile(path.join(sessionsDir, "inside.jsonl"), '{"type":"session"}\n', "utf-8");
 
     try {
       await saveSessionStore(storePath, store);
@@ -303,19 +319,20 @@ describe("Integration: saveSessionStore with pruning", () => {
       old: { sessionId: oldSessionId, updatedAt: now - DAY_MS },
       recent: { sessionId: newSessionId, updatedAt: now },
     };
-    await fs.writeFile(path.join(testDir, `${oldSessionId}.jsonl`), "x".repeat(500), "utf-8");
-    await fs.writeFile(path.join(testDir, `${newSessionId}.jsonl`), "y".repeat(500), "utf-8");
+    testDb.seed(storePath, store);
+    await fs.writeFile(path.join(sessionsDir, `${oldSessionId}.jsonl`), "x".repeat(500), "utf-8");
+    await fs.writeFile(path.join(sessionsDir, `${newSessionId}.jsonl`), "y".repeat(500), "utf-8");
 
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
     expect(Object.keys(loaded).length).toBe(1);
     expect(loaded.recent).toBeDefined();
-    await expect(fs.stat(path.join(testDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
-    await expect(fs.stat(path.join(testDir, `${newSessionId}.jsonl`))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(sessionsDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
+    await expect(fs.stat(path.join(sessionsDir, `${newSessionId}.jsonl`))).resolves.toBeDefined();
   });
 
-  it("uses projected sessions.json size to avoid over-eviction", async () => {
+  it("uses projected store size to avoid over-eviction", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -329,16 +346,14 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    // Simulate a stale oversized on-disk sessions.json from a previous write.
-    await fs.writeFile(storePath, JSON.stringify({ noisy: "x".repeat(10_000) }), "utf-8");
-
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       older: { sessionId: "older", updatedAt: now - DAY_MS },
       newer: { sessionId: "newer", updatedAt: now },
     };
-    await fs.writeFile(path.join(testDir, "older.jsonl"), "x".repeat(80), "utf-8");
-    await fs.writeFile(path.join(testDir, "newer.jsonl"), "y".repeat(80), "utf-8");
+    testDb.seed(storePath, store);
+    await fs.writeFile(path.join(sessionsDir, "older.jsonl"), "x".repeat(80), "utf-8");
+    await fs.writeFile(path.join(sessionsDir, "newer.jsonl"), "y".repeat(80), "utf-8");
 
     await saveSessionStore(storePath, store);
 
@@ -377,7 +392,8 @@ describe("Integration: saveSessionStore with pruning", () => {
         updatedAt: now,
       },
     };
-    await fs.writeFile(path.join(testDir, "inside.jsonl"), "i".repeat(400), "utf-8");
+    testDb.seed(storePath, store);
+    await fs.writeFile(path.join(sessionsDir, "inside.jsonl"), "i".repeat(400), "utf-8");
 
     try {
       await saveSessionStore(storePath, store);
