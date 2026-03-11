@@ -833,16 +833,26 @@ describe("web_search minimax provider", () => {
     const result = await tool?.execute?.("call-1", { query: "minimax oauth" });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("/v1/coding_plan/search?q=");
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.pathname).toBe("/v1/coding_plan/search");
+    const requestInit = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(requestInit?.method).toBe("POST");
+    const requestBody = JSON.parse(
+      typeof requestInit?.body === "string" ? requestInit.body : "{}",
+    ) as {
+      q?: string;
+      count?: number;
+    };
+    expect(requestBody).toMatchObject({ q: "minimax oauth", count: 5 });
     expect(result?.details).toMatchObject({
       provider: "minimax",
       count: 1,
-      relatedSearches: ["another query"],
       externalContent: { untrusted: true, source: "web_search", wrapped: true },
     });
-    const headers = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
-      | Record<string, string>
-      | undefined;
+    const relatedSearches = (result?.details as { relatedSearches?: string[] } | undefined)
+      ?.relatedSearches;
+    expect(relatedSearches?.[0]).toContain("another query");
+    const headers = requestInit?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBe("Bearer minimax-oauth-token");
   });
 });

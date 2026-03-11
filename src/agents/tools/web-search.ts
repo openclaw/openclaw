@@ -1671,20 +1671,23 @@ async function runMinimaxSearch(params: {
   relatedSearches?: string[];
 }> {
   const endpoint = new URL(MINIMAX_SEARCH_PATH, params.apiHost ?? DEFAULT_MINIMAX_API_HOST);
-  endpoint.searchParams.set("q", params.query);
-  endpoint.searchParams.set("count", String(params.count));
 
   return withTrustedWebSearchEndpoint(
     {
       url: endpoint.toString(),
       timeoutSeconds: params.timeoutSeconds,
       init: {
-        method: "GET",
+        method: "POST",
         headers: {
           Accept: "application/json",
+          "Content-Type": "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "MM-API-Source": "OpenClaw",
         },
+        body: JSON.stringify({
+          q: params.query,
+          count: params.count,
+        }),
       },
     },
     async (res) => {
