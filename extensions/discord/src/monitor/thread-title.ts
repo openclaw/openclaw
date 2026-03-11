@@ -28,7 +28,19 @@ type ThreadTitleModelSelection = {
 };
 
 export function normalizeGeneratedThreadTitle(raw: string): string {
-  const firstLine = (raw.replace(/\r/g, "").split("\n")[0] ?? "").trim();
+  const lines = raw.replace(/\r/g, "").split("\n");
+  let firstLine = "";
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!firstLine && trimmed.startsWith("```")) {
+      continue;
+    }
+    firstLine = trimmed;
+    break;
+  }
   return firstLine.replace(/^["'`]+|["'`]+$/g, "").trim();
 }
 

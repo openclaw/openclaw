@@ -63,4 +63,16 @@ describe("normalizeGeneratedThreadTitle", () => {
       "Weekly Release Summary",
     );
   });
+
+  it("skips leading blank lines before selecting a title", () => {
+    expect(normalizeGeneratedThreadTitle('\n\n "Weekly Release Summary"\nExtra text')).toBe(
+      "Weekly Release Summary",
+    );
+  });
+
+  it("skips leading markdown fence lines before selecting a title", () => {
+    expect(normalizeGeneratedThreadTitle("```markdown\nWeekly Release Summary\n```")).toBe(
+      "Weekly Release Summary",
+    );
+  });
 });
