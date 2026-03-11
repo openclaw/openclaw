@@ -98,6 +98,13 @@ function wrapLine(text: string, width: number): string[] {
     if (nextEsc < 0) {
       nextEsc = text.length;
     }
+    if (nextEsc === i) {
+      // Consume unsupported escape bytes as plain characters so wrapping
+      // cannot stall on unknown ANSI/control sequences.
+      tokens.push({ kind: "char", value: ESC });
+      i += ESC.length;
+      continue;
+    }
     const plainChunk = text.slice(i, nextEsc);
     for (const grapheme of splitGraphemes(plainChunk)) {
       tokens.push({ kind: "char", value: grapheme });
