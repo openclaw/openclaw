@@ -417,10 +417,10 @@ function createSharedHookHandler(params: {
   return async (event) => {
     const eventWorkspaceDir = resolveEventWorkspaceDir(event, params.cfg);
     if (isGatewayStartupEvent(event)) {
-      const startupOverrides = eventWorkspaceDir
-        ? params.overriddenWorkspaces?.get(eventWorkspaceDir)
-        : undefined;
-      if (startupOverrides?.has("gateway:startup")) {
+      const hasStartupOverride = Array.from(params.overriddenWorkspaces.values()).some((events) =>
+        events.has("gateway:startup"),
+      );
+      if (hasStartupOverride) {
         return;
       }
       await params.handler(event);
