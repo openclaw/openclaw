@@ -43,19 +43,23 @@ sanitize_env_file() {
   local tmp
   tmp="$(mktemp)"
 
-  # 1. Strip UTF-8 BOM (EF BB BF) if present at the start of file
-  # 2. Convert CRLF to LF
-  # 3. Remove any remaining bare CR characters
-  LC_ALL=C sed '1s/^\xef\xbb\xbf//' "$file" \
+  # Build the 3-byte UTF-8 BOM using ANSI-C quoting so the pattern works
+  # with both GNU sed and BSD sed (which lacks \xNN escape support).
+  local bom
+  bom=$'\xef\xbb\xbf'
+
+  # 1. Strip UTF-8 BOM if present at the start of file
+  # 2. Convert CRLF to LF and remove any remaining bare CR characters
+  LC_ALL=C sed "1s/^${bom}//" "$file" \
     | tr -d '\r' \
     >"$tmp"
 
-  # Only overwrite if content actually changed (preserves timestamps)
+  # Only overwrite if content actually changed (preserves timestamps).
+  # Use cat to rewrite the inode in-place, preserving owner/group/mode.
   if ! cmp -s "$file" "$tmp"; then
-    mv "$tmp" "$file"
-  else
-    rm -f "$tmp"
+    cat "$tmp" > "$file"
   fi
+  rm -f "$tmp"
 }
 
 read_config_gateway_token() {
