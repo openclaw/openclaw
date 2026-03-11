@@ -115,6 +115,23 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
+  const hasInboundAudioAttachment = (message.attachments ?? []).some(
+    (attachment: { content_type?: string | null }) =>
+      (attachment.content_type ?? "").trim().toLowerCase().startsWith("audio/"),
+  );
+  if (hasInboundAudioAttachment) {
+    try {
+      await sendTyping({ client, channelId: messageChannelId });
+    } catch (err) {
+      logTypingFailure({
+        log: logVerbose,
+        channel: "discord",
+        target: messageChannelId,
+        error: err,
+      });
+    }
+  }
+
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
   const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
   if (isProcessAborted(abortSignal)) {
