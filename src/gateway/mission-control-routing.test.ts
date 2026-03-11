@@ -73,4 +73,52 @@ describe("classifyMissionControlRequest", () => {
     expect(profileUpdate).toEqual({ kind: "serve" });
     expect(backlogPatch).toEqual({ kind: "serve" });
   });
+
+  it("allows operator task write routes under mission-control api", () => {
+    const taskCreate = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/tasks`,
+      search: "",
+      method: "POST",
+    });
+    const taskPatch = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/tasks/task-1`,
+      search: "",
+      method: "PATCH",
+    });
+    const taskReceipt = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/tasks/task-1/receipts`,
+      search: "",
+      method: "POST",
+    });
+
+    expect(taskCreate).toEqual({ kind: "serve" });
+    expect(taskPatch).toEqual({ kind: "serve" });
+    expect(taskReceipt).toEqual({ kind: "serve" });
+  });
+
+  it("allows operator memory write routes under mission-control api", () => {
+    const promote = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/memory/promote`,
+      search: "",
+      method: "POST",
+    });
+    const serviceContext = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/memory/service-context`,
+      search: "",
+      method: "POST",
+    });
+
+    expect(promote).toEqual({ kind: "serve" });
+    expect(serviceContext).toEqual({ kind: "serve" });
+  });
+
+  it("allows operator worker cancel routes under mission-control api", () => {
+    const workerCancel = classifyMissionControlRequest({
+      pathname: `${MISSION_CONTROL_BASE_PATH}/api/worker/tasks/task-1/cancel`,
+      search: "",
+      method: "POST",
+    });
+
+    expect(workerCancel).toEqual({ kind: "serve" });
+  });
 });

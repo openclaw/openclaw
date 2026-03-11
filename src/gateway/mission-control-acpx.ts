@@ -1,3 +1,9 @@
+import {
+  getOperatorTask,
+  getOperatorTaskByRunId,
+  patchOperatorTask,
+} from "../operator-control/task-store.js";
+
 type MissionControlAcpxSessionStatus = "active" | "idle" | "error" | "closed";
 
 export type MissionControlAcpxSessionSummary = {
@@ -9,6 +15,8 @@ export type MissionControlAcpxSessionSummary = {
   };
   lastActivity: number;
   status: MissionControlAcpxSessionStatus;
+  taskId?: string | null;
+  runId?: string | null;
 };
 
 export type MissionControlAcpxSessionsSnapshot = {
@@ -42,6 +50,8 @@ type MissionControlAcpxEvent = {
   cwd: string | null;
   status: MissionControlAcpxSessionStatus;
   activityAt: number;
+  taskId: string | null;
+  runId: string | null;
 };
 
 type MissionControlAcpxSessionState = {
@@ -53,6 +63,8 @@ type MissionControlAcpxSessionState = {
   };
   lastActivity: number;
   status: MissionControlAcpxSessionStatus;
+  taskId: string | null;
+  runId: string | null;
 };
 
 type ParseEventsResult = {
@@ -251,6 +263,26 @@ function normalizeEventCandidate(
     receivedAt,
   );
 
+  const taskId = firstStringPath(record, [
+    ["taskId"],
+    ["task_id"],
+    ["task", "id"],
+    ["meta", "taskId"],
+    ["metadata", "taskId"],
+    ["metadata", "operatorTaskId"],
+    ["context", "taskId"],
+  ]);
+
+  const runId = firstStringPath(record, [
+    ["runId"],
+    ["run_id"],
+    ["task", "runId"],
+    ["meta", "runId"],
+    ["metadata", "runId"],
+    ["metadata", "operatorRunId"],
+    ["context", "runId"],
+  ]);
+
   return {
     ok: true,
     value: {
@@ -260,6 +292,8 @@ function normalizeEventCandidate(
       cwd,
       status,
       activityAt,
+      taskId,
+      runId,
     },
   };
 }
@@ -368,10 +402,53 @@ function parseIngestPayload(params: {
   }
 }
 
+function correlateOperatorTask(event: MissionControlAcpxEvent): void {
+  const task =
+    (event.taskId ? getOperatorTask(event.taskId) : null) ??
+    (event.runId ? getOperatorTaskByRunId(event.runId) : null);
+  if (!task) {
+    return;
+  }
+
+  try {
+    if (event.status === "active") {
+      patchOperatorTask(task.envelope.task_id, {
+        state: task.receipt.state === "accepted" ? "queued" : task.receipt.state,
+        owner: event.agent,
+        note: `acpx session ${event.sessionId} active`,
+      });
+      if (
+        task.receipt.state !== "started" &&
+        task.receipt.state !== "completed" &&
+        task.receipt.state !== "dead-letter"
+      ) {
+        patchOperatorTask(task.envelope.task_id, {
+          state: "started",
+          owner: event.agent,
+          note: `acpx session ${event.sessionId} started`,
+        });
+      }
+      return;
+    }
+
+    if (event.status === "error") {
+      patchOperatorTask(task.envelope.task_id, {
+        state: "blocked",
+        owner: event.agent,
+        failure_code: "acpx-session-error",
+        note: `acpx session ${event.sessionId} reported error`,
+      });
+    }
+  } catch {
+    // Ignore correlation failures when lifecycle transitions have already advanced.
+  }
+}
+
 function upsertSessions(events: readonly MissionControlAcpxEvent[]): { sessionsUpdated: number } {
   const touched = new Set<string>();
 
   for (const event of events) {
+    correlateOperatorTask(event);
     touched.add(event.sessionId);
     const current = sessionStateById.get(event.sessionId);
 
@@ -385,22 +462,27 @@ function upsertSessions(events: readonly MissionControlAcpxEvent[]): { sessionsU
         },
         lastActivity: event.activityAt,
         status: event.status,
+        taskId: event.taskId,
+        runId: event.runId,
       });
       continue;
     }
 
     const nextLastActivity = Math.max(current.lastActivity, event.activityAt);
     const shouldApplyEventStatus = event.activityAt >= current.lastActivity;
+    const nextAgent = event.agent.trim() && event.agent !== "unknown" ? event.agent : current.agent;
 
     sessionStateById.set(event.sessionId, {
       sessionId: event.sessionId,
-      agent: event.agent || current.agent,
+      agent: nextAgent,
       scope: {
         repo: event.repo ?? current.scope.repo,
         cwd: event.cwd ?? current.scope.cwd,
       },
       lastActivity: nextLastActivity,
       status: shouldApplyEventStatus ? event.status : current.status,
+      taskId: event.taskId ?? current.taskId,
+      runId: event.runId ?? current.runId,
     });
   }
 
@@ -479,6 +561,8 @@ export function getMissionControlAcpxSessionsSnapshot(): MissionControlAcpxSessi
         },
         lastActivity: session.lastActivity,
         status: session.status,
+        ...(session.taskId ? { taskId: session.taskId } : {}),
+        ...(session.runId ? { runId: session.runId } : {}),
       })),
     summary: countByStatus(sessions),
     generatedAt: Date.now(),

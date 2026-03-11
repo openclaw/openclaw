@@ -1,4 +1,5 @@
-FROM openclaw:local
+ARG OPENCLAW_TONY_BASE_IMAGE=openclaw:local
+FROM ${OPENCLAW_TONY_BASE_IMAGE}
 USER root
 
 # ─── Core system tools + Docker CLI ──────────────────────────────────────────
@@ -37,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ─── acpx CLI (ACP runtime bridge) ───────────────────────────────────────────
 ARG OPENCLAW_ACPX_VERSION=0.1.15
-RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" \
+RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" vercel \
   && acpx --version
 
 # ─── kubectl ─────────────────────────────────────────────────────────────────

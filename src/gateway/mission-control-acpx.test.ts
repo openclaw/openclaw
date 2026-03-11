@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { getOperatorTask, submitOperatorTask } from "../operator-control/task-store.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   getMissionControlAcpxSessionsSnapshot,
   ingestMissionControlAcpxEvents,
@@ -120,5 +122,51 @@ describe("mission-control ACPX ingestion", () => {
     const snapshot = getMissionControlAcpxSessionsSnapshot();
     expect(snapshot.sessions).toEqual([]);
     expect(snapshot.summary.totalTracked).toBe(0);
+  });
+
+  it("correlates task metadata and advances operator task state from ACPX events", async () => {
+    await withStateDirEnv("mission-control-acpx-task-correlation-", async () => {
+      submitOperatorTask({
+        task_id: "task-acpx-1",
+        idempotency_key: "task-acpx-1",
+        requester: { id: "tonya", kind: "operator" },
+        target: { capability: "backend", alias: "raekwon" },
+        objective: "Correlate ACPX session progress",
+        tier: "STANDARD",
+        acceptance_criteria: ["session progress visible"],
+        timeout_s: 900,
+      });
+
+      const result = ingestMissionControlAcpxEvents({
+        rawBody: JSON.stringify({
+          events: [
+            {
+              sessionId: "acpx-session-task-1",
+              agent: "raekwon",
+              status: "running",
+              taskId: "task-acpx-1",
+              runId: "task-run-acpx",
+              timestamp: 1_700_000_000_000,
+            },
+          ],
+        }),
+        contentType: "application/json",
+      });
+
+      expect(result.accepted).toBe(1);
+
+      const task = getOperatorTask("task-acpx-1");
+      expect(task?.receipt.state).toBe("started");
+      expect(task?.receipt.owner).toBe("raekwon");
+
+      const snapshot = getMissionControlAcpxSessionsSnapshot();
+      expect(snapshot.sessions[0]).toMatchObject({
+        sessionId: "acpx-session-task-1",
+        agent: "raekwon",
+        status: "active",
+        taskId: "task-acpx-1",
+        runId: "task-run-acpx",
+      });
+    });
   });
 });

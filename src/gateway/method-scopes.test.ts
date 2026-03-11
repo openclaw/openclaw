@@ -15,7 +15,16 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("config.schema.lookup")).toEqual([
       "operator.read",
     ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("operator.worker.ready")).toEqual([
+      "operator.read",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("operator.worker.tasks.events")).toEqual([
+      "operator.read",
+    ]);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual(["operator.write"]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("operator.worker.tasks.cancel")).toEqual([
+      "operator.write",
+    ]);
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {

@@ -25,6 +25,7 @@ import {
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
+import { createGatewayAngelaRequestHandler } from "./server/angela.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
@@ -117,6 +118,10 @@ export async function createGatewayRuntimeState(params: {
     port: params.port,
     logHooks: params.logHooks,
   });
+  const handleAngelaRequest = createGatewayAngelaRequestHandler({
+    deps: params.deps,
+    log: params.logHooks,
+  });
 
   const handlePluginRequest = createGatewayPluginRequestHandler({
     registry: params.pluginRegistry,
@@ -153,6 +158,7 @@ export async function createGatewayRuntimeState(params: {
       openResponsesEnabled: params.openResponsesEnabled,
       openResponsesConfig: params.openResponsesConfig,
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+      handleAngelaRequest,
       handleHooksRequest,
       handlePluginRequest,
       shouldEnforcePluginGatewayAuth,

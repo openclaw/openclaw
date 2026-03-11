@@ -131,6 +131,10 @@ type RawUsageSession = {
   key?: string;
   agentId?: string;
   channel?: string;
+  modelProvider?: string;
+  model?: string;
+  modelOverride?: string;
+  providerOverride?: string;
   origin?: {
     provider?: string;
     surface?: string;
@@ -241,6 +245,28 @@ function normalizeRun(row: RawSessionRow, index: number): MissionControlRun {
     ...base,
     status: deriveRunStatus(base),
   };
+}
+
+function resolveRunModel(row: RawUsageSession | null | undefined): string | undefined {
+  if (!row) {
+    return undefined;
+  }
+
+  const explicitOverride = asString(row.modelOverride);
+  if (explicitOverride) {
+    return explicitOverride;
+  }
+
+  const providerOverride = asString(row.providerOverride);
+  const provider =
+    providerOverride ?? asString(row.modelProvider) ?? asString(row.origin?.provider);
+  const model = asString(row.model);
+
+  if (provider && model) {
+    return `${provider}/${model}`;
+  }
+
+  return model ?? provider ?? undefined;
 }
 
 function extractLogIncident(line: string): {
@@ -421,15 +447,36 @@ export async function getMissionControlRuns(params: {
   activeMinutes: number;
   limit: number;
 }): Promise<MissionControlRunsSnapshot> {
-  const rows = await loadSessionsList({
-    limit: params.limit,
-    activeMinutes: params.activeMinutes,
-    search: params.search,
-    includeGlobal: true,
-    includeUnknown: true,
-  });
+  const [rows, usage] = await Promise.all([
+    loadSessionsList({
+      limit: params.limit,
+      activeMinutes: params.activeMinutes,
+      search: params.search,
+      includeGlobal: true,
+      includeUnknown: true,
+    }),
+    loadSessionsUsage({ limit: params.limit }),
+  ]);
 
-  const normalized = rows.map((row, index) => normalizeRun(row, index));
+  const usageByKey = new Map(
+    (Array.isArray(usage.sessions) ? usage.sessions : [])
+      .map((entry) => {
+        const key = asString(entry.key);
+        return key ? ([key, entry] as const) : null;
+      })
+      .filter((entry): entry is readonly [string, RawUsageSession] => Boolean(entry)),
+  );
+
+  const normalized = rows.map((row, index) => {
+    const base = normalizeRun(row, index);
+    const usageSession = usageByKey.get(base.key) ?? null;
+    return {
+      ...base,
+      totalTokens: asNumber(usageSession?.usage?.totalTokens) ?? base.totalTokens,
+      totalCostUsd: asNumber(usageSession?.usage?.totalCost) ?? undefined,
+      model: resolveRunModel(usageSession),
+    };
+  });
   const history = [...normalized].toSorted(
     (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
   );
