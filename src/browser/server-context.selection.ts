@@ -1,4 +1,4 @@
-import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
+import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
@@ -32,6 +32,24 @@ export function createProfileSelectionOps({
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
 
+  const resolveTargetAliasViaRelay = async (raw: string): Promise<string | null> => {
+    if (!capabilities.requiresAttachedTab) {
+      return null;
+    }
+    const requested = raw.trim();
+    if (!requested) {
+      return null;
+    }
+    const encoded = encodeURIComponent(requested);
+    const resolveUrl = appendCdpPath(cdpHttpBase, `/json/resolve/${encoded}`);
+    const payload = await fetchJson<{ targetId?: unknown }>(resolveUrl, 1000).catch(() => null);
+    const targetId = typeof payload?.targetId === "string" ? payload.targetId.trim() : "";
+    if (!targetId) {
+      return null;
+    }
+    return targetId;
+  };
+
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
     const profileState = getProfileState();
@@ -60,9 +78,9 @@ export function createProfileSelectionOps({
     }
 
     const tabs = await listTabs();
-    const candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    let candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
 
-    const resolveById = (raw: string) => {
+    const resolveByIdLocal = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
       if (!resolved.ok) {
         if (resolved.reason === "ambiguous") {
@@ -73,9 +91,25 @@ export function createProfileSelectionOps({
       return candidates.find((t) => t.targetId === resolved.targetId) ?? null;
     };
 
+    const resolveById = async (raw: string) => {
+      const local = resolveByIdLocal(raw);
+      if (local || local === "AMBIGUOUS") {
+        return local;
+      }
+      const aliasTargetId = await resolveTargetAliasViaRelay(raw);
+      if (!aliasTargetId || aliasTargetId === raw.trim()) {
+        return null;
+      }
+      const refreshedTabs = await listTabs().catch(() => tabs);
+      candidates = capabilities.supportsPerTabWs
+        ? refreshedTabs.filter((t) => Boolean(t.wsUrl))
+        : refreshedTabs;
+      return resolveByIdLocal(aliasTargetId);
+    };
+
     const pickDefault = () => {
       const last = profileState.lastTargetId?.trim() || "";
-      const lastResolved = last ? resolveById(last) : null;
+      const lastResolved = last ? resolveByIdLocal(last) : null;
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
       }
@@ -84,7 +118,7 @@ export function createProfileSelectionOps({
       return page ?? candidates.at(0) ?? null;
     };
 
-    const chosen = targetId ? resolveById(targetId) : pickDefault();
+    const chosen = targetId ? await resolveById(targetId) : pickDefault();
 
     if (chosen === "AMBIGUOUS") {
       throw new BrowserTargetAmbiguousError();
@@ -98,14 +132,29 @@ export function createProfileSelectionOps({
 
   const resolveTargetIdOrThrow = async (targetId: string): Promise<string> => {
     const tabs = await listTabs();
-    const resolved = resolveTargetIdFromTabs(targetId, tabs);
-    if (!resolved.ok) {
-      if (resolved.reason === "ambiguous") {
+    const resolveLocal = (raw: string) => resolveTargetIdFromTabs(raw, tabs);
+
+    const resolved = resolveLocal(targetId);
+    if (resolved.ok) {
+      return resolved.targetId;
+    }
+    if (resolved.reason === "ambiguous") {
+      throw new BrowserTargetAmbiguousError();
+    }
+
+    const aliasTargetId = await resolveTargetAliasViaRelay(targetId);
+    if (aliasTargetId && aliasTargetId !== targetId.trim()) {
+      const refreshedTabs = await listTabs().catch(() => tabs);
+      const aliasResolved = resolveTargetIdFromTabs(aliasTargetId, refreshedTabs);
+      if (aliasResolved.ok) {
+        return aliasResolved.targetId;
+      }
+      if (aliasResolved.reason === "ambiguous") {
         throw new BrowserTargetAmbiguousError();
       }
-      throw new BrowserTabNotFoundError();
     }
-    return resolved.targetId;
+
+    throw new BrowserTabNotFoundError();
   };
 
   const focusTab = async (targetId: string): Promise<void> => {
