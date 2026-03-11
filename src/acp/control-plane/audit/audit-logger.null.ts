@@ -5,12 +5,7 @@
  * All methods are no-ops to avoid conditional checks in calling code.
  */
 
-import type {
-  AuditLogEntry,
-  AuditLogFilters,
-  AuditLogStats,
-  IAuditLogger,
-} from "./audit.types.js";
+import type { AuditLogEntry, AuditLogFilters, AuditLogStats, IAuditLogger } from "./audit.types.js";
 
 /**
  * Null audit logger - no-op implementation.

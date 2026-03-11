@@ -2,10 +2,10 @@
  * Audit logger utility functions.
  */
 
-import type { AuditActor, IAuditLogger } from "./audit.types.js";
-import { AUDIT_EVENT_TYPES } from "./audit.types.js";
 import { FileAuditLogger } from "./audit-logger.file.js";
 import { createNullAuditLogger } from "./audit-logger.null.js";
+import type { AuditActor, IAuditLogger } from "./audit.types.js";
+import { AUDIT_EVENT_TYPES } from "./audit.types.js";
 
 /**
  * Extract actor information from request context.
@@ -67,7 +67,7 @@ export function createAuditLogger(
     maxBufferSize?: number;
     flushInterval?: number;
     retentionDays?: number;
-  }
+  },
 ): IAuditLogger {
   if (!enabled) {
     return createNullAuditLogger();

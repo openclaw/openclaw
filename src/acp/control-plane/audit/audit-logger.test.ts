@@ -2,12 +2,12 @@
  * Audit logger tests.
  */
 
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { rm } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { FileAuditLogger } from "./audit-logger.file.js";
 import { NullAuditLogger, createNullAuditLogger } from "./audit-logger.null.js";
 import { AUDIT_EVENT_TYPES } from "./audit.types.js";
@@ -15,10 +15,7 @@ import { AUDIT_EVENT_TYPES } from "./audit.types.js";
 describe("FileAuditLogger", () => {
   const testDir = join(tmpdir(), `audit-test-${randomUUID()}`);
 
-  async function createTestLogger(config?: {
-    maxBufferSize?: number;
-    flushInterval?: number;
-  }) {
+  async function createTestLogger(config?: { maxBufferSize?: number; flushInterval?: number }) {
     await fs.mkdir(testDir, { recursive: true });
     return new FileAuditLogger({
       enabled: true,

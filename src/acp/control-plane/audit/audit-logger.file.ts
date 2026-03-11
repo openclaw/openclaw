@@ -13,9 +13,9 @@
  * TODO: Add gzip compression for old log files (disk space optimization)
  */
 
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import { logVerbose } from "../../../globals.js";
 import type {
   AuditEventType,
@@ -59,10 +59,9 @@ export class FileAuditLogger implements IAuditLogger {
 
     // Ensure storage directory exists
     if (this.config.enabled) {
-      fs.mkdir(this.config.storageDir, { recursive: true })
-        .catch((err) => {
-          logVerbose(`audit: failed to create storage dir: ${err}`);
-        });
+      fs.mkdir(this.config.storageDir, { recursive: true }).catch((err) => {
+        logVerbose(`audit: failed to create storage dir: ${err}`);
+      });
     }
   }
 
@@ -82,8 +81,7 @@ export class FileAuditLogger implements IAuditLogger {
 
     // Update stats
     this.stats.totalEntries++;
-    this.stats.entriesByAction[entry.action] =
-      (this.stats.entriesByAction[entry.action] ?? 0) + 1;
+    this.stats.entriesByAction[entry.action] = (this.stats.entriesByAction[entry.action] ?? 0) + 1;
     if (entry.result === "success") {
       this.stats.entriesByResult.success++;
     } else {
