@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnv } from "../test-utils/env.js";
 import { getChannelDock } from "./dock.js";
 
 function emptyConfig(): OpenClawConfig {
@@ -14,7 +15,12 @@ describe("channels dock", () => {
 
     const telegramContext = telegramDock?.threading?.buildToolContext?.({
       cfg: emptyConfig(),
-      context: { To: " room-1 ", MessageThreadId: 42, ReplyToId: "fallback" },
+      context: {
+        To: " room-1 ",
+        MessageThreadId: 42,
+        ReplyToId: "fallback",
+        CurrentMessageId: "9001",
+      },
       hasRepliedRef,
     });
     const googleChatContext = googleChatDock?.threading?.buildToolContext?.({
@@ -26,11 +32,29 @@ describe("channels dock", () => {
     expect(telegramContext).toEqual({
       currentChannelId: "room-1",
       currentThreadTs: "42",
+      currentMessageId: "9001",
       hasRepliedRef,
     });
     expect(googleChatContext).toEqual({
       currentChannelId: "space-1",
       currentThreadTs: "thread-abc",
+      hasRepliedRef,
+    });
+  });
+
+  it("telegram threading does not treat ReplyToId as thread id in DMs", () => {
+    const hasRepliedRef = { value: false };
+    const telegramDock = getChannelDock("telegram");
+    const context = telegramDock?.threading?.buildToolContext?.({
+      cfg: emptyConfig(),
+      context: { To: " dm-1 ", ReplyToId: "12345", CurrentMessageId: "12345" },
+      hasRepliedRef,
+    });
+
+    expect(context).toEqual({
+      currentChannelId: "dm-1",
+      currentThreadTs: undefined,
+      currentMessageId: "12345",
       hasRepliedRef,
     });
   });
@@ -46,7 +70,7 @@ describe("channels dock", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const accountDefault = ircDock?.config?.resolveDefaultTo?.({ cfg, accountId: "work" });
     const rootDefault = ircDock?.config?.resolveDefaultTo?.({ cfg, accountId: "missing" });
@@ -75,5 +99,96 @@ describe("channels dock", () => {
     });
 
     expect(formatted).toEqual(["user", "foo", "plain"]);
+  });
+
+  it("telegram dock config readers preserve omitted-account fallback semantics", () => {
+    withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
+      const telegramDock = getChannelDock("telegram");
+      const cfg = {
+        channels: {
+          telegram: {
+            allowFrom: ["top-owner"],
+            defaultTo: "@top-target",
+            accounts: {
+              work: {
+                botToken: "tok-work",
+                allowFrom: ["work-owner"],
+                defaultTo: "@work-target",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(telegramDock?.config?.resolveAllowFrom?.({ cfg })).toEqual(["top-owner"]);
+      expect(telegramDock?.config?.resolveDefaultTo?.({ cfg })).toBe("@top-target");
+    });
+  });
+
+  it("slack dock config readers stay read-only when tokens are unresolved SecretRefs", () => {
+    const slackDock = getChannelDock("slack");
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: {
+            source: "env",
+            provider: "default",
+            id: "SLACK_BOT_TOKEN",
+          },
+          appToken: {
+            source: "env",
+            provider: "default",
+            id: "SLACK_APP_TOKEN",
+          },
+          defaultTo: "channel:C111",
+          dm: { allowFrom: ["U123"] },
+          channels: {
+            C111: { requireMention: false },
+          },
+          replyToMode: "all",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(slackDock?.config?.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
+    expect(slackDock?.config?.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "channel:C111",
+    );
+    expect(
+      slackDock?.threading?.resolveReplyToMode?.({
+        cfg,
+        accountId: "default",
+        chatType: "channel",
+      }),
+    ).toBe("all");
+    expect(
+      slackDock?.groups?.resolveRequireMention?.({
+        cfg,
+        accountId: "default",
+        groupId: "C111",
+      }),
+    ).toBe(false);
+  });
+
+  it("dock config readers coerce numeric allowFrom/defaultTo entries through shared helpers", () => {
+    const telegramDock = getChannelDock("telegram");
+    const signalDock = getChannelDock("signal");
+    const cfg = {
+      channels: {
+        telegram: {
+          allowFrom: [12345],
+          defaultTo: 67890,
+        },
+        signal: {
+          allowFrom: [14155550100],
+          defaultTo: 42,
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(telegramDock?.config?.resolveAllowFrom?.({ cfg })).toEqual(["12345"]);
+    expect(telegramDock?.config?.resolveDefaultTo?.({ cfg })).toBe("67890");
+    expect(signalDock?.config?.resolveAllowFrom?.({ cfg })).toEqual(["14155550100"]);
+    expect(signalDock?.config?.resolveDefaultTo?.({ cfg })).toBe("42");
   });
 });

@@ -77,6 +77,18 @@ openclaw browser create-profile \
   --color "#00AA00"
 ```
 
+### Custom Gateway ports
+
+If you're using a custom gateway port, the extension relay port is automatically derived:
+
+**Extension Relay Port = Gateway Port + 3**
+
+Example: if `gateway.port: 19001`, then:
+
+- Extension relay port: `19004` (gateway + 3)
+
+Configure the extension to use the derived relay port in the extension Options page.
+
 ## Attach / detach (toolbar button)
 
 - Open the tab you want OpenClaw to control.
@@ -149,6 +161,7 @@ Debugging: `openclaw sandbox explain`
 
 - Keep the Gateway and node host on the same tailnet; avoid exposing relay ports to LAN or public Internet.
 - Pair nodes intentionally; disable browser proxy routing if you don’t want remote control (`gateway.nodes.browser.mode="off"`).
+- Leave the relay on loopback unless you have a real cross-namespace need. For WSL2 or similar split-host setups, set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0`, then keep access constrained with Gateway auth, node pairing, and a private network.
 
 ## How “extension path” works
 

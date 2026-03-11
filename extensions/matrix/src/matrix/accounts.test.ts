@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
-import { resolveMatrixAccount } from "./accounts.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./accounts.js";
 
 vi.mock("./credentials.js", () => ({
   loadMatrixCredentials: () => null,
@@ -78,5 +78,54 @@ describe("resolveMatrixAccount", () => {
 
     const account = resolveMatrixAccount({ cfg });
     expect(account.configured).toBe(true);
+  });
+});
+
+describe("resolveDefaultMatrixAccountId", () => {
+  it("prefers channels.matrix.defaultAccount when it matches a configured account", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "alerts",
+          accounts: {
+            default: { homeserver: "https://matrix.example.org", accessToken: "tok-default" },
+            alerts: { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("alerts");
+  });
+
+  it("normalizes channels.matrix.defaultAccount before lookup", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "Team Alerts",
+          accounts: {
+            "team-alerts": { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("team-alerts");
+  });
+
+  it("falls back when channels.matrix.defaultAccount is not configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "missing",
+          accounts: {
+            default: { homeserver: "https://matrix.example.org", accessToken: "tok-default" },
+            alerts: { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
   });
 });

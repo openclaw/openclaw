@@ -54,6 +54,71 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("handles Moonshot/Kimi cached_tokens field", () => {
+    // Moonshot v1 returns cached_tokens instead of cache_read_input_tokens
+    const usage = normalizeUsage({
+      prompt_tokens: 30,
+      completion_tokens: 9,
+      total_tokens: 39,
+      cached_tokens: 19,
+    });
+    expect(usage).toEqual({
+      input: 30,
+      output: 9,
+      cacheRead: 19,
+      cacheWrite: undefined,
+      total: 39,
+    });
+  });
+
+  it("handles Kimi K2 prompt_tokens_details.cached_tokens field", () => {
+    // Kimi K2 uses automatic prefix caching and returns cached_tokens in prompt_tokens_details
+    const usage = normalizeUsage({
+      prompt_tokens: 1113,
+      completion_tokens: 5,
+      total_tokens: 1118,
+      prompt_tokens_details: { cached_tokens: 1024 },
+    });
+    expect(usage).toEqual({
+      input: 1113,
+      output: 5,
+      cacheRead: 1024,
+      cacheWrite: undefined,
+      total: 1118,
+    });
+  });
+
+  it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
+    // pi-ai OpenAI-format providers subtract cached_tokens from prompt_tokens
+    // upstream.  When cached_tokens exceeds prompt_tokens the result is negative.
+    const usage = normalizeUsage({
+      input: -4900,
+      output: 200,
+      cacheRead: 5000,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 200,
+      cacheRead: 5000,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
+  it("clamps negative prompt_tokens alias to zero", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: -12,
+      completion_tokens: 4,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 4,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("returns undefined when no valid fields are provided", () => {
     const usage = normalizeUsage(null);
     expect(usage).toBeUndefined();

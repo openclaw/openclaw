@@ -1,25 +1,14 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
-import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
-  snapshotSessionOrigin,
   resolveMainSessionKey,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -32,8 +21,13 @@ import {
   validateSessionsResolveParams,
 } from "../protocol/index.js";
 import {
+  archiveSessionTranscriptsForSession,
+  cleanupSessionBeforeMutation,
+  emitSessionUnboundLifecycleEvent,
+  performGatewaySessionReset,
+} from "../session-reset-service.js";
+import {
   archiveFileOnDisk,
-  archiveSessionTranscripts,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
@@ -45,6 +39,7 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
+  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -83,6 +78,9 @@ function rejectWebchatSessionMutation(params: {
   if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
     return false;
   }
+  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
+    return false;
+  }
   params.respond(
     false,
     undefined,
@@ -117,87 +115,6 @@ function migrateAndPruneSessionStoreKey(params: {
     candidates: target.storeKeys,
   });
   return { target, primaryKey, entry: params.store[primaryKey] };
-}
-
-function archiveSessionTranscriptsForSession(params: {
-  sessionId: string | undefined;
-  storePath: string;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-}): string[] {
-  if (!params.sessionId) {
-    return [];
-  }
-  return archiveSessionTranscripts({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
-    reason: params.reason,
-  });
-}
-
-async function emitSessionUnboundLifecycleEvent(params: {
-  targetSessionKey: string;
-  reason: "session-reset" | "session-delete";
-  emitHooks?: boolean;
-}) {
-  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  unbindThreadBindingsBySessionKey({
-    targetSessionKey: params.targetSessionKey,
-    targetKind,
-    reason: params.reason,
-    sendFarewell: true,
-  });
-
-  if (params.emitHooks === false) {
-    return;
-  }
-
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("subagent_ended")) {
-    return;
-  }
-  await hookRunner.runSubagentEnded(
-    {
-      targetSessionKey: params.targetSessionKey,
-      targetKind,
-      reason: params.reason,
-      sendFarewell: true,
-      outcome: params.reason === "session-reset" ? "reset" : "deleted",
-    },
-    {
-      childSessionKey: params.targetSessionKey,
-    },
-  );
-}
-
-async function ensureSessionRuntimeCleanup(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
-  sessionId?: string;
-}) {
-  const queueKeys = new Set<string>(params.target.storeKeys);
-  queueKeys.add(params.target.canonicalKey);
-  if (params.sessionId) {
-    queueKeys.add(params.sessionId);
-  }
-  clearSessionQueues([...queueKeys]);
-  stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
-  if (!params.sessionId) {
-    return undefined;
-  }
-  abortEmbeddedPiRun(params.sessionId);
-  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
-  if (ended) {
-    return undefined;
-  }
-  return errorShape(
-    ErrorCodes.UNAVAILABLE,
-    `Session ${params.key} is still active; try again in a moment.`,
-  );
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
@@ -345,77 +262,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const { entry } = loadSessionEntry(key);
-    const hadExistingEntry = Boolean(entry);
-    const commandReason = p.reason === "new" ? "new" : "reset";
-    const hookEvent = createInternalHookEvent(
-      "command",
-      commandReason,
-      target.canonicalKey ?? key,
-      {
-        sessionEntry: entry,
-        previousSessionEntry: entry,
-        commandSource: "gateway:sessions.reset",
-        cfg,
-      },
-    );
-    await triggerInternalHook(hookEvent);
-    const sessionId = entry?.sessionId;
-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
-    if (cleanupError) {
-      respond(false, undefined, cleanupError);
+    const reason = p.reason === "new" ? "new" : "reset";
+    const result = await performGatewaySessionReset({
+      key,
+      reason,
+      commandSource: "gateway:sessions.reset",
+    });
+    if (!result.ok) {
+      respond(false, undefined, result.error);
       return;
     }
-    let oldSessionId: string | undefined;
-    let oldSessionFile: string | undefined;
-    const next = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      const entry = store[primaryKey];
-      oldSessionId = entry?.sessionId;
-      oldSessionFile = entry?.sessionFile;
-      const now = Date.now();
-      const nextEntry: SessionEntry = {
-        sessionId: randomUUID(),
-        updatedAt: now,
-        systemSent: false,
-        abortedLastRun: false,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        responseUsage: entry?.responseUsage,
-        model: entry?.model,
-        contextTokens: entry?.contextTokens,
-        sendPolicy: entry?.sendPolicy,
-        label: entry?.label,
-        origin: snapshotSessionOrigin(entry),
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-        skillsSnapshot: entry?.skillsSnapshot,
-        // Reset token counts to 0 on session reset (#1523)
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        totalTokensFresh: true,
-      };
-      store[primaryKey] = nextEntry;
-      return nextEntry;
-    });
-    // Archive old transcript so it doesn't accumulate on disk (#14869).
-    archiveSessionTranscriptsForSession({
-      sessionId: oldSessionId,
-      storePath,
-      sessionFile: oldSessionFile,
-      agentId: target.agentId,
-      reason: "reset",
-    });
-    if (hadExistingEntry) {
-      await emitSessionUnboundLifecycleEvent({
-        targetSessionKey: target.canonicalKey ?? key,
-        reason: "session-reset",
-      });
-    }
-    respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
+    respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
@@ -443,13 +300,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
-    const { entry } = loadSessionEntry(key);
-    const sessionId = entry?.sessionId;
-    const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
-    if (cleanupError) {
-      respond(false, undefined, cleanupError);
+    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
+    const mutationCleanupError = await cleanupSessionBeforeMutation({
+      cfg,
+      key,
+      target,
+      entry,
+      legacyKey,
+      canonicalKey,
+      reason: "session-delete",
+    });
+    if (mutationCleanupError) {
+      respond(false, undefined, mutationCleanupError);
       return;
     }
+    const sessionId = entry?.sessionId;
     const deleted = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const hadEntry = Boolean(store[primaryKey]);
@@ -479,6 +344,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
+  },
+  "sessions.get": ({ params, respond }) => {
+    const p = params;
+    const key = requireSessionKey(p.key ?? p.sessionKey, respond);
+    if (!key) {
+      return;
+    }
+    const limit =
+      typeof p.limit === "number" && Number.isFinite(p.limit)
+        ? Math.max(1, Math.floor(p.limit))
+        : 200;
+
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const store = loadSessionStore(storePath);
+    const entry = target.storeKeys.map((k) => store[k]).find(Boolean);
+    if (!entry?.sessionId) {
+      respond(true, { messages: [] }, undefined);
+      return;
+    }
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

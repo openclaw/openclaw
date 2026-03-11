@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
-  sessionsResetHandler: vi.fn(),
+  performGatewaySessionReset: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -41,11 +41,17 @@ vi.mock("../../config/sessions.js", async () => {
 
 vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
+  agentCommandFromIngress: mocks.agentCommand,
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => mocks.loadConfigReturn,
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return {
+    ...actual,
+    loadConfig: () => mocks.loadConfigReturn,
+  };
+});
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
@@ -56,11 +62,9 @@ vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
 }));
 
-vi.mock("./sessions.js", () => ({
-  sessionsHandlers: {
-    "sessions.reset": (...args: unknown[]) =>
-      (mocks.sessionsResetHandler as (...args: unknown[]) => unknown)(...args),
-  },
+vi.mock("../session-reset-service.js", () => ({
+  performGatewaySessionReset: (...args: unknown[]) =>
+    (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
@@ -113,6 +117,51 @@ function captureUpdatedMainEntry() {
   return () => capturedEntry;
 }
 
+function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId: "existing-session-id",
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
+  const getCapturedEntry = captureUpdatedMainEntry();
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+  await runMainAgent("test", idempotencyKey);
+  expect(mocks.updateSessionStore).toHaveBeenCalled();
+  return getCapturedEntry();
+}
+
+function setupNewYorkTimeConfig(isoDate: string) {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
+  mocks.agentCommand.mockClear();
+  mocks.loadConfigReturn = {
+    agents: {
+      defaults: {
+        userTimezone: "America/New_York",
+      },
+    },
+  };
+}
+
+function resetTimeConfig() {
+  mocks.loadConfigReturn = {};
+  vi.useRealTimers();
+}
+
+async function expectResetCall(expectedMessage: string) {
+  await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+  expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+  const call = readLastAgentCommandCall();
+  expect(call?.message).toBe(expectedMessage);
+  return call;
+}
+
 function primeMainAgentRun(params?: { sessionId?: string; cfg?: Record<string, unknown> }) {
   mockMainSessionEntry(
     { sessionId: params?.sessionId ?? "existing-session-id" },
@@ -157,18 +206,16 @@ function mockSessionResetSuccess(params: {
 }) {
   const key = params.key ?? "agent:main:main";
   const sessionId = params.sessionId ?? "reset-session-id";
-  mocks.sessionsResetHandler.mockImplementation(
-    async (opts: {
-      params: { key: string; reason: string };
-      respond: (ok: boolean, payload?: unknown) => void;
-    }) => {
-      expect(opts.params.key).toBe(key);
-      expect(opts.params.reason).toBe(params.reason);
-      opts.respond(true, {
+  mocks.performGatewaySessionReset.mockImplementation(
+    async (opts: { key: string; reason: string; commandSource: string }) => {
+      expect(opts.key).toBe(key);
+      expect(opts.reason).toBe(params.reason);
+      expect(opts.commandSource).toBe("gateway:agent");
+      return {
         ok: true,
         key,
         entry: { sessionId },
-      });
+      };
     },
   );
 }
@@ -179,6 +226,8 @@ async function invokeAgent(
     respond?: ReturnType<typeof vi.fn>;
     reqId?: string;
     context?: GatewayRequestContext;
+    client?: AgentHandlerArgs["client"];
+    isWebchatConnect?: AgentHandlerArgs["isWebchatConnect"];
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -187,8 +236,8 @@ async function invokeAgent(
     respond: respond as never,
     context: options?.context ?? makeContext(),
     req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
-    client: null,
-    isWebchatConnect: () => false,
+    client: options?.client ?? null,
+    isWebchatConnect: options?.isWebchatConnect ?? (() => false),
   });
   return respond;
 }
@@ -218,6 +267,42 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  it("preserves ACP metadata from the current stored session entry", async () => {
+    const existingAcpMeta = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime-1",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    };
+
+    mockMainSessionEntry({
+      acp: existingAcpMeta,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({ acp: existingAcpMeta }),
+      };
+      const result = await updater(store);
+      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("test", "test-idem-acp-meta");
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry).toBeDefined();
+    expect(capturedEntry?.acp).toEqual(existingAcpMeta);
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
@@ -227,34 +312,14 @@ describe("gateway agent handler", () => {
       claudeCliSessionId: existingClaudeCliSessionId,
     });
 
-    const getCapturedEntry = captureUpdatedMainEntry();
-
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-
-    await runMainAgent("test", "test-idem");
-
-    expect(mocks.updateSessionStore).toHaveBeenCalled();
-    const capturedEntry = getCapturedEntry();
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-29T01:30:00.000Z")); // Wed Jan 28, 8:30 PM EST
-    mocks.agentCommand.mockClear();
-
-    mocks.loadConfigReturn = {
-      agents: {
-        defaults: {
-          userTimezone: "America/New_York",
-        },
-      },
-    };
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
 
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
 
@@ -274,8 +339,47 @@ describe("gateway agent handler", () => {
     const callArgs = mocks.agentCommand.mock.calls[0][0];
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
 
-    mocks.loadConfigReturn = {};
-    vi.useRealTimers();
+    resetTimeConfig();
+  });
+
+  it.each([
+    {
+      name: "passes senderIsOwner=false for write-scoped gateway callers",
+      scopes: ["operator.write"],
+      idempotencyKey: "test-sender-owner-write",
+      senderIsOwner: false,
+    },
+    {
+      name: "passes senderIsOwner=true for admin-scoped gateway callers",
+      scopes: ["operator.admin"],
+      idempotencyKey: "test-sender-owner-admin",
+      senderIsOwner: true,
+    },
+  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "owner-tools check",
+        sessionKey: "agent:main:main",
+        idempotencyKey,
+      },
+      {
+        client: {
+          connect: {
+            role: "operator",
+            scopes,
+            client: { id: "test-client", mode: "gateway" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(callArgs?.senderIsOwner).toBe(senderIsOwner);
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
@@ -301,20 +405,91 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
-  it("handles missing cliSessionIds gracefully", async () => {
-    mockMainSessionEntry({});
+  it("only forwards workspaceDir for spawned subagent runs", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
 
-    const getCapturedEntry = captureUpdatedMainEntry();
+    await invokeAgent(
+      {
+        message: "normal run",
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/ignored",
+        idempotencyKey: "workspace-ignored",
+      },
+      { reqId: "workspace-ignored-1" },
+    );
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const normalCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+    expect(normalCall.workspaceDir).toBeUndefined();
+    mocks.agentCommand.mockClear();
 
+    await invokeAgent(
+      {
+        message: "spawned run",
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:subagent:parent",
+        workspaceDir: "/tmp/inherited",
+        idempotencyKey: "workspace-forwarded",
+      },
+      { reqId: "workspace-forwarded-1" },
+    );
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+    expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
+  });
+
+  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "12345",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          lastChannel: "telegram",
+          lastTo: "12345",
+        }),
+      };
+      return await updater(store);
+    });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
 
-    await runMainAgent("test", "test-idem-2");
+    await invokeAgent(
+      {
+        message: "webchat turn",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-webchat-origin-channel",
+      },
+      {
+        reqId: "webchat-origin-1",
+        client: {
+          connect: {
+            client: { id: "webchat-ui", mode: "webchat" },
+          },
+        } as AgentHandlerArgs["client"],
+        isWebchatConnect: () => true,
+      },
+    );
 
-    expect(mocks.updateSessionStore).toHaveBeenCalled();
-    const capturedEntry = getCapturedEntry();
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      messageChannel?: string;
+      runContext?: { messageChannel?: string };
+    };
+    expect(callArgs.channel).toBe("telegram");
+    expect(callArgs.messageChannel).toBe("webchat");
+    expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("handles missing cliSessionIds gracefully", async () => {
+    mockMainSessionEntry({});
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-2");
     expect(capturedEntry).toBeDefined();
     // Should be undefined, not cause an error
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
@@ -381,26 +556,19 @@ describe("gateway agent handler", () => {
     );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
-    expect(call?.message).toBe(BARE_SESSION_RESET_PROMPT);
+    // Message is now dynamically built with current date — check key substrings
     expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain("Current time:");
+    expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-29T01:30:00.000Z")); // Wed Jan 28, 8:30 PM EST
-    mocks.agentCommand.mockClear();
-    mocks.loadConfigReturn = {
-      agents: {
-        defaults: {
-          userTimezone: "America/New_York",
-        },
-      },
-    };
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });
-    mocks.sessionsResetHandler.mockClear();
+    mocks.performGatewaySessionReset.mockClear();
     primeMainAgentRun({
       sessionId: "reset-session-id",
       cfg: mocks.loadConfigReturn,
@@ -415,14 +583,10 @@ describe("gateway agent handler", () => {
       { reqId: "4b" },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
-    const call = readLastAgentCommandCall();
-    expect(call?.message).toBe("[Wed 2026-01-28 20:30 EST] check status");
+    const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
     expect(call?.sessionId).toBe("reset-session-id");
 
-    mocks.loadConfigReturn = {};
-    vi.useRealTimers();
+    resetTimeConfig();
   });
 
   it("rejects malformed agent session keys early in agent handler", async () => {

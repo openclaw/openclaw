@@ -190,7 +190,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "cron",
     description: "Schedule tasks",
     sectionId: "automation",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -319,4 +319,8 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
     return [];
   }
   return [...tool.profiles];
+}
+
+export function isKnownCoreToolId(toolId: string): boolean {
+  return CORE_TOOL_BY_ID.has(toolId);
 }

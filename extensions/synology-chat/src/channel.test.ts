@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock external dependencies
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/synology-chat", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
   registerPluginHttpRoute: vi.fn(() => vi.fn()),
   buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
+  createFixedWindowRateLimiter: vi.fn(() => ({
+    isRateLimited: vi.fn(() => false),
+    size: vi.fn(() => 0),
+    clear: vi.fn(),
+  })),
 }));
 
 vi.mock("./client.js", () => ({
@@ -39,6 +44,7 @@ vi.mock("zod", () => ({
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
+const { registerPluginHttpRoute } = await import("openclaw/plugin-sdk/synology-chat");
 
 describe("createSynologyChatPlugin", () => {
   it("returns a plugin object with all required sections", () => {
@@ -182,6 +188,25 @@ describe("createSynologyChatPlugin", () => {
       expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
     });
 
+    it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = {
+        accountId: "default",
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        nasHost: "h",
+        webhookPath: "/w",
+        dmPolicy: "allowlist" as const,
+        allowedUserIds: [],
+        rateLimitPerMinute: 30,
+        botName: "Bot",
+        allowInsecureSsl: false,
+      };
+      const warnings = plugin.security.collectWarnings({ account });
+      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+    });
+
     it("returns no warnings for fully configured account", () => {
       const plugin = createSynologyChatPlugin();
       const account = {
@@ -243,18 +268,10 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       await expect(
         plugin.outbound.sendText({
-          account: {
-            accountId: "default",
-            enabled: true,
-            token: "t",
-            incomingUrl: "",
-            nasHost: "h",
-            webhookPath: "/w",
-            dmPolicy: "open",
-            allowedUserIds: [],
-            rateLimitPerMinute: 30,
-            botName: "Bot",
-            allowInsecureSsl: true,
+          cfg: {
+            channels: {
+              "synology-chat": { enabled: true, token: "t", incomingUrl: "" },
+            },
           },
           text: "hello",
           to: "user1",
@@ -265,18 +282,15 @@ describe("createSynologyChatPlugin", () => {
     it("sendText returns OutboundDeliveryResult on success", async () => {
       const plugin = createSynologyChatPlugin();
       const result = await plugin.outbound.sendText({
-        account: {
-          accountId: "default",
-          enabled: true,
-          token: "t",
-          incomingUrl: "https://nas/incoming",
-          nasHost: "h",
-          webhookPath: "/w",
-          dmPolicy: "open",
-          allowedUserIds: [],
-          rateLimitPerMinute: 30,
-          botName: "Bot",
-          allowInsecureSsl: true,
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              allowInsecureSsl: true,
+            },
+          },
         },
         text: "hello",
         to: "user1",
@@ -290,18 +304,10 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       await expect(
         plugin.outbound.sendMedia({
-          account: {
-            accountId: "default",
-            enabled: true,
-            token: "t",
-            incomingUrl: "",
-            nasHost: "h",
-            webhookPath: "/w",
-            dmPolicy: "open",
-            allowedUserIds: [],
-            rateLimitPerMinute: 30,
-            botName: "Bot",
-            allowInsecureSsl: true,
+          cfg: {
+            channels: {
+              "synology-chat": { enabled: true, token: "t", incomingUrl: "" },
+            },
           },
           mediaUrl: "https://example.com/img.png",
           to: "user1",
@@ -311,30 +317,115 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("gateway", () => {
-    it("startAccount returns stop function for disabled account", async () => {
+    async function expectPendingStartAccountPromise(
+      result: Promise<unknown>,
+      abortController: AbortController,
+    ) {
+      expect(result).toBeInstanceOf(Promise);
+      const resolved = await Promise.race([
+        result,
+        new Promise((r) => setTimeout(() => r("pending"), 50)),
+      ]);
+      expect(resolved).toBe("pending");
+      abortController.abort();
+      await result;
+    }
+
+    async function expectPendingStartAccount(accountConfig: Record<string, unknown>) {
       const plugin = createSynologyChatPlugin();
+      const abortController = new AbortController();
       const ctx = {
         cfg: {
-          channels: { "synology-chat": { enabled: false } },
+          channels: { "synology-chat": accountConfig },
         },
         accountId: "default",
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        abortSignal: abortController.signal,
       };
-      const result = await plugin.gateway.startAccount(ctx);
-      expect(typeof result.stop).toBe("function");
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+    }
+
+    it("startAccount returns pending promise for disabled account", async () => {
+      await expectPendingStartAccount({ enabled: false });
     });
 
-    it("startAccount returns stop function for account without token", async () => {
+    it("startAccount returns pending promise for account without token", async () => {
+      await expectPendingStartAccount({ enabled: true });
+    });
+
+    it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
+      const registerMock = vi.mocked(registerPluginHttpRoute);
+      registerMock.mockClear();
+      const abortController = new AbortController();
+
       const plugin = createSynologyChatPlugin();
       const ctx = {
         cfg: {
-          channels: { "synology-chat": { enabled: true } },
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              dmPolicy: "allowlist",
+              allowedUserIds: [],
+            },
+          },
         },
         accountId: "default",
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        abortSignal: abortController.signal,
       };
-      const result = await plugin.gateway.startAccount(ctx);
-      expect(typeof result.stop).toBe("function");
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining("empty allowedUserIds"));
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("deregisters stale route before re-registering same account/path", async () => {
+      const unregisterFirst = vi.fn();
+      const unregisterSecond = vi.fn();
+      const registerMock = vi.mocked(registerPluginHttpRoute);
+      registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
+
+      const plugin = createSynologyChatPlugin();
+      const abortFirst = new AbortController();
+      const abortSecond = new AbortController();
+      const makeCtx = (abortCtrl: AbortController) => ({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              webhookPath: "/webhook/synology",
+              dmPolicy: "allowlist",
+              allowedUserIds: ["123"],
+            },
+          },
+        },
+        accountId: "default",
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        abortSignal: abortCtrl.signal,
+      });
+
+      // Start first account (returns a pending promise)
+      const firstPromise = plugin.gateway.startAccount(makeCtx(abortFirst));
+      // Start second account on same path — should deregister the first route
+      const secondPromise = plugin.gateway.startAccount(makeCtx(abortSecond));
+
+      // Give microtasks time to settle
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(registerMock).toHaveBeenCalledTimes(2);
+      expect(unregisterFirst).toHaveBeenCalledTimes(1);
+      expect(unregisterSecond).not.toHaveBeenCalled();
+
+      // Clean up: abort both to resolve promises and prevent test leak
+      abortFirst.abort();
+      abortSecond.abort();
+      await Promise.allSettled([firstPromise, secondPromise]);
     });
   });
 });

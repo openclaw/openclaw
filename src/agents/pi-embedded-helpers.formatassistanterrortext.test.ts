@@ -29,6 +29,21 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+  it("returns context overflow for Kimi 'model token limit' errors", () => {
+    const msg = makeAssistantError(
+      "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+    );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+  it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
+    const msg = makeAssistantError(
+      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Reasoning is required");
+    expect(result).toContain("/think minimal");
+    expect(result).not.toContain("Context overflow");
+  });
   it("returns a friendly message for Anthropic role ordering", () => {
     const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');
     expect(formatAssistantErrorText(msg)).toContain("Message ordering conflict");

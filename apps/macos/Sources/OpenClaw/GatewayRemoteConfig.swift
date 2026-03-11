@@ -1,39 +1,27 @@
 import Foundation
-import Network
+import OpenClawKit
 
 enum GatewayRemoteConfig {
-    private static func isLoopbackHost(_ rawHost: String) -> Bool {
-        var host = rawHost
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
-        if host.isEmpty {
-            return false
-        }
-        if host == "localhost" || host == "0.0.0.0" || host == "::" {
-            return true
+    enum TokenValue: Equatable {
+        case missing
+        case plaintext(String)
+        case unsupportedNonString
+
+        var textFieldValue: String {
+            switch self {
+            case let .plaintext(token):
+                token
+            case .missing, .unsupportedNonString:
+                ""
+            }
         }
 
-        if let ipv4 = IPv4Address(host) {
-            return ipv4.rawValue.first == 127
-        }
-        if let ipv6 = IPv6Address(host) {
-            let bytes = Array(ipv6.rawValue)
-            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
-            if isV6Loopback {
+        var isUnsupportedNonString: Bool {
+            if case .unsupportedNonString = self {
                 return true
             }
-            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
-            return isMappedV4 && bytes[12] == 127
+            return false
         }
-
-        return false
     }
 
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
@@ -58,6 +46,29 @@ enum GatewayRemoteConfig {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    static func resolveTokenValue(root: [String: Any]) -> TokenValue {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let tokenRaw = remote["token"]
+        else {
+            return .missing
+        }
+        guard let tokenString = tokenRaw as? String else {
+            return .unsupportedNonString
+        }
+        let trimmed = tokenString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? .missing : .plaintext(trimmed)
+    }
+
+    static func resolveTokenString(root: [String: Any]) -> String? {
+        switch self.resolveTokenValue(root: root) {
+        case let .plaintext(token):
+            token
+        case .missing, .unsupportedNonString:
+            nil
+        }
+    }
+
     static func resolveGatewayUrl(root: [String: Any]) -> URL? {
         guard let raw = self.resolveUrlString(root: root) else { return nil }
         return self.normalizeGatewayUrl(raw)
@@ -74,7 +85,7 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
-        if scheme == "ws", !self.isLoopbackHost(host) {
+        if scheme == "ws", !LoopbackHost.isLoopbackHost(host) {
             return nil
         }
         if scheme == "ws", url.port == nil {

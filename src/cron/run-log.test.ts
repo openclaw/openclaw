@@ -4,12 +4,40 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendCronRunLog,
+  DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+  DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
 
 describe("cron run log", () => {
+  it("resolves prune options from config with defaults", () => {
+    expect(resolveCronRunLogPruneOptions()).toEqual({
+      maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+      keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+    });
+    expect(
+      resolveCronRunLogPruneOptions({
+        maxBytes: "5mb",
+        keepLines: 123,
+      }),
+    ).toEqual({
+      maxBytes: 5 * 1024 * 1024,
+      keepLines: 123,
+    });
+    expect(
+      resolveCronRunLogPruneOptions({
+        maxBytes: "invalid",
+        keepLines: -1,
+      }),
+    ).toEqual({
+      maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+      keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+    });
+  });
+
   async function withRunLogDir(prefix: string, run: (dir: string) => Promise<void>) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
     try {
@@ -66,6 +94,47 @@ describe("cron run log", () => {
       expect(last.ts).toBe(1009);
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "writes run log files with secure permissions",
+    async () => {
+      await withRunLogDir("openclaw-cron-log-perms-", async (dir) => {
+        const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+        await appendCronRunLog(logPath, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+
+        const mode = (await fs.stat(logPath)).mode & 0o777;
+        expect(mode).toBe(0o600);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "hardens an existing run-log directory to owner-only permissions",
+    async () => {
+      await withRunLogDir("openclaw-cron-log-dir-perms-", async (dir) => {
+        const runDir = path.join(dir, "runs");
+        const logPath = path.join(runDir, "job-1.jsonl");
+        await fs.mkdir(runDir, { recursive: true, mode: 0o755 });
+        await fs.chmod(runDir, 0o755);
+
+        await appendCronRunLog(logPath, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+
+        const runDirMode = (await fs.stat(runDir)).mode & 0o777;
+        expect(runDirMode).toBe(0o700);
+      });
+    },
+  );
 
   it("reads newest entries and filters by jobId", async () => {
     await withRunLogDir("openclaw-cron-log-read-", async (dir) => {
@@ -215,6 +284,32 @@ describe("cron run log", () => {
       });
 
       expect(getPendingCronRunLogWriteCountForTests()).toBe(0);
+    });
+  });
+
+  it("read drains pending fire-and-forget writes", async () => {
+    await withRunLogDir("openclaw-cron-log-drain-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-drain.jsonl");
+
+      // Fire-and-forget write (simulates the `void appendCronRunLog(...)` pattern
+      // in server-cron.ts). Do NOT await.
+      const writePromise = appendCronRunLog(logPath, {
+        ts: 42,
+        jobId: "job-drain",
+        action: "finished",
+        status: "ok",
+        summary: "drain-test",
+      });
+      void writePromise.catch(() => undefined);
+
+      // Read should see the entry because it drains pending writes.
+      const entries = await readCronRunLogEntries(logPath, { limit: 10 });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.ts).toBe(42);
+      expect(entries[0]?.summary).toBe("drain-test");
+
+      // Clean up
+      await writePromise.catch(() => undefined);
     });
   });
 });

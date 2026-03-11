@@ -18,10 +18,16 @@ if str(SCRIPT_DIR) not in sys.path:
 
 fake_quick_validate = types.ModuleType("quick_validate")
 fake_quick_validate.validate_skill = lambda _path: (True, "Skill is valid!")
+original_quick_validate = sys.modules.get("quick_validate")
 sys.modules["quick_validate"] = fake_quick_validate
 
 import package_skill as package_skill_module
 from package_skill import package_skill
+
+if original_quick_validate is not None:
+    sys.modules["quick_validate"] = original_quick_validate
+else:
+    sys.modules.pop("quick_validate", None)
 
 
 class TestPackageSkillSecurity(TestCase):
@@ -134,6 +140,20 @@ class TestPackageSkillSecurity(TestCase):
         with zipfile.ZipFile(skill_file, "r") as archive:
             names = set(archive.namelist())
         self.assertIn("nested-skill/lib/helpers/util.py", names)
+
+    def test_skips_output_archive_when_output_dir_is_skill_dir(self):
+        skill_dir = self.create_skill("self-output-skill")
+
+        result = package_skill(str(skill_dir), str(skill_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = skill_dir / "self-output-skill.skill"
+        self.assertTrue(skill_file.exists())
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("self-output-skill/SKILL.md", names)
+        self.assertIn("self-output-skill/script.py", names)
+        self.assertNotIn("self-output-skill/self-output-skill.skill", names)
 
 
 if __name__ == "__main__":

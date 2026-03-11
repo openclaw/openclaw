@@ -100,9 +100,16 @@ describe("parseDurationMs", () => {
       ["parses hours suffix", "2h", 7_200_000],
       ["parses days suffix", "2d", 172_800_000],
       ["supports decimals", "0.5s", 500],
+      ["parses composite hours+minutes", "1h30m", 5_400_000],
+      ["parses composite with milliseconds", "2m500ms", 120_500],
     ] as const;
     for (const [name, input, expected] of cases) {
       expect(parseDurationMs(input), name).toBe(expected);
     }
+  });
+
+  it("rejects invalid composite strings", () => {
+    expect(() => parseDurationMs("1h30")).toThrow();
+    expect(() => parseDurationMs("1h-30m")).toThrow();
   });
 });

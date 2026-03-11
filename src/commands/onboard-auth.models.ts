@@ -1,10 +1,23 @@
 import { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
+import {
+  KILOCODE_DEFAULT_CONTEXT_WINDOW,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_DEFAULT_MAX_TOKENS,
+  KILOCODE_DEFAULT_MODEL_ID,
+  KILOCODE_DEFAULT_MODEL_NAME,
+} from "../providers/kilocode-shared.js";
+export {
+  KILOCODE_DEFAULT_CONTEXT_WINDOW,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_DEFAULT_MAX_TOKENS,
+  KILOCODE_DEFAULT_MODEL_ID,
+};
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
 export const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
-export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
+export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.5";
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
 export const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
@@ -76,13 +89,8 @@ export const ZAI_DEFAULT_COST = {
 };
 
 const MINIMAX_MODEL_CATALOG = {
-  "MiniMax-M2.1": { name: "MiniMax M2.1", reasoning: false },
-  "MiniMax-M2.1-lightning": {
-    name: "MiniMax M2.1 Lightning",
-    reasoning: false,
-  },
   "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },
-  "MiniMax-M2.5-Lightning": { name: "MiniMax M2.5 Lightning", reasoning: true },
+  "MiniMax-M2.5-highspeed": { name: "MiniMax M2.5 Highspeed", reasoning: true },
 } as const;
 
 type MinimaxCatalogId = keyof typeof MINIMAX_MODEL_CATALOG;
@@ -130,7 +138,7 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
     id: MOONSHOT_DEFAULT_MODEL_ID,
     name: "Kimi K2.5",
     reasoning: false,
-    input: ["text"],
+    input: ["text", "image"],
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
@@ -203,4 +211,118 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
     contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
   };
+}
+
+export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: KILOCODE_DEFAULT_MODEL_ID,
+    name: KILOCODE_DEFAULT_MODEL_NAME,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: KILOCODE_DEFAULT_COST,
+    contextWindow: KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
+  };
+}
+
+// Alibaba Cloud Model Studio Coding Plan
+export const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
+export const MODELSTUDIO_GLOBAL_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
+export const MODELSTUDIO_DEFAULT_MODEL_ID = "qwen3.5-plus";
+export const MODELSTUDIO_DEFAULT_MODEL_REF = `modelstudio/${MODELSTUDIO_DEFAULT_MODEL_ID}`;
+export const MODELSTUDIO_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const MODELSTUDIO_MODEL_CATALOG = {
+  "qwen3.5-plus": {
+    name: "qwen3.5-plus",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 1000000,
+    maxTokens: 65536,
+  },
+  "qwen3-max-2026-01-23": {
+    name: "qwen3-max-2026-01-23",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 65536,
+  },
+  "qwen3-coder-next": {
+    name: "qwen3-coder-next",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 65536,
+  },
+  "qwen3-coder-plus": {
+    name: "qwen3-coder-plus",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 1000000,
+    maxTokens: 65536,
+  },
+  "MiniMax-M2.5": {
+    name: "MiniMax-M2.5",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 1000000,
+    maxTokens: 65536,
+  },
+  "glm-5": {
+    name: "glm-5",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 16384,
+  },
+  "glm-4.7": {
+    name: "glm-4.7",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 16384,
+  },
+  "kimi-k2.5": {
+    name: "kimi-k2.5",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 262144,
+    maxTokens: 32768,
+  },
+} as const;
+
+type ModelStudioCatalogId = keyof typeof MODELSTUDIO_MODEL_CATALOG;
+
+export function buildModelStudioModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  cost?: ModelDefinitionConfig["cost"];
+  contextWindow?: number;
+  maxTokens?: number;
+}): ModelDefinitionConfig {
+  const catalog = MODELSTUDIO_MODEL_CATALOG[params.id as ModelStudioCatalogId];
+  return {
+    id: params.id,
+    name: params.name ?? catalog?.name ?? params.id,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? false,
+    input:
+      (params.input as ("text" | "image")[]) ??
+      ([...(catalog?.input ?? ["text"])] as ("text" | "image")[]),
+    cost: params.cost ?? MODELSTUDIO_DEFAULT_COST,
+    contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 262144,
+    maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 65536,
+  };
+}
+
+export function buildModelStudioDefaultModelDefinition(): ModelDefinitionConfig {
+  return buildModelStudioModelDefinition({
+    id: MODELSTUDIO_DEFAULT_MODEL_ID,
+  });
 }

@@ -244,6 +244,121 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
   return null;
 }
 
+export function resolveEffectiveModelFallbacks(
+  entryModel?: unknown,
+  defaultModel?: unknown,
+): string[] | null {
+  return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
+}
+
+function addModelId(target: Set<string>, value: unknown) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  target.add(trimmed);
+}
+
+function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
+  if (!modelConfig) {
+    return;
+  }
+  if (typeof modelConfig === "string") {
+    addModelId(target, modelConfig);
+    return;
+  }
+  if (typeof modelConfig !== "object") {
+    return;
+  }
+  const record = modelConfig as Record<string, unknown>;
+  addModelId(target, record.primary);
+  addModelId(target, record.model);
+  addModelId(target, record.id);
+  addModelId(target, record.value);
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+    : Array.isArray(record.fallback)
+      ? record.fallback
+      : [];
+  for (const fallback of fallbacks) {
+    addModelId(target, fallback);
+  }
+}
+
+export function sortLocaleStrings(values: Iterable<string>): string[] {
+  const sorted = Array.from(values);
+  const buffer = Array.from({ length: sorted.length }, () => "");
+
+  const merge = (left: number, middle: number, right: number): void => {
+    let i = left;
+    let j = middle;
+    let k = left;
+    while (i < middle && j < right) {
+      buffer[k++] = sorted[i].localeCompare(sorted[j]) <= 0 ? sorted[i++] : sorted[j++];
+    }
+    while (i < middle) {
+      buffer[k++] = sorted[i++];
+    }
+    while (j < right) {
+      buffer[k++] = sorted[j++];
+    }
+    for (let idx = left; idx < right; idx += 1) {
+      sorted[idx] = buffer[idx];
+    }
+  };
+
+  const sortRange = (left: number, right: number): void => {
+    if (right - left <= 1) {
+      return;
+    }
+
+    const middle = (left + right) >>> 1;
+    sortRange(left, middle);
+    sortRange(middle, right);
+    merge(left, middle, right);
+  };
+
+  sortRange(0, sorted.length);
+  return sorted;
+}
+
+export function resolveConfiguredCronModelSuggestions(
+  configForm: Record<string, unknown> | null,
+): string[] {
+  if (!configForm || typeof configForm !== "object") {
+    return [];
+  }
+  const agents = (configForm as { agents?: unknown }).agents;
+  if (!agents || typeof agents !== "object") {
+    return [];
+  }
+  const out = new Set<string>();
+  const defaults = (agents as { defaults?: unknown }).defaults;
+  if (defaults && typeof defaults === "object") {
+    const defaultsRecord = defaults as Record<string, unknown>;
+    addModelConfigIds(out, defaultsRecord.model);
+    const defaultsModels = defaultsRecord.models;
+    if (defaultsModels && typeof defaultsModels === "object") {
+      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
+        addModelId(out, modelId);
+      }
+    }
+  }
+  const list = (agents as { list?: unknown }).list;
+  if (list && typeof list === "object") {
+    for (const entry of Object.values(list as Record<string, unknown>)) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      addModelConfigIds(out, (entry as Record<string, unknown>).model);
+    }
+  }
+  return sortLocaleStrings(out);
+}
+
 export function parseFallbackList(value: string): string[] {
   return value
     .split(",")

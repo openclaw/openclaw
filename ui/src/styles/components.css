@@ -328,6 +328,12 @@
   animation: none;
 }
 
+.statusDot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  animation: none;
+}
+
 /* ===========================================
    Buttons - Tactile with personality
    =========================================== */
@@ -602,6 +608,8 @@
 .cron-workspace-form {
   position: sticky;
   top: 74px;
+  max-height: calc(100vh - 74px - 32px);
+  overflow-y: auto;
 }
 
 .cron-form {
@@ -1185,6 +1193,21 @@
   width: 100%;
 }
 
+/* Debug event log payloads should use full width like other debug sections. */
+.debug-event-log__item {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.debug-event-log__meta {
+  min-width: 0;
+  text-align: left;
+}
+
+.debug-event-log__payload {
+  margin: 0;
+  max-width: 100%;
+}
+
 /* Cron jobs: allow long payload/state text and keep action buttons inside the card. */
 .cron-job-payload,
 .cron-job-agent,
@@ -1402,6 +1425,7 @@
 
 .table {
   display: grid;
+  container-type: inline-size;
   gap: 6px;
 }
 
@@ -1430,6 +1454,20 @@
 
 .table-row:hover {
   border-color: var(--border-strong);
+}
+
+@media (max-width: 1100px) {
+  .table-head,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 1100px) {
+  .table-head,
+  .table-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .session-link {
@@ -1900,7 +1938,10 @@
   margin-top: 0.75em;
   border-collapse: collapse;
   width: 100%;
+  max-width: 100%;
   font-size: 13px;
+  display: block;
+  overflow-x: auto;
 }
 
 .chat-text :where(th, td) {

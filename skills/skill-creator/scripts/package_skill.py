@@ -93,6 +93,10 @@ def package_skill(skill_path, output_dir=None):
                     if not _is_within(resolved_file, skill_path):
                         print(f"[ERROR] File escapes skill root: {file_path}")
                         return None
+                    # If output lives under skill_path, avoid writing archive into itself.
+                    if resolved_file == skill_filename.resolve():
+                        print(f"[WARN] Skipping output archive: {file_path}")
+                        continue
 
                     # Calculate the relative path within the zip.
                     arcname = Path(skill_name) / file_path.relative_to(skill_path)

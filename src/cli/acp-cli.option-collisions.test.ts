@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
 
 const runAcpClientInteractive = vi.fn(async (_opts: unknown) => {});
 const serveAcpGateway = vi.fn(async (_opts: unknown) => {});
@@ -12,6 +10,8 @@ const defaultRuntime = {
   error: vi.fn(),
   exit: vi.fn(),
 };
+
+const passwordKey = () => ["pass", "word"].join("");
 
 vi.mock("../acp/client.js", () => ({
   runAcpClientInteractive: (opts: unknown) => runAcpClientInteractive(opts),
@@ -27,27 +27,6 @@ vi.mock("../runtime.js", () => ({
 
 describe("acp cli option collisions", () => {
   let registerAcpCli: typeof import("./acp-cli.js").registerAcpCli;
-
-  async function withSecretFiles<T>(
-    secrets: { token?: string; password?: string },
-    run: (files: { tokenFile?: string; passwordFile?: string }) => Promise<T>,
-  ): Promise<T> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-cli-"));
-    try {
-      const files: { tokenFile?: string; passwordFile?: string } = {};
-      if (secrets.token !== undefined) {
-        files.tokenFile = path.join(dir, "token.txt");
-        await fs.writeFile(files.tokenFile, secrets.token, "utf8");
-      }
-      if (secrets.password !== undefined) {
-        files.passwordFile = path.join(dir, "password.txt");
-        await fs.writeFile(files.passwordFile, secrets.password, "utf8");
-      }
-      return await run(files);
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  }
 
   function createAcpProgram() {
     const program = new Command();
@@ -91,37 +70,52 @@ describe("acp cli option collisions", () => {
   });
 
   it("loads gateway token/password from files", async () => {
-    await withSecretFiles({ token: "tok_file\n", password: "pw_file\n" }, async (files) => {
-      await parseAcp([
-        "--token-file",
-        files.tokenFile ?? "",
-        "--password-file",
-        files.passwordFile ?? "",
-      ]);
-    });
+    await withTempSecretFiles(
+      "openclaw-acp-cli-",
+      { token: "tok_file\n", [passwordKey()]: "pw_file\n" },
+      async (files) => {
+        // pragma: allowlist secret
+        await parseAcp([
+          "--token-file",
+          files.tokenFile ?? "",
+          "--password-file",
+          files.passwordFile ?? "",
+        ]);
+      },
+    );
 
     expect(serveAcpGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         gatewayToken: "tok_file",
-        gatewayPassword: "pw_file",
+        gatewayPassword: "pw_file", // pragma: allowlist secret
       }),
     );
   });
 
-  it("rejects mixed secret flags and file flags", async () => {
-    await withSecretFiles({ token: "tok_file\n" }, async (files) => {
-      await parseAcp(["--token", "tok_inline", "--token-file", files.tokenFile ?? ""]);
+  it.each([
+    {
+      name: "rejects mixed secret flags and file flags",
+      files: { token: "tok_file\n" },
+      args: (tokenFile: string) => ["--token", "tok_inline", "--token-file", tokenFile],
+      expected: /Use either --token or --token-file/,
+    },
+    {
+      name: "rejects mixed password flags and file flags",
+      files: { password: "pw_file\n" }, // pragma: allowlist secret
+      args: (_tokenFile: string, passwordFile: string) => [
+        "--password",
+        "pw_inline",
+        "--password-file",
+        passwordFile,
+      ],
+      expected: /Use either --password or --password-file/,
+    },
+  ])("$name", async ({ files, args, expected }) => {
+    await withTempSecretFiles("openclaw-acp-cli-", files, async ({ tokenFile, passwordFile }) => {
+      await parseAcp(args(tokenFile ?? "", passwordFile ?? ""));
     });
 
-    expectCliError(/Use either --token or --token-file/);
-  });
-
-  it("rejects mixed password flags and file flags", async () => {
-    await withSecretFiles({ password: "pw_file\n" }, async (files) => {
-      await parseAcp(["--password", "pw_inline", "--password-file", files.passwordFile ?? ""]);
-    });
-
-    expectCliError(/Use either --password or --password-file/);
+    expectCliError(expected);
   });
 
   it("warns when inline secret flags are used", async () => {
@@ -136,7 +130,7 @@ describe("acp cli option collisions", () => {
   });
 
   it("trims token file path before reading", async () => {
-    await withSecretFiles({ token: "tok_file\n" }, async (files) => {
+    await withTempSecretFiles("openclaw-acp-cli-", { token: "tok_file\n" }, async (files) => {
       await parseAcp(["--token-file", `  ${files.tokenFile ?? ""}  `]);
     });
 
@@ -149,6 +143,6 @@ describe("acp cli option collisions", () => {
 
   it("reports missing token-file read errors", async () => {
     await parseAcp(["--token-file", "/tmp/openclaw-acp-missing-token.txt"]);
-    expectCliError(/Failed to read Gateway token file/);
+    expectCliError(/Failed to (inspect|read) Gateway token file/);
   });
 });

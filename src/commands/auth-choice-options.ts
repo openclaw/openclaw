@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
+import { ONBOARD_PROVIDER_AUTH_FLAGS } from "./onboard-provider-auth-flags.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
@@ -95,6 +96,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "kilocode",
+    label: "Kilo Gateway",
+    hint: "API key (OpenRouter-compatible)",
+    choices: ["kilocode-api-key"],
+  },
+  {
     value: "qwen",
     label: "Qwen",
     hint: "OAuth",
@@ -113,6 +120,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "modelstudio",
+    label: "Alibaba Cloud Model Studio",
+    hint: "Coding Plan API key (CN / Global)",
+    choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -125,10 +138,10 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["ai-gateway-api-key"],
   },
   {
-    value: "opencode-zen",
-    label: "OpenCode Zen",
-    hint: "API key",
-    choices: ["opencode-zen"],
+    value: "opencode",
+    label: "OpenCode",
+    hint: "Shared API key for Zen + Go catalogs",
+    choices: ["opencode-zen", "opencode-go"],
   },
   {
     value: "xiaomi",
@@ -180,6 +193,35 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
 ];
 
+const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
+  "litellm-api-key": "Unified gateway for 100+ LLM providers",
+  "cloudflare-ai-gateway-api-key": "Account ID + Gateway ID + API key",
+  "venice-api-key": "Privacy-focused inference (uncensored models)",
+  "together-api-key": "Access to Llama, DeepSeek, Qwen, and more open models",
+  "huggingface-api-key": "Inference Providers — OpenAI-compatible chat",
+  "opencode-zen": "Shared OpenCode key; curated Zen catalog",
+  "opencode-go": "Shared OpenCode key; Kimi/GLM/MiniMax Go catalog",
+};
+
+const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = {
+  "moonshot-api-key": "Kimi API key (.ai)",
+  "moonshot-api-key-cn": "Kimi API key (.cn)",
+  "kimi-code-api-key": "Kimi Code API key (subscription)",
+  "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
+  "opencode-zen": "OpenCode Zen catalog",
+  "opencode-go": "OpenCode Go catalog",
+};
+
+function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
+  return ONBOARD_PROVIDER_AUTH_FLAGS.map((flag) => ({
+    value: flag.authChoice,
+    label: PROVIDER_AUTH_CHOICE_OPTION_LABELS[flag.authChoice] ?? flag.description,
+    ...(PROVIDER_AUTH_CHOICE_OPTION_HINTS[flag.authChoice]
+      ? { hint: PROVIDER_AUTH_CHOICE_OPTION_HINTS[flag.authChoice] }
+      : {}),
+  }));
+}
+
 const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "token",
@@ -196,57 +238,10 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "vLLM (custom URL + model)",
     hint: "Local/self-hosted OpenAI-compatible server",
   },
-  { value: "openai-api-key", label: "OpenAI API key" },
-  { value: "mistral-api-key", label: "Mistral API key" },
-  { value: "xai-api-key", label: "xAI (Grok) API key" },
-  { value: "volcengine-api-key", label: "Volcano Engine API key" },
-  { value: "byteplus-api-key", label: "BytePlus API key" },
-  {
-    value: "qianfan-api-key",
-    label: "Qianfan API key",
-  },
-  { value: "openrouter-api-key", label: "OpenRouter API key" },
-  {
-    value: "litellm-api-key",
-    label: "LiteLLM API key",
-    hint: "Unified gateway for 100+ LLM providers",
-  },
-  {
-    value: "ai-gateway-api-key",
-    label: "Vercel AI Gateway API key",
-  },
-  {
-    value: "cloudflare-ai-gateway-api-key",
-    label: "Cloudflare AI Gateway",
-    hint: "Account ID + Gateway ID + API key",
-  },
-  {
-    value: "moonshot-api-key",
-    label: "Kimi API key (.ai)",
-  },
+  ...buildProviderAuthChoiceOptions(),
   {
     value: "moonshot-api-key-cn",
     label: "Kimi API key (.cn)",
-  },
-  {
-    value: "kimi-code-api-key",
-    label: "Kimi Code API key (subscription)",
-  },
-  { value: "synthetic-api-key", label: "Synthetic API key" },
-  {
-    value: "venice-api-key",
-    label: "Venice AI API key",
-    hint: "Privacy-focused inference (uncensored models)",
-  },
-  {
-    value: "together-api-key",
-    label: "Together AI API key",
-    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
-  },
-  {
-    value: "huggingface-api-key",
-    label: "Hugging Face API key (HF token)",
-    hint: "Inference Providers — OpenAI-compatible chat",
   },
   {
     value: "github-copilot",
@@ -257,7 +252,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "google-gemini-cli",
     label: "Google Gemini CLI OAuth",
-    hint: "Uses the bundled Gemini CLI auth plugin",
+    hint: "Unofficial flow; review account-risk warning before use",
   },
   { value: "zai-api-key", label: "Z.AI API key" },
   {
@@ -298,7 +293,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   { value: "apiKey", label: "Anthropic API key" },
   {
     value: "opencode-zen",
-    label: "OpenCode Zen (multi-model proxy)",
+    label: "OpenCode Zen catalog",
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
   },
   { value: "minimax-api", label: "MiniMax M2.5" },
@@ -309,8 +304,19 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   {
     value: "minimax-api-lightning",
-    label: "MiniMax M2.5 Lightning",
-    hint: "Faster, higher output cost",
+    label: "MiniMax M2.5 Highspeed",
+    hint: "Official fast tier (legacy: Lightning)",
+  },
+  { value: "qianfan-api-key", label: "Qianfan API key" },
+  {
+    value: "modelstudio-api-key-cn",
+    label: "Coding Plan API Key for China (subscription)",
+    hint: "Endpoint: coding.dashscope.aliyuncs.com",
+  },
+  {
+    value: "modelstudio-api-key",
+    label: "Coding Plan API Key for Global/Intl (subscription)",
+    hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

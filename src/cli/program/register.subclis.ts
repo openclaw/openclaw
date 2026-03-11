@@ -28,10 +28,15 @@ const shouldEagerRegisterSubcommands = (_argv: string[]) => {
   return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
 };
 
-const loadConfig = async (): Promise<OpenClawConfig> => {
-  const mod = await import("../../config/config.js");
-  return mod.loadConfig();
-};
+export const loadValidatedConfigForPluginRegistration =
+  async (): Promise<OpenClawConfig | null> => {
+    const mod = await import("../../config/config.js");
+    const snapshot = await mod.readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      return null;
+    }
+    return mod.loadConfig();
+  };
 
 // Note for humans and agents:
 // If you update the list of commands, also check whether they have subcommands
@@ -217,7 +222,10 @@ const entries: SubCliEntry[] = [
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        registerPluginCliCommands(program, config);
+      }
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
@@ -230,7 +238,10 @@ const entries: SubCliEntry[] = [
       const mod = await import("../plugins-cli.js");
       mod.registerPluginsCli(program);
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        registerPluginCliCommands(program, config);
+      }
     },
   },
   {
@@ -258,6 +269,15 @@ const entries: SubCliEntry[] = [
     register: async (program) => {
       const mod = await import("../security-cli.js");
       mod.registerSecurityCli(program);
+    },
+  },
+  {
+    name: "secrets",
+    description: "Secrets runtime reload controls",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../secrets-cli.js");
+      mod.registerSecretsCli(program);
     },
   },
   {

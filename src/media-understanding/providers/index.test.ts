@@ -16,4 +16,20 @@ describe("media-understanding provider registry", () => {
 
     expect(provider?.id).toBe("google");
   });
+
+  it("registers the Moonshot provider", () => {
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("moonshot", registry);
+
+    expect(provider?.id).toBe("moonshot");
+    expect(provider?.capabilities).toEqual(["image", "video"]);
+  });
+
+  it("registers the minimax portal provider", () => {
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("minimax-portal", registry);
+
+    expect(provider?.id).toBe("minimax-portal");
+    expect(provider?.capabilities).toEqual(["image"]);
+  });
 });

@@ -4,6 +4,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
@@ -29,8 +30,10 @@ import {
 } from "../agents/venice-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
+import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
+  KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -62,6 +65,7 @@ import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  buildModelStudioModelDefinition,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
@@ -76,6 +80,9 @@ import {
   resolveZaiBaseUrl,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
+  MODELSTUDIO_CN_BASE_URL,
+  MODELSTUDIO_GLOBAL_BASE_URL,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
 
 export function applyZaiProviderConfig(
@@ -236,7 +243,7 @@ export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfi
   const models = { ...cfg.agents?.defaults?.models };
   models[SYNTHETIC_DEFAULT_MODEL_REF] = {
     ...models[SYNTHETIC_DEFAULT_MODEL_REF],
-    alias: models[SYNTHETIC_DEFAULT_MODEL_REF]?.alias ?? "MiniMax M2.1",
+    alias: models[SYNTHETIC_DEFAULT_MODEL_REF]?.alias ?? "MiniMax M2.5",
   };
 
   const providers = { ...cfg.models?.providers };
@@ -302,7 +309,7 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[VENICE_DEFAULT_MODEL_REF] = {
     ...models[VENICE_DEFAULT_MODEL_REF],
-    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
+    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Kimi K2.5",
   };
 
   const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
@@ -430,6 +437,39 @@ export function applyMistralConfig(cfg: OpenClawConfig): OpenClawConfig {
   return applyAgentDefaultModelPrimary(next, MISTRAL_DEFAULT_MODEL_REF);
 }
 
+export { KILOCODE_BASE_URL };
+
+/**
+ * Apply Kilo Gateway provider configuration without changing the default model.
+ * Registers Kilo Gateway and sets up the provider, but preserves existing model selection.
+ */
+export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[KILOCODE_DEFAULT_MODEL_REF] = {
+    ...models[KILOCODE_DEFAULT_MODEL_REF],
+    alias: models[KILOCODE_DEFAULT_MODEL_REF]?.alias ?? "Kilo Gateway",
+  };
+
+  const kilocodeModels = buildKilocodeProvider().models ?? [];
+
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "kilocode",
+    api: "openai-completions",
+    baseUrl: KILOCODE_BASE_URL,
+    catalogModels: kilocodeModels,
+  });
+}
+
+/**
+ * Apply Kilo Gateway provider configuration AND set Kilo Gateway as the default model.
+ * Use this when Kilo Gateway is the primary provider choice during onboarding.
+ */
+export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyKilocodeProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, KILOCODE_DEFAULT_MODEL_REF);
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -440,6 +480,7 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
+  const normalizedProvider = params.provider.toLowerCase();
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -449,8 +490,13 @@ export function applyAuthProfileConfig(
     },
   };
 
-  // Only maintain `auth.order` when the user explicitly configured it.
-  // Default behavior: no explicit order -> resolveAuthProfileOrder can round-robin by lastUsed.
+  const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
+    .filter(([, profile]) => profile.provider.toLowerCase() === normalizedProvider)
+    .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
+
+  // Maintain `auth.order` when it already exists. Additionally, if we detect
+  // mixed auth modes for the same provider (e.g. legacy oauth + newly selected
+  // api_key), create an explicit order to keep the newly selected profile first.
   const existingProviderOrder = cfg.auth?.order?.[params.provider];
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
@@ -460,6 +506,18 @@ export function applyAuthProfileConfig(
           ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
         ]
       : existingProviderOrder;
+  const hasMixedConfiguredModes = configuredProviderProfiles.some(
+    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
+  );
+  const derivedProviderOrder =
+    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
+      ? [
+          params.profileId,
+          ...configuredProviderProfiles
+            .map(({ profileId }) => profileId)
+            .filter((profileId) => profileId !== params.profileId),
+        ]
+      : undefined;
   const order =
     existingProviderOrder !== undefined
       ? {
@@ -468,7 +526,12 @@ export function applyAuthProfileConfig(
             ? reorderedProviderOrder
             : [...(reorderedProviderOrder ?? []), params.profileId],
         }
-      : cfg.auth?.order;
+      : derivedProviderOrder
+        ? {
+            ...cfg.auth?.order,
+            [params.provider]: derivedProviderOrder,
+          }
+        : cfg.auth?.order;
   return {
     ...cfg,
     auth: {
@@ -513,4 +576,93 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+// Alibaba Cloud Model Studio Coding Plan
+
+function applyModelStudioProviderConfigWithBaseUrl(
+  cfg: OpenClawConfig,
+  baseUrl: string,
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+
+  const modelStudioModelIds = [
+    "qwen3.5-plus",
+    "qwen3-max-2026-01-23",
+    "qwen3-coder-next",
+    "qwen3-coder-plus",
+    "MiniMax-M2.5",
+    "glm-5",
+    "glm-4.7",
+    "kimi-k2.5",
+  ];
+  for (const modelId of modelStudioModelIds) {
+    const modelRef = `modelstudio/${modelId}`;
+    if (!models[modelRef]) {
+      models[modelRef] = {};
+    }
+  }
+  models[MODELSTUDIO_DEFAULT_MODEL_REF] = {
+    ...models[MODELSTUDIO_DEFAULT_MODEL_REF],
+    alias: models[MODELSTUDIO_DEFAULT_MODEL_REF]?.alias ?? "Qwen",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.modelstudio;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModels = [
+    buildModelStudioModelDefinition({ id: "qwen3.5-plus" }),
+    buildModelStudioModelDefinition({ id: "qwen3-max-2026-01-23" }),
+    buildModelStudioModelDefinition({ id: "qwen3-coder-next" }),
+    buildModelStudioModelDefinition({ id: "qwen3-coder-plus" }),
+    buildModelStudioModelDefinition({ id: "MiniMax-M2.5" }),
+    buildModelStudioModelDefinition({ id: "glm-5" }),
+    buildModelStudioModelDefinition({ id: "glm-4.7" }),
+    buildModelStudioModelDefinition({ id: "kimi-k2.5" }),
+  ];
+
+  const mergedModels = [...existingModels];
+  const seen = new Set(existingModels.map((m) => m.id));
+  for (const model of defaultModels) {
+    if (!seen.has(model.id)) {
+      mergedModels.push(model);
+      seen.add(model.id);
+    }
+  }
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.modelstudio = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+}
+
+export function applyModelStudioProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyModelStudioProviderConfigWithBaseUrl(cfg, MODELSTUDIO_GLOBAL_BASE_URL);
+}
+
+export function applyModelStudioProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  return applyModelStudioProviderConfigWithBaseUrl(cfg, MODELSTUDIO_CN_BASE_URL);
+}
+
+export function applyModelStudioConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelStudioProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
+
+export function applyModelStudioConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelStudioProviderConfigCn(cfg);
+  return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
 }

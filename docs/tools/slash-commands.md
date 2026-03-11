@@ -78,8 +78,10 @@ Text + native (when enabled):
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
-- `/session ttl <duration|off>` (manage session-level settings, such as TTL)
+- `/session idle <duration|off>` (manage inactivity auto-unfocus for focused thread bindings)
+- `/session max-age <duration|off>` (manage hard max-age auto-unfocus for focused thread bindings)
 - `/subagents list|kill|log|info|send|steer|spawn` (inspect, control, or spawn sub-agent runs for the current session)
+- `/acp spawn|cancel|steer|close|status|set-mode|set|cwd|permissions|timeout|model|reset-options|doctor|install|sessions` (inspect and control ACP runtime sessions)
 - `/agents` (list thread-bound agents for this session)
 - `/focus <target>` (Discord: bind this thread, or a new thread, to a session/subagent target)
 - `/unfocus` (Discord: remove the current thread binding)
@@ -121,10 +123,12 @@ Notes:
 - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
+- In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).
-- Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session ttl`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
+- Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
+- ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
@@ -216,3 +220,4 @@ Notes:
   - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
 - **`/stop`** targets the active chat session so it can abort the current run.
 - **Slack:** `channels.slack.slashCommand` is still supported for a single `/openclaw`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Command argument menus for Slack are delivered as ephemeral Block Kit buttons.
+  - Slack native exception: register `/agentstatus` (not `/status`) because Slack reserves `/status`. Text `/status` still works in Slack messages.
