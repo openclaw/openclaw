@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { selfEvolveConfigSchema } from "./src/config.js";
 import { createEmbeddingAdapter } from "./src/embedding.js";
 import {
