@@ -518,9 +518,9 @@ describe("resolveOllamaBaseUrlForRun", () => {
 describe("wrapOllamaCompatNumCtx", () => {
   it("injects num_ctx and preserves downstream onPayload hooks", () => {
     let payloadSeen: Record<string, unknown> | undefined;
-    const baseFn = vi.fn((_model, _context, options) => {
+    const baseFn = vi.fn((model, _context, options) => {
       const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
-      options?.onPayload?.(payload);
+      options?.onPayload?.(payload, model);
       payloadSeen = payload;
       return {} as never;
     });
