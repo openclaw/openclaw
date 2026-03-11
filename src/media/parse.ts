@@ -143,13 +143,6 @@ export function splitMediaFromOutput(raw: string): {
       foundMediaInFence = true;
     }
 
-    const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
-    if (matches.length === 0) {
-      keptLines.push(line);
-      lineOffset += line.length + 1; // +1 for newline
-      continue;
-    }
-
     const pieces: string[] = [];
     let cursor = 0;
 
