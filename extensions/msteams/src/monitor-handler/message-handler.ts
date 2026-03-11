@@ -45,6 +45,7 @@ import {
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { resolveGraphToken, fetchChannelMessage, fetchThreadReplies, stripHtmlTags, resolveTeamGroupId } from "../graph.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
@@ -460,6 +461,70 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+
+    // Fetch thread context from Graph API for channel thread replies.
+    let threadContextBody = "";
+    if (isChannel && conversationMessageId && teamId) {
+      try {
+        const graphToken = await resolveGraphToken(cfg);
+        // channelData.team.id is a conversation ID (19:xxx@thread.tacv2), NOT the Azure AD group ID.
+        // Graph API needs the group GUID. Resolve it via internalId matching.
+        const channelData = activity.channelData as Record<string, unknown> | undefined;
+        const teamObj = channelData?.team as Record<string, unknown> | undefined;
+        let graphTeamId = (teamObj?.aadGroupId as string) ?? "";
+        if (!graphTeamId) {
+          graphTeamId = await resolveTeamGroupId(graphToken, teamId) ?? "";
+          log.debug?.("resolved team group ID", { graphTeamId: graphTeamId || "FAILED" });
+        }
+        if (!graphTeamId) {
+          throw new Error("Could not resolve team group ID");
+        }
+        const parentMsg = await fetchChannelMessage({
+          token: graphToken,
+          teamId: graphTeamId,
+          channelId: conversationId,
+          messageId: conversationMessageId,
+        });
+        const replies = await fetchThreadReplies({
+          token: graphToken,
+          teamId: graphTeamId,
+          channelId: conversationId,
+          messageId: conversationMessageId,
+          top: 50,
+        });
+        const threadMessages: string[] = [];
+        if (parentMsg?.body?.content) {
+          const sender = parentMsg.from?.user?.displayName ?? "Unknown";
+          const content = stripHtmlTags(parentMsg.body.content);
+          if (content) {
+            threadMessages.push(`${sender}: ${content}`);
+          }
+        }
+        // Exclude the current message (last reply) to avoid duplication.
+        const currentActivityId = activity.id;
+        for (const reply of replies) {
+          if (reply.id === currentActivityId) continue;
+          const sender = reply.from?.user?.displayName ?? "Unknown";
+          const content = reply.body?.content ? stripHtmlTags(reply.body.content) : "";
+          if (content) {
+            threadMessages.push(`${sender}: ${content}`);
+          }
+        }
+        if (threadMessages.length > 0) {
+          threadContextBody = "\n\n--- Thread context (earlier messages) ---\n" + threadMessages.join("\n") + "\n--- End thread context ---\n\n";
+        }
+        log.debug?.("fetched thread context", {
+          parentMessageId: conversationMessageId,
+          threadMessagesCount: threadMessages.length,
+          hasContext: threadContextBody.length > 0,
+        });
+      } catch (err) {
+        log.debug?.("failed to fetch thread context (Graph API)", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg,
@@ -474,7 +539,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       envelope: envelopeOptions,
       body: rawBody,
     });
-    let combinedBody = body;
+    let combinedBody = threadContextBody ? threadContextBody + body : body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
     if (isRoomish && historyKey) {
@@ -504,9 +569,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         : undefined;
     const commandBody = text.trim();
 
+    const bodyForAgent = threadContextBody ? threadContextBody + rawBody : rawBody;
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: rawBody,
+      BodyForAgent: bodyForAgent,
       InboundHistory: inboundHistory,
       RawBody: rawBody,
       CommandBody: commandBody,
