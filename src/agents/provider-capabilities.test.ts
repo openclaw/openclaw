@@ -43,8 +43,8 @@ describe("resolveProviderCapabilities", () => {
       resolveProviderCapabilities("kimi-code"),
     );
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
-      anthropicToolSchemaMode: "openai-functions",
-      anthropicToolChoiceMode: "openai-string-modes",
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -85,10 +85,11 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
-  it("treats kimi aliases as OpenAI-compatible anthropic tool payload providers", () => {
-    // kimi-coding requires OpenAI-style tool payloads (tools[].function + string-mode tool_choice)
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
+  it("treats kimi aliases as native anthropic tool payload providers", () => {
+    // kimi-coding uses native Anthropic tool format (input_schema)
+    // Legacy compat.requiresOpenAiAnthropicToolPayload=true is ignored by the wrapper guard
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
     // anthropic native does not require OpenAI-compatible payloads
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
