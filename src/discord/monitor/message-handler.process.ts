@@ -130,6 +130,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
   mediaList.push(...forwardedMediaList);
+  const hasInboundAudio = mediaList.some((media) =>
+    (media.contentType ?? "").trim().toLowerCase().startsWith("audio/"),
+  );
   const text = messageText;
   if (!text) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
@@ -191,7 +194,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
   });
   if (statusReactionsEnabled) {
-    void statusReactions.setQueued();
+    if (hasInboundAudio) {
+      void statusReactions.setListening();
+    } else {
+      void statusReactions.setQueued();
+    }
   }
 
   const fromLabel = isDirectMessage

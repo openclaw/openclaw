@@ -82,6 +82,7 @@ const TELEGRAM_SUPPORTED_REACTION_EMOJIS = new Set<string>([
 
 export const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]> = {
   queued: ["👀", "👍", "🔥"],
+  listening: ["👀", "🤔", "👍"],
   thinking: ["🤔", "🤓", "👀"],
   tool: ["🔥", "⚡", "👍"],
   coding: ["👨‍💻", "🔥", "⚡"],
@@ -94,6 +95,7 @@ export const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, s
 
 const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
   "queued",
+  "listening",
   "thinking",
   "tool",
   "coding",
@@ -121,6 +123,7 @@ export function resolveTelegramStatusReactionEmojis(params: {
   const queuedFallback = normalizeEmoji(params.initialEmoji) ?? DEFAULT_EMOJIS.queued;
   return {
     queued: normalizeEmoji(overrides?.queued) ?? queuedFallback,
+    listening: normalizeEmoji(overrides?.listening) ?? DEFAULT_EMOJIS.listening,
     thinking: normalizeEmoji(overrides?.thinking) ?? DEFAULT_EMOJIS.thinking,
     tool: normalizeEmoji(overrides?.tool) ?? DEFAULT_EMOJIS.tool,
     coding: normalizeEmoji(overrides?.coding) ?? DEFAULT_EMOJIS.coding,
