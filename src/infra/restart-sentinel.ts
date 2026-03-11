@@ -137,6 +137,9 @@ export function formatRestartSentinelUserMessage(payload: RestartSentinelPayload
   if (payload.status === "error") {
     return "Gateway restart failed.";
   }
+  if (payload.status === "skipped") {
+    return "Gateway restart skipped (no restart was performed).";
+  }
   return "Gateway restarted successfully.";
 }
 
