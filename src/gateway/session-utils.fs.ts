@@ -118,6 +118,156 @@ export function readSessionMessages(
   return messages;
 }
 
+/**
+ * Parse a single JSONL line into a chat-history message (same logic as readSessionMessages).
+ * Returns null for blank/malformed/non-message lines.
+ */
+function parseTranscriptLine(line: string): unknown | null {
+  if (!line.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(line);
+    if (parsed?.message) {
+      return parsed.message;
+    }
+    if (parsed?.type === "compaction") {
+      const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+      const timestamp = Number.isFinite(ts) ? ts : Date.now();
+      return {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        timestamp,
+        __openclaw: {
+          kind: "compaction",
+          id: typeof parsed.id === "string" ? parsed.id : undefined,
+        },
+      };
+    }
+  } catch {
+    // ignore bad lines
+  }
+  return null;
+}
+
+export type SessionMessagesTailResult = {
+  messages: unknown[];
+  /** True when there are older messages before the returned window. */
+  hasMore: boolean;
+  /** Cursor string for the oldest returned message (its timestamp as a string). */
+  oldestCursor: string | null;
+};
+
+/**
+ * Read the last `limit` messages from a session transcript, using reverse-read from EOF.
+ * When `beforeCursor` is provided, only messages with timestamp < cursor are considered.
+ */
+export function readSessionMessagesTail(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  limit: number,
+  beforeCursor?: string,
+): SessionMessagesTailResult {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return { messages: [], hasMore: false, oldestCursor: null };
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return { messages: [], hasMore: false, oldestCursor: null };
+  }
+  if (stat.size === 0) {
+    return { messages: [], hasMore: false, oldestCursor: null };
+  }
+
+  const beforeTs = beforeCursor != null ? Number(beforeCursor) : null;
+
+  // Read from the tail in chunks, collecting messages in reverse until we have enough.
+  // Each chunk reads TAIL_CHUNK_BYTES from the end, expanding if needed.
+  const TAIL_CHUNK_BYTES = 64 * 1024;
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const collected: unknown[] = [];
+    let offset = stat.size;
+    let leftover = "";
+    let exhaustedFile = false;
+
+    while (collected.length < limit + 1 && !exhaustedFile) {
+      const readLen = Math.min(TAIL_CHUNK_BYTES, offset);
+      if (readLen <= 0) {
+        exhaustedFile = true;
+        break;
+      }
+      offset -= readLen;
+      if (offset === 0) {
+        exhaustedFile = true;
+      }
+      const buf = Buffer.alloc(readLen);
+      fs.readSync(fd, buf, 0, readLen, offset);
+      const chunk = buf.toString("utf-8") + leftover;
+      const lines = chunk.split(/\r?\n/);
+      // First element may be partial (split mid-line); save for next iteration.
+      leftover = lines[0];
+
+      // Process lines in reverse (newest first).
+      for (let i = lines.length - 1; i >= 1; i--) {
+        const msg = parseTranscriptLine(lines[i]);
+        if (msg == null) {
+          continue;
+        }
+        const ts = (msg as Record<string, unknown>).timestamp;
+        if (beforeTs != null && typeof ts === "number" && ts >= beforeTs) {
+          continue;
+        }
+        collected.push(msg);
+        if (collected.length > limit) {
+          break;
+        }
+      }
+    }
+
+    // Process any remaining leftover (first line of the file).
+    if (leftover && collected.length <= limit) {
+      const msg = parseTranscriptLine(leftover);
+      if (msg != null) {
+        const ts = (msg as Record<string, unknown>).timestamp;
+        if (beforeTs == null || (typeof ts !== "number") || ts < beforeTs) {
+          collected.push(msg);
+        }
+      }
+    }
+
+    const hasMore = collected.length > limit;
+    const result = hasMore ? collected.slice(0, limit) : collected;
+    // Reverse to chronological order (we collected newest-first).
+    result.reverse();
+
+    const oldest = result.length > 0 ? result[0] : null;
+    const oldestTs =
+      oldest != null && typeof (oldest as Record<string, unknown>).timestamp === "number"
+        ? String((oldest as Record<string, unknown>).timestamp)
+        : null;
+
+    return { messages: result, hasMore, oldestCursor: oldestTs };
+  } catch {
+    return { messages: [], hasMore: false, oldestCursor: null };
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,

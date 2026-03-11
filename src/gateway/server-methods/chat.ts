@@ -54,6 +54,7 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
+  readSessionMessagesTail,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -751,20 +752,48 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    const { sessionKey, limit, before } = params as {
       sessionKey: string;
       limit?: number;
+      before?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
-    const rawMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
+
+    let rawMessages: unknown[];
+    let hasMore = false;
+    let oldestCursor: string | null = null;
+
+    if (sessionId && storePath) {
+      if (before != null) {
+        // Cursor-based: read tail with before filter
+        const tail = readSessionMessagesTail(
+          sessionId,
+          storePath,
+          entry?.sessionFile,
+          max,
+          before,
+        );
+        rawMessages = tail.messages;
+        hasMore = tail.hasMore;
+        oldestCursor = tail.oldestCursor;
+      } else {
+        // Default: read tail (newest N messages)
+        const tail = readSessionMessagesTail(sessionId, storePath, entry?.sessionFile, max);
+        rawMessages = tail.messages;
+        hasMore = tail.hasMore;
+        oldestCursor = tail.oldestCursor;
+      }
+    } else {
+      rawMessages = [];
+    }
+
+    const sanitized = stripEnvelopeFromMessages(rawMessages);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
@@ -800,6 +829,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       messages: bounded.messages,
       thinkingLevel,
       verboseLevel,
+      hasMore,
+      oldestCursor,
     });
   },
   "chat.abort": ({ params, respond, context }) => {
