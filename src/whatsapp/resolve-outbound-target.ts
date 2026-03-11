@@ -42,7 +42,7 @@ export function resolveWhatsAppOutboundTarget(params: {
     return {
       ok: false,
       error: new Error(
-        `Target "${trimmed}" is not listed in the configured WhatsApp allowFrom policy. ` +
+        `Target "${normalizedTo}" is not listed in the configured WhatsApp allowFrom policy. ` +
           `Add it to the allowFrom list in your openclaw.json to permit outbound messages to this number.`,
       ),
     };
