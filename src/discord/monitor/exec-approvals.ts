@@ -252,30 +252,17 @@ function formatOptionalCommandPreview(
   return formatCommandPreview(commandText, maxChars);
 }
 
-function resolveExecApprovalPreviews(
-  request: ExecApprovalRequest["request"],
-  maxChars: number,
-  secondaryMaxChars: number,
-): { commandPreview: string; commandSecondaryPreview: string | null } {
-  const { commandText, commandPreview: secondaryPreview } =
-    resolveExecApprovalCommandDisplay(request);
-  return {
-    commandPreview: formatCommandPreview(commandText, maxChars),
-    commandSecondaryPreview: formatOptionalCommandPreview(secondaryPreview, secondaryMaxChars),
-  };
-}
-
 function createExecApprovalRequestContainer(params: {
   request: ExecApprovalRequest;
   cfg: OpenClawConfig;
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
-  const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
     params.request.request,
-    1000,
-    500,
   );
+  const commandPreview = formatCommandPreview(commandText, 1000);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 500);
   const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
 
   return new ExecApprovalContainer({
@@ -299,11 +286,11 @@ function createResolvedContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
     params.request.request,
-    500,
-    300,
   );
+  const commandPreview = formatCommandPreview(commandText, 500);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 300);
 
   const decisionLabel =
     params.decision === "allow-once"
@@ -336,11 +323,11 @@ function createExpiredContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
+  const { commandText, commandPreview: secondaryPreview } = resolveExecApprovalCommandDisplay(
     params.request.request,
-    500,
-    300,
   );
+  const commandPreview = formatCommandPreview(commandText, 500);
+  const commandSecondaryPreview = formatOptionalCommandPreview(secondaryPreview, 300);
 
   return new ExecApprovalContainer({
     cfg: params.cfg,

@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { loadConfig } from "../config/config.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
+import {
+  hasConfiguredExecApprovalDmRoute,
+  resolveExecApprovalInitiatingSurfaceState,
+} from "../infra/exec-approval-surface.js";
 import {
   type ExecApprovalsFile,
   type ExecAsk,
@@ -20,7 +25,7 @@ import {
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
-  createAndRegisterDefaultExecApprovalRequest,
+  createDefaultExecApprovalRequestContext,
   resolveBaseExecApprovalDecision,
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
@@ -220,34 +225,50 @@ export async function executeNodeHostCommand(
       approvalId,
       approvalSlug,
       warningText,
-      expiresAtMs,
-      preResolvedDecision,
-      initiatingSurface,
-      sentApproverDms,
-      unavailableReason,
-    } = await createAndRegisterDefaultExecApprovalRequest({
+      expiresAtMs: defaultExpiresAtMs,
+      preResolvedDecision: defaultPreResolvedDecision,
+    } = createDefaultExecApprovalRequestContext({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceAccountId: params.turnSourceAccountId,
-      register: async (approvalId) =>
-        await registerExecApprovalRequestForHostOrThrow({
-          approvalId,
-          systemRunPlan: prepared.plan,
-          env: nodeEnv,
-          workdir: runCwd,
-          host: "node",
-          nodeId,
-          security: hostSecurity,
-          ask: hostAsk,
-          ...buildExecApprovalRequesterContext({
-            agentId: runAgentId,
-            sessionKey: runSessionKey,
-          }),
-          ...buildExecApprovalTurnSourceContext(params),
-        }),
     });
+    let expiresAtMs = defaultExpiresAtMs;
+    let preResolvedDecision = defaultPreResolvedDecision;
+
+    // Register first so the returned approval ID is actionable immediately.
+    const registration = await registerExecApprovalRequestForHostOrThrow({
+      approvalId,
+      systemRunPlan: prepared.plan,
+      env: nodeEnv,
+      workdir: runCwd,
+      host: "node",
+      nodeId,
+      security: hostSecurity,
+      ask: hostAsk,
+      ...buildExecApprovalRequesterContext({
+        agentId: runAgentId,
+        sessionKey: runSessionKey,
+      }),
+      ...buildExecApprovalTurnSourceContext(params),
+    });
+    expiresAtMs = registration.expiresAtMs;
+    preResolvedDecision = registration.finalDecision;
+    const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
+      channel: params.turnSourceChannel,
+      accountId: params.turnSourceAccountId,
+    });
+    const cfg = loadConfig();
+    const sentApproverDms =
+      (initiatingSurface.kind === "disabled" || initiatingSurface.kind === "unsupported") &&
+      hasConfiguredExecApprovalDmRoute(cfg);
+    const unavailableReason =
+      preResolvedDecision === null
+        ? "no-approval-route"
+        : initiatingSurface.kind === "disabled"
+          ? "initiating-platform-disabled"
+          : initiatingSurface.kind === "unsupported"
+            ? "initiating-platform-unsupported"
+            : null;
 
     void (async () => {
       const decision = await resolveApprovalDecisionOrUndefined({

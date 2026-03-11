@@ -423,7 +423,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectInvokeOk(sendInvokeResult, { payloadContains: "app-ok" });
   });
 
-  it("forwards canonical cmdText to mac app exec host for positional-argv shell wrappers", async () => {
+  it("forwards canonical command text to mac app exec host for positional-argv shell wrappers", async () => {
     const { runViaMacAppExecHost } = await runSystemInvoke({
       preferMacAppExecHost: true,
       command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
@@ -496,7 +496,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             approvals: expect.anything(),
             request: expect.objectContaining({
               command: ["env", "sh", "-c", "echo SAFE"],
-              rawCommand: "echo SAFE",
+              rawCommand: 'env sh -c "echo SAFE"',
               cwd: canonicalCwd,
             }),
           });
@@ -584,7 +584,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           const { runCommand, sendInvokeResult } = await runSystemInvoke({
             preferMacAppExecHost: false,
             command: prepared.plan.argv,
-            rawCommand: prepared.plan.rawCommand,
+            rawCommand: prepared.plan.commandText,
             approved: true,
             security: "full",
             ask: "off",
@@ -780,7 +780,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
         command: prepared.plan.argv,
-        rawCommand: prepared.plan.rawCommand,
+        rawCommand: prepared.plan.commandText,
         systemRunPlan: prepared.plan,
         cwd: prepared.plan.cwd ?? tmp,
         approved: true,
@@ -818,7 +818,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
         command: prepared.plan.argv,
-        rawCommand: prepared.plan.rawCommand,
+        rawCommand: prepared.plan.commandText,
         systemRunPlan: prepared.plan,
         cwd: prepared.plan.cwd ?? tmp,
         approved: true,
@@ -857,7 +857,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             const { runCommand, sendInvokeResult } = await runSystemInvoke({
               preferMacAppExecHost: false,
               command: prepared.plan.argv,
-              rawCommand: prepared.plan.rawCommand,
+              rawCommand: prepared.plan.commandText,
               systemRunPlan: prepared.plan,
               cwd: prepared.plan.cwd ?? tmp,
               approved: true,
@@ -899,7 +899,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             const { runCommand, sendInvokeResult } = await runSystemInvoke({
               preferMacAppExecHost: false,
               command: prepared.plan.argv,
-              rawCommand: prepared.plan.rawCommand,
+              rawCommand: prepared.plan.commandText,
               systemRunPlan: prepared.plan,
               cwd: prepared.plan.cwd ?? tmp,
               approved: true,
