@@ -1,31 +1,33 @@
-# 跨渠道记忆共享 (Cross-Channel Memory)
+# Cross-Channel Memory
 
-## 概述
+## Overview
 
-跨渠道记忆共享功能允许用户在不同渠道（如 DingTalk、WeChat、Webchat 等）之间共享同一个 Agent 的记忆和上下文。
+Cross-channel memory sharing allows users to share the same agent's memory and context across different channels (e.g., DingTalk, WeChat, Webchat, etc.).
 
-## 问题背景
+## Problem Statement
 
-在默认架构中，每个渠道的会话是独立的：
-- 在 Webchat 中告诉 Agent 的信息，在 DingTalk 中无法访问
-- 在不同渠道切换时，上下文会断裂
-- 用户感觉像是在和"不同的 Agent"对话
+In the default architecture, sessions are isolated per channel:
 
-## 解决方案
+- Information shared with the agent in Webchat is not accessible in DingTalk
+- Context is fragmented when switching between channels
+- Users feel like they're talking to "different agents"
 
-通过启用 `crossChannelMemory` 选项，同一个 Agent 在不同渠道的 **direct chat** 将共享：
-- MEMORY.md（长期记忆）
-- 会话历史
-- 配置文件（如股票列表、提醒等）
+## Solution
 
-**注意**: Group/Channel 类型的聊天仍保持独立，因为群聊上下文本来就是独立的。
+By enabling the `crossChannelMemory` option, **direct chats** with the same agent across different channels will share:
 
-## 使用方法
+- MEMORY.md (long-term memory)
+- Session history
+- Configuration files (e.g., stock lists, reminders, etc.)
 
-### 方法 1: 使用 `--share-memory` 选项（推荐）
+**Note**: Group/Channel type chats remain isolated, as group chat contexts are inherently independent.
+
+## Usage
+
+### Method 1: Using `--share-memory` Flag (Recommended)
 
 ```bash
-# 绑定多个渠道并启用跨渠道记忆共享
+# Bind multiple channels and enable cross-channel memory sharing
 openclaw agents bind \
   --agent main \
   --bind webchat \
@@ -34,9 +36,9 @@ openclaw agents bind \
   --share-memory
 ```
 
-### 方法 2: 手动配置
+### Method 2: Manual Configuration
 
-在配置文件中为 Agent 添加 `crossChannelMemory: true`：
+Add `crossChannelMemory: true` to the agent in the configuration file:
 
 ```yaml
 agents:
@@ -45,53 +47,53 @@ agents:
       crossChannelMemory: true
 ```
 
-然后绑定渠道：
+Then bind channels:
 
 ```bash
 openclaw agents bind --agent main --bind webchat --bind dingtalk
 ```
 
-## 工作原理
+## How It Works
 
-### SessionKey 生成
+### SessionKey Generation
 
-- **默认模式**: `agent:main:webchat:direct:user123`
-- **跨渠道模式**: `agent:main:shared:direct:user123`
+- **Default mode**: `agent:main:webchat:direct:user123`
+- **Cross-channel mode**: `agent:main:shared:direct:user123`
 
-通过统一使用 `shared` 作为 channel 标识，不同渠道的 direct chat 会映射到同一个 sessionKey，从而共享记忆。
+By uniformly using `shared` as the channel identifier, direct chats from different channels map to the same sessionKey, enabling memory sharing.
 
-### 路由逻辑
+### Routing Logic
 
 ```typescript
 if (crossChannelMemory && isDirectChat) {
-  // 使用统一的 channel 标识
+  // Use unified channel identifier
   channel = "shared";
 }
 ```
 
-## 使用场景
+## Use Cases
 
-### ✅ 适合启用跨渠道记忆
+### ✅ Suitable for Cross-Channel Memory
 
-- 个人助理场景（用户在多个渠道与同一个 Agent 交互）
-- 需要连续上下文的对话
-- 配置/偏好需要在渠道间同步
+- Personal assistant scenarios (users interact with the same agent across multiple channels)
+- Conversations requiring continuous context
+- Configurations/preferences that need synchronization across channels
 
-### ❌ 不适合启用跨渠道记忆
+### ❌ Not Suitable for Cross-Channel Memory
 
-- 每个渠道需要独立的上下文（如客服场景）
-- 渠道间用户群体完全不同
-- 需要渠道特定的行为/配置
+- Each channel requires independent context (e.g., customer support scenarios)
+- Completely different user groups across channels
+- Channel-specific behaviors/configurations are needed
 
-## 配置示例
+## Configuration Examples
 
-### 示例 1: 个人助理（启用跨渠道共享）
+### Example 1: Personal Assistant (Cross-Channel Sharing Enabled)
 
 ```yaml
 agents:
   list:
     - id: main
-      name: 个人助理
+      name: Personal Assistant
       crossChannelMemory: true
       bindings:
         - type: route
@@ -108,40 +110,40 @@ agents:
             channel: wechat
 ```
 
-### 示例 2: 多客服系统（保持渠道隔离）
+### Example 2: Multi-Channel Support System (Channel Isolation)
 
 ```yaml
 agents:
   list:
     - id: webchat-support
-      name: Webchat 客服
+      name: Webchat Support
       crossChannelMemory: false
-      
+
     - id: dingtalk-support
-      name: DingTalk 客服
+      name: DingTalk Support
       crossChannelMemory: false
 ```
 
-## 注意事项
+## Considerations
 
-1. **隐私考虑**: 启用跨渠道记忆后，所有渠道的用户都能看到相同的记忆。确保这符合你的隐私要求。
+1. **Privacy**: When cross-channel memory is enabled, all channels share the same memory. Ensure this aligns with your privacy requirements.
 
-2. **并发写入**: 多个渠道同时写入 MEMORY.md 时，使用文件锁机制避免冲突。
+2. **Concurrent Writes**: When multiple channels write to MEMORY.md simultaneously, file locking mechanisms prevent conflicts.
 
-3. **性能影响**: 跨渠道记忆共享对性能影响极小，因为只是 sessionKey 生成逻辑的变化。
+3. **Performance Impact**: Cross-channel memory sharing has minimal performance impact, as it only changes the sessionKey generation logic.
 
-4. **向后兼容**: 此功能默认关闭，不影响现有部署。
+4. **Backward Compatibility**: This feature is disabled by default and does not affect existing deployments.
 
-## 技术实现
+## Technical Implementation
 
-### 修改的文件
+### Modified Files
 
-1. `src/config/types.agents.ts` - 添加 `crossChannelMemory` 配置项
-2. `src/routing/resolve-route.ts` - 修改 sessionKey 生成逻辑
-3. `src/commands/agents.commands.bind.ts` - 添加 `--share-memory` 选项
-4. `src/cli/program/register.agent.ts` - 注册 CLI 选项
+1. `src/config/types.agents.ts` - Add `crossChannelMemory` configuration option
+2. `src/routing/resolve-route.ts` - Modify sessionKey generation logic
+3. `src/commands/agents.commands.bind.ts` - Add `--share-memory` flag
+4. `src/cli/program/register.agent.ts` - Register CLI option
 
-### 关键代码
+### Key Code
 
 ```typescript
 // resolve-route.ts
@@ -152,30 +154,30 @@ export function buildAgentSessionKey(params: {
   if (params.crossChannelMemory && isDirectChat) {
     return buildAgentPeerSessionKey({
       // ...
-      channel: "shared", // 统一标识
+      channel: "shared", // Unified identifier
     });
   }
-  // 默认行为
+  // Default behavior
 }
 ```
 
-## 测试
+## Testing
 
 ```bash
-# 1. 绑定渠道并启用跨渠道记忆
+# 1. Bind channels and enable cross-channel memory
 openclaw agents bind --agent main --bind webchat --bind dingtalk --share-memory
 
-# 2. 验证配置
+# 2. Verify configuration
 openclaw agents list --json | jq '.[] | select(.id == "main") | .crossChannelMemory'
-# 输出: true
+# Output: true
 
-# 3. 验证路由
+# 3. Verify routing
 openclaw agents bindings --agent main
-# 应该显示所有绑定的渠道
+# Should display all bound channels
 ```
 
-## 相关链接
+## Related Links
 
-- [路由绑定文档](./routing-bindings.md)
-- [Agent 配置文档](./agent-config.md)
-- [会话管理文档](./session-management.md)
+- [Routing Bindings Documentation](./routing-bindings.md)
+- [Agent Configuration Documentation](./agent-config.md)
+- [Session Management Documentation](./session-management.md)
