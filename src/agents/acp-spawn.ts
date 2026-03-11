@@ -121,6 +121,7 @@ type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
   conversationId: string;
+  placement: "current" | "child";
 };
 
 function resolveSpawnMode(params: {
@@ -373,10 +374,9 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (
-    !capabilities.bindSupported ||
-    (!capabilities.placements.includes("child") && !capabilities.placements.includes("current"))
-  ) {
+  // Prefer "child" (new thread) but fall back to "current" for adapters that only support it.
+  const placement = capabilities.placements.includes("child") ? "child" : "current";
+  if (!capabilities.bindSupported || !capabilities.placements.includes(placement)) {
     return {
       ok: false,
       error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
@@ -399,6 +399,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       conversationId,
+      placement,
     },
   };
 }
@@ -591,7 +592,7 @@ export async function spawnAcpDirect(
           accountId: preparedBinding.accountId,
           conversationId: preparedBinding.conversationId,
         },
-        placement: "child",
+        placement: preparedBinding.placement,
         metadata: {
           threadName: resolveThreadBindingThreadName({
             agentId: targetAgentId,

@@ -125,11 +125,10 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
       return true;
     }
-    // grammY wraps network failures that occurred before delivery in an envelope message.
-    const message = formatErrorMessage(candidate).trim().toLowerCase();
-    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
-      return true;
-    }
+    // Note: GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE is intentionally NOT matched here.
+    // Timeout envelopes ("network request for 'sendMessage' failed after N seconds")
+    // can fire *after* the request body was flushed — the message may already be delivered.
+    // Only pre-connect errors (ECONNREFUSED, ENOTFOUND, etc.) are safe for non-idempotent retries.
   }
   return false;
 }

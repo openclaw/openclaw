@@ -268,7 +268,7 @@ export async function resolveMedia(
   const file = await resolveTelegramFileWithRetry(ctx);
   if (!file) {
     throw new Error(
-      "Telegram getFile failed: file could not be retrieved (may exceed 20MB Bot API limit)",
+      "Telegram getFile failed: file could not be retrieved (file may exceed the 20MB Bot API limit, or a network error occurred)",
     );
   }
   if (!file.file_path) {
