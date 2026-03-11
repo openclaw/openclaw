@@ -136,17 +136,8 @@ export function resolveEffectiveBlockStreamingConfig(params: {
     minChars: coalescingMin,
     maxChars: coalescingMax,
     idleMs: coalescingIdleMs,
-    joiner:
-      coalescingDefaults?.joiner ??
-      (resolveChunkMode(params.cfg, normalizeChunkProvider(params.provider), params.accountId) ===
-      "newline"
-        ? " "
-        : chunking.breakPreference === "sentence"
-          ? " "
-          : chunking.breakPreference === "newline"
-            ? "\n"
-            : "\n\n"),
-    flushOnEnqueue: coalescingDefaults?.flushOnEnqueue ?? false,
+    joiner: coalescingDefaults.joiner,
+    flushOnEnqueue: coalescingDefaults.flushOnEnqueue,
   };
 
   return { chunking, coalescing };

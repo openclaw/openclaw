@@ -115,7 +115,7 @@ export function createBlockReplyCoalescer(params: {
     }
 
     const effectiveJoiner =
-      bufferText && (/\s$/.test(bufferText) || text.startsWith("\n")) ? "" : joiner;
+      bufferText && (/\s$/.test(bufferText) || /^\s/.test(text)) ? "" : joiner;
     const nextText = bufferText ? `${bufferText}${effectiveJoiner}${text}` : text;
     if (nextText.length > maxChars) {
       if (bufferText) {
