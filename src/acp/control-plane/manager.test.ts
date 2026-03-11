@@ -184,7 +184,11 @@ describe("AcpSessionManager", () => {
       return {
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: readySessionMeta(),
+        acp: {
+          ...readySessionMeta(),
+          agent: "main",
+          runtimeSessionName: sessionKey,
+        },
       };
     });
 
@@ -211,6 +215,7 @@ describe("AcpSessionManager", () => {
     );
     expect(runtimeState.ensureSession).toHaveBeenCalledWith(
       expect.objectContaining({
+        agent: "main",
         sessionKey: "agent:main:main",
       }),
     );
