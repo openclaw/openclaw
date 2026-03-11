@@ -120,8 +120,18 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toContain(
       "Please re-authenticate",
     );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain("rate limit");
+  });
+
+  it("surfaces OAuth refresh-token reuse when invalid_request_error fields are type-first", () => {
+    const msg = makeAssistantError(
+      'OAuth token refresh failed for openai-codex: 401 {"error":{"type":"invalid_request_error","message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","code":"refresh_token_reused"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toContain(
+      "Please re-authenticate",
+    );
     expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain(
-      "rate limit",
+      "LLM request rejected",
     );
   });
 

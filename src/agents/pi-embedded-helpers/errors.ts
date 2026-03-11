@@ -51,9 +51,7 @@ function isOauthRefreshReauthRequiredMessage(raw: string): boolean {
   return (
     lower.includes("oauth token refresh failed") ||
     lower.includes("refresh_token_reused") ||
-    lower.includes("refresh token has already been used") ||
-    lower.includes("please try signing in again") ||
-    lower.includes("please try again or re-authenticate")
+    lower.includes("refresh token has already been used")
   );
 }
 
@@ -704,13 +702,13 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isOauthRefreshReauthRequiredMessage(raw)) {
+    return formatOauthRefreshReauthCopy(opts?.provider);
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
-  }
-
-  if (isOauthRefreshReauthRequiredMessage(raw)) {
-    return formatOauthRefreshReauthCopy(opts?.provider);
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
