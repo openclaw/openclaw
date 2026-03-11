@@ -13,8 +13,8 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
-const POLL_STALL_THRESHOLD_MS = 90_000;
-const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+const POLL_WATCHDOG_INTERVAL_MS = 10_000;
+const MIN_POLL_STALL_THRESHOLD_MS = 120_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -163,6 +163,13 @@ export class TelegramPollingSession {
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     await this.#confirmPersistedOffset(bot);
 
+    // Derive stall threshold from runner fetch timeout with a minimum to avoid false positives
+    const fetchTimeoutSeconds = this.opts.runnerOptions.runner?.fetch?.timeout ?? 30;
+    const stallThresholdMs = Math.max(
+      MIN_POLL_STALL_THRESHOLD_MS,
+      (fetchTimeoutSeconds + 60) * 1000, // Add 60s buffer for network jitter
+    );
+
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use((prev, method, payload, signal) => {
       if (method === "getUpdates") {
@@ -203,7 +210,7 @@ export class TelegramPollingSession {
         return;
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      if (elapsed > stallThresholdMs && runner.isRunning()) {
         stalledRestart = true;
         this.opts.log(
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
