@@ -10,6 +10,31 @@ import {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { compileOperatorAgentRegistry } from "../operator-control/agent-registry.js";
+import { syncOperatorTaskToDeb } from "../operator-control/deb-sync.js";
+import { submitOperatorTaskAndDispatch } from "../operator-control/dispatch.js";
+import {
+  listOperatorMemory,
+  promoteOperatorMemory,
+  upsertOperatorServiceContext,
+  type OperatorMemoryCollection,
+} from "../operator-control/memory-store.js";
+import { getOperatorControlStatus } from "../operator-control/operator-status.js";
+import {
+  applyOperatorExternalReceipt,
+  getOperatorTask,
+  listOperatorTasks,
+  patchOperatorTask,
+  type OperatorTaskListFilters,
+} from "../operator-control/task-store.js";
+import {
+  cancelOperatorWorkerTask,
+  getOperatorWorkerReady,
+  getOperatorWorkerTask,
+  getOperatorWorkerTaskEvents,
+  isOperatorWorkerClientError,
+  listOperatorWorkerTasks,
+} from "../operator-control/worker-client.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
@@ -168,7 +193,10 @@ function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath:
 
 function resolveMissionControlRootSync(moduleUrl = import.meta.url): MissionControlRootState {
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  const explicitRoot = process.env.OPENCLAW_MISSION_CONTROL_ROOT?.trim();
   const candidates = [
+    ...(explicitRoot ? [path.resolve(explicitRoot)] : []),
+    "/app/dist/mission-control",
     path.resolve(process.cwd(), "dist/mission-control"),
     path.resolve(moduleDir, "../../dist/mission-control"),
     path.resolve(path.dirname(process.argv[1] ?? process.cwd()), "dist/mission-control"),
@@ -285,6 +313,26 @@ class MissionControlApiRequestError extends Error {
 
 function isMissionControlDebRoute(routePath: string): boolean {
   return routePath === "/deb" || routePath.startsWith("/deb/");
+}
+
+function isMissionControlTaskRoute(routePath: string): boolean {
+  return routePath === "/tasks" || routePath.startsWith("/tasks/");
+}
+
+function isMissionControlMemoryRoute(routePath: string): boolean {
+  return (
+    routePath === "/memory" ||
+    routePath === "/memory/promote" ||
+    routePath === "/memory/service-context"
+  );
+}
+
+function isMissionControlWorkerRoute(routePath: string): boolean {
+  return (
+    routePath === "/worker/ready" ||
+    routePath === "/worker/tasks" ||
+    routePath.startsWith("/worker/tasks/")
+  );
 }
 
 async function readJsonRequestBody(req: IncomingMessage, maxBytes: number): Promise<unknown> {
@@ -645,6 +693,335 @@ async function handleMissionControlApiRequest(params: {
     }
   }
 
+  if (isMissionControlTaskRoute(routePath)) {
+    if (authContext) {
+      const authorized = await authorizeGatewayBearerRequestOrReply({
+        req,
+        res,
+        auth: authContext.auth,
+        trustedProxies: authContext.trustedProxies,
+        allowRealIpFallback: authContext.allowRealIpFallback,
+        rateLimiter: authContext.rateLimiter,
+      });
+      if (!authorized) {
+        return true;
+      }
+    }
+
+    try {
+      if (routePath === "/tasks") {
+        if (req.method === "GET" || req.method === "HEAD") {
+          const payload = listOperatorTasks({
+            state: decodePathSegment(
+              url.searchParams.get("state") ?? "",
+            ) as OperatorTaskListFilters["state"],
+            tier: decodePathSegment(
+              url.searchParams.get("tier") ?? "",
+            ) as OperatorTaskListFilters["tier"],
+            capability: decodePathSegment(url.searchParams.get("capability") ?? ""),
+            limit: Number(url.searchParams.get("limit") ?? "50"),
+          });
+          respondJson(res, 200, req, payload);
+          return true;
+        }
+        if (req.method === "POST") {
+          const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
+          const created = await submitOperatorTaskAndDispatch(payload);
+          await syncOperatorTaskToDeb(created.task, "submit");
+          respondJson(res, created.created ? 201 : 200, req, created);
+          return true;
+        }
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, HEAD, POST");
+        res.end();
+        return true;
+      }
+
+      const receiptSuffix = "/receipts";
+      const isReceiptRoute = routePath.endsWith(receiptSuffix);
+      const encodedId = isReceiptRoute
+        ? routePath.slice("/tasks/".length, -receiptSuffix.length)
+        : routePath.slice("/tasks/".length);
+      if (!encodedId || encodedId.includes("/")) {
+        respondNotFound(res);
+        return true;
+      }
+      const taskId = decodePathSegment(encodedId);
+      if (!taskId) {
+        respondNotFound(res);
+        return true;
+      }
+      if (isReceiptRoute) {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "POST");
+          res.end();
+          return true;
+        }
+        const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
+        const updated = applyOperatorExternalReceipt(taskId, payload);
+        if (!updated) {
+          respondJson(res, 404, req, {
+            error: {
+              message: "Operator task not found",
+            },
+          });
+          return true;
+        }
+        await syncOperatorTaskToDeb(updated, "receipt");
+        respondJson(res, 200, req, updated);
+        return true;
+      }
+      if (req.method === "GET" || req.method === "HEAD") {
+        const task = getOperatorTask(taskId);
+        if (!task) {
+          respondJson(res, 404, req, {
+            error: {
+              message: "Operator task not found",
+            },
+          });
+          return true;
+        }
+        respondJson(res, 200, req, task);
+        return true;
+      }
+      if (req.method === "PATCH") {
+        const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
+        const updated = patchOperatorTask(taskId, payload);
+        if (!updated) {
+          respondJson(res, 404, req, {
+            error: {
+              message: "Operator task not found",
+            },
+          });
+          return true;
+        }
+        await syncOperatorTaskToDeb(updated, "patch");
+        respondJson(res, 200, req, updated);
+        return true;
+      }
+      res.statusCode = 405;
+      res.setHeader("Allow", "GET, HEAD, PATCH, POST");
+      res.end();
+      return true;
+    } catch (error) {
+      if (isRequestBodyLimitError(error)) {
+        respondJson(res, error.statusCode, req, {
+          error: {
+            message: requestBodyErrorToText(error.code),
+          },
+        });
+        return true;
+      }
+      if (error instanceof ZodError) {
+        respondValidationError(res, req, error);
+        return true;
+      }
+      respondJson(res, 400, req, {
+        error: {
+          message:
+            error instanceof Error ? error.message : "Mission Control operator task API failed",
+        },
+      });
+      return true;
+    }
+  }
+
+  if (isMissionControlWorkerRoute(routePath)) {
+    if (authContext) {
+      const authorized = await authorizeGatewayBearerRequestOrReply({
+        req,
+        res,
+        auth: authContext.auth,
+        trustedProxies: authContext.trustedProxies,
+        allowRealIpFallback: authContext.allowRealIpFallback,
+        rateLimiter: authContext.rateLimiter,
+      });
+      if (!authorized) {
+        return true;
+      }
+    }
+
+    try {
+      if (routePath === "/worker/ready") {
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, HEAD");
+          res.end();
+          return true;
+        }
+        const payload = await getOperatorWorkerReady();
+        respondJson(res, 200, req, payload);
+        return true;
+      }
+
+      if (routePath === "/worker/tasks") {
+        if (req.method === "GET" || req.method === "HEAD") {
+          const payload = await listOperatorWorkerTasks(
+            Number(url.searchParams.get("limit") ?? "50"),
+          );
+          respondJson(res, 200, req, payload);
+          return true;
+        }
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, HEAD");
+        res.end();
+        return true;
+      }
+
+      const cancelSuffix = "/cancel";
+      const eventsSuffix = "/events";
+      const isCancelRoute = routePath.endsWith(cancelSuffix);
+      const isEventsRoute = routePath.endsWith(eventsSuffix);
+      const encodedId = isCancelRoute
+        ? routePath.slice("/worker/tasks/".length, -cancelSuffix.length)
+        : isEventsRoute
+          ? routePath.slice("/worker/tasks/".length, -eventsSuffix.length)
+          : routePath.slice("/worker/tasks/".length);
+      if (!encodedId || encodedId.includes("/")) {
+        respondNotFound(res);
+        return true;
+      }
+      const taskId = decodePathSegment(encodedId);
+      if (!taskId) {
+        respondNotFound(res);
+        return true;
+      }
+
+      if (isCancelRoute) {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "POST");
+          res.end();
+          return true;
+        }
+        const payload = await cancelOperatorWorkerTask(taskId);
+        respondJson(res, payload.cancelled ? 200 : 409, req, payload);
+        return true;
+      }
+
+      if (isEventsRoute) {
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, HEAD");
+          res.end();
+          return true;
+        }
+        const payload = await getOperatorWorkerTaskEvents(taskId);
+        respondJson(res, 200, req, payload);
+        return true;
+      }
+
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, HEAD");
+        res.end();
+        return true;
+      }
+      const payload = await getOperatorWorkerTask(taskId);
+      respondJson(res, 200, req, payload);
+      return true;
+    } catch (error) {
+      if (isOperatorWorkerClientError(error)) {
+        respondJson(res, error.statusCode, req, {
+          error: {
+            message: error.message,
+          },
+          worker: error.payload,
+        });
+        return true;
+      }
+
+      respondJson(res, 502, req, {
+        error: {
+          message: error instanceof Error ? error.message : "Mission Control worker API failed",
+        },
+      });
+      return true;
+    }
+  }
+
+  if (isMissionControlMemoryRoute(routePath)) {
+    if (authContext) {
+      const authorized = await authorizeGatewayBearerRequestOrReply({
+        req,
+        res,
+        auth: authContext.auth,
+        trustedProxies: authContext.trustedProxies,
+        allowRealIpFallback: authContext.allowRealIpFallback,
+        rateLimiter: authContext.rateLimiter,
+      });
+      if (!authorized) {
+        return true;
+      }
+    }
+
+    try {
+      if (routePath === "/memory") {
+        if (req.method === "GET" || req.method === "HEAD") {
+          const payload = listOperatorMemory({
+            collection: decodePathSegment(
+              url.searchParams.get("collection") ?? "",
+            ) as OperatorMemoryCollection | null,
+            limit: Number(url.searchParams.get("limit") ?? "50"),
+          });
+          respondJson(res, 200, req, payload);
+          return true;
+        }
+        res.statusCode = 405;
+        res.setHeader("Allow", "GET, HEAD");
+        res.end();
+        return true;
+      }
+
+      if (routePath === "/memory/promote") {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "POST");
+          res.end();
+          return true;
+        }
+        const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
+        const promoted = promoteOperatorMemory(payload);
+        respondJson(res, promoted.created ? 201 : 200, req, promoted);
+        return true;
+      }
+
+      if (routePath === "/memory/service-context") {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "POST");
+          res.end();
+          return true;
+        }
+        const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
+        const updated = upsertOperatorServiceContext(payload);
+        respondJson(res, updated.created ? 201 : 200, req, updated);
+        return true;
+      }
+    } catch (error) {
+      if (isRequestBodyLimitError(error)) {
+        respondJson(res, error.statusCode, req, {
+          error: {
+            message: requestBodyErrorToText(error.code),
+          },
+        });
+        return true;
+      }
+      if (error instanceof ZodError) {
+        respondValidationError(res, req, error);
+        return true;
+      }
+      respondJson(res, 400, req, {
+        error: {
+          message:
+            error instanceof Error ? error.message : "Mission Control operator memory API failed",
+        },
+      });
+      return true;
+    }
+  }
+
   if (isMissionControlDebRoute(routePath)) {
     if (authContext) {
       const authorized = await authorizeGatewayBearerRequestOrReply({
@@ -729,6 +1106,18 @@ async function handleMissionControlApiRequest(params: {
 
     if (routePath === "/incidents") {
       const payload = await getMissionControlIncidents();
+      respondJson(res, 200, req, payload);
+      return true;
+    }
+
+    if (routePath === "/agents") {
+      const payload = compileOperatorAgentRegistry();
+      respondJson(res, 200, req, payload);
+      return true;
+    }
+
+    if (routePath === "/operator/status") {
+      const payload = getOperatorControlStatus();
       respondJson(res, 200, req, payload);
       return true;
     }

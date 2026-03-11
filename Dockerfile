@@ -12,7 +12,7 @@
 # Two runtime variants:
 #   Default (bookworm):      docker build .
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
-ARG OPENCLAW_EXTENSIONS=""
+ARG OPENCLAW_EXTENSIONS="matrix"
 ARG OPENCLAW_VARIANT=default
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
@@ -49,6 +49,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
+COPY mission-control-ui/package.json ./mission-control-ui/package.json
 COPY patches ./patches
 
 COPY --from=ext-deps /out/ ./extensions/
@@ -82,6 +83,7 @@ RUN pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
+RUN pnpm mission-control:build
 
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
