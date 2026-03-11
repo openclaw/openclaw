@@ -353,6 +353,9 @@ type PreparedManualRun =
       jobId: string;
       startedAt: number;
       executionJob: CronJob;
+      // lastError captured before prepareManualRun clears it, so
+      // releaseManualRunReservation can restore it on rollback.
+      previousLastError: string | undefined;
     }
   | { ok: false };
 
@@ -382,6 +385,7 @@ async function prepareManualRun(
 
     // Reserve this run under lock, then execute outside lock so read ops
     // (`list`, `status`) stay responsive while the run is in progress.
+    const previousLastError = job.state.lastError;
     job.state.runningAtMs = now;
     job.state.lastError = undefined;
     // Persist the running marker before releasing lock so timer ticks that
@@ -395,6 +399,7 @@ async function prepareManualRun(
       jobId: job.id,
       startedAt: now,
       executionJob,
+      previousLastError,
     } as const;
   });
 }
@@ -499,18 +504,21 @@ async function releaseManualRunReservation(
   state: CronServiceState,
   jobId: string,
   runId: string,
+  previousLastError: string | undefined,
   err: unknown,
 ): Promise<void> {
-  // Clear the runningAtMs reservation set by prepareManualRun so the job does
-  // not remain stuck as "already-running" until the stale-marker maintenance
-  // window fires. Best-effort: if this persist also fails, stale-marker
-  // cleanup will still recover the job after STUCK_RUN_MS.
+  // Clear the runningAtMs reservation set by prepareManualRun so the job is
+  // not stuck as "already-running" until the stale-marker window fires.
+  // Also restore lastError so the previous failure remains visible in cron
+  // status output (prepareManualRun cleared it optimistically).
+  // Best-effort: if persist fails, stale-marker cleanup will still recover.
   try {
     await locked(state, async () => {
       await ensureLoaded(state, { skipRecompute: true });
       const job = state.store?.jobs.find((j) => j.id === jobId);
       if (job && typeof job.state.runningAtMs === "number") {
         job.state.runningAtMs = undefined;
+        job.state.lastError = previousLastError;
         await persist(state);
       }
     });
@@ -555,6 +563,12 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
         await ensureLoaded(state, { skipRecompute: true });
         const current = state.store?.jobs.find((j) => j.id === id);
         if (current?.state.runningAtMs !== prepared.startedAt) {
+          // Reservation was cleared (stale-marker) or replaced by another
+          // run. Restore lastError so the previous failure stays visible.
+          if (current && current.state.lastError === undefined) {
+            current.state.lastError = prepared.previousLastError;
+            await persist(state);
+          }
           return null;
         }
         // Re-stamp so STUCK_RUN_MS is measured from actual execution start.
@@ -585,7 +599,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
     // Release the runningAtMs reservation so the job is not stuck as
     // "already-running" for the full STUCK_RUN_MS window when the lane
     // rejects the task (e.g. GatewayDrainingError on restart).
-    void releaseManualRunReservation(state, id, runId, err);
+    void releaseManualRunReservation(state, id, runId, prepared.previousLastError, err);
   });
   return { ok: true, enqueued: true, runId } as const;
 }

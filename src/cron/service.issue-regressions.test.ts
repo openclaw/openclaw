@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   clearCommandLane,
+  enqueueCommandInLane,
   GatewayDrainingError,
   markGatewayDraining,
   resetAllLanes,
@@ -1703,6 +1704,48 @@ describe("Cron issue regressions", () => {
     resetAllLanes();
   });
 
+  it("enqueueRun restores lastError when lane rejects so previous failure stays visible", async () => {
+    vi.useRealTimers();
+    resetAllLanes();
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:05.100Z");
+    const previousError = "previous task failed: timeout";
+    const job = createDueIsolatedJob({ id: "drain-last-error", nowMs: dueAt, nextRunAtMs: dueAt });
+    // Inject a previous lastError into the persisted state.
+    const jobWithError = { ...job, state: { ...job.state, lastError: previousError } };
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [jobWithError] }), "utf-8");
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: createNoopLogger(),
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    markGatewayDraining();
+
+    await enqueueRun(state, job.id, "force");
+
+    await vi.waitFor(
+      () => {
+        const stored = state.store?.jobs.find((j) => j.id === job.id);
+        expect(stored?.state.runningAtMs).toBeUndefined();
+      },
+      { timeout: 2_000 },
+    );
+
+    // lastError must be restored after rollback so it remains visible in status.
+    const stored = state.store?.jobs.find((j) => j.id === job.id);
+    expect(stored?.state.lastError).toBe(previousError);
+
+    resetAllLanes();
+  });
+
   it("enqueueRun skips execution when stale-marker clears runningAtMs before the lane drains", async () => {
     vi.useRealTimers();
     resetAllLanes();
@@ -1747,6 +1790,66 @@ describe("Cron issue regressions", () => {
 
     // No duplicate execution — runIsolatedAgentJob was never reached.
     expect(state.store?.jobs.find((j) => j.id === job.id)?.state.lastStatus).toBeUndefined();
+
+    resetAllLanes();
+  });
+
+  it("enqueueRun restores lastError when stale-marker skip fires so previous failure stays visible", async () => {
+    vi.useRealTimers();
+    resetAllLanes();
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.100Z");
+    const previousError = "previous task failed: connection refused";
+    const job = createDueIsolatedJob({ id: "stale-skip-last-error", nowMs: dueAt, nextRunAtMs: dueAt });
+    const jobWithError = { ...job, state: { ...job.state, lastError: previousError } };
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [jobWithError] }), "utf-8");
+
+    const log = createNoopLogger();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    // Block the cron lane so we can clear runningAtMs before the callback runs.
+    const blocker = createDeferred<void>();
+    void enqueueCommandInLane(CommandLane.Cron, () => blocker.promise);
+
+    await enqueueRun(state, job.id, "force");
+
+    // Simulate stale-marker clearing runningAtMs while lane is backed up.
+    const stored = state.store?.jobs.find((j) => j.id === job.id);
+    if (stored) {
+      stored.state.runningAtMs = undefined;
+    }
+
+    // Unblock so the queued callback runs and detects the cleared reservation.
+    blocker.resolve();
+
+    await vi.waitFor(
+      () => {
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ jobId: job.id }),
+          "cron: queued manual run skipped — reservation was cleared before execution (stale-marker or concurrent run)",
+        );
+      },
+      { timeout: 2_000 },
+    );
+
+    // lastError must be restored so it remains visible in cron status.
+    await vi.waitFor(
+      () => {
+        const current = state.store?.jobs.find((j) => j.id === job.id);
+        expect(current?.state.lastError).toBe(previousError);
+      },
+      { timeout: 2_000 },
+    );
 
     resetAllLanes();
   });
@@ -1805,7 +1908,8 @@ describe("Cron issue regressions", () => {
     // STUCK_RUN_MS is measured from actual execution, not queue-entry time.
     // Reload from disk to verify the persisted value.
     await fs.readFile(store.storePath, "utf-8").then((raw) => {
-      const persisted = JSON.parse(raw) as { jobs: { id: string; state: { runningAtMs?: number } }[] };
+      type PersistedStore = { jobs: { id: string; state: { runningAtMs?: number } }[] };
+      const persisted = JSON.parse(raw) as PersistedStore;
       const persistedJob = persisted.jobs.find((j) => j.id === job.id);
       expect(persistedJob?.state.runningAtMs).toBe(executionStartAt);
     });
