@@ -11,6 +11,10 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
+import {
+  resolveStoredSubagentCapabilities,
+  type SubagentSessionRole,
+} from "./subagent-capabilities.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
@@ -89,6 +93,13 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
+function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
+  if (role === "leaf") {
+    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
+  }
+  return [...SUBAGENT_TOOL_DENY_ALWAYS];
+}
+
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
@@ -102,6 +113,27 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
   );
   const deny = [
     ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return { allow: mergedAllow, deny };
+}
+
+export function resolveSubagentToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string,
+): SandboxToolPolicy {
+  const configured = cfg?.tools?.subagents?.tools;
+  const capabilities = resolveStoredSubagentCapabilities(sessionKey, { cfg });
+  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const explicitAllow = new Set(
+    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
+  );
+  const deny = [
+    ...resolveSubagentDenyListForRole(capabilities.role).filter(
+      (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
+    ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;

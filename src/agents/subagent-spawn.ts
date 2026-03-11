@@ -27,6 +27,7 @@ import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
+import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
@@ -376,6 +377,10 @@ export async function spawnSubagentDirect(
   }
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
+  const childCapabilities = resolveSubagentCapabilities({
+    depth: childDepth,
+    maxSpawnDepth,
+  });
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
@@ -414,7 +419,11 @@ export async function spawnSubagentDirect(
     }
   };
 
-  const spawnDepthPatchError = await patchChildSession({ spawnDepth: childDepth });
+  const spawnDepthPatchError = await patchChildSession({
+    spawnDepth: childDepth,
+    subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
+    subagentControlScope: childCapabilities.controlScope,
+  });
   if (spawnDepthPatchError) {
     return {
       status: "error",
@@ -643,6 +652,7 @@ export async function spawnSubagentDirect(
     registerSubagentRun({
       runId: childRunId,
       childSessionKey,
+      controllerSessionKey: requesterInternalKey,
       requesterSessionKey: requesterInternalKey,
       requesterOrigin,
       requesterDisplayKey,
