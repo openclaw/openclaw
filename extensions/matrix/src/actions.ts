@@ -62,8 +62,10 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
+      const eventType = readStringParam(params, "eventType");
+      const eventContent = params.eventContent;
       const content = readStringParam(params, "message", {
-        required: true,
+        required: !eventType,
         allowEmpty: true,
       });
       const mediaUrl = readStringParam(params, "media", { trim: false });
@@ -73,10 +75,12 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         {
           action: "sendMessage",
           to,
-          content,
+          content: content ?? "",
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
+          eventType: eventType ?? undefined,
+          eventContent,
         },
         cfg as CoreConfig,
       );

@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   createActionGate,
@@ -25,6 +26,58 @@ import type { CoreConfig } from "./types.js";
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 const reactionActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const ATELIER_EVENT_TYPES = new Set(["ai.atelier.canvas.update", "ai.atelier.agent.presence"]);
+
+type AtelierTriggerModule = {
+  postOpenClawEvent: (args: {
+    payload: {
+      roomId: string;
+      eventType: string;
+      content: Record<string, unknown>;
+    };
+    adapterUrl?: string;
+    ingestToken?: string;
+  }) => Promise<unknown>;
+};
+
+const resolveAtelierTriggerHelperPath = (): string => {
+  const explicit = process.env.ATELIER_TRIGGER_HELPER_PATH?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const home = process.env.HOME ?? "";
+  return `${home}/.openclaw/workspace/projects/atelier/infra/gateway-adapter/src/openclaw-trigger.mjs`;
+};
+
+async function emitAtelierEventViaTrigger(args: {
+  roomId: string;
+  eventType: string;
+  eventContent: Record<string, unknown>;
+}): Promise<unknown> {
+  const helperPath = resolveAtelierTriggerHelperPath();
+  let mod: AtelierTriggerModule;
+  try {
+    mod = (await import(pathToFileURL(helperPath).href)) as AtelierTriggerModule;
+  } catch (error) {
+    throw new Error(
+      `Failed to load Atelier trigger helper at ${helperPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (typeof mod.postOpenClawEvent !== "function") {
+    throw new Error(`Atelier trigger helper is missing postOpenClawEvent(): ${helperPath}`);
+  }
+
+  return await mod.postOpenClawEvent({
+    payload: {
+      roomId: args.roomId,
+      eventType: args.eventType,
+      content: args.eventContent,
+    },
+    adapterUrl: process.env.ATELIER_ADAPTER_URL,
+    ingestToken: process.env.ATELIER_ADAPTER_INGEST_TOKEN,
+  });
+}
 
 function readRoomId(params: Record<string, unknown>, required = true): string {
   const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
@@ -74,6 +127,27 @@ export async function handleMatrixAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
+        const eventType = readStringParam(params, "eventType");
+        if (eventType && ATELIER_EVENT_TYPES.has(eventType)) {
+          const rawEventContent = params.eventContent;
+          const parsedEventContent =
+            typeof rawEventContent === "string" ? JSON.parse(rawEventContent) : rawEventContent;
+
+          if (!parsedEventContent || typeof parsedEventContent !== "object") {
+            throw new Error(
+              "Matrix sendMessage Atelier mode requires eventContent object (or JSON string)",
+            );
+          }
+
+          const result = await emitAtelierEventViaTrigger({
+            roomId: to,
+            eventType,
+            eventContent: parsedEventContent as Record<string, unknown>,
+          });
+
+          return jsonResult({ ok: true, atelierEvent: true, result });
+        }
+
         const content = readStringParam(params, "content", {
           required: true,
           allowEmpty: true,
