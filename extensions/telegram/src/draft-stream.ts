@@ -77,6 +77,8 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** Re-open a stopped stream without clearing messageId or incrementing generation. */
+  revive?: () => void;
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
 };
@@ -366,6 +368,13 @@ export function createTelegramDraftStream(params: {
     warnPrefix: "telegram stream preview cleanup failed",
   });
 
+  const revive = () => {
+    // Re-open a stopped stream without clearing messageId or incrementing
+    // generation, so continued edits land on the same Telegram message.
+    streamState.stopped = false;
+    streamState.final = false;
+  };
+
   const forceNewMessage = () => {
     // Boundary rotation may call stop() to finalize the previous draft.
     // Re-open the stream lifecycle for the next assistant segment.
@@ -448,6 +457,7 @@ export function createTelegramDraftStream(params: {
     stop,
     materialize,
     forceNewMessage,
+    revive,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }

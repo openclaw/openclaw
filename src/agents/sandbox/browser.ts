@@ -87,6 +87,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
+    gpuEnabled: false,
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
