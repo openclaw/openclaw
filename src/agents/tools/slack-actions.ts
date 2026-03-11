@@ -123,9 +123,12 @@ export async function handleSlackAction(
   const allowUserWrites = account.config.userTokenReadOnly === false;
 
   // Choose the most appropriate token for Slack read/write operations.
+  // When userTokenReadOnly is true (default), user token is specifically for reads — prefer it.
+  // When userTokenReadOnly is false, user token can also write — prefer bot token for reads
+  // since bot tokens typically have broader read scopes (channels:history etc.).
   const getTokenForOperation = (operation: "read" | "write") => {
     if (operation === "read") {
-      return userToken ?? botToken;
+      return allowUserWrites ? (botToken ?? userToken) : (userToken ?? botToken);
     }
     if (!allowUserWrites) {
       return botToken;
