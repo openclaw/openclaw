@@ -61,7 +61,12 @@ describe("collectSmallModelRiskFindings", () => {
     expect(findings[0]?.detail).not.toContain("web=[off]");
   });
 
-  it("treats gemini search credentials as enabling web_search exposure", () => {
+  it.each([
+    ["perplexity", { perplexity: { apiKey: "pplx-key" } }],
+    ["gemini", { gemini: { apiKey: "gemini-key" } }],
+    ["grok", { grok: { apiKey: "grok-key" } }],
+    ["kimi", { kimi: { apiKey: "kimi-key" } }],
+  ])("treats %s search config credentials as enabling web_search exposure", (_provider, search) => {
     const findings = collectSmallModelRiskFindings({
       cfg: {
         agents: {
@@ -71,14 +76,10 @@ describe("collectSmallModelRiskFindings", () => {
         },
         tools: {
           web: {
-            search: {
-              gemini: {
-                apiKey: "gemini-key",
-              },
-            },
+            search,
           },
         },
-      } satisfies OpenClawConfig,
+      } as OpenClawConfig,
       env: {},
     });
 
