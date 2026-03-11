@@ -32,9 +32,9 @@ ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
 
 ```bash
-ASC_APP_IDENTIFIER=ai.openclaw.ios
+ASC_APP_IDENTIFIER=ai.openclaw.client
 # or
-ASC_APP_ID=6760218713
+ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID
 ```
 
 File-based fallback (CI/non-macOS):
@@ -60,9 +60,29 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-Run:
+Archive locally without upload:
+
+```bash
+pnpm ios:beta:archive -- --version 2026.3.9-beta.1
+```
+
+Upload to TestFlight:
+
+```bash
+pnpm ios:beta -- --version 2026.3.9-beta.1
+```
+
+Direct Fastlane entry point:
 
 ```bash
 cd apps/ios
-fastlane beta
+IOS_BETA_VERSION=2026.3.9-beta.1 fastlane ios beta
 ```
+
+Versioning rules:
+
+- Input release version uses CalVer beta format: `YYYY.M.D-beta.N`
+- Fastlane stamps `CFBundleShortVersionString` to `YYYY.M.D`
+- Fastlane resolves `CFBundleVersion` as the next integer TestFlight build number for that short version
+- The beta flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
+- Local beta signing uses a temporary generated xcconfig and leaves local development signing overrides untouched

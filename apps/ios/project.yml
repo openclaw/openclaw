@@ -224,6 +224,7 @@ targets:
       Release: Config/Signing.xcconfig
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_APPINTENTS_METADATA: NO
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
