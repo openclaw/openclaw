@@ -250,6 +250,46 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
+  it("creates memory file with session content on automatic session rollover", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "stale-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Yesterday's context" },
+        { role: "assistant", content: "Recovered during automatic rollover" },
+      ]),
+    });
+
+    const event = createHookEvent("session", "rollover", "agent:main:main", {
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      workspaceDir: tempDir,
+      previousSessionEntry: {
+        sessionId: "stale-session",
+        sessionFile,
+      },
+      sessionEntry: {
+        sessionId: "new-session",
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(memoryContent).toContain("user: Yesterday's context");
+    expect(memoryContent).toContain("assistant: Recovered during automatic rollover");
+    expect(memoryContent).toContain("- **Session ID**: stale-session");
+  });
+
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");

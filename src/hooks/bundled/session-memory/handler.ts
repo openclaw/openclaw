@@ -194,17 +194,21 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Save session context to memory when an explicit reset or automatic session rollover happens.
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  const isResetCommand =
+    event.type === "command" && (event.action === "new" || event.action === "reset");
+  const isAutomaticRollover = event.type === "session" && event.action === "rollover";
+  if (!isResetCommand && !isAutomaticRollover) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Hook triggered for session memory persistence", {
+      type: event.type,
+      action: event.action,
+    });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;

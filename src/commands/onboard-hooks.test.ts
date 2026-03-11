@@ -92,7 +92,7 @@ describe("onboard-hooks", () => {
           handlerPath: "/mock/workspace/hooks/session-memory/handler.js",
           hookKey: "session-memory",
           emoji: "💾",
-          events: ["command:new", "command:reset"],
+          events: ["command:new", "command:reset", "session:rollover"],
         },
         eligible,
       ),

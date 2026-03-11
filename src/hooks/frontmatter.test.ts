@@ -155,7 +155,7 @@ describe("resolveOpenClawMetadata", () => {
       metadata: JSON.stringify({
         openclaw: {
           emoji: "🔥",
-          events: ["command:new", "command:reset"],
+          events: ["command:new", "command:reset", "session:rollover"],
           requires: {
             config: ["workspace.dir"],
             bins: ["git"],
@@ -167,7 +167,7 @@ describe("resolveOpenClawMetadata", () => {
     const result = resolveOpenClawMetadata(frontmatter);
     expect(result).toBeDefined();
     expect(result?.emoji).toBe("🔥");
-    expect(result?.events).toEqual(["command:new", "command:reset"]);
+    expect(result?.events).toEqual(["command:new", "command:reset", "session:rollover"]);
     expect(result?.requires?.config).toEqual(["workspace.dir"]);
     expect(result?.requires?.bins).toEqual(["git"]);
   });
@@ -239,7 +239,7 @@ metadata:
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new", "command:reset"],
+        "events": ["command:new", "command:reset", "session:rollover"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -256,7 +256,7 @@ metadata:
     const openclaw = resolveOpenClawMetadata(frontmatter);
     expect(openclaw).toBeDefined();
     expect(openclaw?.emoji).toBe("💾");
-    expect(openclaw?.events).toEqual(["command:new", "command:reset"]);
+    expect(openclaw?.events).toEqual(["command:new", "command:reset", "session:rollover"]);
     expect(openclaw?.requires?.config).toEqual(["workspace.dir"]);
     expect(openclaw?.install?.[0].kind).toBe("bundled");
   });

@@ -171,6 +171,77 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
+  it("emits a session rollover hook for automatic stale-session rollover", async () => {
+    mocks.initSessionState.mockResolvedValueOnce({
+      sessionCtx: {},
+      sessionEntry: { sessionId: "new-session" },
+      previousSessionEntry: { sessionId: "old-session", sessionFile: "/tmp/old.jsonl" },
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:-100123",
+      sessionId: "new-session",
+      isNewSession: true,
+      resetTriggered: false,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-chat",
+      groupResolution: undefined,
+      isGroup: true,
+      triggerBodyNormalized: "",
+      bodyStripped: "",
+    });
+
+    await getReplyFromConfig(buildCtx(), undefined, {});
+
+    expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "session",
+      "rollover",
+      "agent:main:telegram:-100123",
+      expect.objectContaining({
+        previousSessionEntry: expect.objectContaining({ sessionId: "old-session" }),
+        sessionEntry: expect.objectContaining({ sessionId: "new-session" }),
+        resetReason: "automatic",
+      }),
+    );
+    expect(mocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session", action: "rollover" }),
+    );
+  });
+
+  it("does not emit a session rollover hook for explicit /new or /reset flows", async () => {
+    mocks.initSessionState.mockResolvedValueOnce({
+      sessionCtx: {},
+      sessionEntry: { sessionId: "new-session" },
+      previousSessionEntry: { sessionId: "old-session", sessionFile: "/tmp/old.jsonl" },
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:-100123",
+      sessionId: "new-session",
+      isNewSession: true,
+      resetTriggered: true,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-chat",
+      groupResolution: undefined,
+      isGroup: true,
+      triggerBodyNormalized: "/new",
+      bodyStripped: "",
+    });
+
+    await getReplyFromConfig(
+      buildCtx({ Body: "/new", RawBody: "/new", CommandBody: "/new" }),
+      undefined,
+      {},
+    );
+
+    expect(mocks.createInternalHookEvent).not.toHaveBeenCalledWith(
+      "session",
+      "rollover",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("skips message hooks when SessionKey is unavailable", async () => {
     await getReplyFromConfig(buildCtx({ SessionKey: undefined }), undefined, {});
 

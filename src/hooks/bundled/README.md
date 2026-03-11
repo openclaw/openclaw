@@ -6,9 +6,9 @@ This directory contains hooks that ship with OpenClaw. These hooks are automatic
 
 ### 💾 session-memory
 
-Automatically saves session context to memory when you issue `/new` or `/reset`.
+Automatically saves session context to memory when you issue `/new`, `/reset`, or when OpenClaw automatically rolls over a stale session.
 
-**Events**: `command:new`, `command:reset`
+**Events**: `command:new`, `command:reset`, `session:rollover`
 **What it does**: Creates a dated memory file with LLM-generated slug based on conversation content.
 **Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
 
