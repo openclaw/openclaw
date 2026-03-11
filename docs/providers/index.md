@@ -57,6 +57,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Community tools
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
+- [Cursor Agent API Proxy](/providers/cursor-agent-api-proxy) - Community proxy that wraps the Cursor CLI as an OpenAI-compatible API server
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).
