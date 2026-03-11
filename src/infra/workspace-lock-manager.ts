@@ -52,6 +52,10 @@ async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind):
     const parentDir = path.dirname(resolved);
     await fs.mkdir(parentDir, { recursive: true });
     const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
+    const canonicalFile = await fs.realpath(resolved).catch(() => null);
+    if (canonicalFile) {
+      return canonicalFile;
+    }
     return path.join(canonicalParent, path.basename(resolved));
   }
   await fs.mkdir(resolved, { recursive: true });

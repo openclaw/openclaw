@@ -10,13 +10,11 @@ type ParsedSemver = {
 function parseSemver(value: string): ParsedSemver {
   const normalized = value.trim().replace(/^[~^]/, "");
   const [corePart, prereleasePart] = normalized.split("-", 2);
-  const parts = corePart
-    .split(".")
-    .slice(0, 3)
-    .map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+  const coreTokens = corePart.split(".").slice(0, 3);
+  if (coreTokens.length !== 3 || coreTokens.some((part) => !/^\d+$/.test(part))) {
     throw new Error(`Invalid semver value: ${value}`);
   }
+  const parts = coreTokens.map((part) => Number(part));
   return {
     core: parts as [number, number, number],
     prerelease: prereleasePart ? prereleasePart.split(".").filter(Boolean) : [],
@@ -24,10 +22,10 @@ function parseSemver(value: string): ParsedSemver {
 }
 
 function compareIdentifier(a: string, b: string): number {
-  const numericA = Number.parseInt(a, 10);
-  const numericB = Number.parseInt(b, 10);
-  const isNumericA = Number.isFinite(numericA) && `${numericA}` === a;
-  const isNumericB = Number.isFinite(numericB) && `${numericB}` === b;
+  const isNumericA = /^\d+$/.test(a);
+  const isNumericB = /^\d+$/.test(b);
+  const numericA = isNumericA ? Number(a) : Number.NaN;
+  const numericB = isNumericB ? Number(b) : Number.NaN;
   if (isNumericA && isNumericB) {
     return numericA === numericB ? 0 : numericA > numericB ? 1 : -1;
   }
@@ -109,5 +107,11 @@ describe("package security override floors", () => {
       /must be >= 7\.5\.10/,
     );
     expectAtLeast("7.5.10", "7.5.10", "tar stable floor");
+  });
+
+  it("rejects semver tokens with trailing junk", () => {
+    expect(() => expectAtLeast("7.5.10 || 0.0.1", "7.5.10", "tar floor")).toThrow(
+      /Invalid semver value/,
+    );
   });
 });

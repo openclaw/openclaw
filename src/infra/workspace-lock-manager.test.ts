@@ -282,6 +282,44 @@ describe("workspace lock manager", () => {
     await lockA.release();
   });
 
+  it("canonicalizes file path casing when realpath provides canonical case", async () => {
+    const dir = await makeCaseDir();
+    const canonicalPath = path.join(dir, "Shared.txt");
+    const mixedCaseAlias = path.join(dir, "shared.txt");
+    await fs.writeFile(canonicalPath, "x", "utf8");
+
+    const originalRealpath = fs.realpath.bind(fs);
+    const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (value) => {
+      const asString = String(value);
+      if (path.resolve(asString) === path.resolve(mixedCaseAlias)) {
+        return canonicalPath;
+      }
+      return originalRealpath(value);
+    });
+
+    try {
+      const lockA = await acquireWorkspaceLock(canonicalPath, {
+        kind: "file",
+        timeoutMs: 100,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      });
+      const lockB = await acquireWorkspaceLock(mixedCaseAlias, {
+        kind: "file",
+        timeoutMs: 100,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      });
+
+      expect(lockA.lockPath).toBe(lockB.lockPath);
+
+      await lockB.release();
+      await lockA.release();
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("backs off when stale lock deletion fails", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "busy.txt");

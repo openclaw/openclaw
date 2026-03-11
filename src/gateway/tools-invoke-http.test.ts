@@ -5,10 +5,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
-  runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
-    blocked: false as const,
-    params,
-  })),
+  runBeforeToolCallHook: vi.fn(
+    async ({
+      params,
+    }: {
+      params: unknown;
+    }): Promise<{
+      blocked: boolean;
+      params?: unknown;
+      reason?: string;
+    }> => ({
+      blocked: false,
+      params,
+    }),
+  ),
 }));
 
 let cfg: Record<string, unknown> = {};
