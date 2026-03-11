@@ -62,6 +62,46 @@ struct MacNodeRuntimeTests {
         #expect(payload.plan.sessionKey == "main")
     }
 
+    @Test func `handle invoke rejects missing or empty system run prepare command`() async throws {
+        struct PrepareParams: Encodable {
+            var command: [String]?
+        }
+
+        let runtime = MacNodeRuntime()
+        let payloads = [
+            "{}",
+            try #require(String(data: JSONEncoder().encode(PrepareParams(command: [])), encoding: .utf8)),
+        ]
+
+        for (index, paramsJSON) in payloads.enumerated() {
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-prepare-empty-\(index)",
+                    command: OpenClawSystemCommand.runPrepare.rawValue,
+                    paramsJSON: paramsJSON))
+            #expect(response.ok == false)
+            #expect(response.error?.message == "command required")
+        }
+    }
+
+    @Test func `handle invoke rejects mismatched system run prepare raw command`() async throws {
+        struct PrepareParams: Encodable {
+            var command: [String]
+            var rawCommand: String?
+        }
+
+        let runtime = MacNodeRuntime()
+        let params = PrepareParams(command: ["echo", "hello"], rawCommand: "echo world")
+        let json = try #require(String(data: JSONEncoder().encode(params), encoding: .utf8))
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-prepare-raw-mismatch",
+                command: OpenClawSystemCommand.runPrepare.rawValue,
+                paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(response.error?.message == "INVALID_REQUEST: rawCommand does not match command")
+    }
+
     @Test func `handle invoke rejects empty system which`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemWhichParams(bins: [])
