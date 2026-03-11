@@ -34,7 +34,7 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
   return null;
 }
 
-function resolveZaiApiKey(): string | undefined {
+function resolveZaiApiKey(agentDir?: string): string | undefined {
   const envDirect =
     normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
   if (envDirect) {
@@ -49,7 +49,7 @@ function resolveZaiApiKey(): string | undefined {
     return key;
   }
 
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(agentDir);
   const apiProfile = [
     ...listProfilesForProvider(store, "zai"),
     ...listProfilesForProvider(store, "z-ai"),
@@ -81,30 +81,34 @@ function resolveZaiApiKey(): string | undefined {
   }
 }
 
-function resolveKilocodeApiKey(): string | undefined {
+function resolveKilocodeApiKey(agentDir?: string): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "kilocode",
     envDirect: [process.env.KILOCODE_API_KEY],
+    agentDir,
   });
 }
 
-function resolveMinimaxApiKey(): string | undefined {
+function resolveMinimaxApiKey(agentDir?: string): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "minimax",
     envDirect: [process.env.MINIMAX_CODE_PLAN_KEY, process.env.MINIMAX_API_KEY],
+    agentDir,
   });
 }
 
-function resolveXiaomiApiKey(): string | undefined {
+function resolveXiaomiApiKey(agentDir?: string): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "xiaomi",
     envDirect: [process.env.XIAOMI_API_KEY],
+    agentDir,
   });
 }
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
   providerId: UsageProviderId;
   envDirect: Array<string | undefined>;
+  agentDir?: string;
 }): string | undefined {
   const envDirect = params.envDirect.map(normalizeSecretInput).find(Boolean);
   if (envDirect) {
@@ -120,7 +124,7 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
     return key;
   }
 
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(params.agentDir);
   const cred = listProfilesForProvider(store, params.providerId)
     .map((id) => store.profiles[id])
     .find(
@@ -243,28 +247,28 @@ export async function resolveProviderAuths(params: {
 
   for (const provider of params.providers) {
     if (provider === "kilocode") {
-      const apiKey = resolveKilocodeApiKey();
+      const apiKey = resolveKilocodeApiKey(params.agentDir);
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
       continue;
     }
     if (provider === "zai") {
-      const apiKey = resolveZaiApiKey();
+      const apiKey = resolveZaiApiKey(params.agentDir);
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
       continue;
     }
     if (provider === "minimax") {
-      const apiKey = resolveMinimaxApiKey();
+      const apiKey = resolveMinimaxApiKey(params.agentDir);
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
       continue;
     }
     if (provider === "xiaomi") {
-      const apiKey = resolveXiaomiApiKey();
+      const apiKey = resolveXiaomiApiKey(params.agentDir);
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
