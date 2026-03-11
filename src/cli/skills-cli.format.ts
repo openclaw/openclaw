@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -42,6 +43,25 @@ function normalizeSkillEmoji(emoji?: string): string {
   return (emoji ?? "📦").replaceAll("\uFE0E", "\uFE0F");
 }
 
+function sanitizeJsonString(value: string): string {
+  return stripAnsi(value).replace(/[\u007f-\u009f]/g, "");
+}
+
+function sanitizeJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeJsonString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, sanitizeJsonValue(entryValue)]),
+    );
+  }
+  return value;
+}
+
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = normalizeSkillEmoji(skill.emoji);
   return `${emoji} ${theme.command(skill.name)}`;
@@ -71,7 +91,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
 
   if (opts.json) {
-    const jsonReport = {
+    const jsonReport = sanitizeJsonValue({
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
@@ -87,7 +107,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         homepage: s.homepage,
         missing: s.missing,
       })),
-    };
+    });
     return JSON.stringify(jsonReport, null, 2);
   }
 
@@ -154,7 +174,7 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(skill, null, 2);
+    return JSON.stringify(sanitizeJsonValue(skill), null, 2);
   }
 
   const lines: string[] = [];
@@ -251,7 +271,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
 
   if (opts.json) {
     return JSON.stringify(
-      {
+      sanitizeJsonValue({
         summary: {
           total: report.skills.length,
           eligible: eligible.length,
@@ -267,7 +287,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           missing: s.missing,
           install: s.install,
         })),
-      },
+      }),
       null,
       2,
     );
