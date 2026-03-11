@@ -1,3 +1,4 @@
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
@@ -10,7 +11,6 @@ import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   extractSlackToolSend,
   getChatChannelMeta,
   handleSlackMessageAction,
@@ -32,7 +32,6 @@ import {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   buildSlackThreadingToolContext,
-  setAccountEnabledInConfigSection,
   slackOnboardingAdapter,
   SlackConfigSchema,
   type ChannelPlugin,
@@ -96,6 +95,15 @@ const slackConfigAccessors = createScopedAccountConfigAccessors({
   resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
 });
 
+const slackConfigBase = createScopedChannelConfigBase({
+  sectionKey: "slack",
+  listAccountIds: listSlackAccountIds,
+  resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
+  inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultSlackAccountId,
+  clearBaseFields: ["botToken", "appToken", "name"],
+});
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
@@ -144,25 +152,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   reload: { configPrefixes: ["channels.slack"] },
   configSchema: buildChannelConfigSchema(SlackConfigSchema),
   config: {
-    listAccountIds: (cfg) => listSlackAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
-    inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultSlackAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "slack",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "slack",
-        accountId,
-        clearBaseFields: ["botToken", "appToken", "name"],
-      }),
+    ...slackConfigBase,
     isConfigured: (account) => isSlackAccountConfigured(account),
     describeAccount: (account) => ({
       accountId: account.accountId,

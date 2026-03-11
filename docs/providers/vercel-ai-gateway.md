@@ -13,6 +13,8 @@ The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
 - API: Anthropic Messages compatible
+- OpenClaw auto-discovers the Gateway `/v1/models` catalog, so `/models vercel-ai-gateway`
+  includes current model refs such as `vercel-ai-gateway/openai/gpt-5.4`.
 
 ## Quick start
 

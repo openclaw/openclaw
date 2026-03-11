@@ -65,7 +65,7 @@ async function runCustomProviderMergeTest(params: {
     baseUrl: string;
     apiKey: string;
     api: string;
-    models: Array<{ id: string; name: string; input: string[] }>;
+    models: Array<{ id: string; name: string; input: string[]; api?: string }>;
   };
   existingProviderKey?: string;
   configProviderKey?: string;
@@ -240,6 +240,43 @@ describe("models-config", () => {
         },
         existingProviderKey: "custom",
         configProviderKey: " custom ",
+      });
+      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("replaces stale merged baseUrl when the provider api changes", async () => {
+    await withTempHome(async () => {
+      const parsed = await runCustomProviderMergeTest({
+        seedProvider: {
+          baseUrl: "https://agent.example/v1",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
+          api: "openai-completions",
+          models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+        },
+      });
+      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("replaces stale merged baseUrl when only model-level apis change", async () => {
+    await withTempHome(async () => {
+      const parsed = await runCustomProviderMergeTest({
+        seedProvider: {
+          baseUrl: "https://agent.example/v1",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
+          api: "",
+          models: [
+            {
+              id: "agent-model",
+              name: "Agent model",
+              input: ["text"],
+              api: "openai-completions",
+            },
+          ],
+        },
       });
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
@@ -436,6 +473,51 @@ describe("models-config", () => {
           providers: Record<string, { apiKey?: string }>;
         }>();
         expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+      });
+    });
+  });
+
+  it("replaces stale merged apiKey when config key normalizes to a known env marker", async () => {
+    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
+      await withTempHome(async () => {
+        await writeAgentModelsJson({
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [{ id: "gpt-4.1", name: "GPT-4.1", input: ["text"] }],
+            },
+          },
+        });
+        const cfg: OpenClawConfig = {
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "gpt-4.1",
+                    name: "GPT-4.1",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 16384,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        await ensureOpenClawModelsJson(cfg);
+        const result = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
       });
     });
   });

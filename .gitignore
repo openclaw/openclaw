@@ -81,6 +81,7 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
+tmp/
 IDENTITY.md
 USER.md
 .tgz
@@ -122,3 +123,4 @@ dist/protocol.schema.json
 # Syncthing
 **/.stfolder/
 *.sync-conflict-*
+.dev-state
