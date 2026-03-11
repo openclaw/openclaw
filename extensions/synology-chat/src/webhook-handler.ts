@@ -317,8 +317,12 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     // Sanitize input
     let cleanText = sanitizeInput(payload.text);
 
-    // Strip trigger word
-    if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
+    // Strip trigger word only when keyword filtering is enabled (default: true)
+    if (
+      account.keywordFilterEnabled &&
+      payload.trigger_word &&
+      cleanText.startsWith(payload.trigger_word)
+    ) {
       cleanText = cleanText.slice(payload.trigger_word.length).trim();
     }
 

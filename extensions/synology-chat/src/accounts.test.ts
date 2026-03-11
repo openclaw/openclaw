@@ -144,4 +144,31 @@ describe("resolveAccount", () => {
     const account = resolveAccount(cfg);
     expect(account.rateLimitPerMinute).toBe(30);
   });
+
+  it("defaults keywordFilterEnabled to true for backward compatibility", () => {
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.keywordFilterEnabled).toBe(true);
+  });
+
+  it("respects keywordFilterEnabled: false from config", () => {
+    const cfg = {
+      channels: { "synology-chat": { keywordFilterEnabled: false } },
+    };
+    const account = resolveAccount(cfg);
+    expect(account.keywordFilterEnabled).toBe(false);
+  });
+
+  it("account override keywordFilterEnabled takes priority over base config", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          keywordFilterEnabled: false,
+          accounts: { work: { keywordFilterEnabled: true } },
+        },
+      },
+    };
+    const account = resolveAccount(cfg, "work");
+    expect(account.keywordFilterEnabled).toBe(true);
+  });
 });

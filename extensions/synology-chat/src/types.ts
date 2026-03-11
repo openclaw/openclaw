@@ -14,6 +14,8 @@ export interface SynologyChatChannelConfig {
   rateLimitPerMinute?: number;
   botName?: string;
   allowInsecureSsl?: boolean;
+  /** When true (default), strip trigger_word from message start; when false, send full message */
+  keywordFilterEnabled?: boolean;
   accounts?: Record<string, SynologyChatAccountRaw>;
 }
 
@@ -29,6 +31,7 @@ export interface SynologyChatAccountRaw {
   rateLimitPerMinute?: number;
   botName?: string;
   allowInsecureSsl?: boolean;
+  keywordFilterEnabled?: boolean;
 }
 
 /** Fully resolved account config with defaults applied */
@@ -44,6 +47,8 @@ export interface ResolvedSynologyChatAccount {
   rateLimitPerMinute: number;
   botName: string;
   allowInsecureSsl: boolean;
+  /** When true (default), strip trigger_word from message; when false, send full message */
+  keywordFilterEnabled: boolean;
 }
 
 /** Payload received from Synology Chat outgoing webhook (form-urlencoded) */
