@@ -1,7 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/types.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {

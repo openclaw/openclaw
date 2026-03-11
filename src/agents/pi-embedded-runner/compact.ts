@@ -616,7 +616,7 @@ export async function compactEmbeddedPiSessionDirect(
         agentDir,
         settingsManager,
         extensionFactories,
-        systemPrompt: systemPromptText,
+        systemPrompt: systemPromptOverride(),
       });
 
       const { builtInTools, customTools } = splitSdkTools({
