@@ -1,27 +1,26 @@
-import fsp from "node:fs/promises";
-import path from "node:path";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
   OpenClawConfig,
   WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalouser";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
-  promptAccountId,
+  patchScopedAccountConfig,
   promptChannelAccessConfig,
-  resolvePreferredOpenClawTmpDir,
-} from "openclaw/plugin-sdk";
+  resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
   checkZcaAuthenticated,
 } from "./accounts.js";
+import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import {
   logoutZaloProfile,
   resolveZaloAllowFromEntries,
@@ -38,56 +37,24 @@ function setZalouserAccountScopedConfig(
   defaultPatch: Record<string, unknown>,
   accountPatch: Record<string, unknown> = defaultPatch,
 ): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          ...defaultPatch,
-        },
-      },
-    } as OpenClawConfig;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.zalouser?.accounts,
-          [accountId]: {
-            ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-            ...accountPatch,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: defaultPatch,
+    accountPatch,
+  }) as OpenClawConfig;
 }
 
 function setZalouserDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ): OpenClawConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  } as OpenClawConfig;
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "zalouser",
+    dmPolicy,
+  }) as OpenClawConfig;
 }
 
 async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {
@@ -101,25 +68,6 @@ async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {
     ].join("\n"),
     "Zalo Personal Setup",
   );
-}
-
-async function writeQrDataUrlToTempFile(
-  qrDataUrl: string,
-  profile: string,
-): Promise<string | null> {
-  const trimmed = qrDataUrl.trim();
-  const match = trimmed.match(/^data:image\/png;base64,(.+)$/i);
-  const base64 = (match?.[1] ?? "").trim();
-  if (!base64) {
-    return null;
-  }
-  const safeProfile = profile.replace(/[^a-zA-Z0-9_-]+/g, "-") || "default";
-  const filePath = path.join(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-zalouser-qr-${safeProfile}.png`,
-  );
-  await fsp.writeFile(filePath, Buffer.from(base64, "base64"));
-  return filePath;
 }
 
 async function promptZalouserAllowFrom(params: {
@@ -247,20 +195,16 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg);
-    let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
-
-    if (shouldPromptAccountIds && !zalouserOverride) {
-      accountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "Zalo Personal",
-        currentId: accountId,
-        listAccountIds: listZalouserAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Zalo Personal",
+      accountOverride: accountOverrides.zalouser,
+      shouldPromptAccountIds,
+      listAccountIds: listZalouserAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const account = resolveZalouserAccountSync({ cfg: next, accountId });

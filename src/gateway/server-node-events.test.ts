@@ -24,6 +24,8 @@ const buildSessionLookup = (
   legacyKey: undefined,
 });
 
+const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
@@ -31,7 +33,8 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: vi.fn(),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand: vi.fn(),
+  agentCommand: ingressAgentCommandMock,
+  agentCommandFromIngress: ingressAgentCommandMock,
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
@@ -488,6 +491,23 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
     expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses exec notifyOnExit events when payload opts out", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n7", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "approval-1",
+        exitCode: 0,
+        output: "ok",
+        suppressNotifyOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 });
 

@@ -65,10 +65,10 @@ struct SettingsTab: View {
                     DisclosureGroup(isExpanded: self.$gatewayExpanded) {
                         if !self.isGatewayConnected {
                             Text(
-                                "1. Open Telegram and message your bot: /pair\n"
+                                "1. Open a chat with your OpenClaw agent and send /pair\n"
                                     + "2. Copy the setup code it returns\n"
                                     + "3. Paste here and tap Connect\n"
-                                    + "4. Back in Telegram, run /pair approve")
+                                    + "4. Back in that chat, run /pair approve")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
@@ -340,9 +340,9 @@ struct SettingsTab: View {
                                     .foregroundStyle(.secondary)
                             }
                             self.featureToggle(
-                                "Show Talk Button",
+                                "Show Talk Control",
                                 isOn: self.$talkButtonEnabled,
-                                help: "Shows the floating Talk button in the main interface.")
+                                help: "Shows the Talk control in the main toolbar.")
                             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                                 .lineLimit(2 ... 6)
                                 .textInputAutocapitalization(.sentences)
@@ -896,7 +896,7 @@ struct SettingsTab: View {
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
         if lower.contains("pairing required") {
-            return "Pairing required. Go back to Telegram and run /pair approve, then tap Connect again."
+            return "Pairing required. Go back to your OpenClaw chat and run /pair approve, then tap Connect again."
         }
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Make sure Tailscale is connected, then tap Connect again."

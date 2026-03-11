@@ -5,6 +5,7 @@ import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
@@ -21,7 +22,7 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { createPluginRuntime } from "./runtime/index.js";
+import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
@@ -38,6 +39,7 @@ export type PluginLoadOptions = {
   workspaceDir?: string;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
 };
@@ -46,6 +48,45 @@ const registryCache = new Map<string, PluginRegistry>();
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
+type PluginSdkAliasCandidateKind = "dist" | "src";
+
+function resolvePluginSdkAliasCandidateOrder(params: {
+  modulePath: string;
+  isProduction: boolean;
+}): PluginSdkAliasCandidateKind[] {
+  const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
+  const isDistRuntime = normalizedModulePath.includes("/dist/");
+  return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
+}
+
+function listPluginSdkAliasCandidates(params: {
+  srcFile: string;
+  distFile: string;
+  modulePath: string;
+}) {
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath: params.modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+  });
+  let cursor = path.dirname(params.modulePath);
+  const candidates: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    const candidateMap = {
+      src: path.join(cursor, "src", "plugin-sdk", params.srcFile),
+      dist: path.join(cursor, "dist", "plugin-sdk", params.distFile),
+    } as const;
+    for (const kind of orderedKinds) {
+      candidates.push(candidateMap[kind]);
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return candidates;
+}
+
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
@@ -53,31 +94,14 @@ const resolvePluginSdkAliasFile = (params: {
 }): string | null => {
   try {
     const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-    const isProduction = process.env.NODE_ENV === "production";
-    const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
-    const normalizedModulePath = modulePath.replace(/\\/g, "/");
-    const isDistRuntime = normalizedModulePath.includes("/dist/");
-    let cursor = path.dirname(modulePath);
-    for (let i = 0; i < 6; i += 1) {
-      const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
-      const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
-      const orderedCandidates = isDistRuntime
-        ? [distCandidate, srcCandidate]
-        : isProduction
-          ? isTest
-            ? [distCandidate, srcCandidate]
-            : [distCandidate]
-          : [srcCandidate, distCandidate];
-      for (const candidate of orderedCandidates) {
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
+    for (const candidate of listPluginSdkAliasCandidates({
+      srcFile: params.srcFile,
+      distFile: params.distFile,
+      modulePath,
+    })) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
       }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        break;
-      }
-      cursor = parent;
     }
   } catch {
     // ignore
@@ -86,21 +110,57 @@ const resolvePluginSdkAliasFile = (params: {
 };
 
 const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "index.ts", distFile: "index.js" });
+  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
-const resolvePluginSdkAccountIdAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
-};
+const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 
-const resolvePluginSdkCoreAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "core.ts", distFile: "core.js" });
-};
+function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: path.dirname(modulePath),
+  });
+  if (!packageRoot) {
+    return [];
+  }
+  const cached = cachedPluginSdkExportedSubpaths.get(packageRoot);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const pkgRaw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
+    const pkg = JSON.parse(pkgRaw) as {
+      exports?: Record<string, unknown>;
+    };
+    const subpaths = Object.keys(pkg.exports ?? {})
+      .filter((key) => key.startsWith("./plugin-sdk/"))
+      .map((key) => key.slice("./plugin-sdk/".length))
+      .filter((subpath) => Boolean(subpath) && !subpath.includes("/"))
+      .toSorted();
+    cachedPluginSdkExportedSubpaths.set(packageRoot, subpaths);
+    return subpaths;
+  } catch {
+    return [];
+  }
+}
 
-const resolvePluginSdkTelegramAlias = (): string | null => {
-  return resolvePluginSdkAliasFile({ srcFile: "telegram.ts", distFile: "telegram.js" });
+const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
+  const aliasMap: Record<string, string> = {};
+  for (const subpath of listPluginSdkExportedSubpaths()) {
+    const resolved = resolvePluginSdkAliasFile({
+      srcFile: `${subpath}.ts`,
+      distFile: `${subpath}.js`,
+    });
+    if (resolved) {
+      aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;
+    }
+  }
+  return aliasMap;
 };
 
 export const __testing = {
+  listPluginSdkAliasCandidates,
+  listPluginSdkExportedSubpaths,
+  resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
 };
 
@@ -205,16 +265,21 @@ function recordPluginError(params: {
   diagnosticMessagePrefix: string;
 }) {
   const errorText = String(params.error);
-  params.logger.error(`${params.logPrefix}${errorText}`);
+  const deprecatedApiHint =
+    errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
+      ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
+      : null;
+  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
+  params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
-  params.record.error = errorText;
+  params.record.error = displayError;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.pluginId, params.origin);
   params.registry.diagnostics.push({
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
-    message: `${params.diagnosticMessagePrefix}${errorText}`,
+    message: `${params.diagnosticMessagePrefix}${displayError}`,
   });
 }
 
@@ -406,7 +471,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // not eagerly load every channel runtime dependency.
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= createPluginRuntime();
+    resolvedRuntime ??= createPluginRuntime(options.runtimeOptions);
     return resolvedRuntime;
   };
   const runtime = new Proxy({} as PluginRuntime, {
@@ -444,6 +509,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
+    cache: options.cache,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
@@ -475,16 +541,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return jitiLoader;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
-    const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
-    const pluginSdkCoreAlias = resolvePluginSdkCoreAlias();
-    const pluginSdkTelegramAlias = resolvePluginSdkTelegramAlias();
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...(pluginSdkCoreAlias ? { "openclaw/plugin-sdk/core": pluginSdkCoreAlias } : {}),
-      ...(pluginSdkTelegramAlias ? { "openclaw/plugin-sdk/telegram": pluginSdkTelegramAlias } : {}),
-      ...(pluginSdkAccountIdAlias
-        ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
-        : {}),
+      ...resolvePluginSdkScopedAliasMap(),
     };
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
@@ -572,6 +631,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
+    }
+
+    // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
+    // This avoids opening/importing heavy memory plugin modules that will never register.
+    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+      const earlyMemoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: "memory",
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
+      if (!earlyMemoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = earlyMemoryDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
     }
 
     if (!manifestRecord.configSchema) {
@@ -691,6 +769,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const api = createApi(record, {
       config: cfg,
       pluginConfig: validatedConfig.value,
+      hookPolicy: entry?.hooks,
     });
 
     try {

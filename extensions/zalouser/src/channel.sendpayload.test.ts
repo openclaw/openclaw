@@ -1,5 +1,9 @@
-import type { ReplyPayload } from "openclaw/plugin-sdk";
+import type { ReplyPayload } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  installSendPayloadContractSuite,
+  primeSendMock,
+} from "../../../src/test-utils/send-payload-contract.js";
 import { zalouserPlugin } from "./channel.js";
 
 vi.mock("./send.js", () => ({
@@ -24,7 +28,7 @@ vi.mock("./accounts.js", async (importOriginal) => {
 function baseCtx(payload: ReplyPayload) {
   return {
     cfg: {},
-    to: "987654321",
+    to: "user:987654321",
     text: "",
     payload,
   };
@@ -40,78 +44,92 @@ describe("zalouserPlugin outbound sendPayload", () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-1" });
   });
 
-  it("text-only delegates to sendText", async () => {
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-t1" });
+  it("group target delegates with isGroup=true and stripped threadId", async () => {
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g1" });
 
-    const result = await zalouserPlugin.outbound!.sendPayload!(baseCtx({ text: "hello" }));
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text: "hello group" }),
+      to: "group:1471383327500481391",
+    });
 
-    expect(mockedSend).toHaveBeenCalledWith("987654321", "hello", expect.any(Object));
-    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-t1" });
+    expect(mockedSend).toHaveBeenCalledWith(
+      "1471383327500481391",
+      "hello group",
+      expect.objectContaining({ isGroup: true }),
+    );
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g1" });
   });
 
-  it("single media delegates to sendMedia", async () => {
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-m1" });
+  it("treats bare numeric targets as direct chats for backward compatibility", async () => {
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-d1" });
 
-    const result = await zalouserPlugin.outbound!.sendPayload!(
-      baseCtx({ text: "cap", mediaUrl: "https://example.com/a.jpg" }),
-    );
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text: "hello" }),
+      to: "987654321",
+    });
 
     expect(mockedSend).toHaveBeenCalledWith(
       "987654321",
-      "cap",
-      expect.objectContaining({ mediaUrl: "https://example.com/a.jpg" }),
+      "hello",
+      expect.objectContaining({ isGroup: false }),
     );
-    expect(result).toMatchObject({ channel: "zalouser" });
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-d1" });
   });
 
-  it("multi-media iterates URLs with caption on first", async () => {
-    mockedSend
-      .mockResolvedValueOnce({ ok: true, messageId: "zlu-1" })
-      .mockResolvedValueOnce({ ok: true, messageId: "zlu-2" });
+  it("preserves provider-native group ids when sending to raw g- targets", async () => {
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g-native" });
 
-    const result = await zalouserPlugin.outbound!.sendPayload!(
-      baseCtx({
-        text: "caption",
-        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
-      }),
-    );
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text: "hello native group" }),
+      to: "g-1471383327500481391",
+    });
 
-    expect(mockedSend).toHaveBeenCalledTimes(2);
-    expect(mockedSend).toHaveBeenNthCalledWith(
-      1,
-      "987654321",
-      "caption",
-      expect.objectContaining({ mediaUrl: "https://example.com/1.jpg" }),
+    expect(mockedSend).toHaveBeenCalledWith(
+      "g-1471383327500481391",
+      "hello native group",
+      expect.objectContaining({ isGroup: true }),
     );
-    expect(mockedSend).toHaveBeenNthCalledWith(
-      2,
-      "987654321",
-      "",
-      expect.objectContaining({ mediaUrl: "https://example.com/2.jpg" }),
-    );
-    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-2" });
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g-native" });
   });
 
-  it("empty payload returns no-op", async () => {
-    const result = await zalouserPlugin.outbound!.sendPayload!(baseCtx({}));
-
-    expect(mockedSend).not.toHaveBeenCalled();
-    expect(result).toEqual({ channel: "zalouser", messageId: "" });
+  installSendPayloadContractSuite({
+    channel: "zalouser",
+    chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
+    createHarness: ({ payload, sendResults }) => {
+      primeSendMock(mockedSend, { ok: true, messageId: "zlu-1" }, sendResults);
+      return {
+        run: async () => await zalouserPlugin.outbound!.sendPayload!(baseCtx(payload)),
+        sendMock: mockedSend,
+        to: "987654321",
+      };
+    },
   });
+});
 
-  it("chunking splits long text", async () => {
-    mockedSend
-      .mockResolvedValueOnce({ ok: true, messageId: "zlu-c1" })
-      .mockResolvedValueOnce({ ok: true, messageId: "zlu-c2" });
-
-    const longText = "a".repeat(3000);
-    const result = await zalouserPlugin.outbound!.sendPayload!(baseCtx({ text: longText }));
-
-    // textChunkLimit is 2000 with chunkTextForOutbound, so it should split
-    expect(mockedSend.mock.calls.length).toBeGreaterThanOrEqual(2);
-    for (const call of mockedSend.mock.calls) {
-      expect((call[1] as string).length).toBeLessThanOrEqual(2000);
+describe("zalouserPlugin messaging target normalization", () => {
+  it("normalizes user/group aliases to canonical targets", () => {
+    const normalize = zalouserPlugin.messaging?.normalizeTarget;
+    expect(normalize).toBeTypeOf("function");
+    if (!normalize) {
+      return;
     }
-    expect(result).toMatchObject({ channel: "zalouser" });
+    expect(normalize("zlu:g:30003")).toBe("group:30003");
+    expect(normalize("zalouser:u:20002")).toBe("user:20002");
+    expect(normalize("zlu:g-30003")).toBe("group:g-30003");
+    expect(normalize("zalouser:u-20002")).toBe("user:u-20002");
+    expect(normalize("20002")).toBe("20002");
+  });
+
+  it("treats canonical and provider-native user/group targets as ids", () => {
+    const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
+    expect(looksLikeId).toBeTypeOf("function");
+    if (!looksLikeId) {
+      return;
+    }
+    expect(looksLikeId("user:20002")).toBe(true);
+    expect(looksLikeId("group:30003")).toBe(true);
+    expect(looksLikeId("g-30003")).toBe(true);
+    expect(looksLikeId("u-20002")).toBe(true);
+    expect(looksLikeId("Alice Nguyen")).toBe(false);
   });
 });
