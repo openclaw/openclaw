@@ -4,6 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { AgentAppsConfigSchema } from "./zod-schema.apps.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -206,6 +207,7 @@ const TalkSchema = z
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
+    apps: AgentAppsConfigSchema,
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),

@@ -327,6 +327,7 @@ function runAgentAttempt(params: {
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
+  isNewSession: boolean;
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
@@ -459,6 +460,7 @@ function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
+    isNewSession: params.isNewSession,
     trigger: "user",
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
@@ -1119,6 +1121,7 @@ async function agentCommandInternal(
             sessionAgentId,
             sessionFile,
             workspaceDir,
+            isNewSession,
             body,
             isFallbackRetry,
             resolvedThinkLevel,

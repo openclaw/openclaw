@@ -171,6 +171,11 @@ const coreEntries: CoreCliEntry[] = [
         description: "Manage isolated agents (workspaces, auth, routing)",
         hasSubcommands: true,
       },
+      {
+        name: "apps",
+        description: "Manage Agent Apps capability and installed app registry",
+        hasSubcommands: true,
+      },
     ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");

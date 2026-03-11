@@ -24,12 +24,19 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   if (prev === next) {
     return [];
   }
-  if (isPlainObject(prev) && isPlainObject(next)) {
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+  if (isPlainObject(prev) || isPlainObject(next)) {
+    const prevIsObject = isPlainObject(prev);
+    const nextIsObject = isPlainObject(next);
+    const prevObject = prevIsObject ? prev : {};
+    const nextObject = nextIsObject ? next : {};
+    const keys = new Set([...Object.keys(prevObject), ...Object.keys(nextObject)]);
+    if (keys.size === 0) {
+      return prevIsObject && nextIsObject ? [] : [prefix || "<root>"];
+    }
     const paths: string[] = [];
     for (const key of keys) {
-      const prevValue = prev[key];
-      const nextValue = next[key];
+      const prevValue = prevObject[key];
+      const nextValue = nextObject[key];
       if (prevValue === undefined && nextValue === undefined) {
         continue;
       }
@@ -47,8 +54,27 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     if (isDeepStrictEqual(prev, next)) {
       return [];
     }
+    if (shouldDiffArrayEntries(prev, next)) {
+      const paths: string[] = [];
+      const length = Math.max(prev.length, next.length);
+      for (let index = 0; index < length; index += 1) {
+        const childPrefix = prefix ? `${prefix}.${index}` : String(index);
+        const childPaths = diffConfigPaths(prev[index], next[index], childPrefix);
+        if (childPaths.length > 0) {
+          paths.push(...childPaths);
+        }
+      }
+      if (paths.length > 0) {
+        return paths;
+      }
+    }
   }
   return [prefix || "<root>"];
+}
+
+function shouldDiffArrayEntries(prev: unknown[], next: unknown[]): boolean {
+  const entries = [...prev, ...next].filter((entry) => entry !== undefined);
+  return entries.length > 0 && entries.every((entry) => isPlainObject(entry));
 }
 
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {

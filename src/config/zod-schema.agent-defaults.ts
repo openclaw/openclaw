@@ -133,6 +133,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    apps: z.array(z.string()).optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

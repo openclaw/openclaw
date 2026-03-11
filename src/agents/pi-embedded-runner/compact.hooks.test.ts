@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   hookRunner,
   ensureRuntimePluginsLoaded,
+  ensureContextEnginesInitializedMock,
+  resolveContextEngineMock,
+  reinitializeAotuiDesktopForCompactionMock,
   resolveModelMock,
   sessionCompactImpl,
   triggerInternalHook,
@@ -14,6 +17,23 @@ const {
     runAfterCompaction: vi.fn(),
   },
   ensureRuntimePluginsLoaded: vi.fn(),
+  ensureContextEnginesInitializedMock: vi.fn(),
+  resolveContextEngineMock: vi.fn(async () => ({
+    info: { id: "non-legacy" },
+    compact: vi.fn(async () => ({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        tokensAfter: 80,
+        details: { ok: true },
+      },
+    })),
+    dispose: vi.fn(async () => {}),
+  })),
+  reinitializeAotuiDesktopForCompactionMock: vi.fn(async () => true),
   resolveModelMock: vi.fn(() => ({
     model: { provider: "openai", api: "responses", id: "fake", input: [] },
     error: null,
@@ -47,6 +67,15 @@ vi.mock("../../hooks/internal-hooks.js", async () => {
     triggerInternalHook,
   };
 });
+
+vi.mock("../../agent-apps/runtime.js", () => ({
+  reinitializeAotuiDesktopForCompaction: reinitializeAotuiDesktopForCompactionMock,
+}));
+
+vi.mock("../../context-engine/index.js", () => ({
+  ensureContextEnginesInitialized: ensureContextEnginesInitializedMock,
+  resolveContextEngine: resolveContextEngineMock,
+}));
 
 vi.mock("@mariozechner/pi-coding-agent", () => {
   return {
@@ -251,7 +280,7 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { compactEmbeddedPiSession, compactEmbeddedPiSessionDirect } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
@@ -261,6 +290,9 @@ const sessionHook = (action: string) =>
 describe("compactEmbeddedPiSessionDirect hooks", () => {
   beforeEach(() => {
     ensureRuntimePluginsLoaded.mockReset();
+    ensureContextEnginesInitializedMock.mockReset();
+    resolveContextEngineMock.mockReset();
+    reinitializeAotuiDesktopForCompactionMock.mockReset();
     triggerInternalHook.mockClear();
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
@@ -283,6 +315,22 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       return params.messages;
     });
+    resolveContextEngineMock.mockResolvedValue({
+      info: { id: "non-legacy" },
+      compact: vi.fn(async () => ({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 120,
+          tokensAfter: 80,
+          details: { ok: true },
+        },
+      })),
+      dispose: vi.fn(async () => {}),
+    });
+    reinitializeAotuiDesktopForCompactionMock.mockResolvedValue(true);
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -434,5 +482,79 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("reinitializes the AOTUI desktop after queued context-engine compaction", async () => {
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(reinitializeAotuiDesktopForCompactionMock).toHaveBeenCalledWith({
+      sessionKey: "agent:main:session-1",
+      reason: "context_compaction",
+    });
+  });
+
+  it("does not double-reinitialize when queued compaction uses the legacy context engine", async () => {
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { id: "legacy" },
+      compact: vi.fn(async () => ({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 120,
+          tokensAfter: 80,
+          details: { ok: true },
+        },
+      })),
+      dispose: vi.fn(async () => {}),
+    });
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(reinitializeAotuiDesktopForCompactionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reinitialize the AOTUI desktop when queued context-engine compaction is a no-op", async () => {
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { id: "non-legacy" },
+      compact: vi.fn(async () => ({
+        ok: true,
+        compacted: false,
+        reason: "already compacted",
+        result: {
+          summary: "",
+          firstKeptEntryId: "",
+          tokensBefore: 120,
+          tokensAfter: 120,
+          details: { ok: true },
+        },
+      })),
+      dispose: vi.fn(async () => {}),
+    });
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(reinitializeAotuiDesktopForCompactionMock).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { ReadableStream } from "node:stream/web";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
@@ -35,6 +36,7 @@ describe("runVoyageEmbeddingBatches", () => {
   it("successfully submits batch, waits, and streams results", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    mockPinnedHostnameResolution();
 
     // Sequence of fetch calls:
     // 1. Upload file
@@ -130,6 +132,7 @@ describe("runVoyageEmbeddingBatches", () => {
   it("handles empty lines and stream chunks correctly", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    mockPinnedHostnameResolution();
 
     // 1. Upload
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: "f1" }) });

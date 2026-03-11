@@ -7,6 +7,10 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  installAotuiAdapterForRun,
+  type OpenClawAgentHandle,
+} from "../../../agent-apps/runtime.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -1073,6 +1077,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let aotuiAdapter: { dispose: () => Promise<void> } | null = null;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1200,6 +1205,21 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      try {
+        aotuiAdapter = await installAotuiAdapterForRun({
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          workspaceDir: effectiveWorkspace,
+          isNewSession: params.isNewSession,
+          runId: params.runId,
+          agent: activeSession.agent as unknown as OpenClawAgentHandle,
+        });
+      } catch (err) {
+        log.warn(
+          `AOTUI adapter install failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
+        );
+      }
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -2086,6 +2106,15 @@ export async function runEmbeddedAttempt(
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
       removeToolResultContextGuard?.();
+      if (aotuiAdapter) {
+        try {
+          await aotuiAdapter.dispose();
+        } catch (err) {
+          log.warn(
+            `AOTUI adapter dispose failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
+          );
+        }
+      }
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,

@@ -66,7 +66,81 @@ describe("diffConfigPaths", () => {
         },
       },
     };
-    expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths");
+    expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths.0.pattern");
+  });
+
+  it("reports nested agent list object changes at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal", "ide"] }],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
+  });
+
+  it("reports nested agent identity changes at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "coding", apps: ["terminal"] }],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.id");
+  });
+
+  it("reports added agent list object fields at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
+  });
+
+  it("reports removed agent list object fields at index-level paths", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "default", apps: ["terminal"] }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [],
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("agents.list.0.apps");
+  });
+
+  it("reports top-level object removal when the object side becomes empty", () => {
+    const prev = {
+      apps: {},
+    };
+    const next = {};
+    expect(diffConfigPaths(prev, next)).toContain("apps");
+  });
+
+  it("treats unchanged empty objects as no-op", () => {
+    const prev = {
+      apps: {},
+    };
+    const next = {
+      apps: {},
+    };
+    expect(diffConfigPaths(prev, next)).toEqual([]);
   });
 });
 
@@ -195,6 +269,62 @@ describe("buildGatewayReloadPlan", () => {
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
+  });
+
+  it("requires gateway restart for top-level Agent Apps registry changes", () => {
+    const plan = buildGatewayReloadPlan(["apps.registry.ide.source"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("apps.registry.ide.source");
+  });
+
+  it("requires gateway restart for per-agent Agent Apps selection changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.list.0.apps"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.apps");
+  });
+
+  it("requires gateway restart for per-agent identity changes that affect Agent Apps selection", () => {
+    const plan = buildGatewayReloadPlan(["agents.list.0.id"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.id");
+  });
+
+  it("requires gateway restart for diffed per-agent Agent Apps selection changes", () => {
+    const changedPaths = diffConfigPaths(
+      {
+        agents: {
+          list: [{ id: "default", apps: ["terminal"] }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "default", apps: ["terminal", "ide"] }],
+        },
+      },
+    );
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(changedPaths).toContain("agents.list.0.apps");
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.apps");
+  });
+
+  it("requires gateway restart when adding an agent entry with app selections", () => {
+    const changedPaths = diffConfigPaths(
+      {
+        agents: {
+          list: [],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "default", apps: ["terminal"] }],
+        },
+      },
+    );
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(changedPaths).toContain("agents.list.0.apps");
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("agents.list.0.apps");
   });
 
   it.each([

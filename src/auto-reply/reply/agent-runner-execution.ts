@@ -96,6 +96,7 @@ export async function runAgentTurnWithFallback(params: {
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
+  isNewSession: boolean;
   sessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
@@ -325,6 +326,7 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             const result = await runEmbeddedPiAgent({
               ...embeddedContext,
+              isNewSession: params.isNewSession,
               trigger: params.isHeartbeat ? "heartbeat" : "user",
               groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
               groupChannel:

@@ -7,6 +7,7 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { reinitializeAotuiDesktopForCompaction } from "../../agent-apps/runtime.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -826,6 +827,22 @@ export async function compactEmbeddedPiSessionDirect(
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
         }
+        // Direct compaction only reaches this success path after transcript state
+        // has actually been compacted; keep the guard explicit so future edits do
+        // not accidentally reinitialize AOTUI on a no-op success path.
+        const compacted = true;
+        if (compacted) {
+          try {
+            await reinitializeAotuiDesktopForCompaction({
+              sessionKey: params.sessionKey,
+              reason: "context_compaction",
+            });
+          } catch (err) {
+            log.warn(
+              `AOTUI desktop reinitialize failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
+            );
+          }
+        }
         // TODO(#9611): Consider exposing compaction summaries or post-compaction injection;
         // current events only report summary metadata.
         try {
@@ -872,7 +889,7 @@ export async function compactEmbeddedPiSessionDirect(
         }
         return {
           ok: true,
-          compacted: true,
+          compacted,
           result: {
             summary: result.summary,
             firstKeptEntryId: result.firstKeptEntryId,
@@ -944,6 +961,18 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (result.ok && result.compacted && contextEngine.info.id !== "legacy") {
+          try {
+            await reinitializeAotuiDesktopForCompaction({
+              sessionKey: params.sessionKey,
+              reason: "context_compaction",
+            });
+          } catch (err) {
+            log.warn(
+              `AOTUI desktop reinitialize failed for ${params.sessionKey ?? params.sessionId}: ${String(err)}`,
+            );
+          }
+        }
         return {
           ok: result.ok,
           compacted: result.compacted,

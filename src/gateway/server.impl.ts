@@ -1,4 +1,6 @@
 import path from "node:path";
+import { isAotuiEnabled } from "../agent-apps/policy.js";
+import { startAotuiGatewayRuntime, stopAotuiGatewayRuntime } from "../agent-apps/runtime.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -144,6 +146,7 @@ const logHooks = log.child("hooks");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
+const logAotui = log.child("aotui");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
@@ -563,6 +566,14 @@ export async function startGatewayServer(
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
+  if (!minimalTestGateway && isAotuiEnabled(cfgAtStart)) {
+    try {
+      await startAotuiGatewayRuntime(cfgAtStart);
+      logAotui.info("started AOTUI gateway runtime");
+    } catch (err) {
+      logAotui.warn(`failed to start AOTUI gateway runtime: ${String(err)}`);
+    }
+  }
   let canvasHostServer: CanvasHostServer | null = null;
   const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
@@ -1057,6 +1068,11 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
+      try {
+        await stopAotuiGatewayRuntime(opts?.reason ?? "gateway stopping");
+      } catch (err) {
+        logAotui.warn(`failed to stop AOTUI gateway runtime: ${String(err)}`);
+      }
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);
