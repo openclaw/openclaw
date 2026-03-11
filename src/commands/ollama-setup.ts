@@ -17,11 +17,7 @@ export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
 export const OLLAMA_DEFAULT_MODEL = "glm-4.7-flash";
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = ["glm-4.7-flash"];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = [
-  "kimi-k2.5:cloud",
-  "minimax-m2.5:cloud",
-  "glm-5:cloud",
-];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.5:cloud", "glm-5:cloud"];
 
 function normalizeOllamaModelName(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -455,7 +451,10 @@ export async function configureOllamaNonInteractive(params: {
 
   let allModelNames = orderedModelNames;
   let defaultModelId = requestedDefaultModelId;
-  if ((pulledRequestedModel || requestedCloudModel) && !allModelNames.includes(requestedDefaultModelId)) {
+  if (
+    (pulledRequestedModel || requestedCloudModel) &&
+    !allModelNames.includes(requestedDefaultModelId)
+  ) {
     allModelNames = [...allModelNames, requestedDefaultModelId];
   }
   if (!availableModelNames.has(requestedDefaultModelId)) {
