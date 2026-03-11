@@ -399,7 +399,7 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="brand">
             <div class="brand-logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
+              <img src=${basePath ? `${basePath}/favicon.png` : "/favicon.png"} alt="OpenClaw" />
             </div>
             <div class="brand-text">
               <div class="brand-title">openFinClaw</div>
