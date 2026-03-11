@@ -28,8 +28,8 @@ export function lookupReplyContextSync(dbPath: string, messageRowId: number): Re
   try {
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(resolvedPath, { readOnly: true });
-    db.exec("PRAGMA busy_timeout = 3000");
     try {
+      db.exec("PRAGMA busy_timeout = 3000");
       const replyToGuidRow = db
         .prepare("SELECT reply_to_guid FROM message WHERE ROWID = ?")
         .get(messageRowId) as { reply_to_guid?: string | null } | undefined;
