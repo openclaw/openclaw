@@ -178,7 +178,8 @@ export function stripPluginOnlyAllowlist(
     // (e.g., memory_search/memory_get when the memory plugin is disabled).
     const isCoreEntry =
       expanded.some((tool) => coreTools.has(tool)) ||
-      (isStaticCoreId !== undefined && isStaticCoreId(entry));
+      (isStaticCoreId !== undefined &&
+        (isStaticCoreId(entry) || expanded.some((tool) => isStaticCoreId!(tool))));
     if (isCoreEntry) {
       hasCoreEntry = true;
     }
