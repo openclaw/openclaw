@@ -82,6 +82,13 @@ export type PendingInboundEntry = {
   capturedAt: number;
   /** Resolved session key at capture time (used for accurate replay routing). */
   sessionKey?: string;
+  /**
+   * Account identity for channels that support multiple bot accounts watching
+   * the same channel simultaneously (e.g. Discord multi-account setups).
+   * When present, included in the dedup key so each account's capture is
+   * stored independently: `channel:accountId:id` rather than `channel:id`.
+   */
+  accountId?: string;
 };
 
 /**
@@ -102,8 +109,10 @@ type PendingInboundFile = {
   activeTurns?: Record<string, ActiveTurnEntry>;
 };
 
-function storeKey(entry: Pick<PendingInboundEntry, "channel" | "id">): string {
-  return `${entry.channel}:${entry.id}`;
+function storeKey(entry: Pick<PendingInboundEntry, "channel" | "id" | "accountId">): string {
+  return entry.accountId
+    ? `${entry.channel}:${entry.accountId}:${entry.id}`
+    : `${entry.channel}:${entry.id}`;
 }
 
 function resolveStorePath(stateDir: string): string {

@@ -67,6 +67,63 @@ describe("pending-inbound-store", () => {
     expect(result[0].capturedAt).toBe(1700000001000);
   });
 
+  it("dedup: multi-account Discord — same message seen by two accounts stored independently", async () => {
+    // Two Discord bot accounts both see the same message (same channel + message id).
+    // Without accountId in the key the second write silently overwrites the first.
+    // With accountId each account's capture gets its own slot.
+    const messageId = "msg-discord-999";
+    const entryAccount1: PendingInboundEntry = {
+      channel: "discord",
+      id: messageId,
+      accountId: "bot-account-A",
+      payload: { text: "from account A", accountId: "bot-account-A" },
+      capturedAt: 1700000000000,
+    };
+    const entryAccount2: PendingInboundEntry = {
+      channel: "discord",
+      id: messageId,
+      accountId: "bot-account-B",
+      payload: { text: "from account B", accountId: "bot-account-B" },
+      capturedAt: 1700000000001,
+    };
+
+    await writePendingInbound(stateDir, entryAccount1);
+    await writePendingInbound(stateDir, entryAccount2);
+    const result = await readPendingInbound(stateDir);
+
+    // Both entries must be retained — different accounts, same message id
+    expect(result).toHaveLength(2);
+    const payloads = result.map((e) => (e.payload as { text: string }).text).toSorted();
+    expect(payloads).toEqual(["from account A", "from account B"]);
+  });
+
+  it("dedup: same Discord message + same account still deduplicates", async () => {
+    // Same bot account capturing the same message twice (e.g. handler called twice)
+    // must still deduplicate to a single entry.
+    const entry1: PendingInboundEntry = {
+      channel: "discord",
+      id: "msg-dup-111",
+      accountId: "bot-account-A",
+      payload: { text: "first capture" },
+      capturedAt: 1700000000000,
+    };
+    const entry2: PendingInboundEntry = {
+      channel: "discord",
+      id: "msg-dup-111",
+      accountId: "bot-account-A",
+      payload: { text: "second capture" },
+      capturedAt: 1700000000100,
+    };
+
+    await writePendingInbound(stateDir, entry1);
+    await writePendingInbound(stateDir, entry2);
+    const result = await readPendingInbound(stateDir);
+
+    expect(result).toHaveLength(1);
+    // Second write overwrites first (same account + same message = same key)
+    expect((result[0].payload as { text: string }).text).toBe("second capture");
+  });
+
   it("stores multiple entries with different keys", async () => {
     await writePendingInbound(stateDir, {
       channel: "telegram",
