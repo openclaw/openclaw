@@ -120,7 +120,9 @@ describe("restart sentinel", () => {
 });
 
 describe("formatRestartSentinelUserMessage", () => {
-  it("returns note for successful restart with note", () => {
+  it("returns generic success message regardless of note (note is internal only)", () => {
+    // The `note`/`message` field is an operator annotation — it must never be surfaced
+    // directly to the user. Only the agent (via internalContext) should see it.
     const payload = {
       kind: "config-patch" as const,
       status: "ok" as const,
@@ -129,8 +131,8 @@ describe("formatRestartSentinelUserMessage", () => {
       doctorHint: "Run: openclaw doctor --non-interactive",
     };
     const result = formatRestartSentinelUserMessage(payload);
-    expect(result).toBe("testing restart sentinel");
-    expect(result).not.toContain("Gateway restart");
+    expect(result).toBe("Gateway restarted successfully.");
+    expect(result).not.toContain("testing restart sentinel");
     expect(result).not.toContain("config-patch");
     expect(result).not.toContain("doctor");
   });
@@ -144,7 +146,8 @@ describe("formatRestartSentinelUserMessage", () => {
     expect(formatRestartSentinelUserMessage(payload)).toBe("Gateway restarted successfully.");
   });
 
-  it("returns failure message with note for error status", () => {
+  it("returns generic failure message for error status (note is internal only)", () => {
+    // Raw note must not appear in user-facing fallback even on error.
     const payload = {
       kind: "config-apply" as const,
       status: "error" as const,
@@ -152,7 +155,8 @@ describe("formatRestartSentinelUserMessage", () => {
       message: "disk full",
     };
     const result = formatRestartSentinelUserMessage(payload);
-    expect(result).toBe("Gateway restart failed: disk full");
+    expect(result).toBe("Gateway restart failed.");
+    expect(result).not.toContain("disk full");
   });
 
   it("returns generic failure message for error without note", () => {
