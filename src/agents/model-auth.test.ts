@@ -339,6 +339,34 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
+  it("synthesizes a local auth marker for IPv4-mapped IPv6 (::ffff:127.0.0.1)", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "my-mapped",
+      cfg: {
+        models: {
+          providers: {
+            "my-mapped": {
+              baseUrl: "http://[::ffff:127.0.0.1]:8080/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "llama3",
+                  name: "Llama 3",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+  });
+
   it("does not synthesize auth for remote custom providers without apiKey", async () => {
     await expect(
       resolveApiKeyForProvider({
