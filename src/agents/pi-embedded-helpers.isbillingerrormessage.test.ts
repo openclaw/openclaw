@@ -155,6 +155,11 @@ describe("isBillingErrorMessage", () => {
     expect(longResponse.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longResponse)).toBe(false);
   });
+  it("does not false-positive on short non-billing text that mentions insufficient and balance", () => {
+    const sample = "The evidence is insufficient to reconcile the final balance after compaction.";
+    expect(isBillingErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBeNull();
+  });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
       '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
