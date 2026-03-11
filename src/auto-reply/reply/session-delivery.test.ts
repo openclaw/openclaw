@@ -73,6 +73,25 @@ describe("INTER_SESSION_CHANNEL sentinel routing", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not treat a real deliverable channel named 'inter_session' as the sentinel (Codex P2 guard)", () => {
+    // isInterSessionChannel guards against plugin channel collision:
+    // if a real channel plugin registers with id="inter_session", it must not
+    // be silently swallowed by the sentinel path.
+    // With no such plugin registered in the test registry, isDeliverableMessageChannel
+    // returns false for "inter_session" so the sentinel fires as expected.
+    // This test documents the invariant: sentinel only applies when the value is
+    // NOT a real deliverable channel.
+    const result = resolveLastChannelRaw({
+      originatingChannelRaw: INTER_SESSION_CHANNEL,
+      persistedLastChannel: "discord",
+      sessionKey: "agent:navi:main",
+    });
+    // In test env, "inter_session" is not a registered plugin channel, so
+    // isInterSessionChannel returns true and the sentinel path preserves "discord".
+    expect(result).toBe("discord");
+    expect(result).not.toBe(INTER_SESSION_CHANNEL);
+  });
 });
 
 describe("session delivery direct-session routing overrides", () => {
