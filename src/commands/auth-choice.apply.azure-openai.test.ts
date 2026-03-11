@@ -102,6 +102,31 @@ describe("applyAuthChoiceAzureOpenAI", () => {
     ).toEqual({});
   });
 
+  it("reuses AZURE_OPENAI_API_KEY from env in plaintext mode when confirmed", async () => {
+    await setupTempState();
+    process.env.AZURE_OPENAI_API_KEY = "azure-env-key";
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const prompter = createWizardPrompter({ confirm, text }, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceAzureOpenAI({
+      authChoice: "azure-openai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        azureOpenaiBaseUrl: "https://example.openai.azure.com/openai/v1",
+        azureOpenaiModelId: "gpt-4.1",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(confirm).toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it("persists model params azureApiVersion when provided in opts", async () => {
     await setupTempState();
     const prompter = createWizardPrompter({}, { defaultSelect: "" });
