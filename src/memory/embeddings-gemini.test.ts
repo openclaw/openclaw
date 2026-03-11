@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import {
+  buildGeminiEmbeddingRequest,
   buildFileDataPart,
   buildGeminiParts,
   buildGeminiTextEmbeddingRequest,
@@ -107,6 +108,35 @@ describe("buildGeminiTextEmbeddingRequest", () => {
     ).toEqual({
       model: "models/gemini-embedding-2-preview",
       content: { parts: [{ text: "hello" }] },
+      taskType: "RETRIEVAL_DOCUMENT",
+      outputDimensionality: 1536,
+    });
+  });
+});
+
+describe("buildGeminiEmbeddingRequest", () => {
+  it("builds a multimodal request from structured input parts", () => {
+    expect(
+      buildGeminiEmbeddingRequest({
+        input: {
+          text: "Image file: diagram.png",
+          parts: [
+            { type: "text", text: "Image file: diagram.png" },
+            { type: "inline-data", mimeType: "image/png", data: "abc123" },
+          ],
+        },
+        taskType: "RETRIEVAL_DOCUMENT",
+        modelPath: "models/gemini-embedding-2-preview",
+        outputDimensionality: 1536,
+      }),
+    ).toEqual({
+      model: "models/gemini-embedding-2-preview",
+      content: {
+        parts: [
+          { text: "Image file: diagram.png" },
+          { inlineData: { mimeType: "image/png", data: "abc123" } },
+        ],
+      },
       taskType: "RETRIEVAL_DOCUMENT",
       outputDimensionality: 1536,
     });
@@ -338,6 +368,63 @@ describe("gemini-embedding-2-preview provider", () => {
     expect(body.requests).toEqual([
       expect.objectContaining({ outputDimensionality: 768 }),
       expect.objectContaining({ outputDimensionality: 768 }),
+    ]);
+  });
+
+  it("supports multimodal embedBatchInputs requests", async () => {
+    const fetchMock = createGeminiBatchFetchMock(2);
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey();
+
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      fallback: "none",
+    });
+
+    expect(provider.embedBatchInputs).toBeDefined();
+    await provider.embedBatchInputs?.([
+      {
+        text: "Image file: diagram.png",
+        parts: [
+          { type: "text", text: "Image file: diagram.png" },
+          { type: "inline-data", mimeType: "image/png", data: "img" },
+        ],
+      },
+      {
+        text: "Audio file: note.wav",
+        parts: [
+          { type: "text", text: "Audio file: note.wav" },
+          { type: "inline-data", mimeType: "audio/wav", data: "aud" },
+        ],
+      },
+    ]);
+
+    const body = parseFetchBody(fetchMock);
+    expect(body.requests).toEqual([
+      {
+        model: "models/gemini-embedding-2-preview",
+        content: {
+          parts: [
+            { text: "Image file: diagram.png" },
+            { inlineData: { mimeType: "image/png", data: "img" } },
+          ],
+        },
+        taskType: "RETRIEVAL_DOCUMENT",
+        outputDimensionality: 3072,
+      },
+      {
+        model: "models/gemini-embedding-2-preview",
+        content: {
+          parts: [
+            { text: "Audio file: note.wav" },
+            { inlineData: { mimeType: "audio/wav", data: "aud" } },
+          ],
+        },
+        taskType: "RETRIEVAL_DOCUMENT",
+        outputDimensionality: 3072,
+      },
     ]);
   });
 

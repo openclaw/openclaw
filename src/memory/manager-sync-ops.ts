@@ -29,12 +29,14 @@ import { isFileMissingError } from "./fs-utils.js";
 import {
   buildFileEntry,
   ensureDir,
+  hashText,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import { classifyMemoryMultimodalPath } from "./multimodal.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
@@ -50,6 +52,7 @@ type MemoryIndexMeta = {
   provider: string;
   providerKey?: string;
   sources?: MemorySource[];
+  scopeHash?: string;
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
@@ -383,9 +386,22 @@ export abstract class MemoryManagerSyncOps {
         }
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
+          if (this.settings.multimodal.enabled) {
+            for (const modality of this.settings.multimodal.modalities) {
+              const pattern =
+                modality === "image"
+                  ? "*.{jpg,jpeg,png,webp,gif,heic,heif}"
+                  : "*.{mp3,wav,ogg,opus,m4a,aac,flac}";
+              watchPaths.add(path.join(entry, "**", pattern));
+            }
+          }
           continue;
         }
-        if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
+        if (
+          stat.isFile() &&
+          (entry.toLowerCase().endsWith(".md") ||
+            classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
+        ) {
           watchPaths.add(entry);
         }
       } catch {
@@ -649,9 +665,17 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
+    const files = await listMemoryFiles(
+      this.workspaceDir,
+      this.settings.extraPaths,
+      this.settings.multimodal,
+    );
     const fileEntries = (
-      await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
+      await Promise.all(
+        files.map(async (file) =>
+          buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
+        ),
+      )
     ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
@@ -868,6 +892,7 @@ export abstract class MemoryManagerSyncOps {
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const configuredSources = this.resolveConfiguredSourcesForMeta();
+    const configuredScopeHash = this.resolveConfiguredScopeHash();
     const needsFullReindex =
       params?.force ||
       !meta ||
@@ -875,6 +900,7 @@ export abstract class MemoryManagerSyncOps {
       (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
+      meta.scopeHash !== configuredScopeHash ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
@@ -1088,6 +1114,7 @@ export abstract class MemoryManagerSyncOps {
         provider: this.provider?.id ?? "none",
         providerKey: this.providerKey!,
         sources: this.resolveConfiguredSourcesForMeta(),
+        scopeHash: this.resolveConfiguredScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
@@ -1159,6 +1186,7 @@ export abstract class MemoryManagerSyncOps {
       provider: this.provider?.id ?? "none",
       providerKey: this.providerKey!,
       sources: this.resolveConfiguredSourcesForMeta(),
+      scopeHash: this.resolveConfiguredScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1234,6 +1262,22 @@ export abstract class MemoryManagerSyncOps {
       ),
     ).toSorted();
     return normalized.length > 0 ? normalized : ["memory"];
+  }
+
+  private resolveConfiguredScopeHash(): string {
+    const extraPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths)
+      .map((value) => value.replace(/\\/g, "/"))
+      .toSorted();
+    return hashText(
+      JSON.stringify({
+        extraPaths,
+        multimodal: {
+          enabled: this.settings.multimodal.enabled,
+          modalities: [...this.settings.multimodal.modalities].toSorted(),
+          maxFileBytes: this.settings.multimodal.maxFileBytes,
+        },
+      }),
+    );
   }
 
   private metaSourcesDiffer(meta: MemoryIndexMeta, configuredSources: MemorySource[]): boolean {

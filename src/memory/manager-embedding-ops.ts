@@ -8,8 +8,12 @@ import {
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
-import { estimateUtf8Bytes } from "./embedding-input-limits.js";
-import { buildGeminiTextEmbeddingRequest } from "./embeddings-gemini.js";
+import {
+  estimateStructuredEmbeddingInputBytes,
+  estimateUtf8Bytes,
+} from "./embedding-input-limits.js";
+import { type EmbeddingInput, hasNonTextEmbeddingParts } from "./embedding-inputs.js";
+import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
 import {
   chunkMarkdown,
   hashText,
@@ -53,7 +57,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let currentTokens = 0;
 
     for (const chunk of chunks) {
-      const estimate = estimateUtf8Bytes(chunk.text);
+      const estimate = chunk.embeddingInput
+        ? estimateStructuredEmbeddingInputBytes(chunk.embeddingInput)
+        : estimateUtf8Bytes(chunk.text);
       const wouldExceed =
         current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
       if (wouldExceed) {
@@ -188,9 +194,22 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const missingChunks = missing.map((m) => m.chunk);
     const batches = this.buildEmbeddingBatches(missingChunks);
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
+    const provider = this.provider;
+    if (!provider) {
+      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
+    }
     let cursor = 0;
     for (const batch of batches) {
-      const batchEmbeddings = await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const inputs = batch.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
+      const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
+      if (hasStructuredInputs && !provider.embedBatchInputs) {
+        throw new Error(
+          `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
+        );
+      }
+      const batchEmbeddings = hasStructuredInputs
+        ? await this.embedBatchInputsWithRetry(inputs)
+        : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
@@ -476,6 +495,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     source: MemorySource,
   ): Promise<number[][]> {
     const gemini = this.gemini;
+    if (chunks.some((chunk) => hasNonTextEmbeddingParts(chunk.embeddingInput))) {
+      return await this.embedChunksInBatches(chunks);
+    }
     return await this.embedChunksWithProviderBatch<GeminiBatchRequest>({
       chunks,
       entry,
@@ -483,9 +505,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       provider: "gemini",
       enabled: Boolean(gemini),
       buildRequest: (chunk) => ({
-        request: buildGeminiTextEmbeddingRequest({
-          text: chunk.text,
+        request: buildGeminiEmbeddingRequest({
+          input: chunk.embeddingInput ?? { text: chunk.text },
           taskType: "RETRIEVAL_DOCUMENT",
+          modelPath: this.gemini?.modelPath,
           outputDimensionality: this.gemini?.outputDimensionality,
         }),
       }),
@@ -529,6 +552,45 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           Math.round(delayMs * (1 + Math.random() * 0.2)),
         );
         log.warn(`memory embeddings rate limited; retrying in ${waitMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        delayMs *= 2;
+        attempt += 1;
+      }
+    }
+  }
+
+  protected async embedBatchInputsWithRetry(inputs: EmbeddingInput[]): Promise<number[][]> {
+    if (inputs.length === 0) {
+      return [];
+    }
+    if (!this.provider?.embedBatchInputs) {
+      return await this.embedBatchWithRetry(inputs.map((input) => input.text));
+    }
+    let attempt = 0;
+    let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
+    while (true) {
+      try {
+        const timeoutMs = this.resolveEmbeddingTimeout("batch");
+        log.debug("memory embeddings: structured batch start", {
+          provider: this.provider.id,
+          items: inputs.length,
+          timeoutMs,
+        });
+        return await this.withTimeout(
+          this.provider.embedBatchInputs(inputs),
+          timeoutMs,
+          `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+          throw err;
+        }
+        const waitMs = Math.min(
+          EMBEDDING_RETRY_MAX_DELAY_MS,
+          Math.round(delayMs * (1 + Math.random() * 0.2)),
+        );
+        log.warn(`memory embeddings rate limited; retrying structured batch in ${waitMs}ms`);
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         delayMs *= 2;
         attempt += 1;
@@ -708,16 +770,29 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
 
-    const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-    const chunks = enforceEmbeddingMaxInputTokens(
-      this.provider,
-      chunkMarkdown(content, this.settings.chunking).filter(
-        (chunk) => chunk.text.trim().length > 0,
-      ),
-      EMBEDDING_BATCH_MAX_TOKENS,
-    );
-    if (options.source === "sessions" && "lineMap" in entry) {
-      remapChunkLines(chunks, entry.lineMap);
+    let chunks: MemoryChunk[];
+    if ("kind" in entry && entry.kind === "multimodal" && entry.embeddingInput) {
+      chunks = [
+        {
+          startLine: 1,
+          endLine: 1,
+          text: entry.contentText ?? entry.embeddingInput.text,
+          hash: entry.hash,
+          embeddingInput: entry.embeddingInput,
+        },
+      ];
+    } else {
+      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      chunks = enforceEmbeddingMaxInputTokens(
+        this.provider,
+        chunkMarkdown(content, this.settings.chunking).filter(
+          (chunk) => chunk.text.trim().length > 0,
+        ),
+        EMBEDDING_BATCH_MAX_TOKENS,
+      );
+      if (options.source === "sessions" && "lineMap" in entry) {
+        remapChunkLines(chunks, entry.lineMap);
+      }
     }
     const embeddings = this.batch.enabled
       ? await this.embedChunksWithBatch(chunks, entry, options.source)
