@@ -55,6 +55,28 @@ describe("resolveDiscordThreadTitleModelSelection", () => {
       }),
     );
   });
+
+  it("resolves alias refs before parsing provider/model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "fast@work",
+          models: {
+            "openrouter/anthropic/claude-sonnet-4-5": { alias: "fast" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const selection = resolveDiscordThreadTitleModelSelection({ cfg, agentId: "main" });
+    expect(selection).toEqual(
+      expect.objectContaining({
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-5",
+        profileId: "work",
+      }),
+    );
+  });
 });
 
 describe("normalizeGeneratedThreadTitle", () => {
