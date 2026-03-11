@@ -303,7 +303,9 @@ export async function runPreparedReply(
   );
   // Guard against empty inbound messages *before* prepending system-generated metadata,
   // so that inboundMetaPrompt alone doesn't mask a truly empty user message.
-  if (!baseBodyTrimmedRaw && !hasMediaAttachment) {
+  // Bare session resets (e.g. /new, /reset) intentionally have empty baseBodyTrimmedRaw
+  // but proceed via buildBareSessionResetPrompt, so they must bypass this guard.
+  if (!baseBodyTrimmedRaw && !isBareSessionReset && !hasMediaAttachment) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
