@@ -48,6 +48,10 @@ export function findCallByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
 }
 
+export function findCallByDockerArg(position: number, value: string) {
+  return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerArg(args, position) === value);
+}
+
 export function findCallsByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.filter(([args]) =>
     getDockerScript(args).includes(fragment),
