@@ -548,6 +548,45 @@ export const registerTelegramNativeCommands = ({
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
+      bot.command("groupid", async (ctx: TelegramNativeCommandContext) => {
+        const msg = ctx.message;
+        if (!msg) {
+          return;
+        }
+        if (shouldSkipUpdate(ctx)) {
+          return;
+        }
+
+        const messageThreadId = msg.message_thread_id;
+        const groupidThreadParams =
+          messageThreadId != null ? { message_thread_id: messageThreadId } : undefined;
+
+        if (msg.chat.type !== "group" && msg.chat.type !== "supergroup") {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(
+                msg.chat.id,
+                "⚠️ This command only works in group chats.",
+                groupidThreadParams,
+              ),
+          });
+          return;
+        }
+
+        const groupIdText = `🆔 *Group Chat ID:* \`${msg.chat.id}\`\n\nYou can use this ID in your OpenClaw configuration.`;
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(msg.chat.id, groupIdText, {
+              parse_mode: "Markdown",
+              ...groupidThreadParams,
+            }),
+        });
+      });
+
       for (const command of nativeCommands) {
         const normalizedCommandName = normalizeTelegramCommandName(command.name);
         bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
@@ -556,39 +595,6 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           if (shouldSkipUpdate(ctx)) {
-            return;
-          }
-          // Special handling for /groupid command (no auth required)
-          if (command.name === "groupid") {
-            // Build thread params from message context
-            const messageThreadId = msg.message_thread_id;
-            const groupidThreadParams =
-              messageThreadId != null ? { message_thread_id: messageThreadId } : undefined;
-
-            if (!msg.chat.type.includes("group") && !msg.chat.type.includes("supergroup")) {
-              await withTelegramApiErrorLogging({
-                operation: "sendMessage",
-                runtime,
-                fn: () =>
-                  bot.api.sendMessage(
-                    msg.chat.id,
-                    "⚠️ This command only works in group chats.",
-                    groupidThreadParams,
-                  ),
-              });
-              return;
-            }
-            // Use msg.chat.id instead of auth.chatId
-            const groupIdText = `🆔 *Group Chat ID:* \`${msg.chat.id}\`\n\nYou can use this ID in your OpenClaw configuration.`;
-            await withTelegramApiErrorLogging({
-              operation: "sendMessage",
-              runtime,
-              fn: () =>
-                bot.api.sendMessage(msg.chat.id, groupIdText, {
-                  parse_mode: "Markdown",
-                  ...groupidThreadParams,
-                }),
-            });
             return;
           }
 
