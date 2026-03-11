@@ -1054,8 +1054,8 @@ describe("resolveRetryImages", () => {
     expect(resolveRetryImages(fakeImages, true, "format")).toBeUndefined();
   });
 
-  it("preserves images on rate_limit failure reason", () => {
-    expect(resolveRetryImages(fakeImages, true, "rate_limit")).toBe(fakeImages);
+  it("preserves images on same-provider rate_limit failure reason", () => {
+    expect(resolveRetryImages(fakeImages, true, "rate_limit", "openai", "openai")).toBe(fakeImages);
   });
 
   it("preserves images on timeout failure reason", () => {
@@ -1068,5 +1068,25 @@ describe("resolveRetryImages", () => {
 
   it("preserves images when previousFailureReason is undefined", () => {
     expect(resolveRetryImages(fakeImages, true, undefined)).toBe(fakeImages);
+  });
+
+  it("strips images on cross-provider fallback (rate_limit)", () => {
+    expect(
+      resolveRetryImages(fakeImages, true, "rate_limit", "openai", "anthropic"),
+    ).toBeUndefined();
+  });
+
+  it("preserves images on same-provider fallback (rate_limit)", () => {
+    expect(resolveRetryImages(fakeImages, true, "rate_limit", "anthropic", "anthropic")).toBe(
+      fakeImages,
+    );
+  });
+
+  it("strips images on cross-provider fallback even without format error", () => {
+    expect(resolveRetryImages(fakeImages, true, "timeout", "anthropic", "google")).toBeUndefined();
+  });
+
+  it("strips images on same-provider format error (existing behavior)", () => {
+    expect(resolveRetryImages(fakeImages, true, "format", "openai", "openai")).toBeUndefined();
   });
 });
