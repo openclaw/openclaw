@@ -3,6 +3,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { GatewayClient } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
+import { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 import {
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
@@ -312,7 +313,7 @@ export class TelegramExecApprovalHandler {
       approvalId: request.id,
       approvalSlug: request.id.slice(0, 8),
       approvalCommandId: request.id,
-      command: request.request.command,
+      command: resolveExecApprovalCommandDisplay(request.request).commandText,
       cwd: request.request.cwd ?? undefined,
       host: request.request.host === "node" ? "node" : "gateway",
       nodeId: request.request.nodeId ?? undefined,
