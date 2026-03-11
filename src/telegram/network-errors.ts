@@ -123,30 +123,27 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   return false;
 }
 
-/** Returns true for HTTP 5xx server errors (error may have been processed). */
-export function isTelegramServerError(err: unknown): boolean {
+function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (candidate && typeof candidate === "object" && "error_code" in candidate) {
-      const code = (candidate as { error_code: unknown }).error_code;
-      if (typeof code === "number" && code >= 500) {
-        return true;
-      }
+    if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {
+      continue;
+    }
+    const code = (candidate as { error_code: unknown }).error_code;
+    if (typeof code === "number" && matches(code)) {
+      return true;
     }
   }
   return false;
 }
 
+/** Returns true for HTTP 5xx server errors (error may have been processed). */
+export function isTelegramServerError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code >= 500);
+}
+
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
 export function isTelegramClientRejection(err: unknown): boolean {
-  for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (candidate && typeof candidate === "object" && "error_code" in candidate) {
-      const code = (candidate as { error_code: unknown }).error_code;
-      if (typeof code === "number" && code >= 400 && code < 500) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
 }
 
 export function isRecoverableTelegramNetworkError(
