@@ -491,6 +491,17 @@ describe("update-cli", () => {
     expect(jsonOutput).toBeDefined();
   });
 
+  it("uses daemon restart lifecycle in JSON mode when restart script is unavailable", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+    prepareRestartScript.mockResolvedValue(null);
+
+    await updateCommand({ json: true });
+
+    expect(runDaemonRestart).toHaveBeenCalledWith({ json: true });
+    expect(serviceRestart).not.toHaveBeenCalled();
+  });
+
   it("updateCommand exits with error on failure", async () => {
     const mockResult: UpdateRunResult = {
       status: "error",
@@ -641,19 +652,14 @@ describe("update-cli", () => {
       await updateCommand({ json: true });
 
       expect(runDaemonStop).not.toHaveBeenCalled();
-      expect(runDaemonRestart).not.toHaveBeenCalled();
+      expect(runDaemonRestart).toHaveBeenCalledWith({ json: true });
       expect(serviceStop).toHaveBeenCalledWith(
         expect.objectContaining({
           env: process.env,
           stdout: expect.anything(),
         }),
       );
-      expect(serviceRestart).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          stdout: expect.anything(),
-        }),
-      );
+      expect(serviceRestart).not.toHaveBeenCalled();
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });

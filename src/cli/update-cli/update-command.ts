@@ -544,15 +544,7 @@ async function maybeRestartService(params: {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else {
-        if (params.opts.json) {
-          await resolveGatewayService().restart({
-            env: process.env,
-            stdout: createNullWriter(),
-          });
-          restarted = true;
-        } else {
-          restarted = await runDaemonRestart();
-        }
+        restarted = await runDaemonRestart({ json: params.opts.json || undefined });
       }
 
       if (!params.opts.json && restarted) {
@@ -659,14 +651,7 @@ async function restoreServiceAfterStoppedWindowsPackageUpdate(params: {
     if (params.restartScriptPath) {
       await runRestartScript(params.restartScriptPath);
     } else {
-      if (params.opts.json) {
-        await resolveGatewayService().restart({
-          env: process.env,
-          stdout: createNullWriter(),
-        });
-      } else {
-        await runDaemonRestart();
-      }
+      await runDaemonRestart({ json: params.opts.json || undefined });
     }
   } catch (err) {
     if (!params.opts.json) {
@@ -878,6 +863,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let serviceStoppedForWindowsPackageUpdate = false;
   let updateResult: UpdateRunResult | null = null;
   let completedSuccessfully = false;
+  let deferredExitCode: number | null = null;
+  const deferExitUntilCleanup = (code: number) => {
+    deferredExitCode = code;
+  };
   const gatewayPort = resolveGatewayPort(
     configSnapshot.valid ? configSnapshot.config : undefined,
     process.env,
@@ -912,7 +901,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
                   `Run \`${replaceCliName(formatCliCommand("openclaw gateway stop"), CLI_NAME)}\` and retry.`,
                 ].join("\n"),
               );
-              defaultRuntime.exit(1);
+              deferExitUntilCleanup(1);
               return;
             }
           }
@@ -949,7 +938,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     printResult(updateResult, { ...opts, hideSteps: showProgress });
 
     if (updateResult.status === "error") {
-      defaultRuntime.exit(1);
+      deferExitUntilCleanup(1);
       return;
     }
 
@@ -975,7 +964,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           );
         }
       }
-      defaultRuntime.exit(0);
+      deferExitUntilCleanup(0);
       return;
     }
 
@@ -1015,5 +1004,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       opts,
       restartScriptPath,
     });
+    if (deferredExitCode !== null) {
+      defaultRuntime.exit(deferredExitCode);
+    }
   }
 }
