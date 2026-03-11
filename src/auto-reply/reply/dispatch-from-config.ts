@@ -1,4 +1,4 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -21,6 +21,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
@@ -69,6 +70,33 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+async function maybePreprocessInboundAudioForAcp(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  inboundAudio: boolean;
+}): Promise<void> {
+  if (!params.inboundAudio) {
+    return;
+  }
+  if (
+    typeof params.ctx.Transcript === "string" ||
+    (params.ctx.MediaUnderstanding?.length ?? 0) > 0 ||
+    (params.ctx.MediaUnderstandingDecisions?.length ?? 0) > 0
+  ) {
+    return;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.ctx.SessionKey,
+    config: params.cfg,
+  });
+  const agentDir = resolveAgentDir(params.cfg, agentId);
+  await applyMediaUnderstanding({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    agentDir,
+  });
+}
 
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
@@ -337,6 +365,11 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    await maybePreprocessInboundAudioForAcp({
+      ctx,
+      cfg,
+      inboundAudio,
+    });
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
