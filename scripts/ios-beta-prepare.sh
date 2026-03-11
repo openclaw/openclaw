@@ -51,6 +51,25 @@ write_generated_file() {
   mv -f "${tmp_file}" "${output_path}"
 }
 
+validate_push_relay_base_url() {
+  local value="$1"
+
+  if [[ "${value}" =~ [[:space:]] ]]; then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: whitespace is not allowed." >&2
+    exit 1
+  fi
+
+  if [[ "${value}" == *'$'* || "${value}" == *'('* || "${value}" == *')'* || "${value}" == *'='* ]]; then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: contains forbidden xcconfig characters." >&2
+    exit 1
+  fi
+
+  if [[ ! "${value}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~!&*+,;:@%/-]*)?$ ]]; then
+    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: expected https://host[:port][/path]." >&2
+    exit 1
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --)
@@ -95,6 +114,8 @@ if [[ -z "${PUSH_RELAY_BASE_URL}" ]]; then
   echo "Missing OPENCLAW_PUSH_RELAY_BASE_URL (or IOS_PUSH_RELAY_BASE_URL) for beta relay registration." >&2
   exit 1
 fi
+
+validate_push_relay_base_url "${PUSH_RELAY_BASE_URL}"
 
 # `.xcconfig` treats `//` as a comment opener. Break the URL with a helper setting
 # so Xcode still resolves it back to `https://...` at build time.

@@ -13,6 +13,7 @@ import {
   resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
+  shouldClearStoredApnsRegistration,
   shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
 
@@ -100,6 +101,63 @@ describe("push APNs registration store", () => {
     ).rejects.toThrow("invalid APNs token");
   });
 
+  it("rejects relay registrations that do not use production/official values", async () => {
+    const baseDir = await makeTempDir();
+    await expect(
+      registerApnsRegistration({
+        nodeId: "ios-node-relay",
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "staging",
+        distribution: "official",
+        baseDir,
+      }),
+    ).rejects.toThrow("relay registrations must use production environment");
+    await expect(
+      registerApnsRegistration({
+        nodeId: "ios-node-relay",
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "beta",
+        baseDir,
+      }),
+    ).rejects.toThrow("relay registrations must use official distribution");
+  });
+
+  it("rejects oversized relay registration identifiers", async () => {
+    const baseDir = await makeTempDir();
+    const oversized = "x".repeat(257);
+    await expect(
+      registerApnsRegistration({
+        nodeId: "ios-node-relay",
+        transport: "relay",
+        relayHandle: oversized,
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        baseDir,
+      }),
+    ).rejects.toThrow("relayHandle too long");
+    await expect(
+      registerApnsRegistration({
+        nodeId: "ios-node-relay",
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        installationId: oversized,
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        baseDir,
+      }),
+    ).rejects.toThrow("installationId too long");
+  });
+
   it("clears registrations", async () => {
     const baseDir = await makeTempDir();
     await registerApnsToken({
@@ -179,18 +237,33 @@ describe("push APNs env config", () => {
 
   it("allows APNs relay http URLs only when explicitly enabled", () => {
     const resolved = resolveApnsRelayConfigFromEnv({
-      OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
+      OPENCLAW_APNS_RELAY_BASE_URL: "http://127.0.0.1:8787",
       OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
       OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
     } as NodeJS.ProcessEnv);
     expect(resolved).toMatchObject({
       ok: true,
       value: {
-        baseUrl: "http://relay.example.com",
+        baseUrl: "http://127.0.0.1:8787",
         authToken: "relay-secret",
         timeoutMs: 10_000,
       },
     });
+  });
+
+  it("rejects http relay URLs for non-loopback hosts even when explicitly enabled", () => {
+    const resolved = resolveApnsRelayConfigFromEnv({
+      OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
+      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
+      OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
+    } as NodeJS.ProcessEnv);
+    expect(resolved).toMatchObject({
+      ok: false,
+    });
+    if (resolved.ok) {
+      return;
+    }
+    expect(resolved.error).toContain("loopback hosts");
   });
 });
 
@@ -384,5 +457,52 @@ describe("push APNs send semantics", () => {
     expect(shouldInvalidateApnsRegistration({ status: 429, reason: "TooManyRequests" })).toBe(
       false,
     );
+  });
+
+  it("only clears stored registrations for direct APNs failures without an override mismatch", () => {
+    expect(
+      shouldClearStoredApnsRegistration({
+        registration: {
+          nodeId: "ios-node-direct",
+          transport: "direct",
+          token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          updatedAtMs: 1,
+        },
+        result: { status: 400, reason: "BadDeviceToken" },
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldClearStoredApnsRegistration({
+        registration: {
+          nodeId: "ios-node-relay",
+          transport: "relay",
+          relayHandle: "relay-handle-123",
+          installationId: "install-123",
+          topic: "ai.openclaw.ios",
+          environment: "production",
+          distribution: "official",
+          updatedAtMs: 1,
+        },
+        result: { status: 410, reason: "Unregistered" },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldClearStoredApnsRegistration({
+        registration: {
+          nodeId: "ios-node-direct",
+          transport: "direct",
+          token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          updatedAtMs: 1,
+        },
+        result: { status: 400, reason: "BadDeviceToken" },
+        overrideEnvironment: "production",
+      }),
+    ).toBe(false);
   });
 });

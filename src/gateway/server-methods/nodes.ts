@@ -16,7 +16,7 @@ import {
   resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
-  shouldInvalidateApnsRegistration,
+  shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
 import {
   buildCanvasScopedHostUrl,
@@ -112,10 +112,16 @@ async function resolveNodePushConfig(
 }
 
 async function clearStaleApnsRegistrationIfNeeded(
+  registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
   nodeId: string,
   params: { status: number; reason?: string },
 ) {
-  if (!shouldInvalidateApnsRegistration(params)) {
+  if (
+    !shouldClearStoredApnsRegistration({
+      registration,
+      result: params,
+    })
+  ) {
     return;
   }
   await clearApnsRegistration(nodeId);
@@ -285,7 +291,7 @@ export async function maybeWakeNodeWithApns(
         auth: "auth" in resolved ? resolved.auth : undefined,
         relayConfig: "relayConfig" in resolved ? resolved.relayConfig : undefined,
       });
-      await clearStaleApnsRegistrationIfNeeded(nodeId, wakeResult);
+      await clearStaleApnsRegistrationIfNeeded(registration, nodeId, wakeResult);
       if (!wakeResult.ok) {
         return withDuration({
           available: true,
@@ -366,7 +372,7 @@ export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNu
       auth: "auth" in resolved ? resolved.auth : undefined,
       relayConfig: "relayConfig" in resolved ? resolved.relayConfig : undefined,
     });
-    await clearStaleApnsRegistrationIfNeeded(nodeId, result);
+    await clearStaleApnsRegistrationIfNeeded(registration, nodeId, result);
     if (!result.ok) {
       return withDuration({
         sent: false,

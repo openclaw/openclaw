@@ -110,6 +110,7 @@ type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
 const APNS_STATE_FILENAME = "push/apns-registrations.json";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
+const MAX_RELAY_IDENTIFIER_LENGTH = 256;
 const withLock = createAsyncLock();
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
@@ -136,6 +137,19 @@ function normalizeRelayHandle(value: string): string {
 
 function normalizeInstallationId(value: string): string {
   return value.trim();
+}
+
+function validateRelayIdentifier(value: string, fieldName: string): string {
+  if (!value) {
+    throw new Error(`${fieldName} required`);
+  }
+  if (value.length > MAX_RELAY_IDENTIFIER_LENGTH) {
+    throw new Error(`${fieldName} too long`);
+  }
+  if (/[^\x21-\x7e]/.test(value)) {
+    throw new Error(`${fieldName} invalid`);
+  }
+  return value;
 }
 
 function normalizeTopic(value: string): string {
@@ -371,16 +385,16 @@ export async function registerApnsRegistration(
 
     let next: ApnsRegistration;
     if (params.transport === "relay") {
-      const relayHandle = normalizeRelayHandle(params.relayHandle);
-      const installationId = normalizeInstallationId(params.installationId);
-      const environment = normalizeApnsEnvironment(params.environment) ?? "production";
-      const distribution = normalizeDistribution(params.distribution) ?? "official";
-      if (!relayHandle) {
-        throw new Error("relayHandle required");
-      }
-      if (!installationId) {
-        throw new Error("installationId required");
-      }
+      const relayHandle = validateRelayIdentifier(
+        normalizeRelayHandle(params.relayHandle),
+        "relayHandle",
+      );
+      const installationId = validateRelayIdentifier(
+        normalizeInstallationId(params.installationId),
+        "installationId",
+      );
+      const environment = normalizeApnsEnvironment(params.environment);
+      const distribution = normalizeDistribution(params.distribution);
       if (environment !== "production") {
         throw new Error("relay registrations must use production environment");
       }
@@ -469,6 +483,23 @@ export function shouldInvalidateApnsRegistration(result: {
     return true;
   }
   return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
+}
+
+export function shouldClearStoredApnsRegistration(params: {
+  registration: ApnsRegistration;
+  result: { status: number; reason?: string };
+  overrideEnvironment?: ApnsEnvironment | null;
+}): boolean {
+  if (params.registration.transport !== "direct") {
+    return false;
+  }
+  if (
+    params.overrideEnvironment &&
+    params.overrideEnvironment !== params.registration.environment
+  ) {
+    return false;
+  }
+  return shouldInvalidateApnsRegistration(params.result);
 }
 
 export async function resolveApnsAuthConfigFromEnv(

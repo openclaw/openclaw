@@ -53,6 +53,16 @@ function readAllowHttp(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function isLoopbackRelayHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized)
+  );
+}
+
 function parseReason(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -79,6 +89,9 @@ export function resolveApnsRelayConfigFromEnv(
       throw new Error(
         "http relay URLs require OPENCLAW_APNS_RELAY_ALLOW_HTTP=true (development only)",
       );
+    }
+    if (parsed.protocol === "http:" && !isLoopbackRelayHostname(parsed.hostname)) {
+      throw new Error("http relay URLs are limited to loopback hosts");
     }
     return {
       ok: true,

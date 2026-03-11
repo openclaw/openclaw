@@ -72,6 +72,7 @@ Release behavior:
 Required env for beta builds:
 
 - `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
+  This must be a plain `https://host[:port][/path]` base URL without whitespace, query params, fragments, or xcconfig metacharacters.
 
 Archive without upload:
 

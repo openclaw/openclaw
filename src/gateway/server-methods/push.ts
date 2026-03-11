@@ -5,7 +5,7 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
-  shouldInvalidateApnsRegistration,
+  shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
 import { ErrorCodes, errorShape, validatePushTestParams } from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
@@ -90,7 +90,13 @@ export const pushHandlers: GatewayRequestHandlers = {
       if (!result) {
         return;
       }
-      if (shouldInvalidateApnsRegistration(result)) {
+      if (
+        shouldClearStoredApnsRegistration({
+          registration,
+          result,
+          overrideEnvironment,
+        })
+      ) {
         await clearApnsRegistration(nodeId);
       }
       respond(true, result, undefined);
