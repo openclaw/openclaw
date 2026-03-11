@@ -383,8 +383,12 @@ function buildTelegramThreadReplyParams(params: {
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
 
-  if (params.replyToMessageId != null) {
-    const replyToMessageId = Math.trunc(params.replyToMessageId);
+  if (
+    typeof params.replyToMessageId === "number" &&
+    Number.isSafeInteger(params.replyToMessageId) &&
+    params.replyToMessageId > 0
+  ) {
+    const replyToMessageId = params.replyToMessageId;
     if (params.quoteText?.trim()) {
       threadParams.reply_parameters = {
         message_id: replyToMessageId,
