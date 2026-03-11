@@ -96,7 +96,11 @@ export async function listMemoryFiles(
         return;
       }
       result.push(absPath);
-    } catch {}
+    } catch (err) {
+      if (!isFileMissingError(err)) {
+        throw err;
+      }
+    }
   };
 
   await addMarkdownFile(memoryFile);
@@ -106,7 +110,11 @@ export async function listMemoryFiles(
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       await walkDir(memoryDir, result);
     }
-  } catch {}
+  } catch (err) {
+    if (!isFileMissingError(err)) {
+      throw err;
+    }
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
@@ -123,7 +131,11 @@ export async function listMemoryFiles(
         if (stat.isFile() && inputPath.endsWith(".md")) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch (err) {
+        if (!isFileMissingError(err)) {
+          throw err;
+        }
+      }
     }
   }
   if (result.length <= 1) {

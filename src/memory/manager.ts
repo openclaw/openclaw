@@ -591,7 +591,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               break;
             }
           }
-        } catch {}
+        } catch (err) {
+          if (!isFileMissingError(err)) {
+            throw err;
+          }
+        }
       }
     }
     if (!allowedWorkspace && !allowedAdditional) {
