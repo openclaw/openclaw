@@ -11,6 +11,12 @@ title: "Cursor Agent API Proxy"
 
 **cursor-agent-api-proxy** is a community tool that wraps the [Cursor CLI](https://cursor.com/cn/docs/cli/headless) (`agent` command) as an OpenAI-compatible API server. Use your Cursor subscription (Pro / Business) with any tool that speaks the OpenAI API format.
 
+<Warning>
+This path is technical compatibility only. Using the Cursor CLI in automated/proxy
+workflows may conflict with Cursor's Terms of Service. Verify Cursor's current terms
+before relying on this approach in production.
+</Warning>
+
 Works on macOS, Linux, and Windows.
 
 ## How It Works
@@ -51,7 +57,7 @@ When running `openclaw onboard`, at the **Model/Auth** step:
 
 1. Provider type → **Custom Provider** (OpenAI-compatible)
 2. Base URL → `http://localhost:4646/v1`
-3. API Key → leave empty or type `null`
+3. API Key → type `not-needed`
 4. Default model → `auto`
 
 ### Existing setup
@@ -61,7 +67,7 @@ Edit the config file:
 ```json5
 {
   env: {
-    OPENAI_API_KEY: null,
+    OPENAI_API_KEY: "not-needed",
     OPENAI_BASE_URL: "http://localhost:4646/v1",
   },
   agents: {
@@ -73,8 +79,8 @@ Edit the config file:
 ```
 
 <Note>
-`OPENAI_API_KEY: null` means no key is needed — authentication is handled by `agent login`.
-To pass a specific Cursor API Key per-request, set it here instead.
+Set `OPENAI_API_KEY` to `"not-needed"` when authentication is handled by `agent login`.
+To forward a specific Cursor API Key per-request, put it here instead.
 </Note>
 
 ## Models

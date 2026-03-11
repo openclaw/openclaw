@@ -11,6 +11,11 @@ title: "Cursor Agent API 代理"
 
 **cursor-agent-api-proxy** 是一个社区工具，将 [Cursor CLI](https://cursor.com/cn/docs/cli/headless)（`agent` 命令）包装为 OpenAI 兼容的 API 服务。让你的 Cursor 订阅（Pro / Business）可以被任何支持 OpenAI 格式的工具直接调用。
 
+<Warning>
+这是一个技术兼容方案。通过自动化/代理方式使用 Cursor CLI 可能与 Cursor 的服务条款冲突。
+在生产环境使用前，请自行确认 Cursor 的当前条款。
+</Warning>
+
 支持 macOS、Linux、Windows。
 
 ## 工作原理
@@ -51,7 +56,7 @@ curl http://localhost:4646/health
 
 1. Provider 类型 → **Custom Provider**（OpenAI-compatible）
 2. Base URL → `http://localhost:4646/v1`
-3. API Key → 留空或输入 `null`
+3. API Key → 输入 `not-needed`
 4. Default model → `auto`
 
 ### 编辑配置文件
@@ -59,7 +64,7 @@ curl http://localhost:4646/health
 ```json5
 {
   env: {
-    OPENAI_API_KEY: null,
+    OPENAI_API_KEY: "not-needed",
     OPENAI_BASE_URL: "http://localhost:4646/v1",
   },
   agents: {
@@ -71,8 +76,8 @@ curl http://localhost:4646/health
 ```
 
 <Note>
-`OPENAI_API_KEY: null` 表示不需要传 key — 认证由 `agent login` 处理。
-如需按请求传入特定的 Cursor API Key，填在这里即可。
+已通过 `agent login` 认证时，`OPENAI_API_KEY` 设为 `"not-needed"` 即可。
+如需按请求转发特定的 Cursor API Key，填在这里。
 </Note>
 
 ## 模型
