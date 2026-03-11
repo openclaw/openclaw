@@ -197,7 +197,7 @@ describe("config cli", () => {
         baseUrl: "http://127.0.0.1:11434",
         api: "ollama",
         models: [],
-        apiKey: "ollama-local",
+        apiKey: "ollama-local", // pragma: allowlist secret
       });
     });
   });

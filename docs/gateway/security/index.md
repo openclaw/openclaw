@@ -199,7 +199,7 @@ If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
 Use this when auditing access or deciding what to back up:
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
-- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:
@@ -262,9 +262,14 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 ## Control UI over HTTP
 
 The Control UI needs a **secure context** (HTTPS or localhost) to generate device
-identity. `gateway.controlUi.allowInsecureAuth` does **not** bypass secure-context,
-device-identity, or device-pairing checks. Prefer HTTPS (Tailscale Serve) or open
-the UI on `127.0.0.1`.
+identity. `gateway.controlUi.allowInsecureAuth` is a local compatibility toggle:
+
+- On localhost, it allows Control UI auth without device identity when the page
+  is loaded over non-secure HTTP.
+- It does not bypass pairing checks.
+- It does not relax remote (non-localhost) device identity requirements.
+
+Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 
 For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
 disables device identity checks entirely. This is a severe security downgrade;
@@ -1158,19 +1163,22 @@ If your AI does something bad:
 
 ## Secret Scanning (detect-secrets)
 
-CI runs `detect-secrets scan --baseline .secrets.baseline` in the `secrets` job.
-If it fails, there are new candidates not yet in the baseline.
+CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
+Pushes to `main` always run an all-files scan. Pull requests use a changed-file
+fast path when a base commit is available, and fall back to an all-files scan
+otherwise. If it fails, there are new candidates not yet in the baseline.
 
 ### If CI fails
 
 1. Reproduce locally:
 
    ```bash
-   detect-secrets scan --baseline .secrets.baseline
+   pre-commit run --all-files detect-secrets
    ```
 
 2. Understand the tools:
-   - `detect-secrets scan` finds candidates and compares them to the baseline.
+   - `detect-secrets` in pre-commit runs `detect-secrets-hook` with the repo's
+     baseline and excludes.
    - `detect-secrets audit` opens an interactive review to mark each baseline
      item as real or false positive.
 3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.

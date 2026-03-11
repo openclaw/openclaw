@@ -1,5 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { AgentsListResult, ToolsCatalogResult } from "../types.ts";
+import { saveConfig } from "./config.ts";
+import type { ConfigState } from "./config.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -12,6 +14,8 @@ export type AgentsState = {
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
 };
+
+export type AgentsConfigSaveState = AgentsState & ConfigState;
 
 export async function loadAgents(state: AgentsState) {
   if (!state.client || !state.connected) {
@@ -60,5 +64,14 @@ export async function loadToolsCatalog(state: AgentsState, agentId?: string | nu
     state.toolsCatalogError = String(err);
   } finally {
     state.toolsCatalogLoading = false;
+  }
+}
+
+export async function saveAgentsConfig(state: AgentsConfigSaveState) {
+  const selectedBefore = state.agentsSelectedId;
+  await saveConfig(state);
+  await loadAgents(state);
+  if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
+    state.agentsSelectedId = selectedBefore;
   }
 }
