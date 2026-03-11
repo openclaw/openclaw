@@ -5,6 +5,7 @@ import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import { createJinaEmbeddingProvider, type JinaEmbeddingClient } from "./embeddings-jina.js";
 import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
@@ -27,6 +28,7 @@ export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+export type { JinaEmbeddingClient } from "./embeddings-jina.js";
 export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 
 export type EmbeddingProvider = {
@@ -37,14 +39,21 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "jina"
+  | "ollama";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral", "jina"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -56,6 +65,7 @@ export type EmbeddingProviderResult = {
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
+  jina?: JinaEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
 };
 
@@ -189,6 +199,10 @@ export async function createEmbeddingProvider(
     if (id === "mistral") {
       const { provider, client } = await createMistralEmbeddingProvider(options);
       return { provider, mistral: client };
+    }
+    if (id === "jina") {
+      const { provider, client } = await createJinaEmbeddingProvider(options);
+      return { provider, jina: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
