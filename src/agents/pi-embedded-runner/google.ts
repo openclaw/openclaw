@@ -543,6 +543,7 @@ export async function sanitizeSessionHistory(params: {
     {
       sanitizeMode: policy.sanitizeMode,
       sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      textifyHistoricalToolResultImages: policy.textifyHistoricalToolResultImages,
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,

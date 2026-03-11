@@ -50,6 +50,7 @@ export {
   downgradeOpenAIReasoningBlocks,
 } from "./pi-embedded-helpers/openai.js";
 export {
+  HISTORICAL_TOOL_RESULT_IMAGE_MARKER,
   isEmptyAssistantMessageContent,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers/images.js";

@@ -98,7 +98,8 @@ external end-user instructions.
 
 **OpenAI / OpenAI Codex**
 
-- Image sanitization only.
+- Image sanitization only for replayed user/assistant content.
+- Historical `toolResult.image` blocks are downgraded to text markers before replay so persisted browser/tool snapshots do not get resent as inline image history.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
 - No tool call id sanitization.
 - No tool result pairing repair.
@@ -148,4 +149,5 @@ Before the 2026.1.22 release, OpenClaw applied multiple layers of transcript hyg
 
 This complexity caused cross-provider regressions (notably `openai-responses`
 `call_id|fc_id` pairing). The 2026.1.22 cleanup removed the extension, centralized
-logic in the runner, and made OpenAI **no-touch** beyond image sanitization.
+logic in the runner, and made OpenAI mostly **no-touch** beyond image sanitization
+and historical tool-result image downgrading.

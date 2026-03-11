@@ -16,6 +16,7 @@ export type TranscriptSanitizeMode = "full" | "images-only";
 export type TranscriptPolicy = {
   sanitizeMode: TranscriptSanitizeMode;
   sanitizeToolCallIds: boolean;
+  textifyHistoricalToolResultImages: boolean;
   toolCallIdMode?: ToolCallIdMode;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
@@ -110,6 +111,7 @@ export function resolveTranscriptPolicy(params: {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds:
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
+    textifyHistoricalToolResultImages: isOpenAi,
     toolCallIdMode,
     repairToolUseResultPairing,
     preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),

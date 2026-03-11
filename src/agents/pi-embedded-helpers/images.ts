@@ -6,6 +6,8 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
+export const HISTORICAL_TOOL_RESULT_IMAGE_MARKER =
+  "[historical tool-result image omitted from replay]";
 
 export function isEmptyAssistantMessageContent(
   message: Extract<AgentMessage, { role: "assistant" }>,
@@ -35,6 +37,7 @@ export async function sanitizeSessionMessagesImages(
   options?: {
     sanitizeMode?: "full" | "images-only";
     sanitizeToolCallIds?: boolean;
+    textifyHistoricalToolResultImages?: boolean;
     /**
      * Mode for tool call ID sanitization:
      * - "strict" (alphanumeric only)
@@ -55,6 +58,8 @@ export async function sanitizeSessionMessagesImages(
     maxBytes: options?.maxBytes,
   };
   const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
+  const shouldTextifyHistoricalToolResultImages =
+    options?.textifyHistoricalToolResultImages === true;
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (default max side 1200px).
   const sanitizedIds = shouldSanitizeToolCallIds
@@ -71,11 +76,27 @@ export async function sanitizeSessionMessagesImages(
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
-      const nextContent = (await sanitizeContentBlocksImages(
-        content,
-        label,
-        imageSanitization,
-      )) as unknown as typeof toolMsg.content;
+      const sanitizedContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
+      const nextContent = (shouldTextifyHistoricalToolResultImages
+        ? sanitizedContent.map((block) => {
+            if (
+              !block ||
+              typeof block !== "object" ||
+              (block as { type?: unknown }).type !== "image"
+            ) {
+              return block;
+            }
+            const mimeType = (block as { mimeType?: unknown }).mimeType;
+            const mimeLabel =
+              typeof mimeType === "string" && mimeType.trim().length > 0
+                ? ` (${mimeType.trim()})`
+                : "";
+            return {
+              type: "text",
+              text: `${HISTORICAL_TOOL_RESULT_IMAGE_MARKER}${mimeLabel}`,
+            } satisfies ContentBlock;
+          })
+        : sanitizedContent) as unknown as typeof toolMsg.content;
       out.push({ ...toolMsg, content: nextContent });
       continue;
     }

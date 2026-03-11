@@ -49,6 +49,7 @@ describe("sanitizeSessionHistory e2e smoke", () => {
       expect.objectContaining({
         sanitizeMode: "images-only",
         sanitizeToolCallIds: false,
+        textifyHistoricalToolResultImages: true,
       }),
     );
   });

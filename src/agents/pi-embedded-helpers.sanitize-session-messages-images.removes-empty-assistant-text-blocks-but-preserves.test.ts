@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  HISTORICAL_TOOL_RESULT_IMAGE_MARKER,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
@@ -286,6 +287,38 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(2);
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("toolResult");
+  });
+
+  it("textifies historical tool-result image blocks when requested", async () => {
+    const onePixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==";
+    const input = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "browser.snapshot",
+        isError: false,
+        content: [
+          { type: "text", text: "snapshot summary" },
+          { type: "image", data: onePixelPng, mimeType: "image/png" },
+        ],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      sanitizeMode: "images-only",
+      textifyHistoricalToolResultImages: true,
+    });
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("toolResult");
+    const toolResult = out[0] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "snapshot summary" },
+      { type: "text", text: `${HISTORICAL_TOOL_RESULT_IMAGE_MARKER} (image/png)` },
+    ]);
+    expect(JSON.stringify(toolResult)).not.toContain(onePixelPng);
   });
 
   describe("thought_signature stripping", () => {
