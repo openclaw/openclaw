@@ -10,18 +10,6 @@ export type SandboxFsCommandPlan = {
   allowFailure?: boolean;
 };
 
-export function buildWriteCommitPlan(
-  target: SandboxResolvedFsPath,
-  tempPath: string,
-): SandboxFsCommandPlan {
-  return {
-    checks: [{ target, options: { action: "write files", requireWritable: true } }],
-    recheckBeforeCommand: true,
-    script: 'set -eu; mv -f -- "$1" "$2"',
-    args: [tempPath, target.containerPath],
-  };
-}
-
 export function buildMkdirpPlan(
   target: SandboxResolvedFsPath,
   anchoredTarget: AnchoredSandboxEntry,

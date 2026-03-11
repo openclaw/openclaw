@@ -21,6 +21,7 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
 - Reload uses atomic swap: full success, or keep the last-known-good snapshot.
 - Runtime requests read from the active in-memory snapshot only.
+- Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.
 
@@ -113,6 +114,7 @@ Validation:
 
 - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
 - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+- `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
 
 ## Provider config
 
@@ -321,6 +323,7 @@ Activation contract:
 - Success swaps the snapshot atomically.
 - Startup failure aborts gateway startup.
 - Runtime reload failure keeps the last-known-good snapshot.
+- Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
 
 ## Degraded and recovered signals
 
