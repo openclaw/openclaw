@@ -8,7 +8,6 @@ import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
-import { logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
@@ -113,6 +112,24 @@ export function hashCommandList(commands: TelegramMenuCommand[]): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }
 
+/**
+ * Compute a stable hash of the command list including config state.
+ * This ensures toggling nativeEnabled/nativeSkillsEnabled invalidates the cache.
+ * See: openclaw/openclaw#38367
+ */
+export function hashCommandListWithConfig(
+  commands: TelegramMenuCommand[],
+  configState: { nativeEnabled: boolean; nativeSkillsEnabled: boolean },
+): string {
+  const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
+  const payload = {
+    commands: sorted,
+    nativeEnabled: configState.nativeEnabled,
+    nativeSkillsEnabled: configState.nativeSkillsEnabled,
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
+}
+
 function hashBotIdentity(botIdentity?: string): string {
   const normalized = botIdentity?.trim();
   if (!normalized) {
@@ -160,17 +177,33 @@ export function syncTelegramMenuCommands(params: {
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
   botIdentity?: string;
+  /** Config state to include in hash for cache invalidation. See #38367. */
+  nativeEnabled?: boolean;
+  nativeSkillsEnabled?: boolean;
 }): void {
-  const { bot, runtime, commandsToRegister, accountId, botIdentity } = params;
+  const {
+    bot,
+    runtime,
+    commandsToRegister,
+    accountId,
+    botIdentity,
+    nativeEnabled = true,
+    nativeSkillsEnabled = false,
+  } = params;
   const sync = async () => {
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
     // is restarted several times in quick succession.
     // See: openclaw/openclaw#32017
-    const currentHash = hashCommandList(commandsToRegister);
+    // Include config state in hash so toggling config invalidates cache.
+    // See: openclaw/openclaw#38367
+    const currentHash = hashCommandListWithConfig(commandsToRegister, {
+      nativeEnabled,
+      nativeSkillsEnabled,
+    });
     const cachedHash = await readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
-      logVerbose("telegram: command menu unchanged; skipping sync");
+      runtime.log?.("telegram: command menu unchanged; skipping sync");
       return;
     }
 

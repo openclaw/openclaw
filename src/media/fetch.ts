@@ -1,5 +1,9 @@
 import path from "node:path";
-import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withStrictGuardedFetchMode,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -35,6 +39,13 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  /**
+   * When true, use TRUSTED_ENV_PROXY mode which creates an EnvHttpProxyAgent
+   * dispatcher that respects proxy environment variables (HTTPS_PROXY, etc.).
+   * Use this for trusted URLs (e.g., api.telegram.org) where the caller has
+   * proxy configuration that should be honored.
+   */
+  useEnvProxy?: boolean;
 };
 
 function stripQuotes(value: string): string {
@@ -92,21 +103,25 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
+    useEnvProxy,
   } = options;
 
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
   try {
+    const guardedFetchParams = {
+      url,
+      fetchImpl,
+      init: requestInit,
+      maxRedirects,
+      policy: ssrfPolicy,
+      lookupFn,
+    };
     const result = await fetchWithSsrFGuard(
-      withStrictGuardedFetchMode({
-        url,
-        fetchImpl,
-        init: requestInit,
-        maxRedirects,
-        policy: ssrfPolicy,
-        lookupFn,
-      }),
+      useEnvProxy
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchParams)
+        : withStrictGuardedFetchMode(guardedFetchParams),
     );
     res = result.response;
     finalUrl = result.finalUrl;

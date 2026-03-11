@@ -29,7 +29,6 @@ import type {
 } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -86,10 +85,6 @@ const APPROVE_CALLBACK_DATA_RE =
 function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
-}
-
-function isRecoverableMediaGroupError(err: unknown): boolean {
-  return err instanceof MediaFetchError || isMediaSizeLimitError(err);
 }
 
 function hasInboundMedia(msg: Message): boolean {
@@ -374,11 +369,8 @@ export const registerTelegramHandlers = ({
         try {
           media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramFetchImpl);
         } catch (mediaErr) {
-          if (!isRecoverableMediaGroupError(mediaErr)) {
-            throw mediaErr;
-          }
           runtime.log?.(
-            warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
+            warn(`media group: skipping item that failed to fetch: ${String(mediaErr)}`),
           );
           continue;
         }
@@ -997,7 +989,10 @@ export const registerTelegramHandlers = ({
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
-                reply_to_message_id: msg.message_id,
+                reply_parameters: {
+                  message_id: msg.message_id,
+                  allow_sending_without_reply: true,
+                },
               }),
           }).catch(() => {});
         }
@@ -1010,7 +1005,10 @@ export const registerTelegramHandlers = ({
         runtime,
         fn: () =>
           bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
+            reply_parameters: {
+              message_id: msg.message_id,
+              allow_sending_without_reply: true,
+            },
           }),
       }).catch(() => {});
       return;

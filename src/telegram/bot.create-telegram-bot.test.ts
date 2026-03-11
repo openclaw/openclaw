@@ -813,7 +813,7 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  it("routes non-default account DMs via per-account fallback session key", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -842,7 +842,10 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    // Named-account DMs are not dropped; they get a per-account session key.
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload?.AccountId).toBe("opie");
   });
 
   it("applies group mention overrides and fallback behavior", async () => {
@@ -2048,7 +2051,12 @@ describe("createTelegramBot", () => {
       expect(sendMessageSpy).toHaveBeenCalledWith(
         1234,
         "⚠️ Failed to download media. Please try again.",
-        { reply_to_message_id: 411 },
+        {
+          reply_parameters: {
+            message_id: 411,
+            allow_sending_without_reply: true,
+          },
+        },
       );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
@@ -2145,7 +2153,7 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
-  it("drops the media group when a non-recoverable media error occurs", async () => {
+  it("skips failed media items in a media group but still processes the group", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
 
@@ -2222,7 +2230,9 @@ describe("createTelegramBot", () => {
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
 
-      expect(replySpy).not.toHaveBeenCalled();
+      // The group should still be processed with the successfully resolved media;
+      // the failed item (no file_path) is skipped instead of dropping the whole group.
+      expect(replySpy).toHaveBeenCalledTimes(1);
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();

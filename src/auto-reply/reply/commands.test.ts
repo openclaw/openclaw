@@ -448,6 +448,42 @@ describe("/approve command", () => {
       );
     }
   });
+
+  it("allows Telegram approvers to use /approve even when not in general allowFrom list", async () => {
+    // This tests the fix for #40702: Telegram exec approval callbacks should work
+    // even when the approver is not in the channel's general allowFrom list.
+    // The approver is configured in execApprovals.approvers but not in telegram.allowFrom.
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["999"], // Approver 123 is NOT in this list
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"], // Approver 123 is configured here
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123", // This user is an approver but NOT in allowFrom
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
+  });
 });
 
 describe("/compact command", () => {

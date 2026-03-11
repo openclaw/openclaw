@@ -126,6 +126,78 @@ describe("deliverReplies", () => {
     messageHookRunner.runMessageSent.mockReset();
   });
 
+  it("strips leaked inbound metadata from reply text before delivery", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+
+    // Simulate model echoing back the inbound metadata prefix
+    const leakedMetadata = `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "msg-abc",
+  "sender": "+1555000"
+}
+\`\`\`
+
+`;
+    const actualResponse = "The weather today is sunny.";
+    const textWithLeakedMetadata = leakedMetadata + actualResponse;
+
+    await deliverWith({
+      replies: [{ text: textWithLeakedMetadata }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // The sent text should NOT contain the leaked metadata
+    const sentText = sendMessage.mock.calls[0]?.[1];
+    expect(sentText).not.toContain("Conversation info (untrusted metadata)");
+    expect(sentText).not.toContain("message_id");
+    expect(sentText).toContain("sunny");
+  });
+
+  it("strips leaked Sender metadata from reply text before delivery", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+
+    const leakedSenderMeta = `Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Alice",
+  "name": "Alice"
+}
+\`\`\`
+
+Hello Alice, how can I help?`;
+
+    await deliverWith({
+      replies: [{ text: leakedSenderMeta }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = sendMessage.mock.calls[0]?.[1];
+    expect(sentText).not.toContain("Sender (untrusted metadata)");
+    expect(sentText).not.toContain('"label"');
+    expect(sentText).toContain("Hello Alice");
+  });
+
+  it("preserves normal text without metadata markers", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+
+    const normalText = "This is a completely normal response with no metadata leaks.";
+
+    await deliverWith({
+      replies: [{ text: normalText }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = sendMessage.mock.calls[0]?.[1];
+    expect(sentText).toContain("completely normal response");
+  });
+
   it("skips audioAsVoice-only payloads without logging an error", async () => {
     const runtime = createRuntime(false);
 

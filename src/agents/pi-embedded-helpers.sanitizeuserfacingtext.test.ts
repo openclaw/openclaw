@@ -15,6 +15,17 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips thinking/reasoning tags and their content", () => {
+    expect(sanitizeUserFacingText("<think>internal reasoning</think>Hello")).toBe("Hello");
+    expect(sanitizeUserFacingText("<thinking>deep thought</thinking> Answer")).toBe("Answer");
+    expect(sanitizeUserFacingText("Before <think>secret</think> After")).toBe("Before  After");
+    expect(sanitizeUserFacingText("<thought>hmm</thought>Result")).toBe("Result");
+  });
+
+  it("strips unclosed thinking tags in strict mode", () => {
+    expect(sanitizeUserFacingText("<think>leaked reasoning without close tag")).toBe("");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
