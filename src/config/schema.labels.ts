@@ -709,6 +709,7 @@ export const FIELD_LABELS: Record<string, string> = {
   ...IRC_FIELD_LABELS,
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
+  "channels.telegram.processingIndicator": "Telegram Processing Indicator",
   "channels.telegram.configWrites": "Telegram Config Writes",
   "channels.telegram.commands.native": "Telegram Native Commands",
   "channels.telegram.commands.nativeSkills": "Telegram Native Skill Commands",

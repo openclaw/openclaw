@@ -1466,6 +1466,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  "channels.telegram.processingIndicator":
+    'Optional visible Telegram message sent while a request is being processed, for example "⌛️". When set, OpenClaw deletes it after a successful reply and edits it to a generic error message if processing fails.',
   "channels.telegram.streaming":
     'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":

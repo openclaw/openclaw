@@ -66,6 +66,27 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("sends and removes processing indicator around successful dispatch", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
+    const deleteMessage = vi.fn().mockResolvedValue(true);
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      threadSpec: { id: 456 },
+      route: { sessionKey: "agent:main:main" },
+    });
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage, deleteMessage } },
+      telegramCfg: { processingIndicator: "⌛️" },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processSampleMessage(processMessage);
+
+    expect(sendMessage).toHaveBeenCalledWith(123, "⌛️", { message_thread_id: 456 });
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(deleteMessage).toHaveBeenCalledWith(123, 999);
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -95,6 +116,35 @@ describe("telegram bot message processor", () => {
       "Something went wrong while processing your request. Please try again.",
       { message_thread_id: 456 },
     );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+  });
+
+  it("edits processing indicator when dispatch throws", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
+    const editMessageText = vi.fn().mockResolvedValue(true);
+    const runtimeError = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      threadSpec: { id: 456 },
+      route: { sessionKey: "agent:main:main" },
+    });
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage, editMessageText } },
+      telegramCfg: { processingIndicator: "⌛️" },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(123, "⌛️", { message_thread_id: 456 });
+    expect(editMessageText).toHaveBeenCalledWith(
+      123,
+      999,
+      "Something went wrong while processing your request. Please try again.",
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
   });
 

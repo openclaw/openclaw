@@ -110,6 +110,21 @@ describe("web search provider config", () => {
   });
 });
 
+describe("telegram processing indicator config", () => {
+  it("accepts processingIndicator", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          botToken: "fake",
+          processingIndicator: "⌛️",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
