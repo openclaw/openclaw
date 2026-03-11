@@ -34,6 +34,16 @@ const loginOpenAICodexOAuth = vi.hoisted(() =>
 vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
+const loginOpenAICodexDeviceCode = vi.hoisted(() =>
+  vi.fn<() => Promise<OAuthCredentials>>(async () => ({
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: Date.now() + 60_000,
+  })),
+);
+vi.mock("./openai-codex-device-code.js", () => ({
+  loginOpenAICodexDeviceCode,
+}));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../plugins/providers.js", () => ({
@@ -147,6 +157,12 @@ describe("applyAuthChoice", () => {
       config: cfg,
       defaultModelId: "qwen3.5:35b",
     }));
+    loginOpenAICodexDeviceCode.mockReset();
+    loginOpenAICodexDeviceCode.mockResolvedValue({
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+    });
     await lifecycle.cleanup();
     activeStateDir = null;
   });
@@ -202,6 +218,41 @@ describe("applyAuthChoice", () => {
       refresh: "refresh-token",
       access: "access-token",
       email: "user@example.com",
+    });
+  });
+
+  it("stores openai-device-code credentials into the openai-codex auth store", async () => {
+    await setupTempState();
+
+    loginOpenAICodexDeviceCode.mockResolvedValueOnce({
+      email: "device@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-device-code",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(loginOpenAICodexDeviceCode).toHaveBeenCalledOnce();
+    expect(result.config.auth?.profiles?.["openai-codex:device@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(await readAuthProfile("openai-codex:device@example.com")).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      refresh: "refresh-token",
+      access: "access-token",
+      email: "device@example.com",
     });
   });
 

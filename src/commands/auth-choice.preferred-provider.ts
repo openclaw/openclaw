@@ -9,6 +9,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   vllm: "vllm",
   ollama: "ollama",
   "openai-codex": "openai-codex",
+  "openai-device-code": "openai-codex",
   "codex-cli": "openai-codex",
   chutes: "chutes",
   "openai-api-key": "openai",

@@ -171,6 +171,8 @@ export type CommandOptions = {
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
+  mirrorStdout?: boolean;
+  mirrorStderr?: boolean;
 };
 
 export function resolveCommandEnv(params: {
@@ -215,7 +217,7 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const { timeoutMs, cwd, input, env, noOutputTimeoutMs, mirrorStdout, mirrorStderr } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
@@ -291,10 +293,16 @@ export async function runCommandWithTimeout(
 
     child.stdout?.on("data", (d) => {
       stdout += d.toString();
+      if (mirrorStdout) {
+        process.stdout.write(d);
+      }
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
       stderr += d.toString();
+      if (mirrorStderr) {
+        process.stderr.write(d);
+      }
       armNoOutputTimer();
     });
     child.on("error", (err) => {

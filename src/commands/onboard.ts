@@ -30,7 +30,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
   }
   if (originalAuthChoice === "codex-cli") {
-    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
+    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI device code instead.');
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
