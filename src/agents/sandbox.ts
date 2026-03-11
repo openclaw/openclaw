@@ -2,6 +2,7 @@ export {
   resolveSandboxBrowserConfig,
   resolveSandboxConfigForAgent,
   resolveSandboxDockerConfig,
+  resolveSandboxExecutionConfig,
   resolveSandboxPruneConfig,
   resolveSandboxScope,
 } from "./sandbox/config.js";
@@ -27,6 +28,11 @@ export {
 } from "./sandbox/runtime-status.js";
 
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export {
+  extractPythonImportUsages,
+  renderSandboxPythonExecutionTemplate,
+  validateSandboxPythonExecution,
+} from "./sandbox/execution-policy.js";
 
 export type {
   SandboxBrowserConfig,
@@ -34,6 +40,9 @@ export type {
   SandboxConfig,
   SandboxContext,
   SandboxDockerConfig,
+  SandboxExecutionConfig,
+  SandboxExecutionNamePolicy,
+  SandboxExecutionTemplateId,
   SandboxPruneConfig,
   SandboxScope,
   SandboxToolPolicy,

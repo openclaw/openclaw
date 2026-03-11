@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxExecutionSettings } from "../../config/types.sandbox.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -9,6 +10,11 @@ import {
   DEFAULT_SANDBOX_BROWSER_PREFIX,
   DEFAULT_SANDBOX_BROWSER_VNC_PORT,
   DEFAULT_SANDBOX_CONTAINER_PREFIX,
+  DEFAULT_SANDBOX_EXECUTION_DEPENDENCY_ALLOW,
+  DEFAULT_SANDBOX_EXECUTION_DEPENDENCY_DENY,
+  DEFAULT_SANDBOX_EXECUTION_IMPORT_ALLOW,
+  DEFAULT_SANDBOX_EXECUTION_IMPORT_DENY,
+  DEFAULT_SANDBOX_EXECUTION_TEMPLATE,
   DEFAULT_SANDBOX_IDLE_HOURS,
   DEFAULT_SANDBOX_IMAGE,
   DEFAULT_SANDBOX_MAX_AGE_DAYS,
@@ -20,6 +26,8 @@ import type {
   SandboxBrowserConfig,
   SandboxConfig,
   SandboxDockerConfig,
+  SandboxExecutionConfig,
+  SandboxExecutionNamePolicy,
   SandboxPruneConfig,
   SandboxScope,
 } from "./types.js";
@@ -167,6 +175,64 @@ export function resolveSandboxPruneConfig(params: {
   };
 }
 
+function normalizeExecutionNameList(values?: string[]): string[] | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function resolveSandboxExecutionNamePolicy(params: {
+  agent?: SandboxExecutionSettings["imports"];
+  global?: SandboxExecutionSettings["imports"];
+  defaultAllow: readonly string[];
+  defaultDeny: readonly string[];
+}): SandboxExecutionNamePolicy {
+  return {
+    allow: normalizeExecutionNameList(params.agent?.allow ?? params.global?.allow) ?? [
+      ...params.defaultAllow,
+    ],
+    deny: normalizeExecutionNameList(params.agent?.deny ?? params.global?.deny) ?? [
+      ...params.defaultDeny,
+    ],
+  };
+}
+
+export function resolveSandboxExecutionConfig(params: {
+  scope: SandboxScope;
+  globalExecution?: SandboxExecutionSettings;
+  agentExecution?: SandboxExecutionSettings;
+}): SandboxExecutionConfig {
+  const agentExecution = params.scope === "shared" ? undefined : params.agentExecution;
+  const globalExecution = params.globalExecution;
+  return {
+    template:
+      agentExecution?.template ?? globalExecution?.template ?? DEFAULT_SANDBOX_EXECUTION_TEMPLATE,
+    imports: resolveSandboxExecutionNamePolicy({
+      agent: agentExecution?.imports,
+      global: globalExecution?.imports,
+      defaultAllow: DEFAULT_SANDBOX_EXECUTION_IMPORT_ALLOW,
+      defaultDeny: DEFAULT_SANDBOX_EXECUTION_IMPORT_DENY,
+    }),
+    dependencies: resolveSandboxExecutionNamePolicy({
+      agent: agentExecution?.dependencies,
+      global: globalExecution?.dependencies,
+      defaultAllow: DEFAULT_SANDBOX_EXECUTION_DEPENDENCY_ALLOW,
+      defaultDeny: DEFAULT_SANDBOX_EXECUTION_DEPENDENCY_DENY,
+    }),
+  };
+}
+
 export function resolveSandboxConfigForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,
@@ -197,6 +263,11 @@ export function resolveSandboxConfigForAgent(
       scope,
       globalDocker: agent?.docker,
       agentDocker: agentSandbox?.docker,
+    }),
+    execution: resolveSandboxExecutionConfig({
+      scope,
+      globalExecution: agent?.execution,
+      agentExecution: agentSandbox?.execution,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,

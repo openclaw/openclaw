@@ -366,6 +366,38 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.sandbox.browser.network":
     "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
   "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.defaults.sandbox.execution":
+    "Generated-code execution policy for sandboxed research snippets, including deterministic template selection plus import and dependency allow/deny lists. Keep this strict so autonomous research code stays inside known-safe envelopes.",
+  "agents.defaults.sandbox.execution.template":
+    'Deterministic generated-code template id for sandbox execution. Use "python-research-v1" to keep rendered Python research snippets reproducible and reviewable.',
+  "agents.defaults.sandbox.execution.imports":
+    "Allow/deny policy for stdlib/root imports in generated Python research code. Explicit allowlists stay strict; an empty allow list blocks all imports in this category.",
+  "agents.defaults.sandbox.execution.imports.allow":
+    "Exact allowlist of stdlib/root import names permitted in generated Python research code (for example math, json, pathlib). Empty means no imports in this category are allowed.",
+  "agents.defaults.sandbox.execution.imports.deny":
+    "Exact denylist of stdlib/root import names blocked in generated Python research code even if they might otherwise appear safe. Use this for process, network, or escape-prone modules such as os or subprocess.",
+  "agents.defaults.sandbox.execution.dependencies":
+    "Allow/deny policy for third-party Python dependencies used by generated research code. Keep this minimal and explicit so sandbox runs cannot quietly pull in unsafe external client libraries.",
+  "agents.defaults.sandbox.execution.dependencies.allow":
+    "Exact allowlist of third-party dependency roots permitted in generated Python research code (for example numpy or pandas). Empty means no third-party dependencies are allowed.",
+  "agents.defaults.sandbox.execution.dependencies.deny":
+    "Exact denylist of third-party dependency roots blocked in generated Python research code, even if they appear elsewhere in prompts or examples. Use this for networked or host-control libraries such as requests, openai, or docker.",
+  "agents.list[].sandbox.execution":
+    "Per-agent override for the sandbox generated-code execution policy when an agent needs a narrower or different research-code envelope.",
+  "agents.list[].sandbox.execution.template":
+    'Per-agent override for the deterministic sandbox generated-code template id (currently "python-research-v1").',
+  "agents.list[].sandbox.execution.imports":
+    "Per-agent override for the stdlib/root import allow/deny policy applied to generated Python research code.",
+  "agents.list[].sandbox.execution.imports.allow":
+    "Per-agent exact allowlist of stdlib/root import names permitted in generated Python research code.",
+  "agents.list[].sandbox.execution.imports.deny":
+    "Per-agent exact denylist of stdlib/root import names blocked in generated Python research code.",
+  "agents.list[].sandbox.execution.dependencies":
+    "Per-agent override for the third-party dependency allow/deny policy applied to generated Python research code.",
+  "agents.list[].sandbox.execution.dependencies.allow":
+    "Per-agent exact allowlist of third-party dependency roots permitted in generated Python research code.",
+  "agents.list[].sandbox.execution.dependencies.deny":
+    "Per-agent exact denylist of third-party dependency roots blocked in generated Python research code.",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

@@ -1,6 +1,7 @@
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
+  SandboxExecutionSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
 
@@ -30,6 +31,8 @@ export type AgentSandboxConfig = {
   workspaceRoot?: string;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;
+  /** Generated-code execution policy for sandboxed research snippets. */
+  execution?: SandboxExecutionSettings;
   /** Optional sandboxed browser settings. */
   browser?: SandboxBrowserSettings;
   /** Auto-prune sandbox settings. */

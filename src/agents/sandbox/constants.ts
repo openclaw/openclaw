@@ -9,6 +9,69 @@ export const DEFAULT_SANDBOX_CONTAINER_PREFIX = "openclaw-sbx-";
 export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
+export const DEFAULT_SANDBOX_EXECUTION_TEMPLATE = "python-research-v1" as const;
+export const DEFAULT_SANDBOX_EXECUTION_IMPORT_ALLOW = [
+  "collections",
+  "csv",
+  "dataclasses",
+  "datetime",
+  "decimal",
+  "fractions",
+  "functools",
+  "itertools",
+  "json",
+  "math",
+  "pathlib",
+  "re",
+  "statistics",
+  "typing",
+] as const;
+export const DEFAULT_SANDBOX_EXECUTION_IMPORT_DENY = [
+  "ctypes",
+  "importlib",
+  "multiprocessing",
+  "os",
+  "resource",
+  "shutil",
+  "socket",
+  "subprocess",
+  "sys",
+  "tempfile",
+  "threading",
+] as const;
+export const DEFAULT_SANDBOX_EXECUTION_DEPENDENCY_ALLOW = ["numpy", "pandas"] as const;
+export const DEFAULT_SANDBOX_EXECUTION_DEPENDENCY_DENY = [
+  "boto3",
+  "docker",
+  "httpx",
+  "kubernetes",
+  "openai",
+  "paramiko",
+  "playwright",
+  "requests",
+  "selenium",
+  "sqlalchemy",
+] as const;
+export const PYTHON_STDLIB_ROOT_MODULES = new Set<string>([
+  ...DEFAULT_SANDBOX_EXECUTION_IMPORT_ALLOW,
+  ...DEFAULT_SANDBOX_EXECUTION_IMPORT_DENY,
+  "argparse",
+  "asyncio",
+  "base64",
+  "bisect",
+  "calendar",
+  "copy",
+  "enum",
+  "heapq",
+  "io",
+  "logging",
+  "operator",
+  "pprint",
+  "string",
+  "textwrap",
+  "time",
+  "uuid",
+]);
 
 export const DEFAULT_TOOL_ALLOW = [
   "exec",

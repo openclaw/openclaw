@@ -61,6 +61,17 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
     },
+    execution: {
+      template: "python-research-v1",
+      imports: {
+        allow: ["json", "math", "pathlib"],
+        deny: ["os", "subprocess"],
+      },
+      dependencies: {
+        allow: ["numpy", "pandas"],
+        deny: ["requests"],
+      },
+    },
     browser: {
       enabled: true,
       image: "openclaw-sandbox-browser:bookworm-slim",

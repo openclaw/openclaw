@@ -59,6 +59,24 @@ export type SandboxDockerSettings = {
   dangerouslyAllowContainerNamespaceJoin?: boolean;
 };
 
+export type SandboxExecutionTemplate = "python-research-v1";
+
+export type SandboxExecutionAllowDenySettings = {
+  /** Exact allowlist for root import/dependency names. Empty blocks everything in this category. */
+  allow?: string[];
+  /** Exact denylist for root import/dependency names. */
+  deny?: string[];
+};
+
+export type SandboxExecutionSettings = {
+  /** Deterministic template used to wrap generated sandbox execution code. */
+  template?: SandboxExecutionTemplate;
+  /** Stdlib/root import policy for generated Python research code. */
+  imports?: SandboxExecutionAllowDenySettings;
+  /** Third-party dependency policy for generated Python research code. */
+  dependencies?: SandboxExecutionAllowDenySettings;
+};
+
 export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;

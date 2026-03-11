@@ -108,6 +108,17 @@ function createSandboxConfig(
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
       dangerouslyAllowReservedContainerTargets: true,
     },
+    execution: {
+      template: "python-research-v1",
+      imports: {
+        allow: ["json", "math", "pathlib"],
+        deny: ["os", "subprocess"],
+      },
+      dependencies: {
+        allow: ["numpy", "pandas"],
+        deny: ["requests"],
+      },
+    },
     browser: {
       enabled: false,
       image: "openclaw-browser:test",
