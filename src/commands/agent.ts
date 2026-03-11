@@ -81,7 +81,7 @@ import {
 } from "../infra/agent-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -706,6 +706,12 @@ async function agentCommandInternal(
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
+  const embeddedSessionKey =
+    sessionKey ??
+    buildAgentMainSessionKey({
+      agentId: sessionAgentId,
+      mainKey: cfg.session?.mainKey,
+    });
 
   try {
     if (opts.deliver === true) {
@@ -1066,7 +1072,7 @@ async function agentCommandInternal(
     if (!sessionFile) {
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
-        sessionKey: sessionKey ?? sessionId,
+        sessionKey: embeddedSessionKey,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
@@ -1115,7 +1121,7 @@ async function agentCommandInternal(
             cfg,
             sessionEntry,
             sessionId,
-            sessionKey,
+            sessionKey: embeddedSessionKey,
             sessionAgentId,
             sessionFile,
             workspaceDir,
