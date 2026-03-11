@@ -35,7 +35,7 @@ function stubApprovals(overrides: {
       autoAllowSkills: false,
     },
     allowlist: [],
-    file: { agents: {} },
+    file: { version: 1, agents: {} },
   });
 }
 
