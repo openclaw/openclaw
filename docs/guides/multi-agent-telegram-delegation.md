@@ -2,16 +2,16 @@
 summary: "How to wire multi-agent delegation correctly: session keys, tools, and the Manager to Worker to QA pattern."
 title: Multi-Agent Telegram Delegation
 read_when:
-  - Your agents aren't talking to each other
+  - Your agents are not talking to each other
   - You want a manager agent to delegate to workers and run QA
-  - You're confused about when to use sessions_spawn vs sessions_send
-  - The message tool isn't triggering agent responses
+  - You are confused about when to use sessions_spawn vs sessions_send
+  - The message tool is not triggering agent responses
 status: active
 ---
 
 # Multi-Agent Telegram Delegation
 
-So your agents won't talk to each other. You've tried `sessions_spawn`, you've tried the `message` tool, nothing works. This guide explains why, and how to wire it correctly.
+So your agents will not talk to each other. You have tried `sessions_spawn`, you've tried the `message` tool, nothing works. This guide explains why, and how to wire it correctly.
 
 These are hard-won discoveries from production fleet debugging, not theory.
 
