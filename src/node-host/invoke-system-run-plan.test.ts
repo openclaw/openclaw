@@ -22,6 +22,7 @@ type HardeningCase = {
   expectedArgvChanged?: boolean;
   expectedCmdText?: string;
   checkRawCommandMatchesArgv?: boolean;
+  expectedCommandPreview?: string | null;
 };
 
 type ScriptOperandFixture = {
@@ -69,9 +70,16 @@ function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
   const binDir = path.join(tmp, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  const runtimePath = path.join(binDir, params.binName);
-  fs.writeFileSync(runtimePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  fs.chmodSync(runtimePath, 0o755);
+  const runtimePath =
+    process.platform === "win32"
+      ? path.join(binDir, `${params.binName}.cmd`)
+      : path.join(binDir, params.binName);
+  const runtimeBody =
+    process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+  fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
+  if (process.platform !== "win32") {
+    fs.chmodSync(runtimePath, 0o755);
+  }
   const oldPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
   try {
@@ -93,7 +101,8 @@ describe("hardenApprovedExecutionPaths", () => {
       mode: "build-plan",
       argv: ["env", "sh", "-c", "echo SAFE"],
       expectedArgv: () => ["env", "sh", "-c", "echo SAFE"],
-      expectedCmdText: "echo SAFE",
+      expectedCmdText: 'env sh -c "echo SAFE"',
+      expectedCommandPreview: "echo SAFE",
     },
     {
       name: "preserves dispatch-wrapper argv during approval hardening",
@@ -128,6 +137,16 @@ describe("hardenApprovedExecutionPaths", () => {
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
       checkRawCommandMatchesArgv: true,
+      expectedCommandPreview: null,
+    },
+    {
+      name: "stores full approval text and preview for path-qualified env wrappers",
+      mode: "build-plan",
+      argv: ["./env", "sh", "-c", "echo SAFE"],
+      expectedArgv: () => ["./env", "sh", "-c", "echo SAFE"],
+      expectedCmdText: './env sh -c "echo SAFE"',
+      checkRawCommandMatchesArgv: true,
+      expectedCommandPreview: "echo SAFE",
     },
   ];
 
@@ -156,10 +175,13 @@ describe("hardenApprovedExecutionPaths", () => {
           }
           expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
           if (testCase.expectedCmdText) {
-            expect(prepared.cmdText).toBe(testCase.expectedCmdText);
+            expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
           }
           if (testCase.checkRawCommandMatchesArgv) {
-            expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
+            expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
+          }
+          if ("expectedCommandPreview" in testCase) {
+            expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
           }
           return;
         }
@@ -193,6 +215,38 @@ describe("hardenApprovedExecutionPaths", () => {
 
   const mutableOperandCases: RuntimeFixture[] = [
     {
+      name: "python flagged file",
+      binName: "python3",
+      argv: ["python3", "-B", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "lua direct file",
+      binName: "lua",
+      argv: ["lua", "./run.lua"],
+      scriptName: "run.lua",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "pypy direct file",
+      binName: "pypy",
+      argv: ["pypy", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "versioned node alias file",
+      binName: "node20",
+      argv: ["node20", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
       name: "bun direct file",
       binName: "bun",
       argv: ["bun", "./run.ts"],
@@ -215,6 +269,22 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 5,
+    },
+    {
+      name: "bun test file",
+      binName: "bun",
+      argv: ["bun", "test", "./run.test.ts"],
+      scriptName: "run.test.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "deno test file",
+      binName: "deno",
+      argv: ["deno", "test", "./run.test.ts"],
+      scriptName: "run.test.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
     },
   ];
 
@@ -274,7 +344,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("does not snapshot bun package script names", () => {
+  it("rejects bun package script names that do not bind a concrete file", () => {
     withFakeRuntimeBin({
       binName: "bun",
       run: () => {
@@ -284,11 +354,11 @@ describe("hardenApprovedExecutionPaths", () => {
             command: ["bun", "run", "dev"],
             cwd: tmp,
           });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-          expect(prepared.plan.mutableFileOperand).toBeUndefined();
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }
@@ -296,7 +366,7 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
-  it("does not snapshot deno eval invocations", () => {
+  it("rejects deno eval invocations that do not bind a concrete file", () => {
     withFakeRuntimeBin({
       binName: "deno",
       run: () => {
@@ -306,11 +376,11 @@ describe("hardenApprovedExecutionPaths", () => {
             command: ["deno", "eval", "console.log('SAFE')"],
             cwd: tmp,
           });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-          expect(prepared.plan.mutableFileOperand).toBeUndefined();
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }

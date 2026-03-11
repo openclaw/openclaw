@@ -229,9 +229,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.runtime}-path-`));
     const binDir = path.join(tmp, "bin");
     fs.mkdirSync(binDir, { recursive: true });
-    const runtimePath = path.join(binDir, params.runtime);
-    fs.writeFileSync(runtimePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    fs.chmodSync(runtimePath, 0o755);
+    const runtimePath =
+      process.platform === "win32"
+        ? path.join(binDir, `${params.runtime}.cmd`)
+        : path.join(binDir, params.runtime);
+    const runtimeBody =
+      process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+    fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
+    if (process.platform !== "win32") {
+      fs.chmodSync(runtimePath, 0o755);
+    }
     const oldPath = process.env.PATH;
     process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
     try {
@@ -425,7 +432,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectInvokeOk(sendInvokeResult, { payloadContains: "app-ok" });
   });
 
-  it("forwards canonical cmdText to mac app exec host for positional-argv shell wrappers", async () => {
+  it("forwards canonical command text to mac app exec host for positional-argv shell wrappers", async () => {
     const { runViaMacAppExecHost } = await runSystemInvoke({
       preferMacAppExecHost: true,
       command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
@@ -498,7 +505,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             approvals: expect.anything(),
             request: expect.objectContaining({
               command: ["env", "sh", "-c", "echo SAFE"],
-              rawCommand: "echo SAFE",
+              rawCommand: 'env sh -c "echo SAFE"',
               cwd: canonicalCwd,
             }),
           });
@@ -586,7 +593,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           const { runCommand, sendInvokeResult } = await runSystemInvoke({
             preferMacAppExecHost: false,
             command: prepared.plan.argv,
-            rawCommand: prepared.plan.rawCommand,
+            rawCommand: prepared.plan.commandText,
             approved: true,
             security: "full",
             ask: "off",
@@ -782,7 +789,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
         command: prepared.plan.argv,
-        rawCommand: prepared.plan.rawCommand,
+        rawCommand: prepared.plan.commandText,
         systemRunPlan: prepared.plan,
         cwd: prepared.plan.cwd ?? tmp,
         approved: true,
@@ -820,7 +827,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const { runCommand, sendInvokeResult } = await runSystemInvoke({
         preferMacAppExecHost: false,
         command: prepared.plan.argv,
-        rawCommand: prepared.plan.rawCommand,
+        rawCommand: prepared.plan.commandText,
         systemRunPlan: prepared.plan,
         cwd: prepared.plan.cwd ?? tmp,
         approved: true,
@@ -859,7 +866,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             const { runCommand, sendInvokeResult } = await runSystemInvoke({
               preferMacAppExecHost: false,
               command: prepared.plan.argv,
-              rawCommand: prepared.plan.rawCommand,
+              rawCommand: prepared.plan.commandText,
               systemRunPlan: prepared.plan,
               cwd: prepared.plan.cwd ?? tmp,
               approved: true,
@@ -901,7 +908,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             const { runCommand, sendInvokeResult } = await runSystemInvoke({
               preferMacAppExecHost: false,
               command: prepared.plan.argv,
-              rawCommand: prepared.plan.rawCommand,
+              rawCommand: prepared.plan.commandText,
               systemRunPlan: prepared.plan,
               cwd: prepared.plan.cwd ?? tmp,
               approved: true,
