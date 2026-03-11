@@ -1106,6 +1106,21 @@ export async function runEmbeddedAttempt(
       ] as Array<{ name?: string }>);
       let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
+      // Forward sender identity as HTTP headers so downstream LLM proxies can
+      // attribute token usage to individual users (e.g. Telegram sender).
+      if (params.senderId || params.senderUsername) {
+        const senderHeaders: Record<string, string> = {};
+        if (params.senderId) senderHeaders["X-TG-User-Id"] = params.senderId;
+        if (params.senderUsername) senderHeaders["X-TG-Username"] = params.senderUsername;
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          return inner!(model, context, {
+            ...options,
+            headers: { ...senderHeaders, ...options?.headers },
+          });
+        };
+      }
+
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,
