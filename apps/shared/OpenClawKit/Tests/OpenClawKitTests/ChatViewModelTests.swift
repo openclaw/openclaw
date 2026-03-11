@@ -41,11 +41,17 @@ private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSession
         inputTokens: nil,
         outputTokens: nil,
         totalTokens: nil,
+        modelProvider: nil,
         model: nil,
         contextTokens: nil)
 }
 
-private func sessionEntry(key: String, updatedAt: Double, model: String?) -> OpenClawChatSessionEntry {
+private func sessionEntry(
+    key: String,
+    updatedAt: Double,
+    model: String?,
+    modelProvider: String? = nil) -> OpenClawChatSessionEntry
+{
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
@@ -63,6 +69,7 @@ private func sessionEntry(key: String, updatedAt: Double, model: String?) -> Ope
         inputTokens: nil,
         outputTokens: nil,
         totalTokens: nil,
+        modelProvider: modelProvider,
         model: model,
         contextTokens: nil)
 }
@@ -655,7 +662,7 @@ extension TestChatTransportState {
             count: 1,
             defaults: OpenClawChatSessionsDefaults(model: "openrouter/gpt-4.1-mini", contextTokens: nil),
             sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: "openrouter/gpt-4.1-mini"),
+                sessionEntry(key: "main", updatedAt: now, model: "gpt-4.1-mini", modelProvider: "openrouter"),
             ])
         let models = [
             modelChoice(id: "gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
@@ -747,7 +754,7 @@ extension TestChatTransportState {
 
         try await waitUntil("two model patches complete") {
             let patched = await transport.patchedModels()
-            return patched == ["openai/gpt-5.4", "openai/gpt-5.4-pro", "openai/gpt-5.4-pro"]
+            return patched == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
@@ -850,6 +857,55 @@ extension TestChatTransportState {
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+    }
+
+    @Test func failedLatestModelSelectionRestoresEarlierSuccessWithoutReplay() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "main", updatedAt: now, model: nil),
+            ])
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+            modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.4" {
+                    try await Task.sleep(for: .milliseconds(100))
+                    return
+                }
+                if model == "openai/gpt-5.4-pro" {
+                    try await Task.sleep(for: .milliseconds(200))
+                    throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "boom"])
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await MainActor.run {
+            vm.selectModel("openai/gpt-5.4")
+            vm.selectModel("openai/gpt-5.4-pro")
+        }
+
+        try await waitUntil("latest failure restores prior successful model") {
+            await MainActor.run {
+                vm.modelSelectionID == "openai/gpt-5.4" &&
+                    vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
+                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
+            }
+        }
+
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
