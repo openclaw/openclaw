@@ -660,6 +660,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
     } catch (err) {
       runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
+      throw new Error(`Discord bot identity fetch failed: ${String(err)}. Cannot start Discord provider without botUserId.`);
     }
 
     if (voiceEnabled) {
