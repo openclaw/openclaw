@@ -473,6 +473,100 @@ describe("local embedding normalization", () => {
     expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
   });
 
+  it("dispose() releases embeddingContext, model, and llama in order", async () => {
+    const disposeContext = vi.fn().mockResolvedValue(undefined);
+    const disposeModel = vi.fn().mockResolvedValue(undefined);
+    const disposeLlama = vi.fn().mockResolvedValue(undefined);
+    const callOrder: string[] = [];
+
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        dispose: () => {
+          callOrder.push("llama");
+          return disposeLlama();
+        },
+        loadModel: vi.fn().mockResolvedValue({
+          dispose: () => {
+            callOrder.push("model");
+            return disposeModel();
+          },
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            dispose: () => {
+              callOrder.push("context");
+              return disposeContext();
+            },
+            getEmbeddingFor: vi.fn().mockResolvedValue({ vector: new Float32Array([1, 0, 0]) }),
+          }),
+        }),
+      }),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+
+    // Trigger lazy init so resources are allocated.
+    await provider.embedQuery("warm-up");
+
+    expect(provider.dispose).toBeDefined();
+    await provider.dispose!();
+
+    expect(callOrder).toEqual(["context", "model", "llama"]);
+    expect(disposeContext).toHaveBeenCalledOnce();
+    expect(disposeModel).toHaveBeenCalledOnce();
+    expect(disposeLlama).toHaveBeenCalledOnce();
+  });
+
+  it("dispose() is a no-op when called before any embedding is generated", async () => {
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        dispose: vi.fn(),
+        loadModel: vi.fn(),
+      }),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+
+    // No embedQuery call — resources were never initialised.
+    await expect(provider.dispose!()).resolves.toBeUndefined();
+  });
+
+  it("dispose() is idempotent — second call does not re-dispose", async () => {
+    const disposeContext = vi.fn().mockResolvedValue(undefined);
+    const disposeModel = vi.fn().mockResolvedValue(undefined);
+    const disposeLlama = vi.fn().mockResolvedValue(undefined);
+
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        dispose: disposeLlama,
+        loadModel: vi.fn().mockResolvedValue({
+          dispose: disposeModel,
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            dispose: disposeContext,
+            getEmbeddingFor: vi.fn().mockResolvedValue({ vector: new Float32Array([1, 0, 0]) }),
+          }),
+        }),
+      }),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+    await provider.embedQuery("warm-up");
+
+    await provider.dispose!();
+    await provider.dispose!(); // second call — should be a no-op
+
+    expect(disposeContext).toHaveBeenCalledOnce();
+    expect(disposeModel).toHaveBeenCalledOnce();
+    expect(disposeLlama).toHaveBeenCalledOnce();
+  });
+
   it("normalizes batch embeddings to magnitude ~1.0", async () => {
     const unnormalizedVectors = [
       [2.35, 3.45, 0.63, 4.3],
