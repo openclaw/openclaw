@@ -27,6 +27,8 @@ type ThreadTitleModelSelection = {
   agentDir: string;
 };
 
+type ThreadTitleModel = Parameters<typeof complete>[0];
+
 export function normalizeGeneratedThreadTitle(raw: string): string {
   const lines = raw.replace(/\r/g, "").split("\n");
   let firstLine = "";
@@ -88,95 +90,156 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const authStorage = discoverAuthStorage(selection.agentDir);
-    const modelRegistry = discoverModels(authStorage, selection.agentDir);
-    const model = modelRegistry.find(selection.provider, selection.modelId);
-    if (!model) {
-      logVerbose(
-        `thread-title: model not found for agent ${params.agentId}: ${selection.provider}/${selection.modelId}`,
-      );
-      return null;
-    }
-
-    const apiKeyInfo = await getApiKeyForModel({
-      model,
+    const model = await resolveThreadTitleModel({
       cfg: params.cfg,
-      agentDir: selection.agentDir,
-      profileId: selection.profileId,
+      selection,
+      agentId: params.agentId,
     });
-    const rawApiKey = apiKeyInfo.apiKey?.trim();
-    if (!rawApiKey && apiKeyInfo.mode !== "aws-sdk") {
-      logVerbose(
-        `thread-title: missing API key for agent ${params.agentId}: ${selection.provider}/${selection.modelId}`,
-      );
+    if (!model) {
       return null;
     }
-    if (rawApiKey) {
-      if (model.provider === "github-copilot") {
-        const { resolveCopilotApiToken } = await import("../../../github-copilot/token.js");
-        const copilotToken = await resolveCopilotApiToken({
-          githubToken: rawApiKey,
-        });
-        authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-      } else {
-        authStorage.setRuntimeApiKey(model.provider, rawApiKey);
-      }
-    }
 
-    const timeoutMs = Math.max(
-      100,
-      Math.floor(params.timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS),
-    );
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const promptText =
-        sourceText.length > MAX_THREAD_TITLE_SOURCE_CHARS
-          ? `${sourceText.slice(0, MAX_THREAD_TITLE_SOURCE_CHARS)}...`
-          : sourceText;
-      const channelName = normalizeTitleContextField(
-        params.channelName,
-        MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
-      );
-      const channelDescription = normalizeTitleContextField(
-        params.channelDescription,
-        MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
-      );
-      const messageLines: string[] = [];
-      if (channelName) {
-        messageLines.push(`Channel: ${channelName}`);
-      }
-      if (channelDescription) {
-        messageLines.push(`Channel description: ${channelDescription}`);
-      }
-      messageLines.push(`Message:\n${promptText}`);
-      const response = await complete(
-        model,
-        {
-          systemPrompt:
-            "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
-          messages: [
-            {
-              role: "user",
-              content: messageLines.join("\n\n"),
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        {
-          maxTokens: 24,
-          temperature: 0.2,
-          signal: controller.signal,
-        },
-      );
-      const generated = normalizeGeneratedThreadTitle(extractAssistantText(response));
-      return generated || null;
-    } finally {
-      clearTimeout(timer);
-    }
+    const promptText = truncateThreadTitleSourceText(sourceText);
+    const userMessage = buildThreadTitleUserMessage({
+      sourceText: promptText,
+      channelName: params.channelName,
+      channelDescription: params.channelDescription,
+    });
+    const timeoutMs = resolveThreadTitleTimeoutMs(params.timeoutMs);
+    const response = await completeThreadTitle({
+      model,
+      userMessage,
+      timeoutMs,
+    });
+    const generated = normalizeGeneratedThreadTitle(extractAssistantText(response));
+    return generated || null;
   } catch (err) {
     logVerbose(`thread-title: title generation failed for agent ${params.agentId}: ${String(err)}`);
     return null;
+  }
+}
+
+async function resolveThreadTitleModel(params: {
+  cfg: OpenClawConfig;
+  selection: ThreadTitleModelSelection;
+  agentId: string;
+}): Promise<ThreadTitleModel | null> {
+  const authStorage = discoverAuthStorage(params.selection.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.selection.agentDir);
+  const model = modelRegistry.find(params.selection.provider, params.selection.modelId);
+  if (!model) {
+    logVerbose(
+      `thread-title: model not found for agent ${params.agentId}: ${params.selection.provider}/${params.selection.modelId}`,
+    );
+    return null;
+  }
+
+  const apiKeyInfo = await getApiKeyForModel({
+    model,
+    cfg: params.cfg,
+    agentDir: params.selection.agentDir,
+    profileId: params.selection.profileId,
+  });
+  const rawApiKey = apiKeyInfo.apiKey?.trim();
+  if (!rawApiKey && apiKeyInfo.mode !== "aws-sdk") {
+    logVerbose(
+      `thread-title: missing API key for agent ${params.agentId}: ${params.selection.provider}/${params.selection.modelId}`,
+    );
+    return null;
+  }
+
+  await maybeSetThreadTitleRuntimeApiKey({
+    authStorage,
+    model,
+    rawApiKey,
+  });
+
+  return model;
+}
+
+async function maybeSetThreadTitleRuntimeApiKey(params: {
+  authStorage: ReturnType<typeof discoverAuthStorage>;
+  model: ThreadTitleModel;
+  rawApiKey: string | undefined;
+}): Promise<void> {
+  if (!params.rawApiKey) {
+    return;
+  }
+  if (params.model.provider === "github-copilot") {
+    const { resolveCopilotApiToken } = await import("../../../github-copilot/token.js");
+    const copilotToken = await resolveCopilotApiToken({
+      githubToken: params.rawApiKey,
+    });
+    params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
+    return;
+  }
+  params.authStorage.setRuntimeApiKey(params.model.provider, params.rawApiKey);
+}
+
+function truncateThreadTitleSourceText(sourceText: string): string {
+  if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
+    return sourceText;
+  }
+  return `${sourceText.slice(0, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+}
+
+function buildThreadTitleUserMessage(params: {
+  sourceText: string;
+  channelName?: string;
+  channelDescription?: string;
+}): string {
+  const channelName = normalizeTitleContextField(
+    params.channelName,
+    MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
+  );
+  const channelDescription = normalizeTitleContextField(
+    params.channelDescription,
+    MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
+  );
+  const messageLines: string[] = [];
+  if (channelName) {
+    messageLines.push(`Channel: ${channelName}`);
+  }
+  if (channelDescription) {
+    messageLines.push(`Channel description: ${channelDescription}`);
+  }
+  messageLines.push(`Message:\n${params.sourceText}`);
+  return messageLines.join("\n\n");
+}
+
+function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
+  return Math.max(100, Math.floor(timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS));
+}
+
+async function completeThreadTitle(params: {
+  model: ThreadTitleModel;
+  userMessage: string;
+  timeoutMs: number;
+}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  try {
+    return await complete(
+      params.model,
+      {
+        systemPrompt:
+          "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
+        messages: [
+          {
+            role: "user",
+            content: params.userMessage,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        maxTokens: 24,
+        temperature: 0.2,
+        signal: controller.signal,
+      },
+    );
+  } finally {
+    clearTimeout(timer);
   }
 }
 
