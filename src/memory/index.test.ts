@@ -15,18 +15,27 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta];
   };
   return {
-    createEmbeddingProvider: async (options: { model?: string }) => ({
-      requestedProvider: "openai",
-      provider: {
-        id: "mock",
-        model: options.model ?? "mock-embed",
-        embedQuery: async (text: string) => embedText(text),
-        embedBatch: async (texts: string[]) => {
-          embedBatchCalls += 1;
-          return texts.map(embedText);
+    createEmbeddingProvider: async (options: { model?: string }) => {
+      if (options.model === "fts-only-test") {
+        return {
+          requestedProvider: "auto",
+          provider: null,
+          providerUnavailableReason: "No embedding provider configured",
+        };
+      }
+      return {
+        requestedProvider: "openai",
+        provider: {
+          id: "mock",
+          model: options.model ?? "mock-embed",
+          embedQuery: async (text: string) => embedText(text),
+          embedBatch: async (texts: string[]) => {
+            embedBatchCalls += 1;
+            return texts.map(embedText);
+          },
         },
-      },
-    }),
+      };
+    },
   };
 });
 
@@ -41,6 +50,7 @@ describe("memory index", () => {
   let indexStatusPath = "";
   let indexSourceChangePath = "";
   let indexModelPath = "";
+  let indexFtsOnlyPath = "";
   let sourceChangeStateDir = "";
   const sourceChangeSessionLogLines = [
     JSON.stringify({
@@ -74,6 +84,7 @@ describe("memory index", () => {
     indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
     indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    indexFtsOnlyPath = path.join(workspaceDir, "index-fts-only.sqlite");
     sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
 
     await fs.mkdir(memoryDir, { recursive: true });
@@ -353,6 +364,27 @@ describe("memory index", () => {
 
     await manager.sync({ force: true });
     expect(embedBatchCalls).toBe(afterFirst);
+  });
+
+  it("keeps chunks indexed across force sync in FTS-only mode", async () => {
+    const cfg = createCfg({
+      storePath: indexFtsOnlyPath,
+      model: "fts-only-test",
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ force: true });
+    const firstStatus = manager.status();
+    expect(firstStatus.provider).toBe("none");
+    expect(firstStatus.chunks).toBeGreaterThan(0);
+
+    await manager.sync({ force: true });
+    const secondStatus = manager.status();
+    expect(secondStatus.chunks).toBeGreaterThan(0);
+
+    const results = await manager.search("zebra");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
