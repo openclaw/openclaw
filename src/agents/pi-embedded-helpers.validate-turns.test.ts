@@ -128,6 +128,79 @@ describe("validateGeminiTurns", () => {
     expect(result[3].role).toBe("assistant");
     expect(result[4].role).toBe("user");
   });
+
+  it("should merge consecutive assistant messages with string content", () => {
+    // Test normalizeAssistantContentToArray string->TextContent conversion
+    // This covers the assistant-side equivalent of the user string content bug
+    const msgs = asMessages([
+      { role: "user", content: "Hello" },
+      {
+        role: "assistant",
+        content: "First response as string",
+      },
+      {
+        role: "assistant",
+        content: "Second response as string",
+      },
+    ]);
+
+    const result = validateGeminiTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].role).toBe("user");
+    expect(result[1].role).toBe("assistant");
+
+    // String content should be converted to TextContent blocks, not dropped
+    const assistantContent = (result[1] as { content: unknown[] }).content;
+    expect(assistantContent).toEqual([
+      { type: "text", text: "First response as string" },
+      { type: "text", text: "Second response as string" },
+    ]);
+  });
+
+  it("should handle mixed string and array content in assistant merges", () => {
+    const msgs = asMessages([
+      { role: "user", content: "Question" },
+      {
+        role: "assistant",
+        content: "String content",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Array content" }],
+      },
+    ]);
+
+    const result = validateGeminiTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const merged = result[1] as { content: unknown[] };
+    expect(merged.content).toEqual([
+      { type: "text", text: "String content" },
+      { type: "text", text: "Array content" },
+    ]);
+  });
+
+  it("filters empty/whitespace string content in assistant merges", () => {
+    const msgs = asMessages([
+      { role: "user", content: "Hello" },
+      {
+        role: "assistant",
+        content: "   ",
+      },
+      {
+        role: "assistant",
+        content: "Real content",
+      },
+    ]);
+
+    const result = validateGeminiTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const merged = result[1] as { content: unknown[] };
+    // Whitespace-only content should be filtered out
+    expect(merged.content).toEqual([{ type: "text", text: "Real content" }]);
+  });
 });
 
 describe("validateAnthropicTurns", () => {
