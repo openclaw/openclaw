@@ -11,6 +11,10 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../../infra/outbound/outbound-session.js";
+import {
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
   normalizeOutboundPayloads,
@@ -219,6 +223,49 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
+      // Resolve session route from delivery target (channel/to/accountId) to prevent IDOR.
+      // This ensures mirror writes only to the session associated with the outbound route,
+      // not an arbitrary sessionKey supplied by the caller.
+      const route = await resolveOutboundSessionRoute({
+        cfg,
+        channel: deliveryChannel,
+        target: deliveryTarget,
+        accountId: resolvedAccountId ?? null,
+        threadId: resolvedThreadTarget ?? null,
+        agentId: opts.agentId ?? "main",
+      }).catch(() => null);
+
+      if (route) {
+        await ensureOutboundSessionEntry({
+          cfg,
+          agentId: opts.agentId ?? "main",
+          channel: deliveryChannel,
+          accountId: resolvedAccountId ?? null,
+          route,
+        }).catch(() => {});
+      }
+
+      // Build mirror context with hard limits to prevent resource exhaustion.
+      // This ensures cross-channel visibility when dmScope: "main" is configured.
+      const MAX_MIRROR_CHARS = 10_000;
+      const MAX_MIRROR_MEDIA_URLS = 25;
+
+      const rawMirrorText = payloads
+        .map((p) => p.text)
+        .filter((t): t is string => Boolean(t && t.trim()))
+        .join("\n\n");
+
+      const mirrorText =
+        rawMirrorText.length > MAX_MIRROR_CHARS
+          ? rawMirrorText.slice(0, MAX_MIRROR_CHARS) + "\n\n[truncated]"
+          : rawMirrorText;
+
+      const mirrorMediaUrls = payloads
+        .flatMap((p) => p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : []))
+        .map((u) => u?.trim())
+        .filter((url): url is string => Boolean(url))
+        .slice(0, MAX_MIRROR_MEDIA_URLS);
+
       await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
@@ -232,6 +279,14 @@ export async function deliverAgentCommandResult(params: {
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
+        mirror: route?.sessionKey
+          ? {
+              sessionKey: route.sessionKey,
+              agentId: opts.agentId ?? "main",
+              text: mirrorText || undefined,
+              mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+            }
+          : undefined,
       });
     }
   }
