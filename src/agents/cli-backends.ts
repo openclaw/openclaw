@@ -107,6 +107,24 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+const DEFAULT_CURSOR_BACKEND: CliBackendConfig = {
+  command: "agent",
+  args: ["-p", "--output-format", "json", "--force"],
+  resumeArgs: ["-p", "--output-format", "json", "--force", "--resume", "{sessionId}"],
+  output: "json",
+  input: "arg",
+  modelArg: "--model",
+  sessionIdFields: ["session_id", "sessionId"],
+  sessionMode: "existing",
+  reliability: {
+    watchdog: {
+      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+    },
+  },
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -206,6 +224,7 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("cursor-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -233,6 +252,14 @@ export function resolveCliBackendConfig(
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "cursor-cli") {
+    const merged = mergeBackendConfig(DEFAULT_CURSOR_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) {
       return null;

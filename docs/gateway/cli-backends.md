@@ -34,6 +34,15 @@ Codex CLI also works out of the box:
 openclaw agent --message "hi" --model codex-cli/gpt-5.4
 ```
 
+Cursor CLI (headless `agent` command) also works out of the box:
+
+```bash
+openclaw agent --message "hi" --model cursor-cli/claude-4-sonnet
+```
+
+Cursor CLI requires authentication via `CURSOR_API_KEY` environment variable or
+`agent login`. See [Cursor CLI Authentication](https://cursor.com/docs/cli/reference/authentication).
+
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
 command path:
 
@@ -203,6 +212,18 @@ OpenClaw also ships a default for `codex-cli`:
 - `modelArg: "--model"`
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
+
+OpenClaw also ships a default for `cursor-cli`:
+
+- `command: "agent"`
+- `args: ["-p", "--output-format", "json", "--force"]`
+- `resumeArgs: ["-p", "--output-format", "json", "--force", "--resume", "{sessionId}"]`
+- `output: "json"`
+- `modelArg: "--model"`
+- `sessionMode: "existing"`
+
+Cursor CLI uses `--force` to allow file modifications without confirmation.
+Authentication requires `CURSOR_API_KEY` env var or a prior `agent login`.
 
 Override only if needed (common: absolute `command` path).
 

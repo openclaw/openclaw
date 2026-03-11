@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveCliBackendConfig } from "./cli-backends.js";
+import { resolveCliBackendConfig, resolveCliBackendIds } from "./cli-backends.js";
 
 describe("resolveCliBackendConfig reliability merge", () => {
   it("defaults codex-cli to workspace-write for fresh and resume runs", () => {
@@ -164,5 +164,54 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     ]);
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
+  });
+});
+
+describe("resolveCliBackendConfig cursor-cli defaults", () => {
+  it("is included in built-in backend ids", () => {
+    const ids = resolveCliBackendIds();
+    expect(ids.has("cursor-cli")).toBe(true);
+  });
+
+  it("uses headless agent defaults for fresh and resume args", () => {
+    const resolved = resolveCliBackendConfig("cursor-cli");
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.id).toBe("cursor-cli");
+    expect(resolved?.config.command).toBe("agent");
+    expect(resolved?.config.args).toEqual(["-p", "--output-format", "json", "--force"]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--force",
+      "--resume",
+      "{sessionId}",
+    ]);
+    expect(resolved?.config.output).toBe("json");
+    expect(resolved?.config.modelArg).toBe("--model");
+    expect(resolved?.config.sessionMode).toBe("existing");
+  });
+
+  it("retains defaults when only command is overridden", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "cursor-cli": {
+              command: "/usr/local/bin/agent",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("cursor-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.command).toBe("/usr/local/bin/agent");
+    expect(resolved?.config.args).toEqual(["-p", "--output-format", "json", "--force"]);
+    expect(resolved?.config.output).toBe("json");
+    expect(resolved?.config.modelArg).toBe("--model");
   });
 });
