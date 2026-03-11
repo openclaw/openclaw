@@ -91,14 +91,13 @@ export async function resolveSessionAuthProfileOverride(params: {
       return undefined;
     }
     const legacyEntry = store.profiles[profileId];
+    if (legacyEntry?.type !== "oauth") {
+      return profileId;
+    }
     const legacyHasIdentity =
-      legacyEntry?.type === "oauth" &&
-      ((typeof legacyEntry.email === "string" && legacyEntry.email.trim().length > 0) ||
-        (typeof legacyEntry.accountId === "string" && legacyEntry.accountId.length > 0));
+      (typeof legacyEntry.email === "string" && legacyEntry.email.trim().length > 0) ||
+      (typeof legacyEntry.accountId === "string" && legacyEntry.accountId.length > 0);
     const matchesLegacyIdentity = (candidateId: string) => {
-      if (legacyEntry?.type !== "oauth") {
-        return false;
-      }
       const entry = store.profiles[candidateId];
       if (entry?.type !== "oauth") {
         return false;
@@ -193,14 +192,14 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   let next = resolveCanonicalProfile(current);
   if (isNewSession) {
-    next = current ? pickNextAvailable(next ?? current) : pickFirstAvailable();
+    next = resolveCanonicalProfile(
+      current ? pickNextAvailable(next ?? current) : pickFirstAvailable(),
+    );
   } else if (current && compactionCount > storedCompaction) {
-    next = pickNextAvailable(next ?? current);
+    next = resolveCanonicalProfile(pickNextAvailable(next ?? current));
   } else if (!next || isProfileInCooldown(store, next)) {
-    next = pickFirstAvailable();
+    next = resolveCanonicalProfile(pickFirstAvailable());
   }
-
-  next = resolveCanonicalProfile(next);
 
   if (!next) {
     return current;

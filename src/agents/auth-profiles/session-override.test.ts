@@ -213,4 +213,53 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionEntry.authProfileOverrideSource).toBe("auto");
     });
   });
+
+  it("does not remap non-oauth default overrides to oauth aliases", async () => {
+    await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
+      const agentDir = path.join(stateDir, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await writeAuthStore(agentDir, {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-default",
+          },
+          "openai-codex:josh%40example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            email: "josh@example.com",
+            access: "access-token-josh",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default", "openai-codex:josh%40example.com"],
+        },
+      });
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s5",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai-codex:default",
+        authProfileOverrideSource: "auto",
+      };
+      const sessionStore = { "agent:main:telegram:direct:8578467390": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai-codex",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:telegram:direct:8578467390",
+        storePath: undefined,
+        isNewSession: false,
+      });
+
+      expect(resolved).toBe("openai-codex:default");
+      expect(sessionEntry.authProfileOverride).toBe("openai-codex:default");
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    });
+  });
 });
