@@ -8,7 +8,7 @@ import {
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
-import { SUBAGENT_SPAWN_ACCEPTED_NOTE } from "./subagent-spawn.js";
+import { SUBAGENT_SPAWN_FIRE_AND_FORGET_NOTE } from "./subagent-spawn.js";
 
 const callGatewayMock = getCallGatewayMock();
 type GatewayCall = { method?: string; params?: unknown };
@@ -120,7 +120,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
     expect(result.details).toMatchObject({
       status: "accepted",
-      note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
+      note: SUBAGENT_SPAWN_FIRE_AND_FORGET_NOTE,
       modelApplied: true,
     });
 

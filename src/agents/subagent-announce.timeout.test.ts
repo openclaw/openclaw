@@ -23,10 +23,19 @@ let fallbackRequesterResolution: {
   requesterSessionKey: string;
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
 } | null = null;
+let rejectFinalCompletionAnnounce = false;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: GatewayCall) => {
     gatewayCalls.push(request);
+    if (
+      rejectFinalCompletionAnnounce &&
+      request.method === "agent" &&
+      request.expectFinal === true &&
+      request.params?.sessionKey === "agent:main:main"
+    ) {
+      throw new Error("unexpected final wait on requester session");
+    }
     if (request.method === "chat.history") {
       return { messages: [] };
     }
@@ -129,6 +138,7 @@ describe("subagent announce timeout config", () => {
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
     fallbackRequesterResolution = null;
+    rejectFinalCompletionAnnounce = false;
   });
 
   it("uses 60s timeout by default for direct announce agent call", async () => {
@@ -150,7 +160,7 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.timeoutMs).toBe(90_000);
   });
 
-  it("honors configured announce timeout for completion direct agent call", async () => {
+  it("does not wait for final completion delivery on top-level requester announces", async () => {
     setConfiguredAnnounceTimeout(90_000);
     await runAnnounceFlowForTest("run-config-timeout-send", {
       requesterOrigin: {
@@ -161,9 +171,28 @@ describe("subagent announce timeout config", () => {
     });
 
     const completionDirectAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
+      (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
     );
+    expect(completionDirectAgentCall?.expectFinal).toBe(false);
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
+  });
+
+  it("regression, completion announces succeed without waiting for a busy requester final turn", async () => {
+    rejectFinalCompletionAnnounce = true;
+
+    const didAnnounce = await runAnnounceFlowForTest("run-no-final-wait", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const completionDirectAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
+    );
+    expect(completionDirectAgentCall?.expectFinal).toBe(false);
   });
 
   it("regression, skips parent announce while descendants are still pending", async () => {
@@ -190,10 +219,11 @@ describe("subagent announce timeout config", () => {
 
     expect(didAnnounce).toBe(true);
     const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
+      (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
     );
     const internalEvents =
       (directAgentCall?.params?.internalEvents as Array<{ announceType?: string }>) ?? [];
+    expect(directAgentCall?.expectFinal).toBe(false);
     expect(internalEvents[0]?.announceType).toBe("cron job");
   });
 
@@ -210,6 +240,7 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(directAgentCall?.params?.sessionKey).toBe(cronSessionKey);
+    expect(directAgentCall?.expectFinal).toBe(true);
     expect(directAgentCall?.params?.deliver).toBe(false);
     expect(directAgentCall?.params?.channel).toBeUndefined();
     expect(directAgentCall?.params?.to).toBeUndefined();

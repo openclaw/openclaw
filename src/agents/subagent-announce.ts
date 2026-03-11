@@ -785,6 +785,7 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    const waitForFinalDelivery = !params.expectsCompletionMessage || params.requesterIsSubagent;
     await runAnnounceDeliveryWithRetry({
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
@@ -811,7 +812,9 @@ async function sendSubagentAnnounceDirectly(params: {
             },
             idempotencyKey: params.directIdempotencyKey,
           },
-          expectFinal: true,
+          // Top-level completion announces should stop at gateway acceptance to avoid
+          // requester-lane blocking while a separate turn is already running.
+          expectFinal: waitForFinalDelivery,
           timeoutMs: announceTimeoutMs,
         }),
     });

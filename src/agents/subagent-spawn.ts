@@ -79,8 +79,12 @@ export type SpawnSubagentContext = {
   workspaceDir?: string;
 };
 
-export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
+export const SUBAGENT_SPAWN_WAIT_FOR_CHILDREN_NOTE =
   "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool. Wait for completion events to arrive as user messages, track expected child session keys, and only send your final answer after ALL expected completions arrive. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.";
+export const SUBAGENT_SPAWN_FIRE_AND_FORGET_NOTE =
+  "Auto-announce is push-based. Do not wait for child completions in this turn. Finish your current reply now, do not poll, and let completion updates arrive later as separate events.";
+// Backward-compatible alias retained for callers that still import the old constant name.
+export const SUBAGENT_SPAWN_ACCEPTED_NOTE = SUBAGENT_SPAWN_WAIT_FOR_CHILDREN_NOTE;
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
 
@@ -162,6 +166,22 @@ function resolveSpawnMode(params: {
   }
   // Thread-bound spawns should default to persistent sessions.
   return params.threadRequested ? "session" : "run";
+}
+
+function resolveSpawnAcceptedNote(params: {
+  spawnMode: SpawnSubagentMode;
+  isCronSession: boolean;
+  callerDepth: number;
+}): string | undefined {
+  if (params.spawnMode === "session") {
+    return SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE;
+  }
+  if (params.isCronSession) {
+    return undefined;
+  }
+  return params.callerDepth >= 1
+    ? SUBAGENT_SPAWN_WAIT_FOR_CHILDREN_NOTE
+    : SUBAGENT_SPAWN_FIRE_AND_FORGET_NOTE;
 }
 
 function summarizeError(err: unknown): string {
@@ -725,12 +745,11 @@ export async function spawnSubagentDirect(
   // because cron sessions end immediately after the agent produces a response,
   // so the agent needs to wait for subagent results to keep the turn alive.
   const isCronSession = isCronSessionKey(ctx.agentSessionKey);
-  const note =
-    spawnMode === "session"
-      ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
-      : isCronSession
-        ? undefined
-        : SUBAGENT_SPAWN_ACCEPTED_NOTE;
+  const note = resolveSpawnAcceptedNote({
+    spawnMode,
+    isCronSession,
+    callerDepth,
+  });
 
   return {
     status: "accepted",

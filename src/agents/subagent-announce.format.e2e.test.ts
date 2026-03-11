@@ -1762,6 +1762,25 @@ describe("subagent announce formatting", () => {
     );
   });
 
+  it("keeps top-level completion announce on acceptance-only delivery", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { expectFinal?: boolean } | undefined;
+    expect(call?.expectFinal).toBe(false);
+  });
+
   it("retries reading subagent output when early lifecycle completion had no text", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValueOnce(true).mockReturnValue(false);
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
