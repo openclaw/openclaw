@@ -50,6 +50,8 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-api-key-cn"
+  | "modelstudio-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -77,6 +79,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "modelstudio"
   | "xai"
   | "volcengine"
   | "byteplus"
@@ -138,6 +141,8 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioApiKeyCn?: string;
+  modelstudioApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

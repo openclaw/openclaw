@@ -24,6 +24,7 @@
 - `r: testflight`: close requests asking for TestFlight access/builds. OpenClaw does not provide TestFlight distribution yet, so use the standard response (“Not available, build from source.”) instead of ad-hoc replies.
 - `r: third-party-extension`: close with guidance to ship as third-party plugin.
 - `r: moltbook`: close + lock as off-topic (not affiliated).
+- `r: spam`: close + lock as spam (`lock_reason: spam`).
 - `invalid`: close invalid items (issues are closed as `not_planned`; PRs are closed).
 - `dirty`: close PRs with too many unrelated/unexpected changes (PR-only label).
 
