@@ -47,6 +47,7 @@ describe("resolveProviderCapabilities", () => {
   it("flags providers that opt out of OpenAI-compatible turn validation", () => {
     expect(supportsOpenAiCompatTurnValidation("openrouter")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("opencode")).toBe(false);
+    expect(supportsOpenAiCompatTurnValidation("opencode-go")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("moonshot")).toBe(true);
   });
 
@@ -61,6 +62,12 @@ describe("resolveProviderCapabilities", () => {
       shouldSanitizeGeminiThoughtSignaturesForModel({
         provider: "kilocode",
         modelId: "gemini-2.0-flash",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSanitizeGeminiThoughtSignaturesForModel({
+        provider: "opencode-go",
+        modelId: "google/gemini-2.5-pro-preview",
       }),
     ).toBe(true);
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
