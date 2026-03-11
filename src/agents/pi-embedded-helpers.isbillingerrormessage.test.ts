@@ -840,4 +840,9 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("auth");
   });
+  it("keeps billing precedence when payload also contains generic auth tokens", () => {
+    expect(
+      classifyFailoverReason("Billing error: insufficient credits; token expired for this account"),
+    ).toBe("billing");
+  });
 });

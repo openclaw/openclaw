@@ -1010,6 +1010,15 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
+  if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isBillingErrorMessage(raw)) {
+    return "billing";
+  }
+  if (isTimeoutErrorMessage(raw)) {
+    return "timeout";
+  }
   // OAuth refresh wrappers can include provider payloads with `server_error`.
   // Keep auth classification ahead of the generic streaming server_error fallback.
   if (isAuthPermanentErrorMessage(raw)) {
@@ -1022,15 +1031,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     // Treat provider-declared server_error as transient provider overload so
     // auth-profile cooldown + overload backoff policy can engage.
     return "overloaded";
-  }
-  if (isCloudCodeAssistFormatError(raw)) {
-    return "format";
-  }
-  if (isBillingErrorMessage(raw)) {
-    return "billing";
-  }
-  if (isTimeoutErrorMessage(raw)) {
-    return "timeout";
   }
   return null;
 }
