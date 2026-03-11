@@ -43,9 +43,28 @@ describe("resolveEffectiveHomeDir", () => {
       PREFIX: "/data/data/com.termux/files/usr",
       ANDROID_DATA: "/data",
     } as NodeJS.ProcessEnv;
-    expect(resolveEffectiveHomeDir(env)).toBe(
-      path.resolve("/data/data/com.termux/files/home"),
-    );
+    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/data/data/com.termux/files/home"));
+  });
+
+  it("ignores PREFIX without com.termux to avoid false positives in generic chroots", () => {
+    const env = {
+      PREFIX: "/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/fallback"));
+  });
+
+  it("uses Termux PREFIX for tilde expansion when HOME is unset", () => {
+    const env = {
+      OPENCLAW_HOME: "~/workspace",
+      PREFIX: "/data/data/com.termux/files/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(
+      resolveEffectiveHomeDir(env, () => {
+        throw new Error("no homedir");
+      }),
+    ).toBe(path.resolve("/data/data/com.termux/files/home/workspace"));
   });
 
   it("expands OPENCLAW_HOME when set to ~", () => {
