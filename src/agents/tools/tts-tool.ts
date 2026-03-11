@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import { textToSpeech } from "../../tts/tts.js";
+import { textToSpeech, resolveExplicitTtsOverrides } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
@@ -11,6 +11,12 @@ const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to convert to speech." }),
   channel: Type.Optional(
     Type.String({ description: "Optional channel id to pick output format (e.g. telegram)." }),
+  ),
+  voiceId: Type.Optional(
+    Type.String({
+      description:
+        "Optional ElevenLabs voice ID override. Use to give different agents distinct voices.",
+    }),
   ),
 });
 
@@ -28,11 +34,13 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
+      const voiceId = readStringParam(params, "voiceId");
       const cfg = opts?.config ?? loadConfig();
       const result = await textToSpeech({
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        overrides: voiceId ? resolveExplicitTtsOverrides({ cfg, voiceId }) : undefined,
       });
 
       if (result.success && result.audioPath) {
