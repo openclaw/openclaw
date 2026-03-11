@@ -508,8 +508,8 @@ export type ToolsConfig = {
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
-      /** Primary extraction provider ("readability" or "firecrawl"). */
-      provider?: "readability" | "firecrawl";
+      /** Primary extraction provider. */
+      provider?: "readability" | "firecrawl" | "scrapingbee";
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
@@ -536,6 +536,14 @@ export type ToolsConfig = {
         /** Max age (ms) for cached Firecrawl content. */
         maxAgeMs?: number;
         /** Timeout in seconds for Firecrawl requests. */
+        timeoutSeconds?: number;
+      };
+      scrapingbee?: {
+        /** ScrapingBee API key (defaults to SCRAPINGBEE_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Render JavaScript before extracting (default: false). */
+        renderJs?: boolean;
+        /** Timeout in seconds for ScrapingBee requests. */
         timeoutSeconds?: number;
       };
     };

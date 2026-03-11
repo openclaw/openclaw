@@ -114,6 +114,9 @@ function resolveFetchProvider(params: {
   if (explicit === "firecrawl") {
     return "firecrawl";
   }
+  if (explicit === "scrapingbee") {
+    return "scrapingbee";
+  }
   if (explicit === "readability") {
     return "readability";
   }
@@ -222,6 +225,77 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
     return resolved;
   }
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+}
+
+// ---------------------------------------------------------------------------
+// ScrapingBee — thin proxy wrapper (returns HTML, piped through Readability)
+// ---------------------------------------------------------------------------
+
+const DEFAULT_SCRAPINGBEE_BASE_URL = "https://app.scrapingbee.com/api/v1";
+
+type ScrapingBeeFetchConfig =
+  | {
+      apiKey?: unknown;
+      renderJs?: boolean;
+      timeoutSeconds?: number;
+    }
+  | undefined;
+
+function resolveScrapingBeeConfig(fetch?: WebFetchConfig): ScrapingBeeFetchConfig {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const sb = "scrapingbee" in fetch ? fetch.scrapingbee : undefined;
+  if (!sb || typeof sb !== "object") {
+    return undefined;
+  }
+  return sb as ScrapingBeeFetchConfig;
+}
+
+function resolveScrapingBeeApiKey(sb?: ScrapingBeeFetchConfig): string | undefined {
+  const fromConfigRaw =
+    sb && "apiKey" in sb
+      ? normalizeResolvedSecretInputString({
+          value: sb.apiKey,
+          path: "tools.web.fetch.scrapingbee.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
+  const fromEnv = normalizeSecretInput(process.env.SCRAPINGBEE_API_KEY);
+  return fromConfig || fromEnv || undefined;
+}
+
+function resolveScrapingBeeRenderJs(sb?: ScrapingBeeFetchConfig): boolean {
+  return sb?.renderJs === true;
+}
+
+async function fetchViaScrapingBee(params: {
+  url: string;
+  apiKey: string;
+  renderJs: boolean;
+  timeoutSeconds: number;
+}): Promise<{ html: string; status: number; resolvedUrl: string }> {
+  const endpoint = new URL(DEFAULT_SCRAPINGBEE_BASE_URL);
+  endpoint.searchParams.set("api_key", params.apiKey);
+  endpoint.searchParams.set("url", params.url);
+  if (params.renderJs) {
+    endpoint.searchParams.set("render_js", "true");
+  }
+
+  const res = await fetch(endpoint.toString(), {
+    method: "GET",
+    headers: { Accept: "text/html" },
+    signal: AbortSignal.timeout(params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`ScrapingBee API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const html = await res.text();
+  const resolvedUrl = res.headers.get("Spb-resolved-url") || params.url;
+  return { html, status: res.status, resolvedUrl };
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -471,20 +545,27 @@ type FirecrawlRuntimeParams = {
   firecrawlTimeoutSeconds: number;
 };
 
-type FetchProvider = "readability" | "firecrawl";
+type FetchProvider = "readability" | "firecrawl" | "scrapingbee";
 
-type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
-  url: string;
-  extractMode: ExtractMode;
-  maxChars: number;
-  maxResponseBytes: number;
-  maxRedirects: number;
-  timeoutSeconds: number;
-  cacheTtlMs: number;
-  userAgent: string;
-  readabilityEnabled: boolean;
-  provider: FetchProvider;
+type ScrapingBeeRuntimeParams = {
+  scrapingBeeApiKey?: string;
+  scrapingBeeRenderJs: boolean;
+  scrapingBeeTimeoutSeconds: number;
 };
+
+type WebFetchRuntimeParams = FirecrawlRuntimeParams &
+  ScrapingBeeRuntimeParams & {
+    url: string;
+    extractMode: ExtractMode;
+    maxChars: number;
+    maxResponseBytes: number;
+    maxRedirects: number;
+    timeoutSeconds: number;
+    cacheTtlMs: number;
+    userAgent: string;
+    readabilityEnabled: boolean;
+    provider: FetchProvider;
+  };
 
 function toFirecrawlContentParams(
   params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
@@ -573,6 +654,67 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
     } catch {
       // Firecrawl failed — fall through to Readability path.
+    }
+  }
+
+  // Provider "scrapingbee": fetch HTML via ScrapingBee proxy, then extract with Readability.
+  if (params.provider === "scrapingbee" && params.scrapingBeeApiKey) {
+    const start = Date.now();
+    try {
+      const sbResult = await fetchViaScrapingBee({
+        url: params.url,
+        apiKey: params.scrapingBeeApiKey,
+        renderJs: params.scrapingBeeRenderJs,
+        timeoutSeconds: params.scrapingBeeTimeoutSeconds,
+      });
+
+      let text = sbResult.html;
+      let title: string | undefined;
+      let extractor = "scrapingbee";
+
+      if (looksLikeHtml(text) && params.readabilityEnabled) {
+        const readable = await extractReadableContent({
+          html: text,
+          url: sbResult.resolvedUrl,
+          extractMode: params.extractMode,
+        });
+        if (readable?.text) {
+          text = readable.text;
+          title = readable.title;
+          extractor = "scrapingbee+readability";
+        }
+      } else if (params.extractMode === "text") {
+        text = markdownToText(text);
+      }
+
+      const wrapped = wrapWebFetchContent(text, params.maxChars);
+      const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
+      const payload: Record<string, unknown> = {
+        url: params.url,
+        finalUrl: sbResult.resolvedUrl,
+        status: sbResult.status,
+        contentType: "text/html",
+        title: wrappedTitle,
+        extractMode: params.extractMode,
+        extractor,
+        provider: "scrapingbee",
+        externalContent: {
+          untrusted: true,
+          source: "web_fetch",
+          wrapped: true,
+        },
+        truncated: wrapped.truncated,
+        length: wrapped.wrappedLength,
+        rawLength: wrapped.rawLength,
+        wrappedLength: wrapped.wrappedLength,
+        fetchedAt: new Date().toISOString(),
+        tookMs: Date.now() - start,
+        text: wrapped.text,
+      };
+      writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+      return payload;
+    } catch {
+      // ScrapingBee failed — fall through to direct fetch path.
     }
   }
 
@@ -793,6 +935,13 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const scrapingBeeConfig = resolveScrapingBeeConfig(fetch);
+  const scrapingBeeApiKey = resolveScrapingBeeApiKey(scrapingBeeConfig);
+  const scrapingBeeRenderJs = resolveScrapingBeeRenderJs(scrapingBeeConfig);
+  const scrapingBeeTimeoutSeconds = resolveTimeoutSeconds(
+    scrapingBeeConfig?.timeoutSeconds ?? fetch?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
   const provider = resolveFetchProvider({ fetch, firecrawlEnabled });
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
@@ -833,6 +982,9 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        scrapingBeeApiKey,
+        scrapingBeeRenderJs,
+        scrapingBeeTimeoutSeconds,
       });
       return jsonResult(result);
     },

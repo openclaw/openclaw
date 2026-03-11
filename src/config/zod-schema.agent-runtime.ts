@@ -330,7 +330,9 @@ export const ToolsWebSearchSchema = z
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z.union([z.literal("readability"), z.literal("firecrawl")]).optional(),
+    provider: z
+      .union([z.literal("readability"), z.literal("firecrawl"), z.literal("scrapingbee")])
+      .optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
@@ -344,6 +346,14 @@ export const ToolsWebFetchSchema = z
         baseUrl: z.string().optional(),
         onlyMainContent: z.boolean().optional(),
         maxAgeMs: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    scrapingbee: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        renderJs: z.boolean().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
       })
       .strict()
