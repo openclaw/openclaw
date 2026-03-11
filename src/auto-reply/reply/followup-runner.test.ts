@@ -126,6 +126,55 @@ describe("createFollowupRunner compaction", () => {
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
+
+  it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-meta-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        verboseLevel: "on",
+      },
+    });
+
+    await runner(queued);
+
+    expect(onBlockReply).toHaveBeenCalled();
+    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {

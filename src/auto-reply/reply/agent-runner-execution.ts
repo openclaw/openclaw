@@ -466,6 +466,10 @@ export async function runAgentTurnWithFallback(params: {
             bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
               result.meta?.systemPromptReport,
             );
+            const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
+            if (resultCompactionCount > 0) {
+              autoCompactionCompleted = true;
+            }
             return result;
           })();
         },
