@@ -99,6 +99,7 @@ export const formatResponseUsageLine = (params: {
     cacheRead: number;
     cacheWrite: number;
   };
+  providerUsageSummary?: string;
 }): string | null => {
   const usage = params.usage;
   if (!usage) {
@@ -124,7 +125,11 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
+  const suffixParts = [
+    costLabel ? `est ${costLabel}` : null,
+    params.providerUsageSummary?.trim() ? params.providerUsageSummary.trim() : null,
+  ].filter(Boolean);
+  const suffix = suffixParts.length > 0 ? ` · ${suffixParts.join(" · ")}` : "";
   return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
 };
 

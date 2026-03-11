@@ -17,6 +17,11 @@ import {
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  formatUsageWindowSummary,
+  loadProviderUsageSummary,
+  resolveUsageProviderId,
+} from "../../infra/provider-usage.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -59,6 +64,43 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const USAGE_SUMMARY_TIMEOUT_MS = 3_500;
+
+async function loadCopilotUsageFooterSummary(params: {
+  provider: string;
+  agentDir?: string;
+  now: number;
+}): Promise<string | null> {
+  let usageProvider: ReturnType<typeof resolveUsageProviderId> | undefined;
+  try {
+    usageProvider = resolveUsageProviderId(params.provider);
+  } catch {
+    return null;
+  }
+  if (usageProvider !== "github-copilot") {
+    return null;
+  }
+
+  try {
+    const usageSummary = await loadProviderUsageSummary({
+      timeoutMs: USAGE_SUMMARY_TIMEOUT_MS,
+      providers: [usageProvider],
+      agentDir: params.agentDir,
+      now: params.now,
+    });
+    const usageEntry = usageSummary.providers[0];
+    if (!usageEntry || usageEntry.error || usageEntry.windows.length === 0) {
+      return null;
+    }
+    return formatUsageWindowSummary(usageEntry, {
+      now: params.now,
+      maxWindows: 2,
+      includeResets: false,
+    });
+  } catch {
+    return null;
+  }
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -589,10 +631,16 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
+      const providerUsageSummary = await loadCopilotUsageFooterSummary({
+        provider: providerUsed,
+        agentDir: followupRun.run.agentDir,
+        now: Date.now(),
+      });
       let formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
+        providerUsageSummary: providerUsageSummary ?? undefined,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;

@@ -15,6 +15,8 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const loadProviderUsageSummaryMock = vi.fn();
+const formatUsageWindowSummaryMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -58,6 +60,17 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
+vi.mock("../../infra/provider-usage.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/provider-usage.js")>(
+    "../../infra/provider-usage.js",
+  );
+  return {
+    ...actual,
+    loadProviderUsageSummary: (...args: unknown[]) => loadProviderUsageSummaryMock(...args),
+    formatUsageWindowSummary: (...args: unknown[]) => formatUsageWindowSummaryMock(...args),
+  };
+});
+
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -90,8 +103,12 @@ beforeEach(() => {
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   loadCronStoreMock.mockClear();
+  loadProviderUsageSummaryMock.mockClear();
+  formatUsageWindowSummaryMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
+  loadProviderUsageSummaryMock.mockResolvedValue({ updatedAt: Date.now(), providers: [] });
+  formatUsageWindowSummaryMock.mockReturnValue(null);
   resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
@@ -1527,6 +1544,107 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     expect(String(payload?.text ?? "")).toContain("Usage:");
     expect(String(payload?.text ?? "")).toContain(`· session \`${sessionKey}\``);
+  });
+
+  it("appends Copilot premium usage when available", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "github-copilot",
+          model: "gpt-4.1",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+    loadProviderUsageSummaryMock.mockResolvedValueOnce({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "github-copilot",
+          displayName: "GitHub Copilot",
+          windows: [
+            { label: "Premium", usedPercent: 14 },
+            { label: "Chat", usedPercent: 0 },
+          ],
+        },
+      ],
+    });
+    formatUsageWindowSummaryMock.mockReturnValueOnce("Premium 86% left · Chat 100% left");
+
+    const sessionKey = "agent:main:whatsapp:dm:+1000";
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+15550001111",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      responseUsage: "full",
+    };
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "github-copilot",
+        model: "gpt-4.1",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const res = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionKey,
+      defaultModel: "github-copilot/gpt-4.1",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(String(payload?.text ?? "")).toContain("Premium 86% left · Chat 100% left");
+    expect(loadProviderUsageSummaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: ["github-copilot"],
+        agentDir: "/tmp/agent",
+      }),
+    );
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
