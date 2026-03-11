@@ -32,6 +32,23 @@ function readBoolean(record: Record<string, unknown> | null, key: string): boole
   return typeof value === "boolean" ? value : undefined;
 }
 
+function readBooleanLike(record: Record<string, unknown> | null, key: string): boolean | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const value = record[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "true" || value === "1") {
+    return true;
+  }
+  if (value === "false" || value === "0") {
+    return false;
+  }
+  return undefined;
+}
+
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
   if (!record) {
     return undefined;
@@ -677,7 +694,7 @@ export function normalizeWebhookMessage(
     extractChatContext(message);
   const normalizedParticipants = normalizeParticipantList(participants);
 
-  const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
+  const fromMe = readBooleanLike(message, "isFromMe") ?? readBooleanLike(message, "is_from_me");
   const messageId =
     readString(message, "guid") ??
     readString(message, "id") ??
@@ -780,7 +797,7 @@ export function normalizeWebhookReaction(
   const { senderId, senderName } = extractSenderInfo(message);
   const { chatGuid, chatIdentifier, chatId, chatName, isGroup } = extractChatContext(message);
 
-  const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
+  const fromMe = readBooleanLike(message, "isFromMe") ?? readBooleanLike(message, "is_from_me");
   const timestampRaw =
     readNumberLike(message, "date") ??
     readNumberLike(message, "dateCreated") ??
