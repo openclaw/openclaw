@@ -594,6 +594,62 @@ describe("agentCommand", () => {
     });
   });
 
+  it("forwards original prompt body on fallback retry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:prompt-test": {
+          sessionId: "session-prompt",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "session-prompt", provider: "openai", model: "gpt-5.2" },
+          },
+        });
+
+      const originalMessage = "Summarize the quarterly report";
+      await agentCommand(
+        {
+          message: originalMessage,
+          sessionKey: "agent:main:subagent:prompt-test",
+        },
+        runtime,
+      );
+
+      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      expect(calls).toHaveLength(2);
+      // Both attempts must receive the original prompt, not a "Continue where you left off" string
+      expect(calls[0]?.[0]?.prompt).toBe(originalMessage);
+      expect(calls[1]?.[0]?.prompt).toBe(originalMessage);
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
