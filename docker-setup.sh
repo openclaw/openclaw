@@ -423,35 +423,19 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   # forward any host HTTP/HTTPS proxy environment variables so the
   # Dockerfile can use them during the build.  This makes the build
   # work behind corporate proxies.
-  for var in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
-    if [[ -n "${!var:-}" ]]; then
-      echo "==> Passing proxy $var to docker build"
-      BUILD_ARGS+=(--build-arg "$var=${!var}")
-        # collect docker build arguments in an array so we can add
-        # extra entries conditionally (e.g. proxy settings)
-        BUILD_ARGS=()
-        BUILD_ARGS+=(--build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}")
-        BUILD_ARGS+=(--build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}")
-        BUILD_ARGS+=(--build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}")
-
-        # forward any host HTTP/HTTPS proxy environment variables so the
-        # Dockerfile can use them during the build. This makes the build
-        # work behind corporate proxies. If the proxy points at localhost
-        # (127.0.0.1 or localhost), make the build use host networking
-        EXTRA_BUILD_FLAGS=()
-        for var in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
-          if [[ -n "${!var:-}" ]]; then
-            val="${!var}"
-            # If proxy targets loopback, map it to host.docker.internal for builds
-            if [[ "$val" == *"127.0.0.1"* || "$val" == *"localhost"* ]]; then
-              EXTRA_BUILD_FLAGS+=("--network=host")
-            fi
-            echo "==> Passing proxy $var to docker build"
-            BUILD_ARGS+=(--build-arg "$var=$val")
-          fi
-        done
-    fi
-  done
+    EXTRA_BUILD_FLAGS=()
+    for var in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
+      if [[ -n "${!var:-}" ]]; then
+        val="${!var}"
+        # If the proxy points at localhost (127.0.0.1 or localhost), 
+        # make the build use host networking
+        if [[ "$val" == *"127.0.0.1"* || "$val" == *"localhost"* ]]; then
+          EXTRA_BUILD_FLAGS+=("--network=host")
+        fi
+        echo "==> Passing proxy $var to docker build"
+        BUILD_ARGS+=(--build-arg "$var=$val")
+      fi
+    done
 
   DOCKER_BUILDKIT=1 docker build "${EXTRA_BUILD_FLAGS[@]}" "${BUILD_ARGS[@]}" \
     -t "$IMAGE_NAME" \
