@@ -44,7 +44,7 @@ describe("tool mutation helpers", () => {
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
   });
 
-  it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {
+  it("matches retries by tool/action intent while keeping asymmetric data fail-closed", () => {
     expect(
       isSameToolMutationAction(
         { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
@@ -55,6 +55,18 @@ describe("tool mutation helpers", () => {
       isSameToolMutationAction(
         { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
         { toolName: "write", actionFingerprint: "tool=write|path=/tmp/b" },
+      ),
+    ).toBe(true);
+    expect(
+      isSameToolMutationAction(
+        {
+          toolName: "message",
+          actionFingerprint: "tool=message|action=send|target=slack:c123",
+        },
+        {
+          toolName: "message",
+          actionFingerprint: "tool=message|action=react|target=slack:c123",
+        },
       ),
     ).toBe(false);
     expect(

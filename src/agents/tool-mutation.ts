@@ -193,14 +193,36 @@ export function buildToolMutationState(
   };
 }
 
-export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
-  if (existing.actionFingerprint != null || next.actionFingerprint != null) {
-    // For mutating flows, fail closed: only clear when both fingerprints exist and match.
-    return (
-      existing.actionFingerprint != null &&
-      next.actionFingerprint != null &&
-      existing.actionFingerprint === next.actionFingerprint
-    );
+function extractActionFromFingerprint(fingerprint: string | undefined): string | undefined {
+  if (!fingerprint) {
+    return undefined;
   }
+  const match = fingerprint.match(/(?:^|\|)action=([^|]+)/);
+  return match?.[1];
+}
+
+export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
+  if (existing.actionFingerprint && next.actionFingerprint) {
+    if (existing.actionFingerprint === next.actionFingerprint) {
+      return true;
+    }
+
+    // Allow recovery retries that target a different resource but keep the same
+    // tool/action intent (for example write retrying to a fallback path).
+    if (existing.toolName !== next.toolName) {
+      return false;
+    }
+    const existingAction = extractActionFromFingerprint(existing.actionFingerprint);
+    const nextAction = extractActionFromFingerprint(next.actionFingerprint);
+    if (existingAction && nextAction) {
+      return existingAction === nextAction;
+    }
+    return !existingAction && !nextAction;
+  }
+
+  if (existing.actionFingerprint || next.actionFingerprint) {
+    return false;
+  }
+
   return existing.toolName === next.toolName && (existing.meta ?? "") === (next.meta ?? "");
 }

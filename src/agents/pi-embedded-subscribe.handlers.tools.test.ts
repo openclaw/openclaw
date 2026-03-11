@@ -488,3 +488,53 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });
+
+describe("handleToolExecutionEnd retry clearing", () => {
+  it("clears last mutating tool error after same-tool retry succeeds on a different path", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "write",
+        toolCallId: "tool-write-1",
+        args: { path: "/usr/local/bin/demo", content: "echo hi" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "write",
+        toolCallId: "tool-write-1",
+        isError: true,
+        result: { error: "permission denied" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError?.toolName).toBe("write");
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "write",
+        toolCallId: "tool-write-2",
+        args: { path: "/tmp/demo", content: "echo hi" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "write",
+        toolCallId: "tool-write-2",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+});
