@@ -14,6 +14,16 @@
 
 type CardElement = Record<string, unknown>;
 
+/** Max rows per Feishu table component (API limit is 1-10). */
+const FEISHU_TABLE_PAGE_SIZE_MAX = 10;
+
+/**
+ * Regex to match a fenced code block (``` ... ```).
+ * Used to build a set of protected spans so that table-shaped lines
+ * inside code blocks are never converted to table components.
+ */
+const FENCED_CODE_BLOCK_RE = /^[ \t]*`{3,}[\s\S]*?^[ \t]*`{3,}/gm;
+
 /**
  * Regex to match a complete Markdown table block:
  *   - header row:    `| Header1 | Header2 |`
@@ -26,6 +36,33 @@ const MD_TABLE_BLOCK_RE = new RegExp(
     "(?:^[ \\t]*\\|.+\\|[ \\t]*\\n?)+", // one or more data rows
   "gm",
 );
+
+/**
+ * Collect byte-ranges of all fenced code blocks in the text.
+ * Returns sorted, non-overlapping `[start, end)` spans.
+ */
+function collectCodeBlockSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  FENCED_CODE_BLOCK_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FENCED_CODE_BLOCK_RE.exec(text)) !== null) {
+    spans.push([m.index, m.index + m[0].length]);
+  }
+  return spans;
+}
+
+/** Check whether `pos` falls inside any of the protected spans. */
+function isInsideProtectedSpan(pos: number, spans: Array<[number, number]>): boolean {
+  for (const [start, end] of spans) {
+    if (pos >= start && pos < end) {
+      return true;
+    }
+    if (start > pos) {
+      break; // spans are sorted, no need to check further
+    }
+  }
+  return false;
+}
 
 /**
  * Parse a single Markdown table row into cell values.
@@ -95,7 +132,7 @@ export function mdTableToFeishuTable(tableText: string): CardElement | null {
 
   return {
     tag: "table",
-    page_size: rows.length,
+    page_size: Math.min(rows.length, FEISHU_TABLE_PAGE_SIZE_MAX),
     row_height: "low",
     header_style: {
       text_align: "center",
@@ -112,22 +149,34 @@ export function mdTableToFeishuTable(tableText: string): CardElement | null {
 /**
  * Split text into alternating markdown elements and table components.
  *
- * Scans for Markdown table blocks.  Non-table text becomes
- * `{"tag": "markdown"}` elements; tables become `{"tag": "table"}`
- * components with proper columns/rows structure.
+ * Scans for Markdown table blocks **outside** fenced code blocks.
+ * Non-table text becomes `{"tag": "markdown"}` elements; tables become
+ * `{"tag": "table"}` components with proper columns/rows structure.
+ *
+ * Leading/trailing whitespace of each segment is preserved so that
+ * indentation-sensitive markdown (e.g. 4-space code blocks) is not
+ * mutated.
  */
 export function splitTextAndTables(text: string): CardElement[] {
   const elements: CardElement[] = [];
   let lastEnd = 0;
+
+  // Build a set of protected spans (fenced code blocks) to skip
+  const codeSpans = collectCodeBlockSpans(text);
 
   // Reset regex state (global flag)
   MD_TABLE_BLOCK_RE.lastIndex = 0;
 
   let match: RegExpExecArray | null;
   while ((match = MD_TABLE_BLOCK_RE.exec(text)) !== null) {
-    // Text before this table
-    const before = text.slice(lastEnd, match.index).trim();
-    if (before) {
+    // Skip tables that fall inside a fenced code block
+    if (isInsideProtectedSpan(match.index, codeSpans)) {
+      continue;
+    }
+
+    // Text before this table — preserve as-is (no trim)
+    const before = text.slice(lastEnd, match.index);
+    if (before.trim()) {
       elements.push({ tag: "markdown", content: before });
     }
 
@@ -137,15 +186,15 @@ export function splitTextAndTables(text: string): CardElement[] {
       elements.push(tableElement);
     } else {
       // Fallback: keep as markdown (won't render as table but won't lose data)
-      elements.push({ tag: "markdown", content: match[0].trim() });
+      elements.push({ tag: "markdown", content: match[0] });
     }
 
     lastEnd = match.index + match[0].length;
   }
 
-  // Remaining text after last table
-  const after = text.slice(lastEnd).trim();
-  if (after) {
+  // Remaining text after last table — preserve as-is (no trim)
+  const after = text.slice(lastEnd);
+  if (after.trim()) {
     elements.push({ tag: "markdown", content: after });
   }
 

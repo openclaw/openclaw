@@ -66,6 +66,17 @@ describe("mdTableToFeishuTable", () => {
     expect(style.bold).toBe(true);
     expect(style.text_align).toBe("center");
   });
+
+  it("caps page_size at 10 for large tables", () => {
+    const rows = Array.from({ length: 15 }, (_, i) => `| r${i} | v${i} |`);
+    const table = ["| A | B |", "|---|---|", ...rows].join("\n");
+
+    const result = mdTableToFeishuTable(table);
+    expect(result).not.toBeNull();
+    expect(result!.page_size).toBe(10);
+    // All rows are still present in the data
+    expect((result!.rows as any[]).length).toBe(15);
+  });
 });
 
 describe("splitTextAndTables", () => {
@@ -101,10 +112,67 @@ describe("splitTextAndTables", () => {
     const result = splitTextAndTables(text);
     expect(result).toHaveLength(3);
     expect(result[0].tag).toBe("markdown");
-    expect(result[0].content).toBe("Here is a summary:");
+    expect((result[0].content as string).trim()).toBe("Here is a summary:");
     expect(result[1].tag).toBe("table");
     expect(result[2].tag).toBe("markdown");
-    expect(result[2].content).toBe("That's all!");
+    expect((result[2].content as string).trim()).toBe("That's all!");
+  });
+
+  it("does NOT convert tables inside fenced code blocks", () => {
+    const text = [
+      "Example table syntax:",
+      "",
+      "```md",
+      "| A | B |",
+      "|---|---|",
+      "| 1 | 2 |",
+      "```",
+      "",
+      "End.",
+    ].join("\n");
+
+    const result = splitTextAndTables(text);
+    // Everything stays as markdown — no table component
+    expect(result).toHaveLength(1);
+    expect(result[0].tag).toBe("markdown");
+    expect(result[0].content as string).toContain("```md");
+    expect(result[0].content as string).toContain("| A | B |");
+  });
+
+  it("converts real table but preserves table inside code block", () => {
+    const text = [
+      "Here is example code:",
+      "",
+      "```",
+      "| X | Y |",
+      "|---|---|",
+      "| a | b |",
+      "```",
+      "",
+      "And here is a real table:",
+      "",
+      "| Name | Score |",
+      "|------|-------|",
+      "| Alice | 95 |",
+    ].join("\n");
+
+    const result = splitTextAndTables(text);
+    // Should have: markdown (with code block), table (real table)
+    const markdownElements = result.filter((e) => e.tag === "markdown");
+    const tableElements = result.filter((e) => e.tag === "table");
+    expect(tableElements).toHaveLength(1);
+    // The code block content should be in a markdown element
+    const codeBlockMd = markdownElements.find((e) => (e.content as string).includes("```"));
+    expect(codeBlockMd).toBeDefined();
+  });
+
+  it("preserves leading whitespace in non-table segments", () => {
+    const text = "    indented code block\n    second line\n";
+    const result = splitTextAndTables(text);
+    expect(result).toHaveLength(1);
+    expect(result[0].tag).toBe("markdown");
+    // Leading spaces should be preserved
+    expect(result[0].content as string).toContain("    indented code block");
   });
 
   it("handles multiple tables in one text", () => {
@@ -168,11 +236,13 @@ describe("buildMarkdownCardWithTables", () => {
     const card = buildMarkdownCardWithTables(text);
     const elements = (card.body as any).elements;
     expect(elements).toHaveLength(3);
-    expect(elements[0]).toEqual({ tag: "markdown", content: "Results:" });
+    expect(elements[0].tag).toBe("markdown");
+    expect((elements[0].content as string).trim()).toBe("Results:");
     expect(elements[1].tag).toBe("table");
     expect(elements[1].columns[0].display_name).toBe("Test");
     expect(elements[1].columns[1].display_name).toBe("Status");
-    expect(elements[2]).toEqual({ tag: "markdown", content: "Done." });
+    expect(elements[2].tag).toBe("markdown");
+    expect((elements[2].content as string).trim()).toBe("Done.");
   });
 
   it("keeps plain markdown as-is when no tables present", () => {
