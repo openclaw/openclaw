@@ -356,4 +356,61 @@ describe("assistant output reconciliation", () => {
     ]);
     expect(onCommentary).toHaveBeenCalledTimes(1);
   });
+
+  it("uses distinct live fallback ids for commentary messages without ids or signatures", async () => {
+    const onCommentary = vi.fn();
+    const seenSegmentIds = new Set<string>();
+    const firstMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "First live commentary.",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+    const secondMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Second live commentary.",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-2",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const firstResult = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: firstMessage as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    const secondResult = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: secondMessage as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+
+    expect(firstResult.newOutputs).toHaveLength(1);
+    expect(secondResult.newOutputs).toHaveLength(1);
+    expect(firstResult.newOutputs[0]?.segmentId).not.toEqual(secondResult.newOutputs[0]?.segmentId);
+    expect(firstResult.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(secondResult.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(onCommentary).toHaveBeenCalledTimes(2);
+  });
 });

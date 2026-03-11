@@ -20,6 +20,9 @@ type AssistantOutputCandidate = AssistantOutputEntry & {
   isTerminal: boolean;
 };
 
+const liveAssistantFallbackMessageIds = new WeakMap<object, string>();
+let nextLiveAssistantFallbackMessageId = 0;
+
 export function normalizeAssistantMessagePhase(value: unknown): AssistantMessagePhase | null {
   return value === "commentary" || value === "final_answer" ? value : null;
 }
@@ -75,6 +78,20 @@ function resolveAssistantMessageStableId(
   return typeof id === "string" && id.trim().length > 0
     ? id
     : (fallbackMessageStableId ?? "message");
+}
+
+function resolveLiveAssistantFallbackMessageId(message: AgentMessage) {
+  if (!message || typeof message !== "object") {
+    return "stream";
+  }
+  const existingId = liveAssistantFallbackMessageIds.get(message as object);
+  if (existingId) {
+    return existingId;
+  }
+  const id = `stream-${nextLiveAssistantFallbackMessageId}`;
+  nextLiveAssistantFallbackMessageId += 1;
+  liveAssistantFallbackMessageIds.set(message as object, id);
+  return id;
 }
 
 function extractAssistantOutputCandidates(
@@ -173,9 +190,11 @@ export async function reconcileLiveAssistantCommentary(params: {
     return { newOutputs: [] as AssistantOutputEntry[] };
   }
 
+  const liveFallbackMessageId = resolveLiveAssistantFallbackMessageId(params.message);
+
   const newOutputs: AssistantOutputEntry[] = [];
   for (const segment of extractAssistantOutputCandidates(params.message, {
-    fallbackMessageStableId: "stream",
+    fallbackMessageStableId: liveFallbackMessageId,
   })) {
     if (
       segment.phase !== "commentary" ||
