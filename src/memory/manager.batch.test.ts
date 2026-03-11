@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import "./test-runtime-mocks.js";
 
@@ -20,6 +20,7 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 describe("memory indexing with OpenAI batches", () => {
+  let getMemorySearchManager: typeof import("./index.js").getMemorySearchManager;
   let fixtureRoot: string;
   let workspaceDir: string;
   let memoryDir: string;
@@ -117,6 +118,9 @@ describe("memory indexing with OpenAI batches", () => {
   }
 
   beforeAll(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager } = await import("./index.js"));
+
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
