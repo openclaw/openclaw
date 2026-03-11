@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeForLog, stripAnsi } from "./ansi.js";
+import { sanitizeForLog, splitGraphemes, stripAnsi, visibleWidth } from "./ansi.js";
 
 describe("terminal ansi helpers", () => {
   it("strips ANSI and OSC8 sequences", () => {
@@ -10,5 +10,17 @@ describe("terminal ansi helpers", () => {
   it("sanitizes control characters for log-safe interpolation", () => {
     const input = "\u001B[31mwarn\u001B[0m\r\nnext\u0000line\u007f";
     expect(sanitizeForLog(input)).toBe("warnnextline");
+  });
+
+  it("measures wide graphemes by terminal cell width", () => {
+    expect(visibleWidth("abc")).toBe(3);
+    expect(visibleWidth("📸 skill")).toBe(8);
+    expect(visibleWidth("表")).toBe(2);
+    expect(visibleWidth("\u001B[31m📸\u001B[0m")).toBe(2);
+  });
+
+  it("keeps emoji zwj sequences as single graphemes", () => {
+    expect(splitGraphemes("👨‍👩‍👧‍👦")).toEqual(["👨‍👩‍👧‍👦"]);
+    expect(visibleWidth("👨‍👩‍👧‍👦")).toBe(2);
   });
 });

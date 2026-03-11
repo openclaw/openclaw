@@ -5,7 +5,7 @@ metadata:
   {
     "openclaw":
       {
-        "emoji": "🗣️",
+        "emoji": "🔉",
         "os": ["darwin", "linux", "win32"],
         "requires": { "env": ["SHERPA_ONNX_RUNTIME_DIR", "SHERPA_ONNX_MODEL_DIR"] },
         "install":
