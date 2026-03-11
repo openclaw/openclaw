@@ -144,6 +144,13 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
+        if (lightContext) {
+          return jsonResult({
+            status: "error",
+            error:
+              "lightContext is currently unsupported for runtime=acp; use runtime=subagent or remove lightContext",
+          });
+        }
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",
