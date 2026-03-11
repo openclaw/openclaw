@@ -16,7 +16,34 @@ describe("applyGatewayLaneConcurrency", () => {
     resetAllLanes();
   });
 
-  it("keeps nested lane concurrency aligned with cron.maxConcurrentRuns", async () => {
+  it("keeps the cron nested lane concurrency aligned with cron.maxConcurrentRuns", async () => {
+    applyGatewayLaneConcurrency({
+      cron: { maxConcurrentRuns: 2 },
+    } as unknown as ReturnType<typeof import("../config/config.js").loadConfig>);
+
+    const blocker = createDeferred();
+    let started = 0;
+
+    const runTask = () =>
+      enqueueCommandInLane(CommandLane.CronNested, async () => {
+        started += 1;
+        await blocker.promise;
+      });
+
+    const first = runTask();
+    const second = runTask();
+
+    try {
+      await vi.waitFor(() => {
+        expect(started).toBe(2);
+      });
+    } finally {
+      blocker.resolve();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
+  it("keeps the shared interactive nested lane at its default concurrency", async () => {
     applyGatewayLaneConcurrency({
       cron: { maxConcurrentRuns: 2 },
     } as unknown as ReturnType<typeof import("../config/config.js").loadConfig>);
@@ -35,7 +62,7 @@ describe("applyGatewayLaneConcurrency", () => {
 
     try {
       await vi.waitFor(() => {
-        expect(started).toBe(2);
+        expect(started).toBe(1);
       });
     } finally {
       blocker.resolve();

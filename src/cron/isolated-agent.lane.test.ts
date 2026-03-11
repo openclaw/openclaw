@@ -46,13 +46,13 @@ describe("runCronIsolatedAgentTurn lane selection", () => {
 
   it("moves the cron lane to nested for embedded runs", async () => {
     await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home, "cron")).toBe("nested");
+      expect(await runLaneCase(home, "cron")).toBe("cron-nested");
     });
   });
 
   it("defaults missing lanes to nested for embedded runs", async () => {
     await withTempCronHome(async (home) => {
-      expect(await runLaneCase(home)).toBe("nested");
+      expect(await runLaneCase(home)).toBe("cron-nested");
     });
   });
 

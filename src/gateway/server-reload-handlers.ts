@@ -137,7 +137,7 @@ export function createGatewayReloadHandlers(params: {
 
     const cronConcurrency = nextConfig.cron?.maxConcurrentRuns ?? 1;
     setCommandLaneConcurrency(CommandLane.Cron, cronConcurrency);
-    setCommandLaneConcurrency(CommandLane.Nested, cronConcurrency);
+    setCommandLaneConcurrency(CommandLane.CronNested, cronConcurrency);
     setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(nextConfig));
     setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(nextConfig));
 
