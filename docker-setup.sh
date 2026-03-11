@@ -412,10 +412,25 @@ upsert_env "$ENV_FILE" \
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
-  docker build \
-    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
-    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
-    --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
+
+  # collect docker build arguments in an array so we can add
+  # extra entries conditionally (e.g. proxy settings)
+  BUILD_ARGS=()
+  BUILD_ARGS+=(--build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}")
+  BUILD_ARGS+=(--build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}")
+  BUILD_ARGS+=(--build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}")
+
+  # forward any host HTTP/HTTPS proxy environment variables so the
+  # Dockerfile can use them during the build.  This makes the build
+  # work behind corporate proxies.
+  for var in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
+    if [[ -n "${!var:-}" ]]; then
+      echo "==> Passing proxy $var to docker build"
+      BUILD_ARGS+=(--build-arg "$var=${!var}")
+    fi
+  done
+
+  docker build "${BUILD_ARGS[@]}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
     "$ROOT_DIR"

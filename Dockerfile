@@ -14,6 +14,21 @@
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+
+# Support passing host HTTP/S proxy settings through to the build so
+# package installations and curl downloads work behind an outbound proxy.
+# We declare both lowercase and uppercase forms since both are used by
+# different tools (apt respects all four). The values are then promoted to
+# environment variables so RUN steps can see them automatically.
+ARG HTTP_PROXY=""
+ARG http_proxy=""
+ARG HTTPS_PROXY=""
+ARG https_proxy=""
+ENV HTTP_PROXY="${HTTP_PROXY}"
+ENV http_proxy="${http_proxy}"
+ENV HTTPS_PROXY="${HTTPS_PROXY}"
+ENV https_proxy="${https_proxy}"
+
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:22-bookworm-slim@sha256:9c2c405e3ff9b9afb2873232d24bb06367d649aa3e6259cbe314da59578e81e9"
