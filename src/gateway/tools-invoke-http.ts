@@ -37,6 +37,19 @@ import { getBearerToken, getHeader } from "./http-utils.js";
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
+/**
+ * Represents a tool with parameters and an execute function.
+ * This interface provides type safety for tool invocation.
+ */
+interface ToolWithExecute {
+  name: string;
+  parameters?: {
+    properties?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  execute?: (id: string, args: Record<string, unknown>) => Promise<unknown>;
+}
+
 type ToolsInvokeBody = {
   tool?: unknown;
   action?: unknown;
@@ -100,6 +113,18 @@ function mergeActionIntoArgsIfSupported(params: {
     return args;
   }
   return { ...args, action };
+}
+
+/**
+ * Type guard to check if a tool has the expected structure.
+ */
+function isToolWithExecute(tool: unknown): tool is ToolWithExecute {
+  return (
+    typeof tool === "object" &&
+    tool !== null &&
+    "name" in tool &&
+    typeof (tool as ToolWithExecute).name === "string"
+  );
 }
 
 function getErrorMessage(err: unknown): string {
@@ -265,13 +290,11 @@ export async function handleToolsInvokeHttpRequest(
       groupPolicy,
       subagentPolicy,
     ]),
-  });
+  }) as unknown[];
 
   const subagentFiltered = applyToolPolicyPipeline({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    tools: allTools as any,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
+    tools: allTools,
+    toolMeta: (tool) => getPluginToolMeta(tool as ToolWithExecute),
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
@@ -299,7 +322,9 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+  const gatewayFiltered = subagentFiltered.filter(
+    (t): t is ToolWithExecute => isToolWithExecute(t) && !gatewayDenySet.has(t.name),
+  );
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
@@ -312,13 +337,16 @@ export async function handleToolsInvokeHttpRequest(
 
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: tool.parameters,
       action,
       args,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+
+    if (!tool.execute) {
+      throw new Error(`Tool ${toolName} does not have an execute function`);
+    }
+
+    const result = await tool.execute(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
