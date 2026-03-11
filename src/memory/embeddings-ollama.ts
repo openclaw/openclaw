@@ -1,4 +1,5 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveOllamaApiBase } from "../agents/ollama-models.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -17,7 +18,6 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
@@ -34,14 +34,6 @@ function normalizeOllamaModel(model: string): string {
     defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
     prefixes: ["ollama/"],
   });
-}
-
-function resolveOllamaApiBase(configuredBaseUrl?: string): string {
-  if (!configuredBaseUrl) {
-    return DEFAULT_OLLAMA_BASE_URL;
-  }
-  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
-  return trimmed.replace(/\/v1$/i, "");
 }
 
 function resolveOllamaApiKey(options: EmbeddingProviderOptions): string | undefined {
