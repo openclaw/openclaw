@@ -84,8 +84,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/auth: allow one trusted device-token retry on shared-token mismatch with recovery hints to prevent reconnect churn during token drift. (#42507) Thanks @joshavant.
 - Channels/allowlists: remove stale matcher caching so same-array allowlist edits and wildcard replacements take effect immediately, with regression coverage for in-place mutation cases.
 - Gateway/auth: fail closed when local `gateway.auth.*` SecretRefs are configured but unavailable, instead of silently falling back to `gateway.remote.*` credentials in local mode. Thanks @tdjackey.
-- Sandbox/fs bridge: pin staged writes to verified parent directories so temporary write files cannot materialize outside the allowed mount before atomic replace. Thanks @tdjackey.
-- Commands/config writes: enforce `configWrites` against both the originating account and the targeted account scope for `/config` and config-backed `/allowlist` edits, blocking sibling-account mutations while preserving gateway `operator.admin` flows. Thanks @tdjackey for reporting.
 
 ## 2026.3.8
 
@@ -222,7 +220,6 @@ Docs: https://docs.openclaw.ai
 - Onboarding/API key input hardening: strip non-Latin1 Unicode artifacts from normalized secret input (while preserving Latin-1 content and internal spaces) so malformed copied API keys cannot trigger HTTP header `ByteString` construction crashes; adds regression coverage for shared normalization and MiniMax auth header usage. (#24496) Thanks @fa6maalassaf.
 - Kimi Coding/Anthropic tools compatibility: normalize `anthropic-messages` tool payloads to OpenAI-style `tools[].function` + compatible `tool_choice` when targeting Kimi Coding endpoints, restoring tool-call workflows that regressed after v2026.3.2. (#37038) Thanks @mochimochimochi-hub.
 - Heartbeat/workspace-path guardrails: append explicit workspace `HEARTBEAT.md` path guidance (and `docs/heartbeat.md` avoidance) to heartbeat prompts so heartbeat runs target workspace checklists reliably across packaged install layouts. (#37037) Thanks @stofancy.
-- Node/system.run approvals: bind approval prompts to the exact executed argv text and show shell payload only as a secondary preview, closing basename-spoofed wrapper approval mismatches. Thanks @tdjackey.
 - Subagents/kill-complete announce race: when a late `subagent-complete` lifecycle event arrives after an earlier kill marker, clear stale kill suppression/cleanup flags and re-run announce cleanup so finished runs no longer get silently swallowed. (#37024) Thanks @cmfinlan.
 - Agents/tool-result cleanup timeout hardening: on embedded runner teardown idle timeouts, clear pending tool-call state without persisting synthetic `missing tool result` entries, preventing timeout cleanups from poisoning follow-up turns; adds regression coverage for timeout clear-vs-flush behavior. (#37081) Thanks @Coyote-Den.
 - Agents/openai-completions stream timeout hardening: ensure runtime undici global dispatchers use extended streaming body/header timeouts (including env-proxy dispatcher mode) before embedded runs, reducing forced mid-stream `terminated` failures on long generations; adds regression coverage for dispatcher selection and idempotent reconfiguration. (#9708) Thanks @scottchguard.
