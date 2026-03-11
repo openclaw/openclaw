@@ -61,7 +61,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   // The default test env isolates HOME to avoid touching real state.
   if (live) {
     loadProfileEnv();
-    return { cleanup: () => {}, tempHome: process.env.HOME ?? "" };
+    return { cleanup: () => cleanupTrackedTempDirs(), tempHome: process.env.HOME ?? "" };
   }
 
   const restore: RestoreEntry[] = [
@@ -132,6 +132,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
 
   const cleanup = () => {
     restoreEnv(restore);
+    cleanupTrackedTempDirs();
     try {
       fs.rmSync(tempHome, { recursive: true, force: true });
     } catch {
@@ -144,4 +145,29 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
 
 export function withIsolatedTestHome(): { cleanup: () => void; tempHome: string } {
   return installTestEnv();
+}
+
+const trackedTempDirs: string[] = [];
+
+export function trackedMkdtempSync(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  trackedTempDirs.push(dir);
+  return dir;
+}
+
+export async function trackedMkdtemp(prefix: string): Promise<string> {
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), prefix));
+  trackedTempDirs.push(dir);
+  return dir;
+}
+
+export function cleanupTrackedTempDirs(): void {
+  for (const dir of trackedTempDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+  trackedTempDirs.length = 0;
 }

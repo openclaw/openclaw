@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { trackedMkdtempSync } from "../../test/test-env.js";
 
 export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
   if (process.platform !== "win32") {
@@ -10,7 +10,7 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
 }
 
 export function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  return trackedMkdtempSync("openclaw-exec-approvals-");
 }
 
 export type ShellParserParityFixtureCase = {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { trackedMkdtemp } from "../../test/test-env.js";
 import { loadDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
@@ -38,7 +38,7 @@ type DotEnvFixture = {
 };
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
+  const base = await trackedMkdtemp("openclaw-dotenv-test-");
   const cwdDir = path.join(base, "cwd");
   const stateDir = path.join(base, "state");
   process.env.OPENCLAW_STATE_DIR = stateDir;
