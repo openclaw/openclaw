@@ -54,9 +54,17 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
-/** Return true if realPath is within at least one of the allowed prefix directories. */
+/** Return true if realPath is within at least one of the allowed prefix directories.
+ *
+ * Relative prefixes are silently skipped — they would be resolved against
+ * process.cwd(), making the trust boundary dependent on the gateway's startup
+ * directory rather than explicit operator intent.
+ */
 function isWithinAllowedExternalPath(realPath: string, prefixes: string[]): boolean {
   return prefixes.some((prefix) => {
+    if (!path.isAbsolute(prefix)) {
+      return false;
+    }
     const rel = path.relative(prefix, realPath);
     return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
   });
