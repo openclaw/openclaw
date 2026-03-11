@@ -228,8 +228,10 @@ export async function acquireGatewayLock(
 
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
+      // Use the existing lock holder's port for liveness check, not the new gateway's port
+      const ownerPort = lastPayload?.port;
       const ownerStatus = ownerPid
-        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
+        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, ownerPort)
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
