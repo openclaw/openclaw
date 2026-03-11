@@ -642,8 +642,13 @@ export function createNodesTool(options?: {
             // invokeTimeoutMs takes priority; fall back to commandTimeoutMs + 15s buffer.
             // Without this, callGatewayTool uses gatewayOpts.timeoutMs (default 30s),
             // which kills any node command that takes longer than 30 seconds.
-            const runGatewayTimeout =
+            const derivedTimeout =
               invokeTimeoutMs ?? (commandTimeoutMs ? commandTimeoutMs + 15_000 : undefined);
+            // Clamp to at least the default gateway timeout floor (30s) so that
+            // small commandTimeoutMs values don't shrink below the time needed
+            // for node wake/reconnect flows.
+            const runGatewayTimeout =
+              derivedTimeout !== undefined ? Math.max(derivedTimeout, 30_000) : undefined;
             const runGatewayOpts = runGatewayTimeout
               ? { ...gatewayOpts, timeoutMs: runGatewayTimeout }
               : gatewayOpts;
