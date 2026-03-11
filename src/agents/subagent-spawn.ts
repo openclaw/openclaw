@@ -55,6 +55,7 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
+  lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;
@@ -581,6 +582,7 @@ export async function spawnSubagentDirect(
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
+        lightContext: params.lightContext || undefined,
         ...spawnedMetadata,
       },
       timeoutMs: 10_000,

@@ -42,6 +42,7 @@ const SessionsSpawnToolSchema = Type.Object({
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  lightContext: Type.Optional(Type.Boolean()),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -118,6 +119,7 @@ export function createSessionsSpawnTool(
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const lightContext = params.lightContext === true;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;
@@ -142,6 +144,13 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
+        if (lightContext) {
+          return jsonResult({
+            status: "error",
+            error:
+              "lightContext is currently unsupported for runtime=acp; use runtime=subagent or remove lightContext",
+          });
+        }
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",
@@ -185,6 +194,7 @@ export function createSessionsSpawnTool(
           mode,
           cleanup,
           sandbox,
+          lightContext,
           expectsCompletionMessage: true,
           attachments,
           attachMountPath:

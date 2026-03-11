@@ -193,6 +193,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
+      lightContext?: boolean;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
@@ -631,6 +632,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           workspaceDir: request.workspaceDir,
         }),
         senderIsOwner,
+        lightContext: request.lightContext || undefined,
       },
       runId,
       idempotencyKey: idem,
