@@ -341,6 +341,9 @@ type MinimaxConfig = {
   baseUrl?: string;
 };
 
+const MINIMAX_PROVIDER_IDS = ["minimax", "minimax-cn", "minimax-portal"] as const;
+type MinimaxProviderId = (typeof MINIMAX_PROVIDER_IDS)[number];
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -977,7 +980,7 @@ function resolveUrlOrigin(raw?: string): string | undefined {
 
 function resolveConfiguredMinimaxProviderBaseUrl(params: {
   cfg?: OpenClawConfig;
-  providerId: "minimax" | "minimax-cn";
+  providerId: MinimaxProviderId;
 }): string | undefined {
   const providers = params.cfg?.models?.providers as Record<string, unknown> | undefined;
   if (!providers || typeof providers !== "object") {
@@ -991,6 +994,23 @@ function resolveConfiguredMinimaxProviderBaseUrl(params: {
   return typeof value === "string" ? value.trim() : undefined;
 }
 
+function resolveMinimaxProviderPriority(params: { cfg?: OpenClawConfig }): MinimaxProviderId[] {
+  const modelProviderPrefix = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.model)
+    ?.trim()
+    .toLowerCase()
+    .split("/")[0];
+  if (
+    modelProviderPrefix &&
+    MINIMAX_PROVIDER_IDS.includes(modelProviderPrefix as MinimaxProviderId)
+  ) {
+    return [
+      modelProviderPrefix as MinimaxProviderId,
+      ...MINIMAX_PROVIDER_IDS.filter((id) => id !== modelProviderPrefix),
+    ];
+  }
+  return [...MINIMAX_PROVIDER_IDS];
+}
+
 function resolveMinimaxApiHost(params?: { cfg?: OpenClawConfig; minimax?: MinimaxConfig }): string {
   const fromEnv = resolveUrlOrigin(normalizeSecretInput(process.env.MINIMAX_API_HOST));
   if (fromEnv) {
@@ -1002,14 +1022,7 @@ function resolveMinimaxApiHost(params?: { cfg?: OpenClawConfig; minimax?: Minima
     return fromSearchConfig;
   }
 
-  const modelPrimary = resolveAgentModelPrimaryValue(params?.cfg?.agents?.defaults?.model)
-    ?.trim()
-    .toLowerCase();
-  const providerOrder: Array<"minimax" | "minimax-cn"> = modelPrimary?.startsWith("minimax-cn/")
-    ? ["minimax-cn", "minimax"]
-    : ["minimax", "minimax-cn"];
-
-  for (const providerId of providerOrder) {
+  for (const providerId of resolveMinimaxProviderPriority({ cfg: params?.cfg })) {
     const baseUrl = resolveConfiguredMinimaxProviderBaseUrl({ cfg: params?.cfg, providerId });
     const origin = resolveUrlOrigin(baseUrl);
     if (origin) {
@@ -1705,16 +1718,25 @@ async function runMinimaxSearch(params: {
           siteName: resolveSiteName(url) || undefined,
         };
       });
-      const relatedSearches = (data.related_searches ?? [])
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
-        .filter((item) => item.length > 0);
+      const relatedSearches = normalizeMinimaxRelatedSearches(data.related_searches);
 
       return {
         results,
-        relatedSearches: relatedSearches.length > 0 ? relatedSearches : undefined,
+        relatedSearches,
       };
     },
   );
+}
+
+function normalizeMinimaxRelatedSearches(values?: unknown[]): string[] | undefined {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized = values
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0)
+    .map((item) => wrapWebContent(item, "web_search"));
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function mapBraveLlmContextResults(
@@ -2460,6 +2482,7 @@ export const __testing = {
   resolveKimiBaseUrl,
   resolveMinimaxApiKey,
   resolveMinimaxApiHost,
+  normalizeMinimaxRelatedSearches,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
