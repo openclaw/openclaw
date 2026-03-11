@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -8,9 +9,11 @@ import {
 } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
+import { openUrl } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -19,9 +22,21 @@ type SearchProviderEntry = {
   envKeys: string[];
   placeholder: string;
   signupUrl: string;
+  /** If true, provider uses OAuth browser login instead of API key paste. */
+  oauth?: boolean;
 };
 
+// Firecrawl first (recommended), then the rest alphabetically.
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
+  {
+    value: "firecrawl",
+    label: "\uD83D\uDD25 Firecrawl",
+    hint: "Recommended · free 10,000 credits · search + scrape",
+    envKeys: ["FIRECRAWL_API_KEY"],
+    placeholder: "fc-...",
+    signupUrl: "https://www.firecrawl.dev/",
+    oauth: true,
+  },
   {
     value: "brave",
     label: "Brave Search",
@@ -73,6 +88,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
   switch (provider) {
     case "brave":
       return search?.apiKey;
+    case "firecrawl":
+      return search?.firecrawl?.apiKey;
     case "gemini":
       return search?.gemini?.apiKey;
     case "grok":
@@ -95,6 +112,11 @@ export function resolveExistingKey(
 /** Returns true if a key is configured (plaintext string or SecretRef). */
 export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
   return hasConfiguredSecretInput(rawKeyValue(config, provider));
+}
+
+/** Check if Firecrawl is authenticated (config or env). */
+export function isFirecrawlAuthenticated(config: OpenClawConfig): boolean {
+  return hasExistingKey(config, "firecrawl") || hasKeyInEnv(SEARCH_PROVIDER_OPTIONS[0]);
 }
 
 /** Build an env-backed SecretRef for a search provider. */
@@ -132,6 +154,9 @@ export function applySearchKey(
     case "brave":
       search.apiKey = key;
       break;
+    case "firecrawl":
+      search.firecrawl = { ...search.firecrawl, apiKey: key };
+      break;
     case "gemini":
       search.gemini = { ...search.gemini, apiKey: key };
       break;
@@ -150,6 +175,40 @@ export function applySearchKey(
     tools: {
       ...config.tools,
       web: { ...config.tools?.web, search },
+    },
+  };
+}
+
+/** Apply Firecrawl key to both search and fetch config. */
+export function applyFirecrawlKeyEverywhere(
+  config: OpenClawConfig,
+  apiKey: string,
+): OpenClawConfig {
+  return {
+    ...config,
+    tools: {
+      ...config.tools,
+      web: {
+        ...config.tools?.web,
+        search: {
+          ...config.tools?.web?.search,
+          provider: "firecrawl" as const,
+          enabled: true,
+          firecrawl: {
+            ...config.tools?.web?.search?.firecrawl,
+            apiKey,
+          },
+        },
+        fetch: {
+          ...config.tools?.web?.fetch,
+          provider: "firecrawl" as const,
+          firecrawl: {
+            ...config.tools?.web?.fetch?.firecrawl,
+            enabled: true,
+            apiKey,
+          },
+        },
+      },
     },
   };
 }
@@ -184,6 +243,134 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   };
 }
 
+// ---------------------------------------------------------------------------
+// Firecrawl PKCE OAuth helpers
+// ---------------------------------------------------------------------------
+
+function generateSessionId(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function generateCodeVerifier(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function generateCodeChallenge(verifier: string): string {
+  const digest = crypto.createHash("sha256").update(verifier).digest();
+  return digest.toString("base64url");
+}
+
+const FIRECRAWL_AUTH_STATUS_URL = "https://firecrawl.dev/api/auth/cli/status";
+const FIRECRAWL_AUTH_URL_BASE = "https://firecrawl.dev/cli-auth";
+const POLL_INTERVAL_MS = 2_000;
+const POLL_TIMEOUT_MS = 5 * 60 * 1_000;
+
+type FirecrawlAuthResult = {
+  apiKey: string;
+  teamName?: string;
+};
+
+async function pollFirecrawlAuthStatus(
+  sessionId: string,
+  codeVerifier: string,
+): Promise<FirecrawlAuthResult | null> {
+  const res = await fetch(FIRECRAWL_AUTH_STATUS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, code_verifier: codeVerifier }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    return null;
+  }
+  const data = (await res.json()) as { apiKey?: string; teamName?: string };
+  if (data.apiKey) {
+    return { apiKey: data.apiKey, teamName: data.teamName };
+  }
+  return null;
+}
+
+async function waitForFirecrawlAuth(
+  sessionId: string,
+  codeVerifier: string,
+  spin: { update: (msg: string) => void },
+): Promise<FirecrawlAuthResult | null> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  let dots = 0;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    dots = (dots + 1) % 4;
+    spin.update(`Waiting for browser login${".".repeat(dots)}`);
+    try {
+      const result = await pollFirecrawlAuthStatus(sessionId, codeVerifier);
+      if (result) {
+        return result;
+      }
+    } catch {
+      // Network blip — keep polling.
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Firecrawl OAuth flow
+// ---------------------------------------------------------------------------
+
+async function runFirecrawlOAuth(
+  config: OpenClawConfig,
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+): Promise<OpenClawConfig> {
+  try {
+    const sessionId = generateSessionId();
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+
+    const authUrl = `${FIRECRAWL_AUTH_URL_BASE}?code_challenge=${codeChallenge}&source=openclaw#session_id=${sessionId}`;
+
+    const isRemote = isRemoteEnvironment();
+    if (isRemote) {
+      await prompter.note(`Open this URL in your browser to log in:\n\n${authUrl}`, "Firecrawl");
+    } else {
+      const opened = await openUrl(authUrl);
+      if (!opened) {
+        await prompter.note(
+          `Could not open browser. Visit this URL to log in:\n\n${authUrl}`,
+          "Firecrawl",
+        );
+      }
+    }
+
+    const spin = prompter.progress("Waiting for browser login...");
+    const result = await waitForFirecrawlAuth(sessionId, codeVerifier, spin);
+
+    if (!result) {
+      spin.stop("Timed out waiting for login.");
+      await prompter.note(
+        "Authentication timed out.\nYou can set up Firecrawl later via `openclaw configure --section web`\nor set the FIRECRAWL_API_KEY environment variable.",
+        "Firecrawl",
+      );
+      return config;
+    }
+
+    const teamNote = result.teamName ? ` (team: ${result.teamName})` : "";
+    spin.stop(`Authenticated with Firecrawl${teamNote}`);
+    return applyFirecrawlKeyEverywhere(config, result.apiKey);
+  } catch (err) {
+    runtime.log("Firecrawl auth error:", err instanceof Error ? err.message : String(err));
+    await prompter.note(
+      "Something went wrong during Firecrawl setup.\nYou can set up Firecrawl later via `openclaw configure --section web`\nor set the FIRECRAWL_API_KEY environment variable.",
+      "Firecrawl",
+    );
+    return config;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main setup function
+// ---------------------------------------------------------------------------
+
 export type SetupSearchOptions = {
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
@@ -191,7 +378,7 @@ export type SetupSearchOptions = {
 
 export async function setupSearch(
   config: OpenClawConfig,
-  _runtime: RuntimeEnv,
+  runtime: RuntimeEnv,
   prompter: WizardPrompter,
   opts?: SetupSearchOptions,
 ): Promise<OpenClawConfig> {
@@ -222,6 +409,7 @@ export async function setupSearch(
     if (detected) {
       return detected.value;
     }
+    // Default to Firecrawl (first in list, recommended).
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
@@ -248,6 +436,55 @@ export async function setupSearch(
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
 
+  // Firecrawl: use OAuth browser login flow.
+  if (choice === "firecrawl") {
+    // Already authenticated — skip OAuth, just apply provider.
+    if (keyConfigured || envAvailable) {
+      if (opts?.quickstartDefaults) {
+        return preserveDisabledState(
+          config,
+          existingKey
+            ? applyFirecrawlKeyEverywhere(config, existingKey)
+            : applyProviderOnly(config, choice),
+        );
+      }
+      await prompter.note("Firecrawl already authenticated.", "Firecrawl");
+      return existingKey
+        ? applyFirecrawlKeyEverywhere(config, existingKey)
+        : applyProviderOnly(config, choice);
+    }
+
+    // Offer OAuth or manual entry.
+    const method = await prompter.select<"browser" | "manual">({
+      message: "How would you like to authenticate?",
+      options: [
+        { value: "browser", label: "Browser login", hint: "recommended — opens firecrawl.dev" },
+        { value: "manual", label: "Paste API key", hint: "if you already have one" },
+      ],
+      initialValue: "browser",
+    });
+
+    if (method === "browser") {
+      return runFirecrawlOAuth(config, runtime, prompter);
+    }
+
+    // Manual entry for firecrawl.
+    const keyInput = await prompter.text({
+      message: "Firecrawl API key",
+      placeholder: "fc-...",
+    });
+    const key = keyInput?.trim() ?? "";
+    if (key) {
+      return applyFirecrawlKeyEverywhere(config, key);
+    }
+    await prompter.note(
+      "No API key stored — web_search won't work until a key is available.\nGet your key at: https://www.firecrawl.dev/\nDocs: https://docs.openclaw.ai/tools/web",
+      "Web search",
+    );
+    return config;
+  }
+
+  // Non-firecrawl providers: standard API key paste flow.
   if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
     const result = existingKey
       ? applySearchKey(config, choice, existingKey)

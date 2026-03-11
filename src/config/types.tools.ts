@@ -446,8 +446,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider ("brave", "firecrawl", "gemini", "grok", "kimi", or "perplexity"). */
+      provider?: "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -460,6 +460,15 @@ export type ToolsConfig = {
       brave?: {
         /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
         mode?: "web" | "llm-context";
+      };
+      /** Firecrawl-specific configuration (used when provider="firecrawl"). */
+      firecrawl?: {
+        /** Firecrawl API key (defaults to FIRECRAWL_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Firecrawl base URL (default: https://api.firecrawl.dev). */
+        baseUrl?: string;
+        /** Timeout in seconds for Firecrawl search requests. */
+        timeoutSeconds?: number;
       };
       /** Gemini-specific configuration (used when provider="gemini"). */
       gemini?: {
@@ -499,6 +508,8 @@ export type ToolsConfig = {
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /** Primary extraction provider ("readability" or "firecrawl"). */
+      provider?: "readability" | "firecrawl";
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */

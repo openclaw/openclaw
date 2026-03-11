@@ -103,6 +103,35 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   return true;
 }
 
+function resolveFetchProvider(params: {
+  fetch?: WebFetchConfig;
+  firecrawlEnabled: boolean;
+}): FetchProvider {
+  const explicit =
+    params.fetch && "provider" in params.fetch && typeof params.fetch.provider === "string"
+      ? (params.fetch.provider as string).trim().toLowerCase()
+      : "";
+  if (explicit === "firecrawl") {
+    return "firecrawl";
+  }
+  if (explicit === "readability") {
+    return "readability";
+  }
+  // Backward compat: if firecrawl is explicitly enabled with a key, default to firecrawl.
+  if (params.firecrawlEnabled) {
+    const firecrawlCfg =
+      params.fetch && "firecrawl" in params.fetch ? params.fetch.firecrawl : undefined;
+    if (
+      firecrawlCfg &&
+      typeof firecrawlCfg === "object" &&
+      (firecrawlCfg as { enabled?: boolean }).enabled === true
+    ) {
+      return "firecrawl";
+    }
+  }
+  return "readability";
+}
+
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   const raw =
     fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
@@ -442,6 +471,8 @@ type FirecrawlRuntimeParams = {
   firecrawlTimeoutSeconds: number;
 };
 
+type FetchProvider = "readability" | "firecrawl";
+
 type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   url: string;
   extractMode: ExtractMode;
@@ -452,6 +483,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  provider: FetchProvider;
 };
 
 function toFirecrawlContentParams(
@@ -522,6 +554,26 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
+  }
+
+  // Provider "firecrawl": try Firecrawl first, fall through to Readability on failure.
+  if (params.provider === "firecrawl" && params.firecrawlEnabled && params.firecrawlApiKey) {
+    const start = Date.now();
+    try {
+      const payload = await maybeFetchFirecrawlWebFetchPayload({
+        ...params,
+        urlToFetch: params.url,
+        finalUrlFallback: params.url,
+        statusFallback: 200,
+        cacheKey,
+        tookMs: Date.now() - start,
+      });
+      if (payload) {
+        return { ...payload, provider: "firecrawl" };
+      }
+    } catch {
+      // Firecrawl failed — fall through to Readability path.
+    }
   }
 
   const start = Date.now();
@@ -741,6 +793,7 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const provider = resolveFetchProvider({ fetch, firecrawlEnabled });
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -771,6 +824,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        provider,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,
