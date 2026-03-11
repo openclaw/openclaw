@@ -22,6 +22,17 @@ export function resolve2TonySharedSecret(): string | null {
   return secret || null;
 }
 
+function resolveAngelaBaseUrl(): string | null {
+  return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_ANGELA_URL);
+}
+
+function resolveAngelaSharedSecret(): string | null {
+  const secret =
+    process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
+    process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
+  return secret || null;
+}
+
 export function resolveOperatorReceiptBaseUrl(): string | null {
   return normalizeBaseUrl(
     process.env.OPENCLAW_OPERATOR_RECEIPT_BASE_URL ??
@@ -53,6 +64,15 @@ export type OperatorWorkerStatusSnapshot = {
   authConfigured: boolean;
 };
 
+export type OperatorAngelaStatusSnapshot = {
+  dispatchTransport: "angela-http";
+  configured: boolean;
+  baseUrl: string | null;
+  authScheme: "bearer" | null;
+  authEnv: string | null;
+  authConfigured: boolean;
+};
+
 export function getOperatorWorkerStatus(): OperatorWorkerStatusSnapshot {
   const baseUrl = resolve2TonyBaseUrl();
   const sharedSecret = resolve2TonySharedSecret();
@@ -63,6 +83,19 @@ export function getOperatorWorkerStatus(): OperatorWorkerStatusSnapshot {
     receiptTemplate: resolveOperatorReceiptTemplate(),
     authScheme: "bearer",
     authEnv: "OPENCLAW_OPERATOR_2TONY_SHARED_SECRET",
+    authConfigured: Boolean(sharedSecret),
+  };
+}
+
+export function getOperatorAngelaStatus(): OperatorAngelaStatusSnapshot {
+  const baseUrl = resolveAngelaBaseUrl();
+  const sharedSecret = resolveAngelaSharedSecret();
+  return {
+    dispatchTransport: "angela-http",
+    configured: Boolean(baseUrl),
+    baseUrl,
+    authScheme: "bearer",
+    authEnv: "OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET",
     authConfigured: Boolean(sharedSecret),
   };
 }

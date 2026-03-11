@@ -53,6 +53,8 @@ describe("operator task dispatch", () => {
       );
 
       expect(result.created).toBe(true);
+      expect(result.task.receipt.state).toBe("queued");
+      expect(result.task.receipt.owner).toBe("2tony");
       expect(result.dispatch).toMatchObject({
         attempted: true,
         accepted: true,

@@ -1,8 +1,9 @@
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { compileOperatorAgentRegistry } from "./agent-registry.js";
+import { getOperatorDebSyncStatus } from "./deb-sync.js";
 import { listOperatorMemory } from "./memory-store.js";
 import { getOperatorTaskStatusSummary, getOperatorTaskStorePath } from "./task-store.js";
-import { getOperatorWorkerStatus } from "./worker-status.js";
+import { getOperatorAngelaStatus, getOperatorWorkerStatus } from "./worker-status.js";
 
 export type OperatorControlStatusSnapshot = {
   primaryOperator: "tonya";
@@ -27,6 +28,11 @@ export type OperatorControlStatusSnapshot = {
     collections: ReturnType<typeof listOperatorMemory>["collections"];
   };
   worker: ReturnType<typeof getOperatorWorkerStatus>;
+  mesh: {
+    executionFleet: ReturnType<typeof getOperatorWorkerStatus>;
+    projectOps: ReturnType<typeof getOperatorDebSyncStatus>;
+    marketing: ReturnType<typeof getOperatorAngelaStatus>;
+  };
 };
 
 export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
@@ -34,6 +40,8 @@ export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
   const acpBackend = getAcpRuntimeBackend();
   const sharedMemory = listOperatorMemory({ limit: 1 });
   const worker = getOperatorWorkerStatus();
+  const debSync = getOperatorDebSyncStatus();
+  const angela = getOperatorAngelaStatus();
   return {
     primaryOperator: "tonya",
     fallbackOperator: "tony",
@@ -57,5 +65,10 @@ export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
       collections: sharedMemory.collections,
     },
     worker,
+    mesh: {
+      executionFleet: worker,
+      projectOps: debSync,
+      marketing: angela,
+    },
   };
 }

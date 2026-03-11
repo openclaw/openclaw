@@ -250,6 +250,66 @@ describe.sequential("mission-control operator control routes", () => {
     });
   });
 
+  it("forwards operator task lifecycle snapshots to Deb when sync is configured", async () => {
+    await withStateDirEnv("openclaw-mc-operator-deb-sync-", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 202,
+        statusText: "Accepted",
+        json: async () => ({
+          ok: true,
+          message: "stored",
+        }),
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
+          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "deb-sync-secret",
+        },
+        async () => {
+          const created = await requestMissionControl({
+            method: "POST",
+            url: "/mission-control/api/tasks",
+            body: {
+              task_id: "task-operator-deb-sync-1",
+              idempotency_key: "idem-operator-deb-sync-1",
+              requester: { id: "tonya", kind: "operator" },
+              target: { capability: "marketing", team_id: "marketing" },
+              objective: "Verify Deb sync for accepted tasks",
+              tier: "STANDARD",
+              acceptance_criteria: ["Deb receives accepted lifecycle snapshot"],
+              timeout_s: 900,
+              execution: {
+                transport: "manual",
+                runtime: "acpx",
+                durable: true,
+              },
+            },
+          });
+
+          expect(created.statusCode).toBe(201);
+        },
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("http://deb.internal:3010/operator/events");
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer deb-sync-secret");
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
+      ).toMatchObject({
+        schema: "DebOperatorTaskSyncV1",
+        reason: "submit",
+        task_id: "task-operator-deb-sync-1",
+        state: "accepted",
+        team_id: "marketing",
+        capability: "marketing",
+      });
+    });
+  });
+
   it("rejects stale service-context writes with a client-visible error", async () => {
     await withStateDirEnv("openclaw-mc-operator-http-stale-", async () => {
       const first = await requestMissionControl({

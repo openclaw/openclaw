@@ -11,6 +11,7 @@ import {
 } from "../infra/http-body.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { compileOperatorAgentRegistry } from "../operator-control/agent-registry.js";
+import { syncOperatorTaskToDeb } from "../operator-control/deb-sync.js";
 import { submitOperatorTaskAndDispatch } from "../operator-control/dispatch.js";
 import {
   listOperatorMemory,
@@ -726,6 +727,7 @@ async function handleMissionControlApiRequest(params: {
         if (req.method === "POST") {
           const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
           const created = await submitOperatorTaskAndDispatch(payload);
+          await syncOperatorTaskToDeb(created.task, "submit");
           respondJson(res, created.created ? 201 : 200, req, created);
           return true;
         }
@@ -766,6 +768,7 @@ async function handleMissionControlApiRequest(params: {
           });
           return true;
         }
+        await syncOperatorTaskToDeb(updated, "receipt");
         respondJson(res, 200, req, updated);
         return true;
       }
@@ -793,6 +796,7 @@ async function handleMissionControlApiRequest(params: {
           });
           return true;
         }
+        await syncOperatorTaskToDeb(updated, "patch");
         respondJson(res, 200, req, updated);
         return true;
       }

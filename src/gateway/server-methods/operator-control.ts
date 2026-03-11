@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 import { compileOperatorAgentRegistry } from "../../operator-control/agent-registry.js";
+import { syncOperatorTaskToDeb } from "../../operator-control/deb-sync.js";
 import {
   dispatchOperatorTask,
   submitOperatorTaskAndDispatch,
@@ -153,6 +154,7 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
   "operator.tasks.submit": async ({ respond, params }) => {
     try {
       const payload = await submitOperatorTaskAndDispatch(params);
+      await syncOperatorTaskToDeb(payload.task, "submit");
       respond(true, payload, undefined, { created: payload.created });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -198,7 +200,7 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "operator.tasks.receipt": ({ respond, params }) => {
+  "operator.tasks.receipt": async ({ respond, params }) => {
     const taskId = toTaskId(params.taskId ?? params.task_id ?? params.id);
     if (!taskId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "taskId required"));
@@ -214,6 +216,7 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      await syncOperatorTaskToDeb(task, "receipt");
       respond(true, task);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -238,7 +241,7 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "operator.tasks.patch": ({ respond, params }) => {
+  "operator.tasks.patch": async ({ respond, params }) => {
     const taskId = toTaskId(params.taskId ?? params.task_id ?? params.id);
     if (!taskId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "taskId required"));
@@ -254,6 +257,7 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      await syncOperatorTaskToDeb(task, "patch");
       respond(true, task);
     } catch (error) {
       if (error instanceof ZodError) {

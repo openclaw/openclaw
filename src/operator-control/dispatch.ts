@@ -474,7 +474,8 @@ export async function submitOperatorTaskAndDispatch(input: unknown): Promise<{
   const submitted = submitOperatorTask(input);
   if (!submitted.created) {
     return {
-      ...submitted,
+      created: false,
+      task: getOperatorTask(submitted.task.envelope.task_id) ?? submitted.task,
       dispatch: {
         attempted: false,
         reason: "task already existed",
@@ -488,7 +489,8 @@ export async function submitOperatorTaskAndDispatch(input: unknown): Promise<{
     task.envelope.execution.transport === "inline"
   ) {
     return {
-      ...submitted,
+      created: true,
+      task: getOperatorTask(task.envelope.task_id) ?? task,
       dispatch: {
         attempted: false,
         reason: `transport ${task.envelope.execution.transport} does not use automatic dispatch`,
@@ -497,9 +499,11 @@ export async function submitOperatorTaskAndDispatch(input: unknown): Promise<{
   }
 
   try {
+    const dispatch = await dispatchOperatorTask(task.envelope.task_id);
     return {
-      ...submitted,
-      dispatch: await dispatchOperatorTask(task.envelope.task_id),
+      created: true,
+      task: getOperatorTask(task.envelope.task_id) ?? task,
+      dispatch,
     };
   } catch (error) {
     patchOperatorTask(task.envelope.task_id, {
