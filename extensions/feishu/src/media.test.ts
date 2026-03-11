@@ -182,6 +182,37 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("does not fail closed when buffer duration probing cannot write a temp file", async () => {
+    vi.spyOn(fs.promises, "mkdtemp").mockResolvedValue("/tmp/openclaw-feishu-probe-test");
+    vi.spyOn(fs.promises, "writeFile").mockRejectedValue(new Error("disk full"));
+    vi.spyOn(fs.promises, "rm").mockResolvedValue(undefined);
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("audio"),
+      fileName: "voice.opus",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_type: "opus",
+          file_name: "voice.opus",
+        }),
+      }),
+    );
+
+    const uploadPayload = fileCreateMock.mock.calls[0]?.[0]?.data ?? {};
+    expect(uploadPayload.duration).toBeUndefined();
+
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
   it("uses msg_type=file for documents", async () => {
     await sendMediaFeishu({
       cfg: {} as any,

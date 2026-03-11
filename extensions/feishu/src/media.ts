@@ -428,7 +428,8 @@ async function transcodeAudioToFeishuOpus(params: {
       fileName: `${outputBase}.ogg`,
       ...(durationMs !== undefined ? { durationMs } : {}),
     };
-  } catch {
+  } catch (error) {
+    console.warn(`[feishu] failed to transcode audio to opus for ${params.fileName}:`, error);
     return null;
   } finally {
     await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
@@ -461,14 +462,19 @@ async function probeBufferDurationMs(params: {
   fileName: string;
 }): Promise<number | undefined> {
   const ext = path.extname(params.fileName).toLowerCase() || ".bin";
-  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-probe-"));
-  const filePath = path.join(tmpDir, `probe${ext}`);
+  let tmpDir: string | undefined;
 
   try {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-probe-"));
+    const filePath = path.join(tmpDir, `probe${ext}`);
     await fs.promises.writeFile(filePath, params.buffer);
     return await probeMediaDurationMs(filePath);
+  } catch {
+    return undefined;
   } finally {
-    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    if (tmpDir) {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
