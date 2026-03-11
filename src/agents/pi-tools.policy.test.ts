@@ -144,9 +144,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
   });
 
-  it("depth-2 leaf allows subagents (for visibility)", () => {
+  it("depth-2 leaf denies subagents", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
-    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
   it("depth-2 leaf denies sessions_list and sessions_history", () => {
