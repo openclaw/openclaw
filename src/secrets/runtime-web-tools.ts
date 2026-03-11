@@ -52,6 +52,7 @@ export type RuntimeWebSearchMetadata = {
   providerSource: RuntimeWebProviderSource;
   selectedProvider?: WebSearchProvider;
   selectedProviderKeySource?: SecretResolutionSource;
+  minimaxApiHost?: string;
   perplexityTransport?: "search_api" | "chat_completions";
   diagnostics: RuntimeWebDiagnostic[];
 };
@@ -518,6 +519,15 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   if (searchEnabled && search) {
+    const runtimeMinimaxApiHost = normalizeUrlOrigin(params.context.env.MINIMAX_API_HOST);
+    if (runtimeMinimaxApiHost) {
+      searchMetadata.minimaxApiHost = runtimeMinimaxApiHost;
+      setResolvedWebSearchMinimaxBaseUrl({
+        resolvedConfig: params.resolvedConfig,
+        value: runtimeMinimaxApiHost,
+      });
+    }
+
     const candidates = configuredProvider
       ? [
           configuredProvider,

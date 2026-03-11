@@ -1011,7 +1011,16 @@ function resolveMinimaxProviderPriority(params: { cfg?: OpenClawConfig }): Minim
   return [...MINIMAX_PROVIDER_IDS];
 }
 
-function resolveMinimaxApiHost(params?: { cfg?: OpenClawConfig; minimax?: MinimaxConfig }): string {
+function resolveMinimaxApiHost(params?: {
+  cfg?: OpenClawConfig;
+  minimax?: MinimaxConfig;
+  runtimeApiHost?: string;
+}): string {
+  const fromRuntime = resolveUrlOrigin(params?.runtimeApiHost);
+  if (fromRuntime) {
+    return fromRuntime;
+  }
+
   const fromEnv = resolveUrlOrigin(normalizeSecretInput(process.env.MINIMAX_API_HOST));
   if (fromEnv) {
     return fromEnv;
@@ -2453,7 +2462,11 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
-        minimaxApiHost: resolveMinimaxApiHost({ cfg: options?.config, minimax: minimaxConfig }),
+        minimaxApiHost: resolveMinimaxApiHost({
+          cfg: options?.config,
+          minimax: minimaxConfig,
+          runtimeApiHost: options?.runtimeWebSearch?.minimaxApiHost,
+        }),
         braveMode,
       });
       return jsonResult(result);

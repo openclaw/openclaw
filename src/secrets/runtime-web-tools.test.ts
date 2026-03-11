@@ -87,6 +87,16 @@ function expectInactiveFirecrawlSecretRef(params: {
   );
 }
 
+function readMinimaxBaseUrl(config: OpenClawConfig): string | undefined {
+  const search = config.tools?.web?.search as Record<string, unknown> | undefined;
+  const minimax =
+    search && typeof search === "object"
+      ? (search.minimax as Record<string, unknown> | undefined)
+      : undefined;
+  const value = minimax?.baseUrl;
+  return typeof value === "string" ? value : undefined;
+}
+
 describe("runtime web tools resolution", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -295,6 +305,27 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("resolves MINIMAX_API_HOST from runtime env snapshot", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token", // pragma: allowlist secret
+        MINIMAX_API_HOST: "https://api.minimaxi.com/anthropic",
+      },
+    });
+
+    expect(metadata.search.minimaxApiHost).toBe("https://api.minimaxi.com");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
+  });
+
   it("auto-detects minimax using auth profile oauth when env/config keys are missing", async () => {
     vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
       version: 1,
@@ -334,7 +365,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBe("minimax");
     expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
-    expect(resolvedConfig.tools?.web?.search?.minimax?.baseUrl).toBe("https://api.minimaxi.com");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
     expect(resolveApiKeySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         env: {},
@@ -388,7 +419,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProvider).toBe("minimax");
     expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
-    expect(resolvedConfig.tools?.web?.search?.minimax?.baseUrl).toBe("https://api.minimaxi.com");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
   });
 
   it("treats configured provider as primary and falls back to next available provider", async () => {
