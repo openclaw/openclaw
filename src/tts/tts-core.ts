@@ -696,10 +696,10 @@ export async function edgeTTS(params: {
     timeout: config.timeoutMs ?? timeoutMs,
   });
   await tts.ttsPromise(text, outputPath);
-  
+
   const { size } = statSync(outputPath);
 
-if (size === 0) {
-  throw new Error("Edge TTS produced empty audio file");
+  if (size === 0) {
+    throw new Error("Edge TTS produced empty audio file");
   }
 }
