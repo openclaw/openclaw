@@ -214,52 +214,6 @@ export async function promptModelMetadata(
     };
   }
 
-  const configureCompat = await prompter.confirm({
-    message: "Configure advanced compatibility settings?",
-    initialValue: false,
-  });
-
-  if (configureCompat) {
-    const compat: Record<string, unknown> = { ...current?.compat };
-
-    compat.supportsTools = await prompter.confirm({
-      message: "Supports tool/function calling?",
-      initialValue: (current?.compat?.supportsTools as boolean) ?? true,
-    });
-
-    compat.supportsStore = await prompter.confirm({
-      message: "Supports store parameter?",
-      initialValue: (current?.compat?.supportsStore as boolean) ?? false,
-    });
-
-    compat.supportsDeveloperRole = await prompter.confirm({
-      message: "Supports developer role?",
-      initialValue: (current?.compat?.supportsDeveloperRole as boolean) ?? false,
-    });
-
-    compat.supportsReasoningEffort = await prompter.confirm({
-      message: "Supports reasoning effort parameter?",
-      initialValue: (current?.compat?.supportsReasoningEffort as boolean) ?? false,
-    });
-
-    compat.supportsStrictMode = await prompter.confirm({
-      message: "Supports strict mode for tool schemas?",
-      initialValue: (current?.compat?.supportsStrictMode as boolean) ?? false,
-    });
-
-    const maxTokensFieldChoice = await prompter.select({
-      message: "Max tokens field name",
-      options: [
-        { value: "max_tokens", label: "max_tokens", hint: "default" },
-        { value: "max_completion_tokens", label: "max_completion_tokens", hint: "OpenAI-style" },
-      ],
-      initialValue: (current?.compat?.maxTokensField as string) ?? "max_tokens",
-    });
-    compat.maxTokensField = maxTokensFieldChoice;
-
-    result.compat = compat as ModelDefinitionConfig["compat"];
-  }
-
   return result;
 }
 
