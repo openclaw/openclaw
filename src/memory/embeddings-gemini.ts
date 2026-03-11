@@ -51,10 +51,7 @@ export type GeminiTextPart = { text: string };
 export type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
-export type GeminiFilePart = {
-  fileData: { mimeType: string; fileUri: string };
-};
-export type GeminiPart = GeminiTextPart | GeminiInlinePart | GeminiFilePart;
+export type GeminiPart = GeminiTextPart | GeminiInlinePart;
 export type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType: GeminiTaskType;
@@ -62,24 +59,6 @@ export type GeminiEmbeddingRequest = {
   model?: string;
 };
 export type GeminiTextEmbeddingRequest = GeminiEmbeddingRequest;
-
-/** Convert a string or pre-built parts array into `GeminiPart[]`. */
-export function buildGeminiParts(input: string | GeminiPart[]): GeminiPart[] {
-  if (typeof input === "string") {
-    return [{ text: input }];
-  }
-  return input;
-}
-
-/** Convenience: build an inline-data part for multimodal embeddings. */
-export function buildInlineDataPart(mimeType: string, base64Data: string): GeminiInlinePart {
-  return { inlineData: { mimeType, data: base64Data } };
-}
-
-/** Convenience: build a file-data part for multimodal embeddings. */
-export function buildFileDataPart(mimeType: string, fileUri: string): GeminiFilePart {
-  return { fileData: { mimeType, fileUri } };
-}
 
 /** Builds the text-only Gemini embedding request shape used across direct and batch APIs. */
 export function buildGeminiTextEmbeddingRequest(params: {

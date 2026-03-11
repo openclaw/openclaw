@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
   listMemoryFiles,
-  loadMultimodalEmbeddingInput,
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
@@ -201,18 +201,19 @@ describe("buildFileEntry", () => {
     expect(entry?.embeddingInput).toBeUndefined();
   });
 
-  it("loads multimodal embedding input lazily", async () => {
+  it("builds a multimodal chunk lazily for indexing", async () => {
     const tmpDir = getTmpDir();
     const target = path.join(tmpDir, "diagram.png");
     await fs.writeFile(target, Buffer.from("png"));
 
     const entry = await buildFileEntry(target, tmpDir, multimodal);
-    const input = await loadMultimodalEmbeddingInput(entry!);
+    const built = await buildMultimodalChunkForIndexing(entry!);
 
-    expect(input?.parts).toEqual([
+    expect(built?.chunk.embeddingInput?.parts).toEqual([
       { type: "text", text: "Image file: diagram.png" },
       expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
     ]);
+    expect(built?.structuredInputBytes).toBeGreaterThan(0);
   });
 });
 

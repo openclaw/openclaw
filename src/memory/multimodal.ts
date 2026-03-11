@@ -1,5 +1,18 @@
-export const MEMORY_MULTIMODAL_MODALITIES = ["image", "audio"] as const;
-export type MemoryMultimodalModality = (typeof MEMORY_MULTIMODAL_MODALITIES)[number];
+const MEMORY_MULTIMODAL_SPECS = {
+  image: {
+    labelPrefix: "Image file",
+    extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"],
+  },
+  audio: {
+    labelPrefix: "Audio file",
+    extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac"],
+  },
+} as const;
+
+export type MemoryMultimodalModality = keyof typeof MEMORY_MULTIMODAL_SPECS;
+export const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
+  MEMORY_MULTIMODAL_SPECS,
+) as MemoryMultimodalModality[];
 export type MemoryMultimodalSelection = MemoryMultimodalModality | "all";
 
 export type MemoryMultimodalSettings = {
@@ -9,10 +22,6 @@ export type MemoryMultimodalSettings = {
 };
 
 export const DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES = 10 * 1024 * 1024;
-
-const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"]);
-
-const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac"]);
 
 export function normalizeMemoryMultimodalModalities(
   raw: MemoryMultimodalSelection[] | undefined,
@@ -50,6 +59,19 @@ export function isMemoryMultimodalEnabled(settings: MemoryMultimodalSettings): b
   return settings.enabled && settings.modalities.length > 0;
 }
 
+export function getMemoryMultimodalExtensions(
+  modality: MemoryMultimodalModality,
+): readonly string[] {
+  return MEMORY_MULTIMODAL_SPECS[modality].extensions;
+}
+
+export function buildMemoryMultimodalLabel(
+  modality: MemoryMultimodalModality,
+  normalizedPath: string,
+): string {
+  return `${MEMORY_MULTIMODAL_SPECS[modality].labelPrefix}: ${normalizedPath}`;
+}
+
 export function buildCaseInsensitiveExtensionGlob(extension: string): string {
   const normalized = extension.trim().replace(/^\./, "").toLowerCase();
   if (!normalized) {
@@ -68,8 +90,7 @@ export function classifyMemoryMultimodalPath(
   }
   const lower = filePath.trim().toLowerCase();
   for (const modality of settings.modalities) {
-    const extensionSet = modality === "image" ? IMAGE_EXTENSIONS : AUDIO_EXTENSIONS;
-    for (const extension of extensionSet) {
+    for (const extension of getMemoryMultimodalExtensions(modality)) {
       if (lower.endsWith(extension)) {
         return modality;
       }

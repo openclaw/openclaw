@@ -36,7 +36,11 @@ import {
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
-import { buildCaseInsensitiveExtensionGlob, classifyMemoryMultimodalPath } from "./multimodal.js";
+import {
+  buildCaseInsensitiveExtensionGlob,
+  classifyMemoryMultimodalPath,
+  getMemoryMultimodalExtensions,
+} from "./multimodal.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
@@ -388,11 +392,7 @@ export abstract class MemoryManagerSyncOps {
           watchPaths.add(path.join(entry, "**", "*.md"));
           if (this.settings.multimodal.enabled) {
             for (const modality of this.settings.multimodal.modalities) {
-              const extensions =
-                modality === "image"
-                  ? [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"]
-                  : [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac"];
-              for (const extension of extensions) {
+              for (const extension of getMemoryMultimodalExtensions(modality)) {
                 watchPaths.add(
                   path.join(entry, "**", buildCaseInsensitiveExtensionGlob(extension)),
                 );

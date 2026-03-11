@@ -2,16 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import {
   buildGeminiEmbeddingRequest,
-  buildFileDataPart,
-  buildGeminiParts,
   buildGeminiTextEmbeddingRequest,
-  buildInlineDataPart,
   createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   GEMINI_EMBEDDING_2_MODELS,
   isGeminiEmbedding2Model,
   resolveGeminiOutputDimensionality,
-  type GeminiPart,
 } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -61,40 +57,6 @@ function mockResolvedProviderKey(apiKey = "test-key") {
     source: "test",
   });
 }
-
-// ---------- Helper function tests ----------
-
-describe("buildGeminiParts", () => {
-  it("wraps a string into a single text part", () => {
-    expect(buildGeminiParts("hello")).toEqual([{ text: "hello" }]);
-  });
-
-  it("passes through an existing parts array", () => {
-    const parts: GeminiPart[] = [
-      { text: "hello" },
-      { inlineData: { mimeType: "image/png", data: "base64data" } },
-    ];
-    expect(buildGeminiParts(parts)).toBe(parts);
-  });
-});
-
-describe("buildInlineDataPart", () => {
-  it("produces the correct shape", () => {
-    const part = buildInlineDataPart("image/jpeg", "abc123");
-    expect(part).toEqual({
-      inlineData: { mimeType: "image/jpeg", data: "abc123" },
-    });
-  });
-});
-
-describe("buildFileDataPart", () => {
-  it("produces the correct shape", () => {
-    const part = buildFileDataPart("application/pdf", "gs://bucket/file.pdf");
-    expect(part).toEqual({
-      fileData: { mimeType: "application/pdf", fileUri: "gs://bucket/file.pdf" },
-    });
-  });
-});
 
 describe("buildGeminiTextEmbeddingRequest", () => {
   it("builds a text embedding request with optional model and dimensions", () => {

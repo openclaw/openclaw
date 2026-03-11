@@ -15,9 +15,9 @@ import {
 import { type EmbeddingInput, hasNonTextEmbeddingParts } from "./embedding-inputs.js";
 import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
 import {
+  buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
-  loadMultimodalEmbeddingInput,
   parseEmbedding,
   remapChunkLines,
   type MemoryChunk,
@@ -813,21 +813,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let chunks: MemoryChunk[];
     let structuredInputBytes: number | undefined;
     if ("kind" in entry && entry.kind === "multimodal") {
-      const embeddingInput = await loadMultimodalEmbeddingInput(entry);
-      if (!embeddingInput) {
+      const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
+      if (!multimodalChunk) {
         this.clearIndexedFileData(entry.path, options.source);
         return;
       }
-      structuredInputBytes = estimateStructuredEmbeddingInputBytes(embeddingInput);
-      chunks = [
-        {
-          startLine: 1,
-          endLine: 1,
-          text: entry.contentText ?? embeddingInput.text,
-          hash: entry.hash,
-          embeddingInput,
-        },
-      ];
+      structuredInputBytes = multimodalChunk.structuredInputBytes;
+      chunks = [multimodalChunk.chunk];
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
       chunks = enforceEmbeddingMaxInputTokens(

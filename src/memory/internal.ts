@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime } from "../media/mime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
 import { isFileMissingError } from "./fs-utils.js";
 import {
+  buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
@@ -30,6 +32,11 @@ export type MemoryChunk = {
   text: string;
   hash: string;
   embeddingInput?: EmbeddingInput;
+};
+
+export type MultimodalMemoryChunk = {
+  chunk: MemoryChunk;
+  structuredInputBytes: number;
 };
 
 const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
@@ -211,7 +218,7 @@ export async function buildFileEntry(
     if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
       return null;
     }
-    const contentText = `${modality === "image" ? "Image" : "Audio"} file: ${normalizedPath}`;
+    const contentText = buildMemoryMultimodalLabel(modality, normalizedPath);
     const dataHash = crypto.createHash("sha256").update(buffer).digest("hex");
     const chunkHash = hashText(
       JSON.stringify({
@@ -253,7 +260,7 @@ export async function buildFileEntry(
   };
 }
 
-export async function loadMultimodalEmbeddingInput(
+async function loadMultimodalEmbeddingInput(
   entry: Pick<MemoryFileEntry, "absPath" | "contentText" | "mimeType" | "kind">,
 ): Promise<EmbeddingInput | null> {
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
@@ -278,6 +285,25 @@ export async function loadMultimodalEmbeddingInput(
         data: buffer.toString("base64"),
       },
     ],
+  };
+}
+
+export async function buildMultimodalChunkForIndexing(
+  entry: Pick<MemoryFileEntry, "absPath" | "contentText" | "mimeType" | "kind" | "hash">,
+): Promise<MultimodalMemoryChunk | null> {
+  const embeddingInput = await loadMultimodalEmbeddingInput(entry);
+  if (!embeddingInput) {
+    return null;
+  }
+  return {
+    chunk: {
+      startLine: 1,
+      endLine: 1,
+      text: entry.contentText ?? embeddingInput.text,
+      hash: entry.hash,
+      embeddingInput,
+    },
+    structuredInputBytes: estimateStructuredEmbeddingInputBytes(embeddingInput),
   };
 }
 
