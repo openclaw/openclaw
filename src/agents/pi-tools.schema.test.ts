@@ -59,6 +59,27 @@ describe("normalizeToolParameters", () => {
     expect(params).not.toHaveProperty("required");
   });
 
+  it("strips nested required: null inside properties for Gemini provider", () => {
+    const tool = makeTool({
+      type: "object",
+      properties: {
+        address: {
+          type: "object",
+          properties: { street: { type: "string" } },
+          required: null,
+        },
+      },
+      required: ["address"],
+    });
+    const result = normalizeToolParameters(tool, { modelProvider: "google" });
+    const props = (result.parameters as Record<string, unknown>).properties as Record<
+      string,
+      unknown
+    >;
+    expect(props.address).not.toHaveProperty("required");
+    expect((result.parameters as Record<string, unknown>).required).toEqual(["address"]);
+  });
+
   it("returns tool unchanged when parameters is absent", () => {
     const tool = makeTool();
     const result = normalizeToolParameters(tool);

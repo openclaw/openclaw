@@ -78,7 +78,7 @@ export function normalizeToolParameters(
   // Some schema generators (e.g. TypeBox) emit `required: null` instead of
   // omitting the field. Providers like Bailian/GLM reject this with
   // "got null, want array". Strip it early so every downstream path benefits.
-  if ("required" in schema && !Array.isArray(schema.required)) {
+  if (Object.hasOwn(schema, "required") && !Array.isArray(schema.required)) {
     const { required: _, ...rest } = schema;
     return normalizeToolParameters({ ...tool, parameters: rest }, options);
   }
