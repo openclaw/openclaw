@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { PluginLogger } from "openclaw/plugin-sdk";
+import type { PluginLogger } from "openclaw/plugin-sdk/byterover";
 
 // ---------------------------------------------------------------------------
 // Types — brv CLI JSON output shapes

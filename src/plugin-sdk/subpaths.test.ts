@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 const bundledExtensionSubpathLoaders = [
   { id: "acpx", load: () => import("openclaw/plugin-sdk/acpx") },
   { id: "bluebubbles", load: () => import("openclaw/plugin-sdk/bluebubbles") },
+  { id: "byterover", load: () => import("openclaw/plugin-sdk/byterover") },
   { id: "copilot-proxy", load: () => import("openclaw/plugin-sdk/copilot-proxy") },
   { id: "device-pair", load: () => import("openclaw/plugin-sdk/device-pair") },
   { id: "diagnostics-otel", load: () => import("openclaw/plugin-sdk/diagnostics-otel") },
