@@ -14,6 +14,7 @@ REQUIRED_BINS=(
   terraform
   vault
   boundary
+  sentry-cli
   argocd
   openclaw
   qmd
@@ -39,6 +40,7 @@ helm version --short >/dev/null
 terraform version -json >/dev/null
 vault --version >/dev/null
 boundary version >/dev/null
+sentry-cli --version >/dev/null
 argocd version --client >/dev/null
 openclaw --help >/dev/null
 qmd --version >/dev/null
