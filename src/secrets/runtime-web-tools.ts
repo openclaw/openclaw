@@ -1,7 +1,7 @@
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForSecretsRuntime,
-  resolveApiKeyForProfile,
+  type AuthProfileCredential,
 } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -440,14 +440,12 @@ async function resolveMinimaxApiKeyFromAuthProfiles(params: {
       }
       visited.add(profileId);
       try {
-        const resolved = await resolveApiKeyForProfile({
-          cfg: params.sourceConfig,
-          store,
-          profileId,
-          agentDir: params.context.env.OPENCLAW_AGENT_DIR,
-          env: params.context.env,
+        const credential = store.profiles[profileId];
+        const value = await resolveMinimaxCredentialValueReadOnly({
+          credential,
+          sourceConfig: params.sourceConfig,
+          context: params.context,
         });
-        const value = normalizeSecretInput(resolved?.apiKey);
         if (value) {
           return {
             apiKey: value,
@@ -462,6 +460,77 @@ async function resolveMinimaxApiKeyFromAuthProfiles(params: {
         // Ignore profile-specific failures and continue probing next profile.
       }
     }
+  }
+
+  return undefined;
+}
+
+async function resolveProfileSecretValueReadOnly(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  value: unknown;
+  refValue?: unknown;
+}): Promise<string | undefined> {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    refValue: params.refValue,
+    defaults: params.sourceConfig.secrets?.defaults,
+  });
+  if (!ref) {
+    return normalizeSecretInput(params.value);
+  }
+
+  try {
+    const resolved = await resolveSecretRefValues([ref], {
+      config: params.sourceConfig,
+      env: params.context.env,
+      cache: params.context.cache,
+    });
+    const resolvedValue = resolved.get(secretRefKey(ref));
+    return typeof resolvedValue === "string" ? normalizeSecretInput(resolvedValue) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveMinimaxCredentialValueReadOnly(params: {
+  credential: AuthProfileCredential | undefined;
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+}): Promise<string | undefined> {
+  const credential = params.credential;
+  if (!credential) {
+    return undefined;
+  }
+
+  if (credential.type === "oauth") {
+    const expires = typeof credential.expires === "number" ? credential.expires : undefined;
+    if (expires === undefined || Date.now() >= expires) {
+      return undefined;
+    }
+    return normalizeSecretInput(credential.access);
+  }
+
+  if (credential.type === "token") {
+    const expires = typeof credential.expires === "number" ? credential.expires : undefined;
+    if (expires !== undefined && Date.now() >= expires) {
+      return undefined;
+    }
+    return resolveProfileSecretValueReadOnly({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      value: credential.token,
+      refValue: credential.tokenRef,
+    });
+  }
+
+  if (credential.type === "api_key") {
+    return resolveProfileSecretValueReadOnly({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      value: credential.key,
+      refValue: credential.keyRef,
+    });
   }
 
   return undefined;

@@ -343,10 +343,6 @@ describe("runtime web tools resolution", () => {
     vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
       provider === "minimax-cn" ? ["minimax-cn:default"] : [],
     );
-    const resolveApiKeySpy = vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
-      apiKey: "profile-oauth-token", // pragma: allowlist secret
-      provider: "minimax-cn",
-    });
 
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({
@@ -366,11 +362,6 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
     expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: {},
-      }),
-    );
   });
 
   it("prefers configured minimax-portal baseUrl when auth profile fallback is minimax-portal", async () => {
@@ -390,10 +381,6 @@ describe("runtime web tools resolution", () => {
     vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
       provider === "minimax-portal" ? ["minimax-portal:default"] : [],
     );
-    vi.spyOn(authProfiles, "resolveApiKeyForProfile").mockResolvedValue({
-      apiKey: "profile-oauth-token", // pragma: allowlist secret
-      provider: "minimax-portal",
-    });
 
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({
@@ -420,6 +407,43 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
     expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
     expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
+  });
+
+  it("keeps auth-profile probing read-only by ignoring expired oauth credentials", async () => {
+    const resolveApiKeySpy = vi.spyOn(authProfiles, "resolveApiKeyForProfile");
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax:default": {
+          type: "oauth",
+          provider: "minimax",
+          access: "expired-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() - 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax" ? ["minimax:default"] : [],
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBeUndefined();
+    expect(resolveApiKeySpy).not.toHaveBeenCalled();
   });
 
   it("treats configured provider as primary and falls back to next available provider", async () => {
