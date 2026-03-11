@@ -1,6 +1,9 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
     security_opt:
       - no-new-privileges:true
     environment:
