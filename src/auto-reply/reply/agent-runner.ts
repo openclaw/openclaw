@@ -515,6 +515,9 @@ export async function runReplyAgent(params: {
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
+    const reminderAgentId =
+      followupRun.run.agentId ??
+      (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&
@@ -528,6 +531,7 @@ export async function runReplyAgent(params: {
         ? await hasSessionRelatedCronJobs({
             cronStorePath: cfg.cron?.store,
             sessionKey,
+            agentId: reminderAgentId,
           })
         : false;
     const guardedReplyPayloads =

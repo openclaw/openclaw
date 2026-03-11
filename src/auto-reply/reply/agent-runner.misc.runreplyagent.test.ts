@@ -1108,7 +1108,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 });
 
 describe("runReplyAgent reminder commitment guard", () => {
-  function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
+  function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean; agentId?: string }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "telegram",
@@ -1130,6 +1130,7 @@ describe("runReplyAgent reminder commitment guard", () => {
         workspaceDir: "/tmp",
         config: {},
         skillsSnapshot: {},
+        ...(params?.agentId ? { agentId: params.agentId } : {}),
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
@@ -1217,6 +1218,34 @@ describe("runReplyAgent reminder commitment guard", () => {
     const result = await createRun();
     expect(result).toMatchObject({
       text: "I'll ping you when it's done.",
+    });
+  });
+
+  it("suppresses guard note when same agent already has an isolated cron job", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "isolated-job",
+          name: "thursday-ping",
+          enabled: true,
+          agentId: "main",
+          sessionKey: undefined,
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll ping you Thursday morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({ sessionKey: "main", agentId: "main" });
+    expect(result).toMatchObject({
+      text: "I'll ping you Thursday morning.",
     });
   });
 

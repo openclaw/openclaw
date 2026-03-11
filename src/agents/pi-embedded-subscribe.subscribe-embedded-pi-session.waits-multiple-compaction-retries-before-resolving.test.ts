@@ -60,6 +60,35 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getCompactionCount()).toBe(0);
   });
 
+  it("preserves successful cron adds across compaction retries", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-compaction-cron-add",
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "cron",
+      toolCallId: "tool-cron-1",
+      args: { action: "add", job: { name: "reminder" } },
+    });
+    await Promise.resolve();
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "cron",
+      toolCallId: "tool-cron-1",
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+    await Promise.resolve();
+
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
+
+    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "s" } });
+
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
+  });
+
   it("emits compaction events on the agent event bus", async () => {
     const { emit } = createSubscribedSessionHarness({
       runId: "run-compaction",

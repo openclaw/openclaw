@@ -28,6 +28,7 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
 export async function hasSessionRelatedCronJobs(params: {
   cronStorePath?: string;
   sessionKey?: string;
+  agentId?: string;
 }): Promise<boolean> {
   try {
     const storePath = resolveCronStorePath(params.cronStorePath);
@@ -35,10 +36,17 @@ export async function hasSessionRelatedCronJobs(params: {
     if (store.jobs.length === 0) {
       return false;
     }
-    if (params.sessionKey) {
-      return store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey);
-    }
-    return false;
+    return store.jobs.some((job) => {
+      if (!job.enabled) {
+        return false;
+      }
+      if (params.sessionKey && job.sessionKey === params.sessionKey) {
+        return true;
+      }
+      // Isolated reminder jobs intentionally omit sessionKey, so fall back to
+      // same-agent coverage before appending a contradictory disclaimer.
+      return !job.sessionKey && Boolean(params.agentId) && job.agentId === params.agentId;
+    });
   } catch {
     // If we cannot read the cron store, do not suppress the note.
     return false;
