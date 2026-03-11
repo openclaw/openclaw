@@ -144,6 +144,28 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     });
   });
 
+  it("marks gateway.remote.token inactive when local token SecretRef is configured", () => {
+    const states = evaluate({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: envRef("GW_AUTH_TOKEN"),
+        },
+        remote: {
+          enabled: true,
+          token: envRef("GW_REMOTE_TOKEN"),
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(states["gateway.remote.token"]).toMatchObject({
+      hasSecretRef: true,
+      active: false,
+      reason: "gateway.auth.token is configured.",
+    });
+  });
+
   it("marks gateway.remote.password active when remote url is configured", () => {
     const states = evaluate({
       gateway: {
