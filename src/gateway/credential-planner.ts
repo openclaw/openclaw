@@ -30,6 +30,7 @@ export type GatewayCredentialPlan = {
   localTokenSurfaceActive: boolean;
   tokenCanWin: boolean;
   passwordCanWin: boolean;
+  remoteEnabled: boolean;
   remoteMode: boolean;
   remoteUrlConfigured: boolean;
   tailscaleRemoteExposure: boolean;
@@ -183,12 +184,16 @@ export function createGatewayCredentialPlan(params: {
       (authMode === undefined && !(envPassword || localPassword.configured)));
 
   const remoteMode = gateway?.mode === "remote";
+  const remoteEnabled = remote?.enabled !== false;
   const remoteUrlConfigured = Boolean(trimToUndefined(remote?.url));
   const tailscaleRemoteExposure =
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
-  const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
-  const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
-  const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
+  const remoteConfiguredSurface =
+    remoteEnabled && (remoteMode || remoteUrlConfigured || tailscaleRemoteExposure);
+  const remoteTokenFallbackActive =
+    remoteEnabled && localTokenCanWin && !envToken && !localToken.configured;
+  const remotePasswordFallbackActive =
+    remoteEnabled && !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
     configuredMode: gateway?.mode === "remote" ? "remote" : "local",
@@ -204,6 +209,7 @@ export function createGatewayCredentialPlan(params: {
     localTokenSurfaceActive,
     tokenCanWin,
     passwordCanWin,
+    remoteEnabled,
     remoteMode,
     remoteUrlConfigured,
     tailscaleRemoteExposure,
