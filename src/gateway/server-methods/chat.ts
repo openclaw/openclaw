@@ -86,6 +86,10 @@ type AbortedPartialSnapshot = {
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const INTERNAL_RUNTIME_CONTEXT_HEADER = "OpenClaw runtime context (internal):";
+const INTERNAL_TASK_COMPLETION_MARKER = "[Internal task completion event]";
+const INTERNAL_CHILD_RESULT_START = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
+const INTERNAL_CHILD_RESULT_END = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -318,6 +322,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   if (!message || typeof message !== "object") {
     return { message, changed: false };
   }
+  const projectedToolResult = projectSubagentAnnounceHistoryMessage(message);
+  if (projectedToolResult) {
+    return { message: projectedToolResult, changed: true };
+  }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
 
@@ -355,6 +363,118 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   return { message: changed ? entry : message, changed };
+}
+
+function extractChatHistoryRawText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const chunks: string[] = [];
+  for (const block of value) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    chunks.push(typed.text);
+  }
+  return chunks.join("\n");
+}
+
+function extractSubagentCompletionEvents(text: string): Array<{
+  taskLabel: string;
+  statusLabel: string;
+  result: string;
+}> {
+  if (!text.includes(INTERNAL_RUNTIME_CONTEXT_HEADER)) {
+    return [];
+  }
+  const events: Array<{ taskLabel: string; statusLabel: string; result: string }> = [];
+  const taskCompletionBlocks = text
+    .split(INTERNAL_TASK_COMPLETION_MARKER)
+    .slice(1)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  for (const block of taskCompletionBlocks) {
+    const taskMatch = block.match(/(?:^|\n)task:\s*(.+)/);
+    const statusMatch = block.match(/(?:^|\n)status:\s*(.+)/);
+    const startIndex = block.indexOf(INTERNAL_CHILD_RESULT_START);
+    const endIndex = block.indexOf(INTERNAL_CHILD_RESULT_END);
+    if (!taskMatch || !statusMatch || startIndex < 0 || endIndex < 0 || endIndex <= startIndex) {
+      continue;
+    }
+    const result = block.slice(startIndex + INTERNAL_CHILD_RESULT_START.length, endIndex).trim();
+    events.push({
+      taskLabel: taskMatch[1]?.trim() || "subagent",
+      statusLabel: statusMatch[1]?.trim() || "unknown",
+      result: result || "(no output)",
+    });
+  }
+  return events;
+}
+
+function formatSubagentCompletionToolText(
+  events: Array<{ taskLabel: string; statusLabel: string; result: string }>,
+): string {
+  if (events.length === 1) {
+    const [event] = events;
+    return [`Task: ${event.taskLabel}`, `Status: ${event.statusLabel}`, "", event.result].join(
+      "\n",
+    );
+  }
+  return events
+    .map((event, index) =>
+      [`${index + 1}. ${event.taskLabel}`, `Status: ${event.statusLabel}`, "", event.result].join(
+        "\n",
+      ),
+    )
+    .join("\n\n");
+}
+
+function projectSubagentAnnounceHistoryMessage(
+  message: unknown,
+): Record<string, unknown> | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "user") {
+    return undefined;
+  }
+  const provenance = normalizeInputProvenance(entry.provenance);
+  if (provenance?.kind !== "inter_session" || provenance.sourceTool !== "subagent_announce") {
+    return undefined;
+  }
+  const rawText = extractChatHistoryRawText(entry.content ?? entry.text);
+  if (!rawText) {
+    return undefined;
+  }
+  const events = extractSubagentCompletionEvents(rawText);
+  if (events.length === 0) {
+    return undefined;
+  }
+  return {
+    role: "toolResult",
+    toolName: events.length === 1 ? "subagent_result" : "subagent_results",
+    timestamp: typeof entry.timestamp === "number" ? entry.timestamp : Date.now(),
+    provenance,
+    content: [
+      {
+        type: "text",
+        text: formatSubagentCompletionToolText(events),
+      },
+    ],
+    __openclaw: {
+      synthetic: true,
+      source: "subagent_announce",
+    },
+  };
 }
 
 /**
