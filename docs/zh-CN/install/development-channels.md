@@ -66,7 +66,9 @@ openclaw update --channel dev
 
 ## 标签最佳实践
 
-- 为你希望 git checkout 落在的发布版本打标签（`vYYYY.M.D` 或 `vYYYY.M.D-<patch>`）。
+- 为你希望 git checkout 落在的发布版本打标签（`vYYYY.M.D` 表示 stable，`vYYYY.M.D-beta.N` 表示 beta）。
+- `vYYYY.M.D.beta.N` 也可识别（兼容），但推荐使用 `-beta.N`。
+- 旧版 `vYYYY.M.D-<patch>` 标签仍被视为 stable（非 beta）。
 - 保持标签不可变：永远不要移动或重用标签。
 - npm dist-tag 仍然是 npm 安装的数据源：
   - `latest` → stable
