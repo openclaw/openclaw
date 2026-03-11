@@ -28,7 +28,7 @@ function makeStore(
       createdAtMs: Date.now(),
       updatedAtMs: Date.now(),
       state: {},
-    })) as CronStoreFile["jobs"],
+    })) as unknown as CronStoreFile["jobs"],
   };
 }
 
