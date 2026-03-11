@@ -371,6 +371,9 @@ importers:
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.8.1)(@emnapi/runtime@1.9.1)(opusscript@0.1.1)
+      '@snazzah/davey':
+        specifier: ^0.1.11
+        version: 0.1.11(@emnapi/core@1.8.1)(@emnapi/runtime@1.9.1)
       discord-api-types:
         specifier: ^0.38.44
         version: 0.38.44
@@ -384,6 +387,10 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+    optionalDependencies:
+      '@discordjs/opus':
+        specifier: ^0.10.0
+        version: 0.10.0
 
   extensions/duckduckgo: {}
 

@@ -1327,6 +1327,7 @@
       "yauzl": "3.2.1"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
@@ -1339,10 +1340,7 @@
       "protobufjs",
       "sharp"
     ],
-    "ignoredBuiltDependencies": [
-      "@discordjs/opus",
-      "koffi"
-    ],
+    "ignoredBuiltDependencies": ["koffi"],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {
         "dependencies": {
