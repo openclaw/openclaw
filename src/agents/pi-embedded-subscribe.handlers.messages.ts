@@ -11,7 +11,7 @@ import {
 } from "./pi-embedded-helpers.js";
 import {
   buildToolOnlyTurnNudgeMessage,
-  resolveToolOnlyTurnSafetyConfig,
+  resolveEffectiveToolOnlyTurnSafetyConfig,
 } from "./pi-embedded-runner/tool-only-turn-safety.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
@@ -27,8 +27,12 @@ import {
 const messageLog = createSubsystemLogger("agent/embedded/messages");
 
 /** Resolve the maxConsecutiveToolOnlyTurns setting from config. */
-function resolveMaxConsecutiveToolOnlyTurns(config?: OpenClawConfig): number {
-  return resolveToolOnlyTurnSafetyConfig(config?.tools).maxConsecutiveToolOnlyTurns;
+function resolveMaxConsecutiveToolOnlyTurns(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+}): number {
+  return resolveEffectiveToolOnlyTurnSafetyConfig(params).maxConsecutiveToolOnlyTurns;
 }
 
 /** Check whether an assistant message contains any tool-call content blocks. */
@@ -477,8 +481,18 @@ export function handleMessageEnd(
     ctx.state.consecutiveToolOnlyTurns = 0;
     ctx.state.toolOnlyNudgeInjected = false;
   } else if (hasToolCalls) {
+    // Some providers can repeat message_end for the same assistant turn.
+    // Count each assistant message at most once for tool-only safety.
+    if (ctx.state.lastCountedToolOnlyMessageIndex === ctx.state.assistantMessageIndex) {
+      return;
+    }
+    ctx.state.lastCountedToolOnlyMessageIndex = ctx.state.assistantMessageIndex;
     ctx.state.consecutiveToolOnlyTurns++;
-    const threshold = resolveMaxConsecutiveToolOnlyTurns(ctx.params.config);
+    const threshold = resolveMaxConsecutiveToolOnlyTurns({
+      config: ctx.params.config,
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+    });
     if (
       threshold > 0 &&
       ctx.state.consecutiveToolOnlyTurns >= threshold &&

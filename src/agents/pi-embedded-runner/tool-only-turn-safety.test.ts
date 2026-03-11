@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildApiErrorNotice,
   buildToolOnlyTurnNudgeMessage,
   DEFAULT_MAX_CONSECUTIVE_TOOL_ONLY_TURNS,
   DEFAULT_NOTIFY_USER_ON_API_ERROR,
+  resolveEffectiveToolOnlyTurnSafetyConfig,
   resolveToolOnlyTurnSafetyConfig,
 } from "./tool-only-turn-safety.js";
 
@@ -42,6 +44,52 @@ describe("resolveToolOnlyTurnSafetyConfig", () => {
   it("falls back to default for non-integer values", () => {
     const cfg = resolveToolOnlyTurnSafetyConfig({ maxConsecutiveToolOnlyTurns: 3.5 });
     expect(cfg.maxConsecutiveToolOnlyTurns).toBe(15);
+  });
+});
+
+describe("resolveEffectiveToolOnlyTurnSafetyConfig", () => {
+  const cfg: OpenClawConfig = {
+    tools: {
+      maxConsecutiveToolOnlyTurns: 9,
+      notifyUserOnApiError: false,
+    },
+    agents: {
+      defaults: {
+        tools: {
+          maxConsecutiveToolOnlyTurns: 5,
+          notifyUserOnApiError: false,
+        },
+      },
+      list: [
+        { id: "helper" },
+        {
+          id: "support",
+          tools: {
+            maxConsecutiveToolOnlyTurns: 2,
+            notifyUserOnApiError: true,
+          },
+        },
+      ],
+    },
+  };
+
+  it("uses agents.defaults.tools when the selected agent has no override", () => {
+    expect(resolveEffectiveToolOnlyTurnSafetyConfig({ config: cfg, agentId: "helper" })).toEqual({
+      maxConsecutiveToolOnlyTurns: 5,
+      notifyUserOnApiError: false,
+    });
+  });
+
+  it("lets agent tools override defaults and root tools", () => {
+    expect(
+      resolveEffectiveToolOnlyTurnSafetyConfig({
+        config: cfg,
+        sessionKey: "agent:support:session-1",
+      }),
+    ).toEqual({
+      maxConsecutiveToolOnlyTurns: 2,
+      notifyUserOnApiError: true,
+    });
   });
 });
 

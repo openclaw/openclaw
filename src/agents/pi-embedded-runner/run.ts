@@ -64,7 +64,10 @@ import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
-import { buildApiErrorNotice, resolveToolOnlyTurnSafetyConfig } from "./tool-only-turn-safety.js";
+import {
+  buildApiErrorNotice,
+  resolveEffectiveToolOnlyTurnSafetyConfig,
+} from "./tool-only-turn-safety.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -801,7 +804,11 @@ export async function runEmbeddedPiAgent(
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
-      const toolOnlySafetyConfig = resolveToolOnlyTurnSafetyConfig(params.config?.tools);
+      const toolOnlySafetyConfig = resolveEffectiveToolOnlyTurnSafetyConfig({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      });
       // Track whether we've already notified the user about an API error in
       // this run to avoid spamming multiple notices across retries.
       let apiErrorNotified = false;

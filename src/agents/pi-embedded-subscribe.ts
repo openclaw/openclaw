@@ -81,6 +81,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deterministicApprovalPromptSent: false,
     consecutiveToolOnlyTurns: 0,
     toolOnlyNudgeInjected: false,
+    lastCountedToolOnlyMessageIndex: -1,
   };
   const usageTotals = {
     input: 0,

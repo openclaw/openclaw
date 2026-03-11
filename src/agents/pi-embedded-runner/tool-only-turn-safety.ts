@@ -12,7 +12,9 @@
  * @see https://github.com/openclaw/openclaw/issues/38792
  */
 
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope.js";
 
 const log = createSubsystemLogger("agents/tool-only-turn-safety");
 
@@ -40,6 +42,45 @@ export function resolveToolOnlyTurnSafetyConfig(cfg?: {
         : DEFAULT_MAX_CONSECUTIVE_TOOL_ONLY_TURNS,
     notifyUserOnApiError: typeof notify === "boolean" ? notify : DEFAULT_NOTIFY_USER_ON_API_ERROR,
   };
+}
+
+/**
+ * Resolve the effective runtime safety config from root/default/agent tool scopes.
+ *
+ * Precedence is:
+ * 1. `agents.<id>.tools`
+ * 2. `agents.defaults.tools`
+ * 3. root `tools`
+ */
+export function resolveEffectiveToolOnlyTurnSafetyConfig(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+}): ToolOnlyTurnSafetyConfig {
+  const cfg = params.config;
+  if (!cfg) {
+    return resolveToolOnlyTurnSafetyConfig();
+  }
+
+  const { sessionAgentId } = resolveSessionAgentIds({
+    config: cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  const agentTools = resolveAgentConfig(cfg, sessionAgentId)?.tools;
+  const defaultTools = cfg.agents?.defaults?.tools;
+  const rootTools = cfg.tools;
+
+  return resolveToolOnlyTurnSafetyConfig({
+    maxConsecutiveToolOnlyTurns:
+      agentTools?.maxConsecutiveToolOnlyTurns ??
+      defaultTools?.maxConsecutiveToolOnlyTurns ??
+      rootTools?.maxConsecutiveToolOnlyTurns,
+    notifyUserOnApiError:
+      agentTools?.notifyUserOnApiError ??
+      defaultTools?.notifyUserOnApiError ??
+      rootTools?.notifyUserOnApiError,
+  });
 }
 
 /**

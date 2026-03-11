@@ -83,6 +83,8 @@ export type EmbeddedPiSubscribeState = {
   consecutiveToolOnlyTurns: number;
   /** Whether a tool-only turn nudge has been injected for the current streak. */
   toolOnlyNudgeInjected: boolean;
+  /** Assistant message index already counted for the current tool-only streak. */
+  lastCountedToolOnlyMessageIndex: number;
 };
 
 export type EmbeddedPiSubscribeContext = {
