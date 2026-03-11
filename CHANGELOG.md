@@ -97,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Azure OpenAI Responses: include the `azure-openai` provider in the Responses API store override so Azure OpenAI multi-turn cron jobs and embedded agent runs no longer fail with HTTP 400 "store is set to false". (#42934, fixes #42800) Thanks @ademczuk.
 - Agents/context pruning: prune image-only tool results during soft-trim, align context-pruning coverage with the new tool-result contract, and extend historical image cleanup to the same screenshot-heavy session path. (#43045) Thanks @MoerAI.
 - fix(models): guard optional model.input capability checks (#42096) thanks @andyliu
+- Security/plugin runtime: stop unauthenticated plugin HTTP routes from inheriting synthetic admin gateway scopes when they call `runtime.subagent.*`, so admin-only methods like `sessions.delete` stay blocked without gateway auth.
 
 ## 2026.3.8
 
