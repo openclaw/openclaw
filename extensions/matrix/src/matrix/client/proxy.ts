@@ -4,6 +4,24 @@ import { getMatrixLogService } from "../sdk-runtime.js";
 let proxyConfigured = false;
 
 /**
+ * Sanitize a proxy URL for logging by removing embedded credentials.
+ * e.g., "http://user:pass@proxy:8080" -> "http://***@proxy:8080"
+ */
+function sanitizeProxyUrlForLogging(proxyUrl: string): string {
+  try {
+    const url = new URL(proxyUrl);
+    if (url.username || url.password) {
+      url.username = "***";
+      url.password = "";
+    }
+    return url.toString();
+  } catch {
+    // If URL parsing fails, mask anything that looks like credentials
+    return proxyUrl.replace(/\/\/[^@]+@/, "//***@");
+  }
+}
+
+/**
  * Resolve the proxy URL from environment variables.
  * Matrix-specific MATRIX_PROXY takes precedence, followed by standard proxy vars.
  */
@@ -40,7 +58,9 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
     proxyConfigured = true;
 
     const LogService = getMatrixLogService();
-    LogService.info("MatrixProxy", `Configured global proxy: ${proxyUrl}`);
+    // Sanitize URL to avoid logging credentials
+    const safeUrl = sanitizeProxyUrlForLogging(proxyUrl);
+    LogService.info("MatrixProxy", `Configured global proxy: ${safeUrl}`);
     return true;
   } catch (err) {
     const LogService = getMatrixLogService();
@@ -54,4 +74,12 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
  */
 export function isMatrixProxyConfigured(): boolean {
   return proxyConfigured;
+}
+
+/**
+ * Reset proxy state for testing purposes only.
+ * @internal
+ */
+export function resetProxyStateForTesting(): void {
+  proxyConfigured = false;
 }
