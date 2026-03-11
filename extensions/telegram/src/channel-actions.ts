@@ -80,10 +80,31 @@ function readTelegramMessageIdParam(
 }
 
 function readTelegramTopicIdParam(params: Record<string, unknown>): number | undefined {
-  return (
-    readNumberParam(params, "topicId", { integer: true, strict: true }) ??
-    readNumberParam(params, "threadId", { integer: true, strict: true })
-  );
+  const hasTopicIdParam = Object.hasOwn(params, "topicId") || Object.hasOwn(params, "topic_id");
+  const topicId = readNumberParam(params, "topicId", {
+    integer: true,
+    strict: true,
+    strictInteger: true,
+  });
+  if (hasTopicIdParam && typeof topicId !== "number") {
+    throw new Error("topicId must be a valid integer when provided.");
+  }
+  if (typeof topicId === "number") {
+    return topicId;
+  }
+
+  const hasThreadIdParam =
+    Object.hasOwn(params, "threadId") || Object.hasOwn(params, "thread_id");
+  const threadId = readNumberParam(params, "threadId", {
+    integer: true,
+    strict: true,
+    strictInteger: true,
+  });
+  if (hasThreadIdParam && typeof threadId !== "number") {
+    throw new Error("threadId must be a valid integer when provided.");
+  }
+
+  return threadId;
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {

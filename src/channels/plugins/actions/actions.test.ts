@@ -953,7 +953,53 @@ describe("telegramMessageActions", () => {
         },
         cfg,
       }),
-    ).rejects.toThrow(/threadId\/topicId is required for action=topic-delete/i);
+    ).rejects.toThrow(/topicId must be a valid integer when provided/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed topicId even when threadId alias is valid", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "topic-delete",
+        params: {
+          to: "-1001234567890",
+          topicId: "oops",
+          threadId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/topicId must be a valid integer when provided/i);
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed delete topicId even when threadId alias is valid", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "delete",
+        params: {
+          to: "-1001234567890",
+          topicId: "oops",
+          threadId: 271,
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/topicId must be a valid integer when provided/i);
 
     expect(handleTelegramAction).not.toHaveBeenCalled();
   });

@@ -629,7 +629,7 @@ describe("handleTelegramAction", () => {
     expect(deleteForumTopicTelegram).toHaveBeenCalledWith(
       "-100123",
       271,
-      expect.objectContaining({ token: "tok" }),
+      expect.objectContaining({ cfg, token: "tok" }),
     );
   });
 

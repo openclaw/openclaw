@@ -359,6 +359,7 @@ export async function handleTelegramAction(
       required: true,
       integer: true,
       strict: true,
+      strictInteger: true,
     });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -367,6 +368,7 @@ export async function handleTelegramAction(
       );
     }
     await deleteForumTopicTelegram(chatId ?? "", topicId ?? 0, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
     });

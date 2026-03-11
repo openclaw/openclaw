@@ -1443,6 +1443,7 @@ export async function sendPollTelegram(
 // ---------------------------------------------------------------------------
 
 type TelegramDeleteForumTopicOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
   verbose?: boolean;
