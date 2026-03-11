@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  resetAllLanes,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import * as schedule from "./schedule.js";
 import {
@@ -1492,7 +1497,7 @@ describe("Cron issue regressions", () => {
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
   });
 
-  it("queues manual cron.run requests behind the cron execution lane", async () => {
+  it("honors cron maxConcurrentRuns for manual runs", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
@@ -1566,6 +1571,54 @@ describe("Cron issue regressions", () => {
     });
 
     clearCommandLane(CommandLane.Cron);
+  });
+
+  it("manual enqueueRun does not deadlock when isolated execution re-enters the cron lane (#43008)", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Main);
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Main, 1);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const dueAt = Date.parse("2026-02-06T10:05:02.500Z");
+    const job = createDueIsolatedJob({
+      id: "manual-nested-cron-lane",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: makeStorePath().storePath,
+      log: createNoopLogger(),
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async (params: { isManualRun?: boolean }) => {
+        if (params.isManualRun) {
+          return { status: "ok" as const, summary: "nested cron work completed" };
+        }
+        return await enqueueCommandInLane(CommandLane.Nested, async () => ({
+          status: "ok" as const,
+          summary: "nested cron work completed",
+        }));
+      }),
+    });
+    state.running = true;
+    state.store = { version: 1, jobs: [job] };
+
+    try {
+      const result = await enqueueRun(state, job.id, "force");
+      expect(result).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+      await vi.waitFor(() => {
+        const updatedJob = state.store?.jobs.find((entry) => entry.id === job.id);
+        expect(updatedJob?.state.lastStatus).toBe("ok");
+      });
+    } finally {
+      clearCommandLane(CommandLane.Main);
+      clearCommandLane(CommandLane.Cron);
+      resetAllLanes();
+    }
   });
 
   it("logs unexpected queued manual run background failures once", async () => {

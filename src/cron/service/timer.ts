@@ -65,17 +65,18 @@ type StartupCatchupPlan = {
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
+  isManualRun?: boolean,
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
+    return await executeJobCore(state, job, undefined, isManualRun);
   }
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
+      executeJobCore(state, job, runAbortController.signal, isManualRun),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
           runAbortController.abort(timeoutErrorMessage());
@@ -1006,6 +1007,7 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
+  isManualRun?: boolean,
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
@@ -1134,6 +1136,7 @@ export async function executeJobCore(
     job,
     message: job.payload.message,
     abortSignal,
+    isManualRun,
   });
 
   if (abortSignal?.aborted) {

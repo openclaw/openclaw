@@ -209,6 +209,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
   deliveryContract?: IsolatedDeliveryContract;
+  isManualRun?: boolean;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -612,6 +613,10 @@ export async function runCronIsolatedAgentTurn(params: {
             skillsSnapshot,
             prompt: promptText,
             lane: resolveNestedAgentLane(params.lane),
+            enqueue:
+              params.isManualRun && params.lane === "cron"
+                ? async (task) => await task()
+                : undefined,
             provider: providerOverride,
             model: modelOverride,
             authProfileId,
