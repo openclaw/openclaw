@@ -3,13 +3,15 @@ param(
 
   [string]$ConfigRoot,
 
-  [ValidateSet("init", "run", "status")]
+  [ValidateSet("init", "run", "status", "dashboard")]
   [string]$Action = "run",
 
   [ValidateSet("native", "wsl")]
   [string]$Mode = "native",
 
-  [string]$Distro = "Ubuntu"
+  [string]$Distro = "Ubuntu",
+
+  [switch]$Dashboard
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +32,9 @@ if ($Mode -eq "native") {
   }
   if (-not [string]::IsNullOrWhiteSpace($ConfigRoot)) {
     $argsMap["ConfigRoot"] = $ConfigRoot
+  }
+  if ($Dashboard) {
+    $argsMap["Dashboard"] = $true
   }
   & $NativeScript @argsMap
   if ($LASTEXITCODE -ne 0) {
@@ -75,11 +80,16 @@ if ($WslConfigRoot) {
 }
 
 wsl -d $Distro -- chmod +x "$WslScript"
+$WslArgs = @($Action, $WslUsbRoot)
+if ($Dashboard -and $Action -eq "run") {
+  $WslArgs += "dashboard"
+}
+
 if ($WslConfigRoot) {
-  wsl -d $Distro -- env OPENCLAW_CONFIG_ROOT="$WslConfigRoot" bash "$WslScript" "$Action" "$WslUsbRoot"
+  wsl -d $Distro -- env OPENCLAW_CONFIG_ROOT="$WslConfigRoot" bash "$WslScript" @WslArgs
 }
 else {
-  wsl -d $Distro -- bash "$WslScript" "$Action" "$WslUsbRoot"
+  wsl -d $Distro -- bash "$WslScript" @WslArgs
 }
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE

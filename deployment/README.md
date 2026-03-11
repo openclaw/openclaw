@@ -153,10 +153,28 @@ Optional custom config root:
 powershell -ExecutionPolicy Bypass -File .\deployment\usb-openclaw-win.ps1 -Action run -ConfigRoot "D:\portable-openclaw-config"
 ```
 
+Open dashboard with tokenized URL:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deployment\usb-openclaw-win.ps1 -Action dashboard
+```
+
+Run gateway and auto-open dashboard in one command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deployment\usb-openclaw-win.ps1 -Action run -Dashboard
+```
+
 The wrapper defaults to native mode (`-Mode native`). You can also call native script directly:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deployment\usb-openclaw-win-native.ps1 -Action run
+```
+
+Native direct dashboard:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deployment\usb-openclaw-win-native.ps1 -Action dashboard
 ```
 
 ## Windows (PowerShell + WSL)
@@ -215,10 +233,10 @@ CODEX_HOME=./deployment/data/codex-home \
 
 - Scripts default to `deployment/config` for config and `deployment/data` for state/workspace.
 - Scripts set `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `CODEX_HOME` automatically.
-- macOS script runs `openclaw setup --workspace <resolved-workspace>` on startup to ensure bootstrap files exist (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) without overwriting existing files.
-- if both `MEMORY.md` and `memory.md` are absent, macOS script creates a starter `MEMORY.md`.
+- Scripts run `openclaw setup --workspace <resolved-workspace>` on startup to ensure bootstrap files exist (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) without overwriting existing files.
+- If both `MEMORY.md` and `memory.md` are absent, scripts create a starter `MEMORY.md`.
 - If `gateway.auth.token` is missing, scripts auto-generate one.
-- macOS script syncs OpenAI Codex OAuth from `CODEX_HOME/auth.json` into `state-mac/agents/main/agent/auth-profiles.json` before start.
+- Scripts sync OpenAI Codex OAuth from `CODEX_HOME/auth.json` into `state-*/agents/main/agent/auth-profiles.json` before start.
 - macOS script auto-detects expired/shared OpenAI Codex refresh tokens and runs interactive re-login before gateway start (set `OPENCLAW_AUTO_CODEX_RELOGIN=0` to disable).
 - Scripts only fill missing defaults; they do not overwrite existing custom values in imported config.
 - For full 1:1 migration, copy both config and state. Config alone may miss credentials stored in state files.
