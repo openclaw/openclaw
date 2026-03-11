@@ -31,13 +31,12 @@ describe("parseCliJson", () => {
     }
   });
 
-  it("rejects sentinels with no digits like 'rate-limited'", () => {
-    const raw = JSON.stringify({
-      session_id: "rate-limited",
-      result: "hello",
-    });
-    const out = parseCliJson(raw, DEFAULT_BACKEND);
-    expect(out?.sessionId).toBeUndefined();
+  it("rejects long sentinels with no digits", () => {
+    for (const sentinel of ["blocked-now", "forbidden-access", "unavailable"]) {
+      const raw = JSON.stringify({ session_id: sentinel, result: "hi" });
+      const out = parseCliJson(raw, DEFAULT_BACKEND);
+      expect(out?.sessionId).toBeUndefined();
+    }
   });
 
   it("accepts OpenAI-style thread IDs via sessionIdFields", () => {
