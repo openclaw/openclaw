@@ -199,10 +199,12 @@ export async function reconcileAssistantOutputs(params: {
   seenSegmentIds: Set<string>;
 }) {
   const newOutputs: AssistantOutputEntry[] = [];
+  const normalizedStartIndex =
+    params.startIndex >= 0 && params.startIndex <= params.messages.length ? params.startIndex : 0;
   let nextStartIndex = params.messages.length;
 
-  for (const [index, msg] of params.messages.slice(params.startIndex).entries()) {
-    const absoluteIndex = params.startIndex + index;
+  for (const [index, msg] of params.messages.slice(normalizedStartIndex).entries()) {
+    const absoluteIndex = normalizedStartIndex + index;
     if (msg?.role !== "assistant") {
       continue;
     }
