@@ -35,10 +35,12 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
-  // kimi-coding natively supports Anthropic tool framing (input_schema);
-  // converting to OpenAI format causes XML text fallback instead of tool_use blocks.
+  // kimi-coding uses anthropic-messages API but requires OpenAI-style tool payloads
+  // (tools[].function + string-mode tool_choice) for proper tool call support.
   "kimi-coding": {
     preserveAnthropicThinkingSignatures: false,
+    anthropicToolSchemaMode: "openai-functions",
+    anthropicToolChoiceMode: "openai-string-modes",
   },
   mistral: {
     transcriptToolCallIdMode: "strict9",
