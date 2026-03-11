@@ -440,6 +440,44 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("uses per-job lane for isolated cron runs", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-lane-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockClear();
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "isolated lane test",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+      await runCronJobForce(ws, jobId);
+
+      expect(cronIsolatedRun).toHaveBeenCalled();
+      const call = (cronIsolatedRun.mock.calls.at(-1) as unknown[] | undefined)?.[0] as
+        | {
+            lane?: unknown;
+            sessionKey?: unknown;
+            job?: { id?: unknown };
+          }
+        | undefined;
+      expect(call?.job?.id).toBe(jobId);
+      expect(call?.sessionKey).toBe(`cron:${jobId}`);
+      expect(call?.lane).toBe(`cron:${jobId}`);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron, dir } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",
