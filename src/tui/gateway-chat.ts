@@ -276,6 +276,27 @@ export async function resolveGatewayConnection(
   const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
+  // Apply runtime port override: if gateway service is running with --port,
+  // use that port instead of config/default to match the active listener.
+  let runtimePort: number | undefined;
+  try {
+    const { resolveGatewayService } = await import("../daemon/service.js");
+    const service = resolveGatewayService();
+    const command = await service.readCommand(env as Record<string, string | undefined>);
+    if (command?.programArguments) {
+      const portIdx = command.programArguments.indexOf("--port");
+      if (portIdx >= 0 && portIdx + 1 < command.programArguments.length) {
+        const portArg = command.programArguments[portIdx + 1];
+        const parsed = Number.parseInt(portArg, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          runtimePort = parsed;
+        }
+      }
+    }
+  } catch {
+    // Best-effort: if we can't read runtime state, fall back to config.
+  }
+
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
@@ -286,7 +307,7 @@ export async function resolveGatewayConnection(
     errorHint: "Fix: pass --token or --password when using --url.",
   });
   const url = buildGatewayConnectionDetails({
-    config,
+    config: runtimePort !== undefined ? { ...config, gateway: { ...config.gateway, port: runtimePort } } : config,
     ...(urlOverride ? { url: urlOverride } : {}),
   }).url;
 
