@@ -5,7 +5,7 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "./model-auth.js";
+import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export function resolveModelAuthLabel(params: {
@@ -59,7 +59,10 @@ export function resolveModelAuthLabel(params: {
     return `api-key (${envKey.source})`;
   }
 
-  const customKey = getCustomProviderApiKey(params.cfg, providerKey);
+  const customKey = resolveUsableCustomProviderApiKey({
+    cfg: params.cfg,
+    provider: providerKey,
+  });
   if (customKey) {
     return `api-key (models.json)`;
   }
