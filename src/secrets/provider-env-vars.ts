@@ -25,6 +25,12 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   modelstudio: ["MODELSTUDIO_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
   byteplus: ["BYTEPLUS_API_KEY"],
+  // GigaChat (Sber): supports two auth modes –
+  //   GIGACHAT_CREDENTIALS: base64-encoded "ClientId:ClientSecret" (preferred;
+  //     the gateway exchanges it for a Bearer token automatically).
+  //   GIGACHAT_API_KEY: a pre-obtained access token (expires in ~30 min; set
+  //     GIGACHAT_TOKEN_EXPIRY_MS to a shorter interval to trigger refresh).
+  gigachat: ["GIGACHAT_CREDENTIALS", "GIGACHAT_API_KEY"],
 };
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = [
