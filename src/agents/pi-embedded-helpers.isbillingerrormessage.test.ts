@@ -106,6 +106,9 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      // Venice returns "Insufficient USD or Diem balance" which has extra words
+      // between "insufficient" and "balance" (#XXXXX)
+      "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -650,6 +653,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("overloaded");
+    // Venice 402 billing error with extra words between "insufficient" and "balance"
+    expect(
+      classifyFailoverReason(
+        "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+      ),
+    ).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
