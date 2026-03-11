@@ -624,7 +624,11 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return `${prefix}${type}: ${info.message}${requestId}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  // Never return raw unhandled error text to the user — it may contain
+  // internal infrastructure details, API keys, or request metadata.
+  // Log the raw error for debugging and return a safe generic message.
+  log.warn(`Raw API error not parsed (not shown to user): ${trimmed.slice(0, 500)}`);
+  return "LLM request failed. Check `openclaw logs` for details.";
 }
 
 export function formatAssistantErrorText(
@@ -706,15 +710,23 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "⚠️ Authentication failed — your API key appears to be invalid or revoked. Please check your API key configuration.";
+  }
+
+  if (isAuthErrorMessage(raw)) {
+    return "⚠️ Authentication error — please verify your API key or credentials are correct and not expired.";
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
-  }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  // Never return raw unhandled errors to the user — they may contain
+  // internal API details, request IDs, or infrastructure metadata.
+  // Log the full error for debugging and return a safe generic message.
+  log.warn(`Unclassified API error (not shown to user): ${raw.slice(0, 500)}`);
+  return "⚠️ An unexpected error occurred. Check `openclaw logs` for details.";
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
