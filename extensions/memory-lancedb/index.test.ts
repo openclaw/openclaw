@@ -24,6 +24,12 @@ function installTmpDirHarness(params: { prefix: string }) {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
+describe("memory plugin e2e", () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-test-"));
     dbPath = path.join(tmpDir, "lancedb");
   });
 
@@ -68,6 +74,14 @@ describe("memory plugin e2e", () => {
 
   test("config schema parses valid config", async () => {
     const config = await parseConfig({
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath,
       autoCapture: true,
       autoRecall: true,
     });
@@ -75,6 +89,7 @@ describe("memory plugin e2e", () => {
     expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(getDbPath());
+    expect(config?.dbPath).toBe(dbPath);
     expect(config?.captureMaxChars).toBe(500);
   });
 
@@ -89,6 +104,7 @@ describe("memory plugin e2e", () => {
         apiKey: "${TEST_MEMORY_API_KEY}",
       },
       dbPath: getDbPath(),
+      dbPath,
     });
 
     expect(config?.embedding?.apiKey).toBe("test-key-123");
@@ -103,6 +119,7 @@ describe("memory plugin e2e", () => {
       memoryPlugin.configSchema?.parse?.({
         embedding: {},
         dbPath: getDbPath(),
+        dbPath,
       });
     }).toThrow("embedding.apiKey is required");
   });
@@ -114,6 +131,7 @@ describe("memory plugin e2e", () => {
       memoryPlugin.configSchema?.parse?.({
         embedding: { apiKey: OPENAI_API_KEY },
         dbPath: getDbPath(),
+        dbPath,
         captureMaxChars: 99,
       });
     }).toThrow("captureMaxChars must be between 100 and 10000");
@@ -121,6 +139,14 @@ describe("memory plugin e2e", () => {
 
   test("config schema accepts captureMaxChars override", async () => {
     const config = await parseConfig({
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath,
       captureMaxChars: 1800,
     });
 
@@ -129,6 +155,15 @@ describe("memory plugin e2e", () => {
 
   test("config schema keeps autoCapture disabled by default", async () => {
     const config = await parseConfig();
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath,
+    });
 
     expect(config?.autoCapture).toBe(false);
     expect(config?.autoRecall).toBe(true);
@@ -176,6 +211,7 @@ describe("memory plugin e2e", () => {
             dimensions: 1024,
           },
           dbPath: getDbPath(),
+          dbPath,
           autoCapture: false,
           autoRecall: false,
         },
@@ -274,11 +310,454 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
   });
+
+  // ============================================================================
+  // memory_refresh tests
+  // ============================================================================
+
+  function buildMockApi(overrides: {
+    dbPath: string;
+    embeddingsCreate: ReturnType<typeof vi.fn>;
+    vectorSearch: ReturnType<typeof vi.fn>;
+    queryWhere: ReturnType<typeof vi.fn>;
+    tableAdd: ReturnType<typeof vi.fn>;
+    tableDelete: ReturnType<typeof vi.fn>;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    registeredTools: any[];
+  }) {
+    return {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath: overrides.dbPath,
+        autoCapture: false,
+        autoRecall: false,
+      },
+      runtime: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerTool: (tool: any, opts: any) => {
+        overrides.registeredTools.push({ tool, opts });
+      },
+      registerCli: vi.fn(),
+      registerService: vi.fn(),
+      on: vi.fn(),
+      resolvePath: (p: string) => p,
+    };
+  }
+
+  test("memory_refresh search-only mode returns matches without writing to DB", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const tableAdd = vi.fn(async () => undefined);
+    const tableDelete = vi.fn(async () => undefined);
+
+    const mockSearchResults = [
+      {
+        id: "aaaaaaaa-0000-0000-0000-000000000001",
+        text: "Match one",
+        vector: [0.1, 0.2, 0.3],
+        importance: 0.8,
+        category: "fact",
+        createdAt: 1000,
+        _distance: 0.05,
+      },
+      {
+        id: "aaaaaaaa-0000-0000-0000-000000000002",
+        text: "Match two",
+        vector: [0.1, 0.2, 0.3],
+        importance: 0.7,
+        category: "preference",
+        createdAt: 1001,
+        _distance: 0.1,
+      },
+      {
+        id: "aaaaaaaa-0000-0000-0000-000000000003",
+        text: "Match three",
+        vector: [0.1, 0.2, 0.3],
+        importance: 0.6,
+        category: "other",
+        createdAt: 1002,
+        _distance: 0.2,
+      },
+    ];
+
+    const toArray = vi.fn(async () => mockSearchResults);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const queryWhere = vi.fn();
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 3),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      // Call without memoryId → search-only mode
+      const result = await refreshTool.execute("test-refresh-search", {
+        text: "user prefers dark theme",
+      });
+
+      expect(result.details.operation).toBe("search_only");
+      expect(result.details.matches).toHaveLength(3);
+      expect(result.details.matches[0]).toHaveProperty("similarity");
+      expect(result.details.matches[0].similarity).toBeGreaterThan(0);
+
+      // Verify nothing was written to the DB
+      expect(tableAdd).not.toHaveBeenCalled();
+      expect(tableDelete).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
+  test("memory_refresh atomic replace: old entry gone, new entry present, audit log written", async () => {
+    const existingId = "bbbbbbbb-0000-0000-0000-000000000001";
+    const existingEntry = {
+      id: existingId,
+      text: "Old memory text that will be replaced",
+      vector: [0.1, 0.2, 0.3],
+      importance: 0.7,
+      category: "fact",
+      createdAt: 1000,
+    };
+
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.15, 0.25, 0.35] }],
+    }));
+    const tableAdd = vi.fn(async () => undefined);
+    const tableDelete = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => [existingEntry]);
+    const queryWhere = vi.fn(() => ({ toArray }));
+    const searchToArray = vi.fn(async () => []);
+    const searchLimit = vi.fn(() => ({ toArray: searchToArray }));
+    const vectorSearch = vi.fn(() => ({ limit: searchLimit }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 1),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    let auditLogPath: string | null = null;
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+
+      // Use tmpDir for audit log by temporarily pointing homedir there
+      const originalHome = process.env.HOME;
+      process.env.HOME = tmpDir;
+
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      const result = await refreshTool.execute("test-refresh-replace", {
+        text: "Updated memory text with new information",
+        category: "fact",
+        importance: 0.9,
+        memoryId: existingId,
+      });
+
+      // Restore HOME
+      if (originalHome !== undefined) {
+        process.env.HOME = originalHome;
+      } else {
+        delete process.env.HOME;
+      }
+
+      expect(result.details.operation).toBe("replaced");
+      expect(result.details.old_id).toBe(existingId);
+      expect(result.details.new_id).toBeDefined();
+      expect(result.details.old_text_preview).toContain("Old memory");
+
+      // Verify delete was called for old entry
+      expect(tableDelete).toHaveBeenCalledWith(`id = '${existingId}'`);
+
+      // Verify add was called for new entry
+      expect(tableAdd).toHaveBeenCalledTimes(1);
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const addCall = (tableAdd.mock.calls as any[][][])[0][0][0];
+      expect(addCall.text).toBe("Updated memory text with new information");
+      expect(addCall.importance).toBe(0.9);
+
+      // Check audit log was written
+      auditLogPath = `${tmpDir}/.openclaw/memory/refresh-audit.jsonl`;
+      const auditContent = await import("node:fs/promises").then((fs) =>
+        fs.readFile(auditLogPath!, "utf8").catch(() => null),
+      );
+      expect(auditContent).not.toBeNull();
+      const auditLine = JSON.parse(auditContent!.trim());
+      expect(auditLine.operation).toBe("replaced");
+      expect(auditLine.old_id).toBe(existingId);
+      expect(auditLine.new_id).toBeDefined();
+      expect(auditLine.old_text).toContain("Old memory");
+      expect(auditLine.new_text).toContain("Updated memory");
+      expect(auditLine.ts).toBeGreaterThan(0);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
+  test("memory_refresh replace with non-existent ID returns error without creating entry", async () => {
+    const nonExistentId = "cccccccc-0000-0000-0000-000000000001";
+
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const tableAdd = vi.fn(async () => undefined);
+    const tableDelete = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []); // empty → not found
+    const queryWhere = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({
+      limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 0),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      const result = await refreshTool.execute("test-refresh-notfound", {
+        text: "This text won't be stored",
+        memoryId: nonExistentId,
+      });
+
+      expect(result.details.operation).toBe("error");
+      expect(result.details.error).toBe("not_found");
+      expect(result.details.memoryId).toBe(nonExistentId);
+
+      // Verify nothing was written or deleted
+      expect(tableAdd).not.toHaveBeenCalled();
+      expect(tableDelete).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
+  test("memory_refresh best-effort rollback: restores original when insert fails", async () => {
+    const existingId = "dddddddd-0000-0000-0000-000000000001";
+    const existingEntry = {
+      id: existingId,
+      text: "Original memory that must be restored",
+      vector: [0.1, 0.2, 0.3],
+      importance: 0.8,
+      category: "fact",
+      createdAt: 1000,
+    };
+
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.15, 0.25, 0.35] }],
+    }));
+    const tableDelete = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => [existingEntry]);
+    const queryWhere = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({
+      limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+    }));
+
+    // First call to add throws (new entry); second call succeeds (rollback restore)
+    let addCallCount = 0;
+    const tableAdd = vi.fn(async () => {
+      addCallCount++;
+      if (addCallCount === 1) {
+        throw new Error("Simulated insert failure");
+      }
+      // second call (rollback) succeeds
+    });
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 1),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      const result = await refreshTool.execute("test-refresh-rollback", {
+        text: "New text that will fail to insert",
+        memoryId: existingId,
+      });
+
+      expect(result.details.operation).toBe("error");
+      expect(result.details.error).toBe("insert_failed");
+      expect(result.details.rollbackWarning).toContain("restored");
+
+      // Verify delete was called (old entry was removed before the attempted insert)
+      expect(tableDelete).toHaveBeenCalledWith(`id = '${existingId}'`);
+
+      // Verify add was called twice: once for new entry (failed), once for rollback (succeeded)
+      expect(tableAdd).toHaveBeenCalledTimes(2);
+
+      // Second add call should restore original content
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const rollbackAddCall = (tableAdd.mock.calls as any[][][])[1][0][0];
+      expect(rollbackAddCall.text).toBe(existingEntry.text);
+      expect(rollbackAddCall.importance).toBe(existingEntry.importance);
+      expect(rollbackAddCall.category).toBe(existingEntry.category);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
 });
 
 // Live tests that require OpenAI API key and actually use LanceDB
 describeLive("memory plugin live tests", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-live-" });
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-live-"));
+    dbPath = path.join(tmpDir, "lancedb");
+  });
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 
   test("memory tools work end-to-end", async () => {
     const { default: memoryPlugin } = await import("./index.js");
@@ -306,6 +785,7 @@ describeLive("memory plugin live tests", () => {
           model: "text-embedding-3-small",
         },
         dbPath: getDbPath(),
+        dbPath,
         autoCapture: false,
         autoRecall: false,
       },
@@ -347,6 +827,11 @@ describeLive("memory plugin live tests", () => {
     expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_recall");
     expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_store");
     expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_forget");
+    expect(registeredTools.length).toBe(4);
+    expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_recall");
+    expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_store");
+    expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_forget");
+    expect(registeredTools.map((t) => t.opts?.name)).toContain("memory_refresh");
     expect(registeredClis.length).toBe(1);
     expect(registeredServices.length).toBe(1);
 
