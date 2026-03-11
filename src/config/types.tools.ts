@@ -475,14 +475,7 @@ export type ToolsConfig = {
       /** baidu-specific configuration (used when provider="baidu"). */
       baidu?: {
         /** API key for Baidu (defaults to BAIDU_SEARCH_API_KEY env var). */
-        apiKey?: string;
-      };
-      /** Gemini-specific configuration (used when provider="gemini"). */
-      gemini?: {
-        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
-        apiKey?: string;
-        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
-        model?: string;
+        apiKey?: SecretInput;
       };
       /** Kimi-specific configuration (used when provider="kimi"). */
       kimi?: {

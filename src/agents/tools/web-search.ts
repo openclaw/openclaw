@@ -894,13 +894,16 @@ function resolveBaiduConfig(search?: WebSearchConfig): BaiduConfig {
   return baidu as BaiduConfig;
 }
 
-function resolveBaiduApiKey(search?: BaiduConfig): string | undefined {
-  const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string"
-      ? normalizeSecretInput(search.apiKey)
-      : "";
-  const fromEnv = normalizeSecretInput(process.env.BAIDU_SEARCH_API_KEY);
-  return fromConfig || fromEnv || undefined;
+function resolveBaiduApiKey(baidu?: BaiduConfig): string | undefined {
+  const fromConfig = normalizeApiKey(baidu?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnvBaidu = normalizeApiKey(process.env.BAIDU_SEARCH_API_KEY);
+  if (fromEnvBaidu) {
+    return fromEnvBaidu;
+  }
+  return undefined;
 }
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
