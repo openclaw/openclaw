@@ -566,9 +566,10 @@ export const dispatchTelegramMessage = async ({
             toolSummaryLines.push(line);
             const aggregated = toolSummaryLines.join("\n");
             const maxToolSummaryChars = Math.min(textLimit, 4096);
+            const sliceEnd = Math.max(0, maxToolSummaryChars - 20);
             const safeAggregated =
               aggregated.length > maxToolSummaryChars
-                ? `${aggregated.slice(0, maxToolSummaryChars - 20)}\n…`
+                ? `${aggregated.slice(0, sliceEnd)}\n…`
                 : aggregated;
             if (toolSummaryMessageId === undefined) {
               const result = await deliverReplies({
