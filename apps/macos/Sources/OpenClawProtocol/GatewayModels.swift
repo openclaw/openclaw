@@ -540,6 +540,7 @@ public struct AgentParams: Codable, Sendable {
     public let label: String?
     public let spawnedby: String?
     public let workspacedir: String?
+    public let lightcontext: Bool?
 
     public init(
         message: String,
@@ -568,7 +569,8 @@ public struct AgentParams: Codable, Sendable {
         idempotencykey: String,
         label: String?,
         spawnedby: String?,
-        workspacedir: String?)
+        workspacedir: String?,
+        lightcontext: Bool?)
     {
         self.message = message
         self.agentid = agentid
@@ -597,6 +599,7 @@ public struct AgentParams: Codable, Sendable {
         self.label = label
         self.spawnedby = spawnedby
         self.workspacedir = workspacedir
+        self.lightcontext = lightcontext
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -627,6 +630,7 @@ public struct AgentParams: Codable, Sendable {
         case label
         case spawnedby = "spawnedBy"
         case workspacedir = "workspaceDir"
+        case lightcontext = "lightContext"
     }
 }
 
