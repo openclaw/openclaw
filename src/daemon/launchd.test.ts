@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
+  spawnCalls: [] as Array<{ command: string; args: string[]; options: Record<string, unknown> }>,
 }));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
@@ -52,6 +53,17 @@ vi.mock("./exec-file.js", () => ({
     return { stdout: "", stderr: "", code: 0 };
   }),
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: vi.fn((command: string, args: string[], options: Record<string, unknown>) => {
+      state.spawnCalls.push({ command, args, options });
+      return { unref: vi.fn() };
+    }),
+  };
+});
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -113,6 +125,7 @@ beforeEach(() => {
   state.dirModes.clear();
   state.files.clear();
   state.fileModes.clear();
+  state.spawnCalls.length = 0;
   vi.clearAllMocks();
 });
 
@@ -302,6 +315,61 @@ describe("launchd install", () => {
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o644);
+  });
+
+  it("spawns a detached recovery process only when inside the gateway (#41198)", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printOutput = ["state = running", "pid = 5555"].join("\n");
+    const killSpy = vi.spyOn(process, "kill");
+    killSpy.mockImplementation(() => {
+      const err = new Error("no such process") as NodeJS.ErrnoException;
+      err.code = "ESRCH";
+      throw err;
+    });
+    const origMarker = process.env.OPENCLAW_SERVICE_MARKER;
+
+    try {
+      // Without OPENCLAW_SERVICE_MARKER: no detached child spawned
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+      await restartLaunchAgent({ env, stdout: new PassThrough() });
+      expect(state.spawnCalls.length).toBe(0);
+
+      // Reset for second call
+      state.launchctlCalls.length = 0;
+
+      // With OPENCLAW_SERVICE_MARKER=openclaw: detached child spawned
+      process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      await restartLaunchAgent({ env, stdout: new PassThrough() });
+
+      expect(state.spawnCalls.length).toBe(1);
+      const call = state.spawnCalls[0];
+      expect(call.command).toBe(process.execPath);
+      expect(call.args[0]).toBe("-e");
+      expect(call.options.detached).toBe(true);
+      expect(call.options.stdio).toBe("ignore");
+
+      // Verify the inline script references the correct domain/label/pid
+      const script = call.args[1];
+      expect(script).toContain("ai.openclaw.gateway");
+      expect(script).toContain("bootstrap");
+      expect(script).toContain("kickstart");
+      expect(script).toContain("5555"); // previousPid
+
+      // Verify bootout still happened
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const label = "ai.openclaw.gateway";
+      const bootoutIndex = state.launchctlCalls.findIndex(
+        (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
+      );
+      expect(bootoutIndex).toBeGreaterThanOrEqual(0);
+    } finally {
+      killSpy.mockRestore();
+      if (origMarker !== undefined) {
+        process.env.OPENCLAW_SERVICE_MARKER = origMarker;
+      } else {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    }
   });
 
   it("restarts LaunchAgent with bootout-enable-bootstrap-kickstart order", async () => {

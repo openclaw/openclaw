@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -468,6 +469,81 @@ export async function installLaunchAgent({
   return { plistPath };
 }
 
+/**
+ * Build an inline Node.js script that re-bootstraps the LaunchAgent after
+ * the current gateway process has exited.  The script is spawned as a fully
+ * detached process so it survives the `launchctl bootout` that kills the
+ * gateway (and any child processes in its tree).
+ *
+ * Flow: wait for previous PID to exit → enable → bootstrap → kickstart.
+ */
+function buildDetachedRecoveryScript(args: {
+  domain: string;
+  label: string;
+  plistPath: string;
+  previousPid: number | undefined;
+}): string {
+  // JSON-encode values so they are safely embedded in the inline script.
+  const d = JSON.stringify(args.domain);
+  const l = JSON.stringify(args.label);
+  const p = JSON.stringify(args.plistPath);
+  const pid = args.previousPid ?? 0;
+
+  return `
+"use strict";
+const { execFileSync } = require("child_process");
+
+const domain = ${d};
+const label = ${l};
+const plistPath = ${p};
+const prevPid = ${pid};
+
+function pidAlive(pid) {
+  if (pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// Wait for the previous gateway process to exit (up to 30 s).
+const deadline = Date.now() + 30000;
+function poll() {
+  if (!pidAlive(prevPid)) {
+    recover();
+  } else if (Date.now() >= deadline) {
+    // Gateway still alive after 30 s — bootout likely failed; do not
+    // interfere.  The parent CLI will surface the error.
+    process.exit(0);
+  } else {
+    setTimeout(poll, 200);
+  }
+}
+
+function lctl(args) {
+  try {
+    execFileSync("launchctl", args, { timeout: 10000 });
+  } catch { /* best effort */ }
+}
+
+function recover() {
+  lctl(["enable", domain + "/" + label]);
+  lctl(["bootstrap", domain, plistPath]);
+  lctl(["kickstart", "-k", domain + "/" + label]);
+  process.exit(0);
+}
+
+if (prevPid > 0) { poll(); } else { recover(); }
+`.trim();
+}
+
+/**
+ * Detect whether the current process is a descendant of the gateway.
+ * The gateway sets OPENCLAW_SERVICE_MARKER in the launchd environment;
+ * agent exec children inherit it.  A standalone terminal session will
+ * not have this variable set.
+ */
+function isRunningInsideGateway(): boolean {
+  return process.env.OPENCLAW_SERVICE_MARKER === "openclaw";
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
@@ -482,6 +558,23 @@ export async function restartLaunchAgent({
     runtime.code === 0
       ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
       : undefined;
+
+  // When running inside the gateway process tree (e.g. agent exec),
+  // `launchctl bootout` will kill this process before it can run the
+  // bootstrap/kickstart steps.  Spawn a detached recovery process that
+  // survives the shutdown and re-registers the service.  (#41198)
+  //
+  // Only spawn when actually inside the gateway to avoid a double
+  // kickstart -k in the normal case (kickstart -k is not idempotent —
+  // it kills the running process).
+  if (isRunningInsideGateway()) {
+    const recoveryScript = buildDetachedRecoveryScript({ domain, label, plistPath, previousPid });
+    const child = spawn(process.execPath, ["-e", recoveryScript], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  }
 
   const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
