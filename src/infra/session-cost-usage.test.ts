@@ -231,6 +231,141 @@ describe("session cost usage", () => {
     });
   });
 
+  it("counts reset and deleted transcripts in global usage summary, but excludes bak archives", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const timestamp = "2026-02-12T10:00:00.000Z";
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-active.jsonl"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 1, output: 2, totalTokens: 3, cost: { total: 0.003 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 20, totalTokens: 30, cost: { total: 0.03 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-deleted.jsonl.deleted.2026-02-12T12-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 4, output: 5, totalTokens: 9, cost: { total: 0.009 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-bak.jsonl.bak.2026-02-12T13-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 100, output: 200, totalTokens: 300, cost: { total: 0.3 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 12),
+        endMs: Date.UTC(2026, 1, 12, 23, 59, 59, 999),
+      });
+      expect(summary.totals.totalTokens).toBe(42);
+      expect(summary.totals.totalCost).toBeCloseTo(0.042, 8);
+    });
+  });
+
+  it("discovers reset and deleted transcripts as usage sessions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "reset transcript" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-deleted.jsonl.deleted.2026-02-12T12-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "deleted transcript" },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions.map((session) => session.sessionId).toSorted()).toEqual([
+        "sess-deleted",
+        "sess-reset",
+      ]);
+      expect(
+        sessions
+          .map((session) => session.firstUserMessage)
+          .toSorted((a, b) => String(a).localeCompare(String(b))),
+      ).toEqual(["deleted transcript", "reset transcript"]);
+    });
+  });
+
+  it("falls back to archived reset transcripts for per-session detail queries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-archive-fallback-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "archived answer",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-reset" });
+      const timeseries = await loadSessionUsageTimeSeries({ sessionId: "sess-reset" });
+      const logs = await loadSessionLogs({ sessionId: "sess-reset" });
+
+      expect(summary?.totalTokens).toBe(10);
+      expect(summary?.sessionFile).toContain(".jsonl.reset.");
+      expect(timeseries?.points[0]?.totalTokens).toBe(10);
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toContain("archived answer");
+    });
+  });
+
   it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
     const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");
