@@ -3,12 +3,18 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
+type BeforeToolCallOutcomeMock =
+  | { blocked: true; reason: string }
+  | { blocked: false; params: unknown };
+
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
-  runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
-    blocked: false as const,
-    params,
-  })),
+  runBeforeToolCallHook: vi.fn(
+    async ({ params }: { params: unknown }): Promise<BeforeToolCallOutcomeMock> => ({
+      blocked: false,
+      params,
+    }),
+  ),
 }));
 
 let cfg: Record<string, unknown> = {};

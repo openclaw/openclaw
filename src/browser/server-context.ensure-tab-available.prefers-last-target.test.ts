@@ -122,6 +122,19 @@ describe("browser server-context ensureTabAvailable", () => {
     await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
   });
 
+  it("keeps a non-empty extension tab read when a follow-up read briefly returns empty", async () => {
+    const responses = [
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+    ];
+    stubChromeJsonList(responses);
+    const state = makeBrowserState();
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+    const chosen = await chrome.ensureTabAvailable("A");
+    expect(chosen.targetId).toBe("A");
+  });
+
   it("waits briefly for extension tabs to reappear when a previous target exists", async () => {
     vi.useFakeTimers();
     try {
@@ -155,7 +168,6 @@ describe("browser server-context ensureTabAvailable", () => {
     vi.useFakeTimers();
     try {
       const responses = [
-        [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
         [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
         ...Array.from({ length: 20 }, () => []),
       ];
