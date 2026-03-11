@@ -605,6 +605,7 @@ final class AppState {
         }
     }
 
+    @MainActor
     func syncGatewayConfigNow() {
         guard !self.isPreview, !self.isInitializing else { return }
 

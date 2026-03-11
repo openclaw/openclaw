@@ -81,6 +81,7 @@ struct OnboardingView: View {
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
+    @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()

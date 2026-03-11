@@ -116,7 +116,10 @@ extension OnboardingView {
             }
         }
         .onChange(of: self.state.connectionMode) { _, newValue in
-            guard newValue != .remote else { return }
+            guard Self.shouldResetRemoteProbeFeedback(
+                for: newValue,
+                suppressReset: self.suppressRemoteProbeReset)
+            else { return }
             self.resetRemoteProbeFeedback()
         }
         .onChange(of: self.state.remoteTransport) { _, _ in
@@ -462,9 +465,21 @@ extension OnboardingView {
 
     @MainActor
     private func probeRemoteConnection() async {
-        self.state.connectionMode = .remote
+        let originalMode = self.state.connectionMode
+        let shouldRestoreMode = originalMode != .remote
+        if shouldRestoreMode {
+            // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
+            self.state.connectionMode = .remote
+        }
         self.remoteProbeState = .checking
         self.remoteAuthIssue = nil
+        defer {
+            if shouldRestoreMode {
+                self.suppressRemoteProbeReset = true
+                self.state.connectionMode = originalMode
+                self.suppressRemoteProbeReset = false
+            }
+        }
 
         switch await RemoteGatewayProbe.run() {
         case let .ready(success):
@@ -508,6 +523,13 @@ extension OnboardingView {
             remoteTokenUnsupported ||
             !remoteToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             authIssue?.showsTokenField == true
+    }
+
+    static func shouldResetRemoteProbeFeedback(
+        for connectionMode: AppState.ConnectionMode,
+        suppressReset: Bool) -> Bool
+    {
+        !suppressReset && connectionMode != .remote
     }
 
     func gatewaySubtitle(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {

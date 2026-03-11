@@ -97,4 +97,11 @@ struct OnboardingRemoteAuthPromptTests {
         #expect(noAuth.title == "Remote gateway ready")
         #expect(noAuth.detail == nil)
     }
+
+    @Test func `transient probe mode restore does not clear probe feedback`() {
+        #expect(OnboardingView.shouldResetRemoteProbeFeedback(for: .local, suppressReset: false))
+        #expect(OnboardingView.shouldResetRemoteProbeFeedback(for: .unconfigured, suppressReset: false))
+        #expect(OnboardingView.shouldResetRemoteProbeFeedback(for: .remote, suppressReset: false) == false)
+        #expect(OnboardingView.shouldResetRemoteProbeFeedback(for: .local, suppressReset: true) == false)
+    }
 }
