@@ -234,6 +234,7 @@ export class AcpSessionManager {
             sessionKey,
             agent,
             mode: input.mode,
+            resumeSessionId: input.resumeSessionId,
             cwd: requestedCwd,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -655,6 +656,7 @@ export class AcpSessionManager {
         for await (const event of runtime.runTurn({
           handle,
           text: input.text,
+          attachments: input.attachments,
           mode: input.mode,
           requestId: input.requestId,
           signal: combinedSignal,

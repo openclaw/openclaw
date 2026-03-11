@@ -6,6 +6,7 @@ const loadDotEnvMock = vi.hoisted(() => vi.fn());
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
+const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
@@ -27,6 +28,10 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
 }));
 
+vi.mock("../memory/search-manager.js", () => ({
+  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
+}));
+
 const { runCli } = await import("./run-main.js");
 
 describe("runCli exit behavior", () => {
@@ -43,6 +48,7 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
