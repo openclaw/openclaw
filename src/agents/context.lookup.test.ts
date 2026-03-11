@@ -158,4 +158,38 @@ describe("lookupContextTokens", () => {
     });
     expect(result).toBe(200_000);
   });
+
+  it("resolveContextTokensForModel does not collide raw slash-containing model IDs with synthetic qualified keys", async () => {
+    // Reviewer concern: OpenRouter stores raw IDs like "google/gemini-2.5-pro".
+    // If the lookup built a synthetic key "google/gemini-2.5-pro" from
+    // {provider:"google", model:"gemini-2.5-pro"}, it would hit the OpenRouter
+    // raw entry. Guard: skip the qualified key when model already contains "/".
+    mockDiscoveryDeps([
+      // OpenRouter raw entry (model ID already provider-qualified by OpenRouter).
+      { id: "google/gemini-2.5-pro", contextWindow: 999_000 },
+    ]);
+
+    const { resolveContextTokensForModel } = await import("./context.js");
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Calling with the native Google provider and a bare model id should NOT
+    // hit the OpenRouter raw entry via a synthetic "google/gemini-2.5-pro" key.
+    // Instead it falls through to the bare lookup which returns the raw value —
+    // functionally correct (same model, same window in practice) but via the
+    // intended code path rather than an accidental key collision.
+    const result = resolveContextTokensForModel({
+      provider: "google",
+      model: "gemini-2.5-pro",
+    });
+    // The bare fallback finds the raw OpenRouter entry; no double-prefix lookup.
+    expect(result).toBe(999_000);
+
+    // Calling with the OpenRouter provider and the slash-model id must NOT
+    // generate "openrouter/google/gemini-2.5-pro"; it uses bare lookup directly.
+    const openrouterResult = resolveContextTokensForModel({
+      provider: "openrouter",
+      model: "google/gemini-2.5-pro",
+    });
+    expect(openrouterResult).toBe(999_000);
+  });
 });

@@ -284,10 +284,17 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  // When provider is known, prefer the provider-qualified key so the correct
-  // entry is found even when the same bare model id is catalogued under
-  // multiple providers with different context limits.
-  const qualifiedKey = ref ? resolveQualifiedContextWindowKey(ref.provider, ref.model) : undefined;
+  // When provider is known and the model id is bare (no slash), prefer the
+  // provider-qualified key so the correct entry is found when the same bare
+  // model id is catalogued under multiple providers with different limits.
+  // Skip the qualified key when the model id already contains a slash: those
+  // ids are themselves provider-qualified (e.g. OpenRouter's "google/gemini-2.5-pro")
+  // and the bare lookup is already the correct scoped key, preventing collisions
+  // with synthetic "provider/model" keys in the same cache.
+  const qualifiedKey =
+    ref && !ref.model.includes("/")
+      ? resolveQualifiedContextWindowKey(ref.provider, ref.model)
+      : undefined;
   return (
     (qualifiedKey ? lookupContextTokens(qualifiedKey) : undefined) ??
     lookupContextTokens(params.model) ??
