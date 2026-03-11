@@ -1,6 +1,6 @@
 ---
 name: gws
-description: Google Workspace CLI (gws) for Drive, Gmail, Calendar, Sheets, Docs, Chat, Admin, and more. Official CLI; dynamic API surface from Discovery Service.
+description: Google Workspace CLI (gws) for Drive, Gmail, Calendar, Sheets, Docs, Chat, Admin, and more. Dynamic API surface from Discovery Service; not an officially supported Google product.
 homepage: https://github.com/googleworkspace/cli
 metadata:
   {
@@ -11,8 +11,8 @@ metadata:
         "install":
           [
             {
-              "id": "npm",
-              "kind": "npm",
+              "id": "node",
+              "kind": "node",
               "package": "@googleworkspace/cli",
               "bins": ["gws"],
               "label": "Install gws (npm global)",
@@ -25,6 +25,8 @@ metadata:
 # gws (Google Workspace CLI)
 
 Use `gws` for Drive, Gmail, Calendar, Sheets, Docs, Chat, Admin, Keep, Meet, Tasks, People, and more. Commands are built at runtime from Google's Discovery Service. Structured JSON output; optional gcloud-free auth.
+
+> **Note**: `gws` is published under the `googleworkspace` GitHub org but is **not an officially supported Google product** (see [repo disclaimer](https://github.com/googleworkspace/cli)).
 
 **Gmail Pub/Sub push**: OpenClaw's Gmail watch flow uses **gog** (`gog gmail watch serve`). Use gws for ad-hoc Gmail (and other Workspace) operations; use gog when wiring Gmail push to webhooks.
 
