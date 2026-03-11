@@ -741,5 +741,120 @@ export async function setupChannels(
     });
   }
 
+  // Prompt for channel-specific SOUL files
+  next = await maybeConfigureSoulFiles({
+    cfg: next,
+    selection,
+    prompter,
+    accountIdsByChannel,
+  });
+
+  return next;
+}
+
+/**
+ * Prompt for channel-specific SOUL files for configured channels.
+ */
+async function maybeConfigureSoulFiles(params: {
+  cfg: OpenClawConfig;
+  selection: ChannelChoice[];
+  prompter: WizardPrompter;
+  accountIdsByChannel: Map<ChannelChoice, string>;
+}): Promise<OpenClawConfig> {
+  const { cfg, selection, prompter, accountIdsByChannel } = params;
+
+  if (selection.length === 0) {
+    return cfg;
+  }
+
+  const wantsSoulConfig = await prompter.confirm({
+    message: "Configure custom SOUL (personality) files for channels?",
+    initialValue: false,
+  });
+
+  if (!wantsSoulConfig) {
+    return cfg;
+  }
+
+  let next = cfg;
+
+  for (const channel of selection) {
+    const accountId = accountIdsByChannel.get(channel) ?? "default";
+    const plugin = getChannelPlugin(channel);
+    const account = plugin?.config.resolveAccount(next, accountId) as
+      | { soulFile?: string; name?: string }
+      | undefined;
+
+    const existingSoulFile = account?.soulFile;
+    const accountLabel = accountId === "default" ? channel : `${channel}:${accountId}`;
+
+    const useCustomSoul = await prompter.confirm({
+      message: `Use custom SOUL file for ${accountLabel}?${existingSoulFile ? ` (current: ${existingSoulFile})` : ""}`,
+      initialValue: false,
+    });
+
+    if (!useCustomSoul) {
+      continue;
+    }
+
+    const defaultSoulName = `SOUL.${accountId === "default" ? channel : accountId}.md`;
+    const soulFileName = await prompter.text({
+      message: `SOUL filename for ${accountLabel}`,
+      initialValue: existingSoulFile ?? defaultSoulName,
+      validate: (input) => {
+        const trimmed = input.trim();
+        if (!trimmed) {
+          return "Filename cannot be empty";
+        }
+        if (!trimmed.endsWith(".md")) {
+          return "Filename must end with .md";
+        }
+        if (trimmed.includes("/") || trimmed.includes("\\")) {
+          return "Filename must not contain path separators";
+        }
+        if (trimmed.startsWith(".")) {
+          return "Filename must not start with a dot";
+        }
+        return true;
+      },
+    });
+
+    if (!soulFileName?.trim()) {
+      continue;
+    }
+
+    // Apply soulFile to config
+    const channelConfig = next.channels?.[channel as keyof typeof next.channels] as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+
+    next = {
+      ...next,
+      channels: {
+        ...next.channels,
+        [channel]: {
+          ...channelConfig,
+          accounts: {
+            ...channelConfig?.accounts,
+            [accountId]: {
+              ...(channelConfig?.accounts?.[accountId] as Record<string, unknown> | undefined),
+              soulFile: soulFileName.trim(),
+            },
+          },
+        },
+      },
+    };
+
+    await prompter.note(
+      [
+        `SOUL file: ${soulFileName}`,
+        `Config path: channels.${channel}.accounts.${accountId}.soulFile`,
+        "",
+        "Create this file in your workspace directory with your custom personality.",
+      ].join("\n"),
+      `${accountLabel} SOUL configured`,
+    );
+  }
+
   return next;
 }
