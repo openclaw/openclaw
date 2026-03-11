@@ -264,6 +264,8 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    /** Custom SOUL file for this account (e.g., "SOUL.fin.md") */
+    soulFile: z.string().optional(),
   })
   .strict();
 

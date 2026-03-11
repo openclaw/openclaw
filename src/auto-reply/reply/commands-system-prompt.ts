@@ -33,6 +33,8 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
+    channel: params.ctx.OriginatingChannel,
+    accountId: params.ctx.AccountId,
   });
   const skillsSnapshot = (() => {
     try {

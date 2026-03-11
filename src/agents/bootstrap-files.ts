@@ -126,14 +126,20 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  channel?: string;
+  accountId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
 
-  // Extract channel info from session key for channel-specific SOUL loading
-  const { channel, accountId } = extractChannelInfoFromSessionKey(sessionKey);
+  // Prefer explicit routing context from the inbound channel path.
+  // Session keys may collapse to agent:main:main for DM/main-session flows,
+  // which loses provider account identity.
+  const sessionDerived = extractChannelInfoFromSessionKey(sessionKey);
+  const channel = params.channel?.trim() || sessionDerived.channel;
+  const accountId = params.accountId?.trim() || sessionDerived.accountId;
   const soulFile = resolveSoulFileFromConfig({
     config: params.config,
     channel,
@@ -145,6 +151,9 @@ export async function resolveBootstrapFilesForRun(params: {
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
+        channel,
+        accountId,
+        soulFile,
       })
     : channel || soulFile
       ? await loadWorkspaceBootstrapFilesWithChannel({
@@ -178,6 +187,8 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  channel?: string;
+  accountId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
