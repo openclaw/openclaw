@@ -449,4 +449,74 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
   });
+
+  it("threads agentChannel through to the agent gateway call instead of hardcoding webchat", async () => {
+    // Regression test for: sessions_send hardcodes INTERNAL_MESSAGE_CHANNEL ("webchat"),
+    // causing reply routing to flip from Discord/external channel to control UI.
+    // Fix: channel should be opts.agentChannel ?? INTERNAL_MESSAGE_CHANNEL.
+    // See: https://github.com/openclaw/openclaw/issues/43318
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
+    });
+
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "agent:other:main" }],
+    });
+    callGatewayMock.mockResolvedValueOnce({ runId: "run-test-123" });
+
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL, // "whatsapp"
+    });
+
+    await tool.execute("call-channel-threading", {
+      sessionKey: "agent:other:main",
+      message: "hello from whatsapp agent",
+      timeoutSeconds: 0,
+    });
+
+    // Find the "agent" gateway call (the one that carries sendParams)
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string })?.method === "agent",
+    );
+    expect(agentCall).toBeDefined();
+    // Channel must be the source agent's channel, NOT "webchat"
+    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).toBe(
+      MAIN_AGENT_CHANNEL,
+    );
+    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).not.toBe(
+      "webchat",
+    );
+  });
+
+  it("falls back to webchat channel when agentChannel is not provided", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
+    });
+
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "agent:other:main" }],
+    });
+    callGatewayMock.mockResolvedValueOnce({ runId: "run-test-456" });
+
+    // No agentChannel provided — internal spawn case
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+
+    await tool.execute("call-no-channel", {
+      sessionKey: "agent:other:main",
+      message: "internal message",
+      timeoutSeconds: 0,
+    });
+
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string })?.method === "agent",
+    );
+    expect(agentCall).toBeDefined();
+    // Should fall back to webchat when no agentChannel is set
+    expect((agentCall![0] as { params?: { channel?: string } })?.params?.channel).toBe("webchat");
+  });
 });
