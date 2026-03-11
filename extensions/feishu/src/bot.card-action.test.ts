@@ -221,6 +221,52 @@ describe("Feishu Card Action Handler", () => {
     });
   });
 
+  it("preserves empty options array (deselect all)", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok7",
+      action: {
+        value: { field: "tags" },
+        tag: "checkbox",
+        options: [],
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const call = vi.mocked(handleFeishuMessage).mock.calls.at(-1)![0];
+    const content = JSON.parse(call.event.message.content);
+    const parsed = JSON.parse(content.text);
+    expect(parsed).toEqual({
+      field: "tags",
+      options: [],
+    });
+  });
+
+  it("preserves empty form_value object (empty form submit)", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok8",
+      action: {
+        value: { form_id: "empty_form" },
+        tag: "form",
+        form_value: {},
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const call = vi.mocked(handleFeishuMessage).mock.calls.at(-1)![0];
+    const content = JSON.parse(call.event.message.content);
+    const parsed = JSON.parse(content.text);
+    expect(parsed).toEqual({
+      form_id: "empty_form",
+      form_value: {},
+    });
+  });
+
   it("preserves existing button behavior with value.command", async () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
