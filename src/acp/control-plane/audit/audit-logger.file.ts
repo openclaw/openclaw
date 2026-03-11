@@ -204,12 +204,12 @@ export class FileAuditLogger implements IAuditLogger {
               return results;
             }
           } catch (err) {
-            logVerbose(`audit: failed to parse log line: ${err}`);
+            logVerbose(`audit: failed to parse log line: ${String(err)}`);
           }
         }
       }
     } catch (err) {
-      logVerbose(`audit: query failed: ${err}`);
+      logVerbose(`audit: query failed: ${String(err)}`);
     }
 
     return results;
@@ -243,7 +243,7 @@ export class FileAuditLogger implements IAuditLogger {
     } catch (err) {
       // Put entries back in buffer if flush failed
       this.buffer.unshift(...toFlush);
-      logVerbose(`audit: flush failed: ${err}`);
+      logVerbose(`audit: flush failed: ${String(err)}`);
       throw err;
     }
   }
@@ -292,7 +292,7 @@ export class FileAuditLogger implements IAuditLogger {
         }
       }
     } catch (err) {
-      logVerbose(`audit: prune failed: ${err}`);
+      logVerbose(`audit: prune failed: ${String(err)}`);
     }
 
     return pruned;
