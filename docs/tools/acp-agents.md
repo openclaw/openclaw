@@ -243,8 +243,35 @@ Interface details:
   - `mode: "session"` requires `thread: true`
 - `cwd` (optional): requested runtime working directory (validated by backend/runtime policy).
 - `label` (optional): operator-facing label used in session/banner text.
+- `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+
+### Resume an existing session
+
+Use `resumeSessionId` to continue a previous ACP session instead of starting fresh. The agent replays its conversation history via `session/load`, so it picks up with full context of what came before.
+
+```json
+{
+  "task": "Continue where we left off — fix the remaining test failures",
+  "runtime": "acp",
+  "agentId": "codex",
+  "resumeSessionId": "<previous-session-id>"
+}
+```
+
+Common use cases:
+
+- Hand off a Codex session from your laptop to your phone — tell your agent to pick up where you left off
+- Continue a coding session you started interactively in the CLI, now headlessly through your agent
+- Pick up work that was interrupted by a gateway restart or idle timeout
+
+Notes:
+
+- `resumeSessionId` requires `runtime: "acp"` — returns an error if used with the sub-agent runtime.
+- `resumeSessionId` restores the upstream ACP conversation history; `thread` and `mode` still apply normally to the new OpenClaw session you are creating, so `mode: "session"` still requires `thread: true`.
+- The target agent must support `session/load` (Codex and Claude Code do).
+- If the session ID isn't found, the spawn fails with a clear error — no silent fallback to a new session.
 
 ### Operator smoke test
 

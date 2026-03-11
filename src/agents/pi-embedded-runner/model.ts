@@ -81,8 +81,12 @@ function applyConfiguredProviderOverrides(params: {
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
-  const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
-  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
   if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
     return {
       ...discoveredModel,
@@ -118,14 +122,18 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers);
+    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
+      stripSecretRefMarkers: true,
+    });
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
       headers: (() => {
-        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers);
+        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+          stripSecretRefMarkers: true,
+        });
         if (!providerHeaders && !modelHeaders) {
           return undefined;
         }
@@ -205,8 +213,12 @@ export function resolveModelWithRegistry(params: {
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
-  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
-  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
   if (providerConfig || modelId.startsWith("mock-")) {
     return normalizeResolvedModel({
       provider,
