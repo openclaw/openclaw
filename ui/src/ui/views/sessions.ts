@@ -214,6 +214,54 @@ export function renderSessions(props: SessionsProps) {
   `;
 }
 
+function inferSessionChannel(row: GatewaySessionRow): string {
+  const directFromRow = (row.channel ?? row.surface ?? "").trim().toLowerCase();
+  if (directFromRow) {
+    return directFromRow;
+  }
+  const keyMatch = row.key.match(/^agent:[^:]+:([^:]+):(?:direct|group):/i);
+  return keyMatch?.[1]?.toLowerCase() ?? "";
+}
+
+function inferSessionHandle(row: GatewaySessionRow): string {
+  const keyDirectMatch = row.key.match(/^agent:[^:]+:[^:]+:direct:(.+)$/i)?.[1]?.trim() ?? "";
+  const candidates = [
+    row.displayName,
+    row.subject,
+    row.room,
+    row.label,
+    keyDirectMatch,
+  ]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    const atHandle = candidate.match(/@([A-Za-z0-9_]{4,})/);
+    if (atHandle) {
+      return `@${atHandle[1]}`;
+    }
+    if (/^[A-Za-z0-9_]{4,}$/.test(candidate) && !/^\d+$/.test(candidate)) {
+      return `@${candidate}`;
+    }
+    if (/^\+?\d{8,}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+function renderSessionPlatformMeta(row: GatewaySessionRow) {
+  const channel = inferSessionChannel(row);
+  if (channel !== "telegram" && channel !== "whatsapp") {
+    return nothing;
+  }
+  const icon = channel === "telegram" ? "✈️" : "🟢";
+  const handle = inferSessionHandle(row);
+  const fallback = channel === "telegram" ? "Telegram" : "WhatsApp";
+  return html`<span class="muted session-platform-meta">${icon} ${handle || fallback}</span>`;
+}
+
 function renderRow(
   row: GatewaySessionRow,
   basePath: string,
@@ -245,6 +293,7 @@ function renderRow(
     <div class="table-row">
       <div class="mono session-key-cell">
         ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+        ${renderSessionPlatformMeta(row)}
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>
       <div>
