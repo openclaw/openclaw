@@ -30,6 +30,7 @@ export const mockedGlobalHookRunner = {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+  initializeGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("../auth-profiles.js", () => ({
@@ -64,24 +65,39 @@ vi.mock("../workspace-run.js", () => ({
   redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
 }));
 
+export const mockedFormatBillingErrorMessage = vi.fn(() => "");
+export const mockedClassifyFailoverReason = vi.fn(() => null);
+export const mockedFormatAssistantErrorText = vi.fn(() => "");
+export const mockedIsAuthAssistantError = vi.fn(() => false);
+export const mockedIsBillingAssistantError = vi.fn(() => false);
+export const mockedIsCompactionFailureError = vi.fn(() => false);
+export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
+  const lower = (msg ?? "").toLowerCase();
+  return lower.includes("request_too_large") || lower.includes("context window exceeded");
+});
+export const mockedIsFailoverAssistantError = vi.fn(() => false);
+export const mockedIsFailoverErrorMessage = vi.fn(() => false);
+export const mockedParseImageSizeError = vi.fn(() => null);
+export const mockedParseImageDimensionError = vi.fn(() => null);
+export const mockedIsRateLimitAssistantError = vi.fn(() => false);
+export const mockedIsTimeoutErrorMessage = vi.fn(() => false);
+export const mockedPickFallbackThinkingLevel = vi.fn(() => null);
+
 vi.mock("../pi-embedded-helpers.js", () => ({
-  formatBillingErrorMessage: vi.fn(() => ""),
-  classifyFailoverReason: vi.fn(() => null),
-  formatAssistantErrorText: vi.fn(() => ""),
-  isAuthAssistantError: vi.fn(() => false),
-  isBillingAssistantError: vi.fn(() => false),
-  isCompactionFailureError: vi.fn(() => false),
-  isLikelyContextOverflowError: vi.fn((msg?: string) => {
-    const lower = (msg ?? "").toLowerCase();
-    return lower.includes("request_too_large") || lower.includes("context window exceeded");
-  }),
-  isFailoverAssistantError: vi.fn(() => false),
-  isFailoverErrorMessage: vi.fn(() => false),
-  parseImageSizeError: vi.fn(() => null),
-  parseImageDimensionError: vi.fn(() => null),
-  isRateLimitAssistantError: vi.fn(() => false),
-  isTimeoutErrorMessage: vi.fn(() => false),
-  pickFallbackThinkingLevel: vi.fn(() => null),
+  formatBillingErrorMessage: mockedFormatBillingErrorMessage,
+  classifyFailoverReason: mockedClassifyFailoverReason,
+  formatAssistantErrorText: mockedFormatAssistantErrorText,
+  isAuthAssistantError: mockedIsAuthAssistantError,
+  isBillingAssistantError: mockedIsBillingAssistantError,
+  isCompactionFailureError: mockedIsCompactionFailureError,
+  isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
+  isFailoverAssistantError: mockedIsFailoverAssistantError,
+  isFailoverErrorMessage: mockedIsFailoverErrorMessage,
+  parseImageSizeError: mockedParseImageSizeError,
+  parseImageDimensionError: mockedParseImageDimensionError,
+  isRateLimitAssistantError: mockedIsRateLimitAssistantError,
+  isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
+  pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
 }));
 
 vi.mock("./run/attempt.js", () => ({
@@ -142,6 +158,7 @@ vi.mock("../../process/command-queue.js", () => ({
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
   isMarkdownCapableMessageChannel: vi.fn(() => true),
 }));
 

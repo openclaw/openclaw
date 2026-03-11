@@ -1,0 +1,63 @@
+import "./run.overflow-compaction.mocks.shared.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { runEmbeddedPiAgent } from "./run.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import {
+  mockedClassifyFailoverReason,
+  mockedFormatAssistantErrorText,
+  mockedGlobalHookRunner,
+  mockedIsFailoverAssistantError,
+} from "./run.overflow-compaction.mocks.shared.js";
+import { mockedRunEmbeddedAttempt } from "./run.overflow-compaction.shared-test.js";
+
+describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
+  });
+
+  it("throws FailoverError for Codex server_error when model fallbacks are configured", async () => {
+    const rawCodexError =
+      'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
+
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
+    mockedIsFailoverAssistantError.mockReturnValue(true);
+    mockedFormatAssistantErrorText.mockReturnValue(
+      "LLM error server_error: An error occurred while processing your request.",
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          stopReason: "error",
+          errorMessage: rawCodexError,
+          provider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "test-session",
+        sessionKey: "test-key",
+        sessionFile: "/tmp/session.json",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        timeoutMs: 30000,
+        runId: "run-codex-server-error-fallback",
+        config: makeModelFallbackCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai-codex/gpt-5.4",
+                fallbacks: ["anthropic/claude-opus-4-6"],
+              },
+            },
+          },
+        }),
+      }),
+    ).rejects.toThrow("LLM error server_error: An error occurred while processing your request.");
+  });
+});
