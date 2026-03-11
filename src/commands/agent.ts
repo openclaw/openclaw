@@ -144,10 +144,18 @@ function resolveRetryImages(
   images: AgentCommandOpts["images"],
   isFallbackRetry: boolean,
   previousFailureReason?: FailoverReason,
+  primaryProvider?: string,
+  currentProvider?: string,
 ): AgentCommandOpts["images"] {
-  // Format errors may be caused by image payloads the fallback model
-  // doesn't support — strip as a safety measure.
-  if (isFallbackRetry && previousFailureReason === "format") {
+  if (!isFallbackRetry) {
+    return images;
+  }
+  // Cross-provider fallback: strip images to avoid unintended third-party disclosure
+  if (primaryProvider && currentProvider && primaryProvider !== currentProvider) {
+    return undefined;
+  }
+  // Same-provider format error: strip images (model can't handle modality)
+  if (previousFailureReason === "format") {
     return undefined;
   }
   return images;
@@ -386,6 +394,8 @@ function runAgentAttempt(params: {
           params.opts.images,
           params.isFallbackRetry,
           params.previousFailureReason,
+          params.primaryProvider,
+          params.providerOverride,
         ),
         streamParams: params.opts.streamParams,
       });
@@ -494,6 +504,8 @@ function runAgentAttempt(params: {
       params.opts.images,
       params.isFallbackRetry,
       params.previousFailureReason,
+      params.primaryProvider,
+      params.providerOverride,
     ),
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
