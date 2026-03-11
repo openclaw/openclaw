@@ -168,6 +168,7 @@ export function registerOnboardCommand(program: Command) {
           togetherApiKey: opts.togetherApiKey as string | undefined,
           huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
+          opencodeGoApiKey: opts.opencodeGoApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
           volcengineApiKey: opts.volcengineApiKey as string | undefined,

@@ -184,7 +184,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        BRAVE_API_KEY_REF: "brave-runtime-key",
+        BRAVE_API_KEY_REF: "brave-runtime-key", // pragma: allowlist secret
       },
     });
 
@@ -225,7 +225,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        GEMINI_API_KEY_REF: "gemini-runtime-key",
+        GEMINI_API_KEY_REF: "gemini-runtime-key", // pragma: allowlist secret
       },
     });
 
@@ -260,7 +260,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        GEMINI_API_KEY_REF: "gemini-runtime-key",
+        GEMINI_API_KEY_REF: "gemini-runtime-key", // pragma: allowlist secret
       },
     });
 
@@ -397,7 +397,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        FIRECRAWL_API_KEY: "firecrawl-fallback-key",
+        FIRECRAWL_API_KEY: "firecrawl-fallback-key", // pragma: allowlist secret
       },
     });
 

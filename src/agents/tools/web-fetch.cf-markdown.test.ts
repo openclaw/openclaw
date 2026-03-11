@@ -114,7 +114,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
       sandboxed: false,
       runtimeFirecrawl: {
         active: false,
-        apiKeySource: "secretRef",
+        apiKeySource: "secretRef", // pragma: allowlist secret
         diagnostics: [],
       },
     });

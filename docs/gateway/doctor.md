@@ -63,7 +63,7 @@ cat ~/.openclaw/openclaw.json
 - Health check + restart prompt.
 - Skills status summary (eligible/missing/blocked).
 - Config normalization for legacy values.
-- OpenCode Zen provider override warnings (`models.providers.opencode`).
+- OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - State integrity and permissions checks (sessions, transcripts, state dir).
@@ -134,12 +134,12 @@ Doctor warnings also include account-default guidance for multi-account channels
 - If two or more `channels.<channel>.accounts` entries are configured without `channels.<channel>.defaultAccount` or `accounts.default`, doctor warns that fallback routing can pick an unexpected account.
 - If `channels.<channel>.defaultAccount` is set to an unknown account ID, doctor warns and lists configured account IDs.
 
-### 2b) OpenCode Zen provider overrides
+### 2b) OpenCode provider overrides
 
-If you’ve added `models.providers.opencode` (or `opencode-zen`) manually, it
-overrides the built-in OpenCode Zen catalog from `@mariozechner/pi-ai`. That can
-force every model onto a single API or zero out costs. Doctor warns so you can
-remove the override and restore per-model API routing + costs.
+If you’ve added `models.providers.opencode`, `opencode-zen`, or `opencode-go`
+manually, it overrides the built-in OpenCode catalog from `@mariozechner/pi-ai`.
+That can force models onto the wrong API or zero out costs. Doctor warns so you
+can remove the override and restore per-model API routing + costs.
 
 ### 3) Legacy state migrations (disk layout)
 

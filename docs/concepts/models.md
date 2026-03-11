@@ -55,8 +55,8 @@ subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
-Provider configuration examples (including OpenCode Zen) live in
-[/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy).
+Provider configuration examples (including OpenCode) live in
+[/gateway/configuration](/gateway/configuration#opencode).
 
 ## “Model is not allowed” (and why replies stop)
 

@@ -9,10 +9,6 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import {
-  isMiniMaxModelNotFoundErrorMessage,
-  isModelNotFoundErrorMessage,
-} from "./live-model-errors.js";
 import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -85,6 +81,35 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   }
   return false;
 }
+
+function isModelNotFoundErrorMessage(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) {
+    return false;
+  }
+  if (/\b404\b/.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
+    return true;
+  }
+  if (/not_found_error/i.test(msg)) {
+    return true;
+  }
+  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+describe("isModelNotFoundErrorMessage", () => {
+  it("matches whitespace-separated not found errors", () => {
+    expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("model: minimax-text-01 not found")).toBe(true);
+  });
+
+  it("still matches underscore and hyphen variants", () => {
+    expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
+  });
+});
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
@@ -475,11 +500,7 @@ describeLive("live models (profile keys)", () => {
 
             if (ok.res.stopReason === "error") {
               const msg = ok.res.errorMessage ?? "";
-              if (
-                allowNotFoundSkip &&
-                (isModelNotFoundErrorMessage(msg) ||
-                  (model.provider === "minimax" && isMiniMaxModelNotFoundErrorMessage(msg)))
-              ) {
+              if (allowNotFoundSkip && isModelNotFoundErrorMessage(msg)) {
                 skipped.push({ model: id, reason: msg });
                 logProgress(`${progressLabel}: skip (model not found)`);
                 break;
@@ -500,7 +521,9 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               ok.text.length === 0 &&
-              (model.provider === "openrouter" || model.provider === "opencode")
+              (model.provider === "openrouter" ||
+                model.provider === "opencode" ||
+                model.provider === "opencode-go")
             ) {
               skipped.push({
                 model: id,
@@ -566,15 +589,6 @@ describeLive("live models (profile keys)", () => {
             if (
               allowNotFoundSkip &&
               model.provider === "minimax" &&
-              isMiniMaxModelNotFoundErrorMessage(message)
-            ) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (model not found)`);
-              break;
-            }
-            if (
-              allowNotFoundSkip &&
-              model.provider === "minimax" &&
               message.includes("request ended without sending any chunks")
             ) {
               skipped.push({ model: id, reason: message });
@@ -592,7 +606,7 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              model.provider === "opencode" &&
+              (model.provider === "opencode" || model.provider === "opencode-go") &&
               isRateLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });

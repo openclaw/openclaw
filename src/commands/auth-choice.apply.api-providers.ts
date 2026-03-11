@@ -34,6 +34,8 @@ import {
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
   applyMoonshotProviderConfigCn,
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applySyntheticConfig,
@@ -68,6 +70,7 @@ import {
   setKimiCodingApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
+  setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
@@ -84,6 +87,7 @@ import {
   setModelStudioApiKey,
 } from "./onboard-auth.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
+import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./opencode-go-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
@@ -104,6 +108,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   huggingface: "huggingface-api-key",
   mistral: "mistral-api-key",
   opencode: "opencode-zen",
+  "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
 };
@@ -240,20 +245,40 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
   "opencode-zen": {
     provider: "opencode",
     profileId: "opencode:default",
-    expectedProviders: ["opencode"],
+    expectedProviders: ["opencode", "opencode-go"],
     envLabel: "OPENCODE_API_KEY",
-    promptMessage: "Enter OpenCode Zen API key",
+    promptMessage: "Enter OpenCode API key",
     setCredential: setOpencodeZenApiKey,
     defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
     applyDefaultConfig: applyOpencodeZenConfig,
     applyProviderConfig: applyOpencodeZenProviderConfig,
     noteDefault: OPENCODE_ZEN_DEFAULT_MODEL,
     noteMessage: [
-      "OpenCode Zen provides access to Claude, GPT, Gemini, and more models.",
+      "OpenCode uses one API key across the Zen and Go catalogs.",
+      "Zen provides access to Claude, GPT, Gemini, and more models.",
       "Get your API key at: https://opencode.ai/auth",
-      "OpenCode Zen bills per request. Check your OpenCode dashboard for details.",
+      "Choose the Zen catalog when you want the curated multi-model proxy.",
     ].join("\n"),
-    noteTitle: "OpenCode Zen",
+    noteTitle: "OpenCode",
+  },
+  "opencode-go": {
+    provider: "opencode-go",
+    profileId: "opencode-go:default",
+    expectedProviders: ["opencode", "opencode-go"],
+    envLabel: "OPENCODE_API_KEY",
+    promptMessage: "Enter OpenCode API key",
+    setCredential: setOpencodeGoApiKey,
+    defaultModel: OPENCODE_GO_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyOpencodeGoConfig,
+    applyProviderConfig: applyOpencodeGoProviderConfig,
+    noteDefault: OPENCODE_GO_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "OpenCode uses one API key across the Zen and Go catalogs.",
+      "Go provides access to Kimi, GLM, and MiniMax models through the Go catalog.",
+      "Get your API key at: https://opencode.ai/auth",
+      "Choose the Go catalog when you want the OpenCode-hosted Kimi/GLM/MiniMax lineup.",
+    ].join("\n"),
+    noteTitle: "OpenCode",
   },
   "together-api-key": {
     provider: "together",
