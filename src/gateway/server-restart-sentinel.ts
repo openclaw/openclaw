@@ -4,8 +4,6 @@ import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   consumeRestartSentinel,
@@ -85,47 +83,27 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
-  // Step 1: deliver a human-friendly restart notice deterministically — model-independent,
-  // guaranteed. Uses userMessage (omits raw diagnostic fields like status prefix and
-  // doctorHint) so the user sees a clean message even if the agent turn in Step 2 fails.
-  // Slack uses replyToId (thread_ts) for threading; deliverOutboundPayloads does not do
-  // this mapping automatically, so we convert here. See #17716.
-  const isSlack = channel === "slack";
-  const replyToId = isSlack && threadId != null && threadId !== "" ? String(threadId) : undefined;
-  const resolvedThreadId = isSlack ? undefined : threadId;
-  const outboundSession = buildOutboundSessionContext({ cfg, sessionKey });
-  try {
-    await deliverOutboundPayloads({
-      cfg,
-      channel,
-      to: resolved.to,
-      accountId: origin?.accountId,
-      replyToId,
-      threadId: resolvedThreadId,
-      payloads: [{ text: userMessage }],
-      session: outboundSession,
-      bestEffort: true,
-    });
-  } catch {
-    // bestEffort: true means this should not throw, but guard anyway.
-    // If it does throw (channel plugin/runtime error before best-effort handling is applied),
-    // enqueue a system event so the user receives the restart notice even on delivery failure.
-    // This preserves the prior behaviour where delivery errors in this path produced a fallback event.
-    enqueueSystemEvent(userMessage, { sessionKey });
-  }
-
-  // Step 2: trigger an agent resume turn so the agent can continue autonomously
-  // after restart. The model sees the restart context and can respond/take actions.
-  // internalContext is injected via extraSystemPrompt so the agent has full technical
-  // details (kind, status, note, doctorHint) without exposing raw diagnostics as a
-  // user-visible chat message. The agent's reply is what the user ultimately sees.
+  // Trigger an agent resume turn so the agent can compose a natural response and
+  // continue autonomously after restart. The restart context is injected via
+  // extraSystemPrompt — the raw note, doctorHint, and status fields are NEVER
+  // sent directly to the channel. Only the agent's composed reply reaches the user.
+  //
+  // summary is used as the neutral wake prompt (e.g. "Gateway restart config-patch ok").
+  // It is an internal technical label; the agent sees it but users do not — only the
+  // agent's response is delivered.
+  //
   // This is safe post-restart: scheduleRestartSentinelWake() runs in the new process
   // with zero in-flight replies, so the pre-restart race condition (ab4a08a82) does
   // not apply here.
+  //
+  // Explicitly set senderIsOwner: false. The restart wake runs in a new process after
+  // an operator-triggered restart, and we cannot reliably infer the original sender's
+  // authorization level. Defaulting to false prevents privilege escalation where any
+  // restarted session would inherit owner-level access. See #18612.
   try {
     await agentCommand(
       {
-        message: userMessage,
+        message: summary,
         extraSystemPrompt: internalContext,
         sessionKey,
         to: resolved.to,
@@ -135,11 +113,14 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
         messageChannel: channel,
         threadId,
         accountId: origin?.accountId,
+        senderIsOwner: false,
       },
       defaultRuntime,
       params.deps,
     );
   } catch (err) {
+    // Agent failed — fall back to a clean restart notice without raw sentinel fields
+    // so the user isn't left completely silent after a restart.
     enqueueSystemEvent(`${summary}\n${String(err)}`, { sessionKey });
   }
 }

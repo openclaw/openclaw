@@ -100,32 +100,24 @@ vi.mock("../infra/system-events.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Suite 1 — Core two-step delivery + resume flow
+// Suite 1 — Agent resume flow (no direct channel delivery)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("scheduleRestartSentinelWake – two-step delivery + resume", () => {
+describe("scheduleRestartSentinelWake – agent resume, no raw delivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("delivers restart notice directly (model-independent) then resumes agent", async () => {
+  it("resumes agent with internal context and never delivers raw sentinel fields to channel", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    // Step 1: deterministic delivery — uses human-friendly userMessage, not raw diagnostic
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "whatsapp",
-        to: "+15550002",
-        accountId: "acct-2",
-        payloads: [{ text: "Gateway restarted successfully." }],
-        bestEffort: true,
-      }),
-    );
+    // Raw sentinel fields must NEVER go directly to the channel — no deliverOutboundPayloads call.
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
 
-    // Step 2: agent resume — userMessage as prompt, internalContext via extraSystemPrompt
+    // Agent resume: summary as neutral wake prompt, full context in extraSystemPrompt only.
     expect(mocks.agentCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Gateway restarted successfully.",
+        message: "restart summary",
         extraSystemPrompt: expect.stringContaining("[Gateway restart context"),
         sessionKey: "agent:main:main",
         to: "+15550002",
@@ -140,14 +132,6 @@ describe("scheduleRestartSentinelWake – two-step delivery + resume", () => {
     );
 
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("delivers notification before triggering agent resume (ordering guarantee)", async () => {
-    await scheduleRestartSentinelWake({ deps: {} as never });
-
-    const deliverOrder = mocks.deliverOutboundPayloads.mock.invocationCallOrder[0];
-    const agentOrder = mocks.agentCommand.mock.invocationCallOrder[0];
-    expect(deliverOrder).toBeLessThan(agentOrder);
   });
 
   it("passes senderIsOwner=false to agentCommand (no privilege escalation)", async () => {
@@ -230,42 +214,18 @@ describe("scheduleRestartSentinelWake – fallback to enqueueSystemEvent", () =>
     });
   });
 
-  it("falls back to enqueueSystemEvent (with error) when agentCommand throws", async () => {
+  it("falls back to enqueueSystemEvent (with summary + error) when agentCommand throws", async () => {
     mocks.agentCommand.mockRejectedValueOnce(new Error("agent failed"));
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    // Direct delivery should still have been attempted
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
-    // Then fallback for the resume
+    // No direct delivery — never.
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    // Fallback enqueues summary + error so the user isn't left silent.
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining("restart summary"),
       { sessionKey: "agent:main:main" },
     );
-  });
-
-  it("still calls agentCommand even if deliverOutboundPayloads throws (bestEffort guard)", async () => {
-    // bestEffort: true means it shouldn't normally throw, but even if it does, resume continues
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("deliver failed"));
-
-    await scheduleRestartSentinelWake({ deps: {} as never });
-
-    expect(mocks.agentCommand).toHaveBeenCalled();
-  });
-
-  it("enqueues system event when deliverOutboundPayloads throws so user is not left silent", async () => {
-    // Guard: if the channel plugin throws before bestEffort handling kicks in, the catch block
-    // must enqueue a system event — otherwise the user receives neither the deterministic notice
-    // nor any fallback, regressing the prior behaviour. See PR #34580 CR comment 2909058539.
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("plugin error"));
-
-    await scheduleRestartSentinelWake({ deps: {} as never });
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("Gateway restarted successfully.", {
-      sessionKey: "agent:main:main",
-    });
-    // Resume step must still run after delivery failure
-    expect(mocks.agentCommand).toHaveBeenCalled();
   });
 });
 
@@ -278,7 +238,7 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
     vi.clearAllMocks();
   });
 
-  it("maps threadId to replyToId and clears threadId for Slack deliverOutboundPayloads", async () => {
+  it("passes Slack threadId to agentCommand (Slack threading handled internally by agentCommand)", async () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:main",
@@ -290,12 +250,13 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    const deliverArgs = getArg<Record<string, unknown>>(mocks.deliverOutboundPayloads, 0);
-    expect(deliverArgs.replyToId).toBe("1234567890.123456");
-    expect(deliverArgs.threadId).toBeUndefined();
+    // No direct delivery — agentCommand is the only delivery path.
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const agentOpts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(agentOpts.threadId).toBe("1234567890.123456");
   });
 
-  it("passes threadId directly (not replyToId) for non-Slack channels", async () => {
+  it("passes threadId directly for non-Slack channels", async () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:main",
@@ -306,9 +267,9 @@ describe("scheduleRestartSentinelWake – thread routing", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    const deliverArgs = getArg<Record<string, unknown>>(mocks.deliverOutboundPayloads, 0);
-    expect(deliverArgs.threadId).toBe("discord-thread-id");
-    expect(deliverArgs.replyToId).toBeUndefined();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const agentOpts = getArg<Record<string, unknown>>(mocks.agentCommand, 0);
+    expect(agentOpts.threadId).toBe("discord-thread-id");
   });
 
   it("passes threadId to agentCommand for non-Slack threading", async () => {

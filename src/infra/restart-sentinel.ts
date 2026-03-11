@@ -128,16 +128,16 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
 }
 
 /**
- * Human-friendly message for direct user delivery after a gateway restart.
- * Omits raw diagnostic fields (status prefix, doctorHint) — those belong in
- * the agent's internal context, not in the user-facing chat message.
+ * Clean fallback message for system-event delivery when the agent cannot be woken.
+ * Never includes the raw `note`/`message` field — that belongs in the agent's
+ * internal context only (see formatRestartSentinelInternalContext). The note is
+ * an operator annotation, not a user-facing string.
  */
 export function formatRestartSentinelUserMessage(payload: RestartSentinelPayload): string {
-  const note = payload.message?.trim();
   if (payload.status === "error") {
-    return note ? `Gateway restart failed: ${note}` : "Gateway restart failed.";
+    return "Gateway restart failed.";
   }
-  return note ?? "Gateway restarted successfully.";
+  return "Gateway restarted successfully.";
 }
 
 /**
