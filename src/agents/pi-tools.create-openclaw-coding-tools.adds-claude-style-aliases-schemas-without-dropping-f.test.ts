@@ -12,6 +12,8 @@ describe("createOpenClawCodingTools", () => {
     try {
       const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
       const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+      const lsTool = tools.find((tool) => tool.name === "ls");
+      expect(lsTool).toBeDefined();
 
       const filePath = "alias-test.txt";
       await writeTool?.execute("tool-alias-1", {
@@ -34,6 +36,13 @@ describe("createOpenClawCodingTools", () => {
         | undefined;
       const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
       expect(combinedText).toContain("hello universe");
+
+      const lsResult = await lsTool?.execute("tool-alias-ls", { file_path: "." });
+      const lsTextBlocks = lsResult?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const listed = lsTextBlocks?.map((block) => block.text ?? "").join("\n") ?? "";
+      expect(listed).toContain(filePath);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

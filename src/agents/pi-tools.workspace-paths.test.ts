@@ -58,11 +58,17 @@ describe("workspace path resolution", () => {
         try {
           const tools = createOpenClawCodingTools({ workspaceDir });
           const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+          const lsTool = tools.find((tool) => tool.name === "ls");
+          expect(lsTool).toBeDefined();
 
           const readFile = "read.txt";
           await fs.writeFile(path.join(workspaceDir, readFile), "workspace read ok", "utf8");
           const readResult = await readTool.execute("ws-read", { path: readFile });
           expect(getTextContent(readResult)).toContain("workspace read ok");
+
+          await fs.mkdir(path.join(workspaceDir, "list-dir"), { recursive: true });
+          const lsResult = await lsTool?.execute("ws-ls", { path: "." });
+          expect(getTextContent(lsResult)).toContain("list-dir/");
 
           const writeFile = "write.txt";
           await writeTool.execute("ws-write", {
@@ -141,10 +147,15 @@ describe("workspace path resolution", () => {
       const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
       const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
       const { readTool } = expectReadWriteEditTools(tools);
+      const lsTool = tools.find((tool) => tool.name === "ls");
+      expect(lsTool).toBeDefined();
 
       const outsideAbsolute = path.resolve(path.parse(workspaceDir).root, "outside-openclaw.txt");
       await expect(
         readTool.execute("ws-read-at-prefix", { path: `@${outsideAbsolute}` }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      await expect(
+        lsTool?.execute("ws-ls-at-prefix", { path: `@${outsideAbsolute}` }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
     });
   });
@@ -208,6 +219,8 @@ describe("sandboxed workspace paths", () => {
 
         const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
         const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+        const lsTool = tools.find((tool) => tool.name === "ls");
+        expect(lsTool).toBeDefined();
 
         const result = await readTool?.execute("sbx-read", { path: testFile });
         expect(getTextContent(result)).toContain("sandbox read");
@@ -226,6 +239,13 @@ describe("sandboxed workspace paths", () => {
         });
         const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");
+
+        await fs.writeFile(path.join(sandboxDir, "sandbox-only.txt"), "sandbox only", "utf8");
+        await fs.writeFile(path.join(workspaceDir, "workspace-only.txt"), "workspace only", "utf8");
+        const lsResult = await lsTool?.execute("sbx-ls", { path: "." });
+        const listed = getTextContent(lsResult);
+        expect(listed).toContain("sandbox-only.txt");
+        expect(listed).not.toContain("workspace-only.txt");
       });
     });
   });

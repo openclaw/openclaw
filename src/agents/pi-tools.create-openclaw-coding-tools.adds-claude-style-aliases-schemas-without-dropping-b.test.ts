@@ -54,6 +54,7 @@ describe("createOpenClawCodingTools", () => {
   it("enforces apply_patch availability and canonical names across model/provider constraints", () => {
     expect(defaultTools.some((tool) => tool.name === "exec")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
+    expect(defaultTools.some((tool) => tool.name === "ls")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
 
     const enabledConfig: OpenClawConfig = {
@@ -105,6 +106,7 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(oauthTools.map((tool) => tool.name));
     expect(names.has("exec")).toBe(true);
     expect(names.has("read")).toBe(true);
+    expect(names.has("ls")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
     expect(names.has("apply_patch")).toBe(false);

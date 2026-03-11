@@ -47,6 +47,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "ls",
+    label: "ls",
+    description: "List directory contents",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
     id: "write",
     label: "write",
     description: "Create or overwrite files",

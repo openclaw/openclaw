@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import {
+  createEditTool,
+  createLsTool,
+  createReadTool,
+  createWriteTool,
+} from "@mariozechner/pi-coding-agent";
 import {
   SafeOpenError,
   openFileWithinRoot,
@@ -458,6 +463,13 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
+export function createSandboxedLsTool(params: SandboxToolParams) {
+  const base = createLsTool(params.root, {
+    operations: createSandboxLsOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base);
+}
+
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
@@ -470,6 +482,13 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+}
+
+export function createHostWorkspaceLsTool(root: string, options?: { workspaceOnly?: boolean }) {
+  const base = createLsTool(root, {
+    operations: createHostLsOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base);
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -541,6 +560,26 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function createSandboxLsOperations(params: SandboxToolParams) {
+  return {
+    exists: async (absolutePath: string) =>
+      (await params.bridge.stat({ filePath: absolutePath, cwd: params.root })) !== null,
+    stat: async (absolutePath: string) => {
+      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+      if (!stat) {
+        throw createFsAccessError("ENOENT", absolutePath);
+      }
+      return {
+        isDirectory: () => stat.type === "directory",
+      };
+    },
+    readdir: async (absolutePath: string) => {
+      const resolved = params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root });
+      return await fs.readdir(resolved.hostPath);
+    },
+  } as const;
+}
+
 function createSandboxEditOperations(params: SandboxToolParams) {
   return {
     readFile: (absolutePath: string) =>
@@ -560,6 +599,21 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = path.resolve(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+}
+
+async function resolveHostWorkspacePath(
+  root: string,
+  absolutePath: string,
+  options?: { workspaceOnly?: boolean },
+) {
+  const resolved = path.resolve(absolutePath);
+  if (options?.workspaceOnly !== true) {
+    return resolved;
+  }
+  const relative = toRelativeWorkspacePath(root, resolved, { allowRoot: true });
+  const workspaceResolved = relative ? path.resolve(root, relative) : path.resolve(root);
+  await assertSandboxPath({ filePath: workspaceResolved, cwd: root, root });
+  return workspaceResolved;
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
@@ -592,6 +646,31 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         data: content,
         mkdir: true,
       });
+    },
+  } as const;
+}
+
+function createHostLsOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  return {
+    exists: async (absolutePath: string) => {
+      try {
+        const resolved = await resolveHostWorkspacePath(root, absolutePath, options);
+        await fs.access(resolved);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return false;
+        }
+        throw error;
+      }
+    },
+    stat: async (absolutePath: string) => {
+      const resolved = await resolveHostWorkspacePath(root, absolutePath, options);
+      return await fs.stat(resolved);
+    },
+    readdir: async (absolutePath: string) => {
+      const resolved = await resolveHostWorkspacePath(root, absolutePath, options);
+      return await fs.readdir(resolved);
     },
   } as const;
 }

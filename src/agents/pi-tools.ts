@@ -1,4 +1,4 @@
-import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import { codingTools, createLsTool, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -29,9 +29,11 @@ import {
 import {
   assertRequiredParams,
   createHostWorkspaceEditTool,
+  createHostWorkspaceLsTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
   createSandboxedEditTool,
+  createSandboxedLsTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
   normalizeToolParams,
@@ -347,7 +349,12 @@ export function createOpenClawCodingTools(options?: {
   }
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
 
-  const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
+  const codingBaseTools = [...(codingTools as unknown as AnyAgentTool[])];
+  if (!codingBaseTools.some((tool) => tool.name === "ls")) {
+    codingBaseTools.push(createLsTool(workspaceRoot) as unknown as AnyAgentTool);
+  }
+
+  const base = codingBaseTools.flatMap((tool) => {
     if (tool.name === readTool.name) {
       if (sandboxRoot) {
         const sandboxed = createSandboxedReadTool({
@@ -369,6 +376,23 @@ export function createOpenClawCodingTools(options?: {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
       });
+      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+    }
+    if (tool.name === "ls") {
+      if (sandboxRoot) {
+        const sandboxed = createSandboxedLsTool({
+          root: sandboxRoot,
+          bridge: sandboxFsBridge!,
+        });
+        return [
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
+                containerWorkdir: sandbox.containerWorkdir,
+              })
+            : sandboxed,
+        ];
+      }
+      const wrapped = createHostWorkspaceLsTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
