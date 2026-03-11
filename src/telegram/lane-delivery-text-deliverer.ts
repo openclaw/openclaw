@@ -365,13 +365,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         context,
       });
       if (typeof previewTargetAfterStop.previewMessageId !== "number") {
-        if (lane.stream?.sendMayHaveLanded?.()) {
-          params.log(
-            `telegram: ${laneName} first preview send may have landed despite missing message id; keeping to avoid duplicate`,
-          );
-          params.markDelivered();
-          return "retained";
-        }
         return "fallback";
       }
       return finalizePreview(previewTargetAfterStop.previewMessageId, true, false);
