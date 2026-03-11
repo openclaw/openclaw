@@ -1,3 +1,4 @@
+import type { ExecutionHealthConfig } from "../agents/execution-health.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
@@ -286,23 +287,6 @@ export type AgentDefaultsConfig = {
   sandbox?: AgentSandboxConfig;
   /** Passive execution health monitoring to detect agent death spirals. */
   executionHealth?: ExecutionHealthConfig;
-};
-
-export type ExecutionHealthConfig = {
-  /** Enable execution health monitoring (default: true). */
-  enabled?: boolean;
-  /** File writes in a single window before warning (default: 10). */
-  fileBurstThreshold?: number;
-  /** Window in ms for file burst detection (default: 600000). */
-  fileBurstWindowMs?: number;
-  /** Same tool+args repeats before warning (default: 5). */
-  toolRepeatThreshold?: number;
-  /** Window in ms for tool repeat detection (default: 300000). */
-  toolRepeatWindowMs?: number;
-  /** Consecutive turns without a real side-effect before warning (default: 10). */
-  noEffectLoopThreshold?: number;
-  /** Consecutive tool errors before warning (default: 3). */
-  errorCascadeThreshold?: number;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
