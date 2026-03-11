@@ -1,14 +1,13 @@
 import fs from "node:fs";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
-import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import {
-  buildMkdirpPlan,
-  buildRemovePlan,
-  buildRenamePlan,
-  buildStatPlan,
-  type SandboxFsCommandPlan,
-} from "./fs-bridge-shell-command-plans.js";
-import { buildPinnedWritePlan } from "./fs-bridge-write-helper.js";
+  buildPinnedMkdirpPlan,
+  buildPinnedRemovePlan,
+  buildPinnedRenamePlan,
+  buildPinnedWritePlan,
+} from "./fs-bridge-mutation-helper.js";
+import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
+import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
@@ -119,7 +118,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const pinnedWriteTarget = this.pathGuard.resolvePinnedWriteEntry(target, "write files");
+    const pinnedWriteTarget = this.pathGuard.resolvePinnedEntry(target, "write files");
     await this.runCheckedCommand({
       ...buildPinnedWritePlan({
         check: writeCheck,
@@ -134,8 +133,21 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target);
-    await this.runPlannedCommand(buildMkdirpPlan(target, anchoredTarget), params.signal);
+    const mkdirCheck = {
+      target,
+      options: {
+        action: "create directories",
+        requireWritable: true,
+        allowedType: "directory",
+      } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedMkdirpPlan({
+        check: mkdirCheck,
+        pinned: this.pathGuard.resolvePinnedDirectoryEntry(target, "create directories"),
+      }),
+      signal: params.signal,
+    });
   }
 
   async remove(params: {
@@ -147,16 +159,22 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "remove files");
-    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target);
-    await this.runPlannedCommand(
-      buildRemovePlan({
-        target,
-        anchoredTarget,
+    const removeCheck = {
+      target,
+      options: {
+        action: "remove files",
+        requireWritable: true,
+      } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedRemovePlan({
+        check: removeCheck,
+        pinned: this.pathGuard.resolvePinnedEntry(target, "remove files"),
         recursive: params.recursive,
         force: params.force,
       }),
-      params.signal,
-    );
+      signal: params.signal,
+    });
   }
 
   async rename(params: {
@@ -169,17 +187,29 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const to = this.resolveResolvedPath({ filePath: params.to, cwd: params.cwd });
     this.ensureWriteAccess(from, "rename files");
     this.ensureWriteAccess(to, "rename files");
-    const anchoredFrom = await this.pathGuard.resolveAnchoredSandboxEntry(from);
-    const anchoredTo = await this.pathGuard.resolveAnchoredSandboxEntry(to);
-    await this.runPlannedCommand(
-      buildRenamePlan({
-        from,
-        to,
-        anchoredFrom,
-        anchoredTo,
+    const fromCheck = {
+      target: from,
+      options: {
+        action: "rename files",
+        requireWritable: true,
+      } as const,
+    };
+    const toCheck = {
+      target: to,
+      options: {
+        action: "rename files",
+        requireWritable: true,
+      } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedRenamePlan({
+        fromCheck,
+        toCheck,
+        from: this.pathGuard.resolvePinnedEntry(from, "rename files"),
+        to: this.pathGuard.resolvePinnedEntry(to, "rename files"),
       }),
-      params.signal,
-    );
+      signal: params.signal,
+    });
   }
 
   async stat(params: {
