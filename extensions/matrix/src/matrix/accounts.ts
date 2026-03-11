@@ -1,8 +1,5 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createAccountListHelpers } from "openclaw/plugin-sdk/matrix";
 import { hasConfiguredSecretInput } from "../secret-input.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
@@ -35,44 +32,11 @@ export type ResolvedMatrixAccount = {
   config: MatrixConfig;
 };
 
-function listConfiguredAccountIds(cfg: CoreConfig): string[] {
-  const accounts = cfg.channels?.matrix?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  // Normalize and de-duplicate keys so listing and resolution use the same semantics
-  return [
-    ...new Set(
-      Object.keys(accounts)
-        .filter(Boolean)
-        .map((id) => normalizeAccountId(id)),
-    ),
-  ];
-}
-
-export function listMatrixAccountIds(cfg: CoreConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    // Fall back to default if no accounts configured (legacy top-level config)
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
-  const preferred = normalizeOptionalAccountId(cfg.channels?.matrix?.defaultAccount);
-  if (
-    preferred &&
-    listMatrixAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listMatrixAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const {
+  listAccountIds: listMatrixAccountIds,
+  resolveDefaultAccountId: resolveDefaultMatrixAccountId,
+} = createAccountListHelpers("matrix", { normalizeAccountId });
+export { listMatrixAccountIds, resolveDefaultMatrixAccountId };
 
 function resolveAccountConfig(cfg: CoreConfig, accountId: string): MatrixConfig | undefined {
   const accounts = cfg.channels?.matrix?.accounts;
