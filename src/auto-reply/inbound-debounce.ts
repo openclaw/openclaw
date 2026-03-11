@@ -38,6 +38,7 @@ type DebounceBuffer<T> = {
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
   flushing: boolean;
+  consecutiveFailures: number;
 };
 
 export type InboundDebounceCreateParams<T> = {
@@ -45,6 +46,10 @@ export type InboundDebounceCreateParams<T> = {
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  maxFlushRetries?: number;
+  maxBufferedItems?: number;
+  maxRetryDelayMs?: number;
+  retryBackoffFactor?: number;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
 };
@@ -52,6 +57,14 @@ export type InboundDebounceCreateParams<T> = {
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const maxFlushRetries = Math.max(0, Math.trunc(params.maxFlushRetries ?? 20));
+  const maxBufferedItems = Math.max(1, Math.trunc(params.maxBufferedItems ?? 500));
+  const retryBackoffFactor = Number.isFinite(params.retryBackoffFactor)
+    ? Math.max(1, params.retryBackoffFactor ?? 2)
+    : 2;
+  const maxRetryDelayMs = Number.isFinite(params.maxRetryDelayMs)
+    ? Math.max(defaultDebounceMs, Math.trunc(params.maxRetryDelayMs ?? 30_000))
+    : Math.max(defaultDebounceMs, 30_000);
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
@@ -59,6 +72,37 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return defaultDebounceMs;
     }
     return Math.max(0, Math.trunc(resolved));
+  };
+
+  const emitOverflowError = (key: string, droppedItems: T[]) => {
+    if (droppedItems.length === 0) {
+      return;
+    }
+    params.onError?.(
+      Object.assign(new Error(`inbound debounce buffer overflow for key "${key}"`), {
+        code: "INBOUND_DEBOUNCE_BUFFER_OVERFLOW",
+      }),
+      droppedItems,
+    );
+  };
+
+  const trimBufferToLimit = (key: string, buffer: DebounceBuffer<T>) => {
+    const overflow = buffer.items.length - maxBufferedItems;
+    if (overflow <= 0) {
+      return;
+    }
+    // Drop newest items to preserve ordering for already-buffered work.
+    const droppedItems = buffer.items.splice(maxBufferedItems, overflow);
+    emitOverflowError(key, droppedItems);
+  };
+
+  const resolveRetryDelayMs = (buffer: DebounceBuffer<T>) => {
+    const exponent = Math.max(0, buffer.consecutiveFailures - 1);
+    const delay = buffer.debounceMs * retryBackoffFactor ** exponent;
+    if (!Number.isFinite(delay)) {
+      return maxRetryDelayMs;
+    }
+    return Math.min(maxRetryDelayMs, Math.max(buffer.debounceMs, Math.trunc(delay)));
   };
 
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
@@ -79,18 +123,37 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const items = buffer.items.splice(0);
     buffer.flushing = true;
     let flushFailed = false;
+    let retriesExceeded = false;
     try {
       await params.onFlush(items);
+      buffer.consecutiveFailures = 0;
     } catch (err) {
       flushFailed = true;
       // Preserve ordering when retrying the failed batch.
       buffer.items.unshift(...items);
+      buffer.consecutiveFailures += 1;
       params.onError?.(err, items);
+      trimBufferToLimit(key, buffer);
+      retriesExceeded = buffer.consecutiveFailures > maxFlushRetries;
     } finally {
       buffer.flushing = false;
     }
+    if (retriesExceeded) {
+      const droppedItems = buffer.items.splice(0);
+      buffers.delete(key);
+      params.onError?.(
+        Object.assign(
+          new Error(
+            `inbound debounce flush retries exceeded for key "${key}" (${maxFlushRetries})`,
+          ),
+          { code: "INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED" },
+        ),
+        droppedItems,
+      );
+      return;
+    }
     if (flushFailed || buffer.items.length > 0) {
-      scheduleFlush(key, buffer);
+      scheduleFlush(key, buffer, flushFailed ? "retry" : "debounce");
       return;
     }
     buffers.delete(key);
@@ -104,13 +167,18 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
-  const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
+  const scheduleFlush = (
+    key: string,
+    buffer: DebounceBuffer<T>,
+    reason: "debounce" | "retry" = "debounce",
+  ) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
+    const delayMs = reason === "retry" ? resolveRetryDelayMs(buffer) : buffer.debounceMs;
     buffer.timeout = setTimeout(() => {
       void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    }, delayMs);
     buffer.timeout.unref?.();
   };
 
@@ -135,11 +203,18 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (existing) {
       existing.items.push(item);
       existing.debounceMs = debounceMs;
+      trimBufferToLimit(key, existing);
       scheduleFlush(key, existing);
       return;
     }
 
-    const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs, flushing: false };
+    const buffer: DebounceBuffer<T> = {
+      items: [item],
+      timeout: null,
+      debounceMs,
+      flushing: false,
+      consecutiveFailures: 0,
+    };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
   };

@@ -383,6 +383,117 @@ describe("createInboundDebouncer", () => {
       vi.useRealTimers();
     }
   });
+
+  it("applies exponential backoff before retrying failed flushes", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      const errors: unknown[] = [];
+      let attempts = 0;
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          attempts += 1;
+          if (attempts < 3) {
+            throw new Error("temporary flush failure");
+          }
+          delivered.push(items.map((entry) => entry.id));
+        },
+        onError: (err) => {
+          errors.push(err);
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await vi.advanceTimersByTimeAsync(10); // First flush failure.
+      expect(delivered).toEqual([]);
+      expect(errors).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(9); // Retry delay is still 10ms for first failure.
+      expect(errors).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1); // Second flush failure at t=20ms.
+      expect(errors).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(19); // Backoff doubles to 20ms before third attempt.
+      expect(delivered).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(delivered).toEqual([["1"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops buffered items after max retry ceiling is exceeded", async () => {
+    vi.useFakeTimers();
+    try {
+      const errors: Array<{ err: unknown; items: string[] }> = [];
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        maxFlushRetries: 2,
+        onFlush: async () => {
+          throw new Error("persistent flush failure");
+        },
+        onError: (err, items) => {
+          errors.push({ err, items: items.map((entry) => entry.id) });
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await vi.advanceTimersByTimeAsync(60);
+
+      expect(errors).toHaveLength(4);
+      expect(errors[0]?.items).toEqual(["1"]);
+      expect(errors[1]?.items).toEqual(["1"]);
+      expect(errors[2]?.items).toEqual(["1"]);
+      expect(errors[3]?.items).toEqual(["1"]);
+      expect(errors[3]?.err).toMatchObject({
+        code: "INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps buffered items and reports dropped overflow", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      const errors: Array<{ err: unknown; items: string[] }> = [];
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        maxBufferedItems: 2,
+        onFlush: async (items) => {
+          delivered.push(items.map((entry) => entry.id));
+        },
+        onError: (err, items) => {
+          errors.push({ err, items: items.map((entry) => entry.id) });
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await debouncer.enqueue({ key: "a", id: "2" });
+      await debouncer.enqueue({ key: "a", id: "3" });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered).toEqual([["1", "2"]]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.items).toEqual(["3"]);
+      expect(errors[0]?.err).toMatchObject({
+        code: "INBOUND_DEBOUNCE_BUFFER_OVERFLOW",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
