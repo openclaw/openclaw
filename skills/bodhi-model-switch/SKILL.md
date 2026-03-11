@@ -20,7 +20,7 @@ import json, os, pathlib
 cfg = pathlib.Path(os.path.expanduser('~/.openclaw/openclaw.json'))
 d = json.loads(cfg.read_text())
 d['agents']['defaults']['model'] = 'anthropic/claude-sonnet-4-6'
-d['agents']['defaults']['thinkingDefault'] = 'medium'
+d['agents']['defaults']['thinkingDefault'] = 'low'
 cfg.write_text(json.dumps(d, indent=2))
 print('switched')
 "
@@ -42,22 +42,7 @@ print('switched')
 "
 ```
 
-Reply: `Switched to Ollama (Mistral Nemo). Local only — no API cost. No vision.`
-
-## On `/model`
-
-Read current model from config and report it. No changes.
-
-```bash
-python3 -c "
-import json, os, pathlib
-cfg = pathlib.Path(os.path.expanduser('~/.openclaw/openclaw.json'))
-d = json.loads(cfg.read_text())
-print(d['agents']['defaults']['model'])
-"
-```
-
-Reply: `Current model: <model name>`
+Reply: `Switched to Ollama (Qwen 2.5 7B). Local only — no API cost. No vision.`
 
 ## Rules
 

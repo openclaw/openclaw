@@ -8,7 +8,6 @@
       "workspace": "~/.openclaw/workspace",
       "thinkingDefault": "low",
       "timeoutSeconds": 300,
-      "heartbeat": { "every": "0m" },
       "models": {
         "anthropic/claude-sonnet-4-6": {
           "params": { "cacheRetention": "short" }

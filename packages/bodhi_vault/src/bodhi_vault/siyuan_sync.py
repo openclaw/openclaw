@@ -113,8 +113,17 @@ class SiYuanClient:
         if attrs:
             self._post("/api/attr/setBlockAttrs", {"id": block_id, "attrs": attrs})
 
+    @staticmethod
+    def _validate_notebook_id(notebook_id: str) -> bool:
+        """SiYuan notebook IDs are alphanumeric + hyphens, typically 20 chars."""
+        import re
+        return bool(re.fullmatch(r"[A-Za-z0-9\-]{1,64}", notebook_id))
+
     def _find_person_doc(self, notebook_id: str, person_name: str) -> str | None:
         """Return the block id of an existing person doc, or None."""
+        if not self._validate_notebook_id(notebook_id):
+            log.debug("siyuan: skipping person doc lookup — unexpected notebook_id format")
+            return None
         safe_name = person_name.replace("'", "''")
         data = self._post(
             "/api/query/sql",

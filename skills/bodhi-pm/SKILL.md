@@ -164,6 +164,9 @@ Mark task n complete:
 ```bash
 python3 -c "
 import pathlib, os, sys
+if len(sys.argv) < 2 or not sys.argv[1].isdigit():
+    print('INVALID_ARG')
+    exit()
 n = int(sys.argv[1])
 f = pathlib.Path(os.path.expanduser('~/.openclaw/tasks.md'))
 if not f.exists():
@@ -206,6 +209,9 @@ Reply: last 50 lines of `pm-memory.md`. If empty: `No memory saved yet.`
 ```bash
 python3 -c "
 import pathlib, os, sys, datetime
+if len(sys.argv) < 3:
+    print('INVALID_ARG')
+    exit()
 key = sys.argv[1]
 val = ' '.join(sys.argv[2:])
 f = pathlib.Path(os.path.expanduser('~/.openclaw/pm-memory.md'))
@@ -236,7 +242,8 @@ Delegate to bodhi-budget skill: read `~/.openclaw/budget-state.json` and format 
 
 - Run bash commands, then reply with the result. Nothing else.
 - Never expose file paths or tokens in replies.
-- If any command fails: `Command failed — check server logs.`
+- If command outputs `INVALID_ARG`: reply with the correct usage (e.g. `/task done <number>` or `/memory save <key> <value>`).
+- If any other command fails: `Command failed — check server logs.`
 - `/model opus` always requires confirmation before switching.
 - `/effort high` always shows cost warning in the reply.
 - Config changes hot-reload within ~3 seconds — no restart needed.
