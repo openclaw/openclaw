@@ -3,11 +3,13 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow } from "../types.ts";
 import { executeSlashCommand } from "./slash-command-executor.ts";
 
-function row(key: string): GatewaySessionRow {
+function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
   return {
     key,
+    spawnedBy: overrides?.spawnedBy,
     kind: "direct",
     updatedAt: null,
+    ...overrides,
   };
 }
 
@@ -18,8 +20,11 @@ describe("executeSlashCommand /kill", () => {
         return {
           sessions: [
             row("main"),
-            row("agent:main:subagent:one"),
-            row("agent:main:subagent:parent:subagent:child"),
+            row("agent:main:subagent:one", { spawnedBy: "main" }),
+            row("agent:main:subagent:parent", { spawnedBy: "main" }),
+            row("agent:main:subagent:parent:subagent:child", {
+              spawnedBy: "agent:main:subagent:parent",
+            }),
             row("agent:other:main"),
           ],
         };
@@ -37,12 +42,15 @@ describe("executeSlashCommand /kill", () => {
       "all",
     );
 
-    expect(result.content).toBe("Aborted 2 sub-agent sessions.");
+    expect(result.content).toBe("Aborted 3 sub-agent sessions.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
       sessionKey: "agent:main:subagent:one",
     });
     expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
+      sessionKey: "agent:main:subagent:parent",
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "chat.abort", {
       sessionKey: "agent:main:subagent:parent:subagent:child",
     });
   });
@@ -52,9 +60,9 @@ describe("executeSlashCommand /kill", () => {
       if (method === "sessions.list") {
         return {
           sessions: [
-            row("agent:main:subagent:one"),
-            row("agent:main:subagent:two"),
-            row("agent:other:subagent:three"),
+            row("agent:main:subagent:one", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:two", { spawnedBy: "agent:main:main" }),
+            row("agent:other:subagent:three", { spawnedBy: "agent:other:main" }),
           ],
         };
       }
@@ -86,9 +94,11 @@ describe("executeSlashCommand /kill", () => {
       if (method === "sessions.list") {
         return {
           sessions: [
-            row("agent:main:subagent:parent"),
-            row("agent:main:subagent:parent:subagent:child"),
-            row("agent:main:subagent:sibling"),
+            row("agent:main:subagent:parent", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:parent:subagent:child", {
+              spawnedBy: "agent:main:subagent:parent",
+            }),
+            row("agent:main:subagent:sibling", { spawnedBy: "agent:main:main" }),
           ],
         };
       }
@@ -116,7 +126,10 @@ describe("executeSlashCommand /kill", () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
-          sessions: [row("agent:main:subagent:one"), row("agent:main:subagent:two")],
+          sessions: [
+            row("agent:main:subagent:one", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:two", { spawnedBy: "agent:main:main" }),
+          ],
         };
       }
       if (method === "chat.abort") {
@@ -148,9 +161,9 @@ describe("executeSlashCommand /kill", () => {
         return {
           sessions: [
             row("main"),
-            row("agent:main:subagent:one"),
-            row("agent:main:subagent:two"),
-            row("agent:other:subagent:three"),
+            row("agent:main:subagent:one", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:two", { spawnedBy: "agent:main:main" }),
+            row("agent:other:subagent:three", { spawnedBy: "agent:other:main" }),
           ],
         };
       }
@@ -175,5 +188,129 @@ describe("executeSlashCommand /kill", () => {
     expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
       sessionKey: "agent:main:subagent:two",
     });
+  });
+
+  it("does not abort unrelated same-agent subagents from another root session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main"),
+            row("agent:main:subagent:mine", { spawnedBy: "agent:main:main" }),
+            row("agent:main:subagent:mine:subagent:child", {
+              spawnedBy: "agent:main:subagent:mine",
+            }),
+            row("agent:main:subagent:other-root", {
+              spawnedBy: "agent:main:discord:dm:alice",
+            }),
+          ],
+        };
+      }
+      if (method === "chat.abort") {
+        return { ok: true, aborted: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "kill",
+      "all",
+    );
+
+    expect(result.content).toBe("Aborted 2 sub-agent sessions.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: "agent:main:subagent:mine",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
+      sessionKey: "agent:main:subagent:mine:subagent:child",
+    });
+  });
+});
+
+describe("executeSlashCommand directives", () => {
+  it("reports the current thinking level for bare /think", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              modelProvider: "openai",
+              model: "gpt-4.1-mini",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-4.1-mini", provider: "openai", reasoning: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "Current thinking level: low.\nOptions: off, minimal, low, medium, high, adaptive.",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("accepts minimal and xhigh thinking levels", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true });
+
+    const minimal = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "minimal",
+    );
+    const xhigh = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "xhigh",
+    );
+
+    expect(minimal.content).toBe("Thinking level set to **minimal**.");
+    expect(xhigh.content).toBe("Thinking level set to **xhigh**.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "minimal",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "xhigh",
+    });
+  });
+
+  it("reports the current verbose level for bare /verbose", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [row("agent:main:main", { verboseLevel: "full" })],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "verbose",
+      "",
+    );
+
+    expect(result.content).toBe("Current verbose level: full.\nOptions: on, full, off.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 });

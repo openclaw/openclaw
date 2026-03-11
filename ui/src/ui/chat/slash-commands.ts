@@ -77,7 +77,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     icon: "brain",
     category: "model",
     executeLocal: true,
-    argOptions: ["off", "low", "medium", "high"],
+    argOptions: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
   },
   {
     name: "verbose",
@@ -192,7 +192,7 @@ export type ParsedSlashCommand = {
 
 /**
  * Parse a message as a slash command. Returns null if it doesn't match.
- * Supports `/command` and `/command args...`.
+ * Supports `/command`, `/command args...`, and `/command: args...`.
  */
 export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   const trimmed = text.trim();
@@ -200,9 +200,14 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
     return null;
   }
 
-  const spaceIdx = trimmed.indexOf(" ");
-  const name = spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx);
-  const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+  const body = trimmed.slice(1);
+  const firstSeparator = body.search(/[\s:]/u);
+  const name = firstSeparator === -1 ? body : body.slice(0, firstSeparator);
+  let remainder = firstSeparator === -1 ? "" : body.slice(firstSeparator).trimStart();
+  if (remainder.startsWith(":")) {
+    remainder = remainder.slice(1).trimStart();
+  }
+  const args = remainder.trim();
 
   if (!name) {
     return null;
