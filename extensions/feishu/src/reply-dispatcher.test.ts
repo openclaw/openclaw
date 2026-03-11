@@ -270,6 +270,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       replyToMessageId: undefined,
       replyInThread: undefined,
       rootId: "om_root_topic",
+      header: { title: "🤖 AI 助手", template: "blue" },
     });
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
@@ -541,6 +542,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].start).toHaveBeenCalledWith("oc_chat", "chat_id", {
       replyToMessageId: "om_msg",
       replyInThread: true,
+      header: { title: "🤖 AI 助手", template: "blue" },
     });
   });
 
