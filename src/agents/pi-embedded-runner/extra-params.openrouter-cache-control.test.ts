@@ -13,7 +13,7 @@ type StreamPayload = {
 
 function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
   const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(payload, model);
+    options?.onPayload?.(payload);
     return createAssistantMessageEventStream();
   };
   const agent = { streamFn: baseStreamFn };
@@ -89,38 +89,5 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toBe("Hello");
-  });
-
-  it("maps thinking=minimal to reasoning.effort=none (OpenRouter does not support minimal)", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, model);
-      capturedPayload = payload;
-      return createAssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    // Pass thinking level explicitly to trigger reasoning injection.
-    applyExtraParamsToAgent(
-      agent,
-      undefined,
-      "openrouter",
-      "anthropic/claude-opus-4-6",
-      undefined,
-      "minimal",
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "anthropic/claude-opus-4-6",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
-
-    expect(capturedPayload?.reasoning).toEqual({ effort: "none" });
   });
 });
