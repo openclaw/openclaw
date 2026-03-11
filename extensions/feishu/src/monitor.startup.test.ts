@@ -3,17 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-}));
-
-vi.mock("./client.js", () => ({
+const feishuClientMockModule = vi.hoisted(() => ({
   createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
-
-vi.mock("./runtime.js", () => ({
+const feishuRuntimeMockModule = vi.hoisted(() => ({
   getFeishuRuntime: () => ({
     channel: {
       debounce: {
@@ -29,6 +23,13 @@ vi.mock("./runtime.js", () => ({
     },
   }),
 }));
+
+vi.mock("./probe.js", () => ({
+  probeFeishu: probeFeishuMock,
+}));
+
+vi.mock("./client.js", () => feishuClientMockModule);
+vi.mock("./runtime.js", () => feishuRuntimeMockModule);
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {

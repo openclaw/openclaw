@@ -46,6 +46,7 @@ export const AUTO_IMAGE_KEY_PROVIDERS = [
   "anthropic",
   "google",
   "minimax",
+  "minimax-portal",
   "zai",
 ] as const;
 export const AUTO_VIDEO_KEY_PROVIDERS = ["google", "moonshot"] as const;
@@ -54,6 +55,7 @@ export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
   anthropic: "claude-opus-4-6",
   google: "gemini-3-flash-preview",
   minimax: "MiniMax-VL-01",
+  "minimax-portal": "MiniMax-VL-01",
   zai: "glm-4.6v",
 };
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
