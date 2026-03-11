@@ -215,6 +215,38 @@ describe("hardenApprovedExecutionPaths", () => {
 
   const mutableOperandCases: RuntimeFixture[] = [
     {
+      name: "python flagged file",
+      binName: "python3",
+      argv: ["python3", "-B", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "lua direct file",
+      binName: "lua",
+      argv: ["lua", "./run.lua"],
+      scriptName: "run.lua",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "pypy direct file",
+      binName: "pypy",
+      argv: ["pypy", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "versioned node alias file",
+      binName: "node20",
+      argv: ["node20", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
       name: "bun direct file",
       binName: "bun",
       argv: ["bun", "./run.ts"],
@@ -237,6 +269,22 @@ describe("hardenApprovedExecutionPaths", () => {
       scriptName: "run.ts",
       initialBody: 'console.log("SAFE");\n',
       expectedArgvIndex: 5,
+    },
+    {
+      name: "bun test file",
+      binName: "bun",
+      argv: ["bun", "test", "./run.test.ts"],
+      scriptName: "run.test.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "deno test file",
+      binName: "deno",
+      argv: ["deno", "test", "./run.test.ts"],
+      scriptName: "run.test.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
     },
   ];
 
@@ -296,7 +344,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("does not snapshot bun package script names", () => {
+  it("rejects bun package script names that do not bind a concrete file", () => {
     withFakeRuntimeBin({
       binName: "bun",
       run: () => {
@@ -306,11 +354,11 @@ describe("hardenApprovedExecutionPaths", () => {
             command: ["bun", "run", "dev"],
             cwd: tmp,
           });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-          expect(prepared.plan.mutableFileOperand).toBeUndefined();
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }
@@ -318,7 +366,7 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
-  it("does not snapshot deno eval invocations", () => {
+  it("rejects deno eval invocations that do not bind a concrete file", () => {
     withFakeRuntimeBin({
       binName: "deno",
       run: () => {
@@ -328,11 +376,11 @@ describe("hardenApprovedExecutionPaths", () => {
             command: ["deno", "eval", "console.log('SAFE')"],
             cwd: tmp,
           });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-          expect(prepared.plan.mutableFileOperand).toBeUndefined();
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }

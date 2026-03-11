@@ -18,15 +18,15 @@ export type PathSafetyCheck = {
   options: PathSafetyOptions;
 };
 
-export type AnchoredSandboxEntry = {
-  canonicalParentPath: string;
-  basename: string;
-};
-
 export type PinnedSandboxEntry = {
   mountRootPath: string;
   relativeParentPath: string;
   basename: string;
+};
+
+export type PinnedSandboxDirectoryEntry = {
+  mountRootPath: string;
+  relativePath: string;
 };
 
 type RunCommand = (
@@ -134,22 +134,14 @@ export class SandboxFsPathGuard {
     return guarded;
   }
 
-  async resolveAnchoredSandboxEntry(target: SandboxResolvedFsPath): Promise<AnchoredSandboxEntry> {
-    const splitTarget = this.splitSandboxEntryTarget(target);
-    const canonicalParentPath = await this.resolveCanonicalContainerPath({
-      containerPath: splitTarget.parentPath,
-      allowFinalSymlinkForUnlink: false,
-    });
-    return {
-      canonicalParentPath,
-      basename: splitTarget.basename,
-    };
-  }
-
-  resolvePinnedMutationEntry(target: SandboxResolvedFsPath, action: string): PinnedSandboxEntry {
-    const splitTarget = this.splitSandboxEntryTarget(target);
-    const mount = this.resolveRequiredMount(splitTarget.parentPath, action);
-    const relativeParentPath = path.posix.relative(mount.containerRoot, splitTarget.parentPath);
+  resolvePinnedEntry(target: SandboxResolvedFsPath, action: string): PinnedSandboxEntry {
+    const basename = path.posix.basename(target.containerPath);
+    if (!basename || basename === "." || basename === "/") {
+      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
+    }
+    const parentPath = normalizeContainerPath(path.posix.dirname(target.containerPath));
+    const mount = this.resolveRequiredMount(parentPath, action);
+    const relativeParentPath = path.posix.relative(mount.containerRoot, parentPath);
     if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
@@ -158,21 +150,24 @@ export class SandboxFsPathGuard {
     return {
       mountRootPath: mount.containerRoot,
       relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
-      basename: splitTarget.basename,
+      basename,
     };
   }
 
-  private splitSandboxEntryTarget(target: SandboxResolvedFsPath): {
-    basename: string;
-    parentPath: string;
-  } {
-    const basename = path.posix.basename(target.containerPath);
-    if (!basename || basename === "." || basename === "/") {
-      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
+  resolvePinnedDirectoryEntry(
+    target: SandboxResolvedFsPath,
+    action: string,
+  ): PinnedSandboxDirectoryEntry {
+    const mount = this.resolveRequiredMount(target.containerPath, action);
+    const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
+    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
+      );
     }
     return {
-      parentPath: normalizeContainerPath(path.posix.dirname(target.containerPath)),
-      basename,
+      mountRootPath: mount.containerRoot,
+      relativePath: relativePath === "." ? "" : relativePath,
     };
   }
 
