@@ -11,8 +11,9 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveUserPath } from "../utils.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, stripNullBytes } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -419,11 +420,17 @@ export async function spawnSubagentDirect(
     }
   };
 
+  // Normalize workspace path (~/ expansion, relative-to-absolute, null byte stripping)
+  // to ensure session metadata matches the real execution directory.
+  const normalizedTargetWorkspace = targetAgentConfig?.workspace
+    ? stripNullBytes(resolveUserPath(targetAgentConfig.workspace.trim()))
+    : undefined;
+
   const spawnDepthPatchError = await patchChildSession({
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
-    workspace: targetAgentConfig?.workspace?.trim() || undefined,
+    workspace: normalizedTargetWorkspace,
   });
   if (spawnDepthPatchError) {
     return {
@@ -555,7 +562,7 @@ export async function spawnSubagentDirect(
   });
   // Prefer target agent's configured workspace to keep spawned metadata
   // aligned with the actual execution cwd used by the child session.
-  const targetWorkspace = targetAgentConfig?.workspace?.trim();
+  const targetWorkspace = normalizedTargetWorkspace;
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
