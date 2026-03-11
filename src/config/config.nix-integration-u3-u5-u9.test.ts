@@ -218,11 +218,35 @@ describe("Nix integration (U3, U5, U9)", () => {
       ).toBe(19001);
     });
 
+    it("accepts Compose-style host publish values from env", () => {
+      expect(
+        resolveGatewayPort(
+          { gateway: { port: 19002 } },
+          envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" }),
+        ),
+      ).toBe(18789);
+      expect(
+        resolveGatewayPort(
+          { gateway: { port: 19002 } },
+          envWith({ OPENCLAW_GATEWAY_PORT: "[::1]:28789" }),
+        ),
+      ).toBe(28789);
+    });
+
     it("falls back to config when env is invalid", () => {
       expect(
         resolveGatewayPort(
           { gateway: { port: 19003 } },
           envWith({ OPENCLAW_GATEWAY_PORT: "nope" }),
+        ),
+      ).toBe(19003);
+    });
+
+    it("falls back to config when Compose-style env suffix is invalid", () => {
+      expect(
+        resolveGatewayPort(
+          { gateway: { port: 19003 } },
+          envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:not-a-port" }),
         ),
       ).toBe(19003);
     });
