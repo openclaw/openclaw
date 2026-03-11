@@ -5,6 +5,7 @@ import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
@@ -43,7 +44,7 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     scope: params.scope,
   });
 
-  const res = await fetch(DEVICE_CODE_URL, {
+  const res = await applyNetworkIOGateAndFetch(DEVICE_CODE_URL, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -75,7 +76,7 @@ async function pollForAccessToken(params: {
   });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(ACCESS_TOKEN_URL, {
+    const res = await applyNetworkIOGateAndFetch(ACCESS_TOKEN_URL, {
       method: "POST",
       headers: {
         Accept: "application/json",

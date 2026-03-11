@@ -52,6 +52,14 @@ function createState(overrides: Partial<CronState> = {}): CronState {
 }
 
 describe("cron controller", () => {
+  const RUN_ENTRIES_FIXTURE = [
+    { ts: 1000, jobId: "job-1", status: "ok", summary: "oldest" },
+    { ts: 5000, jobId: "job-1", status: "ok", summary: "newest" },
+    { ts: 2500, jobId: "job-1", status: "ok", summary: "middle" },
+    { ts: 4000, jobId: "job-1", status: "failed", summary: "second-newest" },
+    { ts: 1500, jobId: "job-1", status: "ok", summary: "second-oldest" },
+  ] as const;
+
   it("normalizes stale announce mode when session/payload no longer support announce", () => {
     const normalized = normalizeCronFormState({
       ...DEFAULT_CRON_FORM,
@@ -533,5 +541,113 @@ describe("cron controller", () => {
     expect(state.cronRuns).toHaveLength(2);
     expect(state.cronRuns[0]?.summary).toBe("newest");
     expect(state.cronRuns[1]?.summary).toBe("older");
+  });
+
+  it("ensures run history is always sorted newest-first by ts with out-of-order synthetic data", async () => {
+    type ClientNN = Exclude<CronState["client"], null>;
+    type Request = ClientNN["request"];
+    const requestMock = vi.fn(async (method: string, _payload?: unknown): Promise<unknown> => {
+      if (method !== "cron.runs") {
+        return {};
+      }
+      // Return intentionally out-of-order timestamps to test sorting
+      return {
+        entries: RUN_ENTRIES_FIXTURE,
+        total: 5,
+        hasMore: false,
+        nextOffset: null,
+      };
+    });
+    const request: Request = async <T = unknown>(method: string, _payload?: unknown) =>
+      requestMock(method, _payload) as Promise<T>;
+    const client: ClientNN = {
+      request,
+    } as ClientNN;
+    const state = createState({
+      client,
+      cronRunsSortDir: "desc",
+    });
+
+    const fixtureTsBefore = RUN_ENTRIES_FIXTURE.map(e => e.ts);
+    await loadCronRuns(state, "job-1");
+    expect(RUN_ENTRIES_FIXTURE.map(e => e.ts)).toEqual(fixtureTsBefore);
+
+    // Assert gateway call contract
+    expect(requestMock).toHaveBeenCalledOnce();
+    expect(requestMock).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({
+        sortDir: "desc",
+        offset: 0,
+        limit: 50,
+      }),
+    );
+
+    expect(state.cronRuns).toHaveLength(5);
+    // Verify strict descending order
+    for (let i = 0; i < state.cronRuns.length - 1; i++) {
+      const current = state.cronRuns[i]?.ts ?? 0;
+      const next = state.cronRuns[i + 1]?.ts ?? 0;
+      expect(current).toBeGreaterThan(next);
+    }
+    // Verify exact order: 5000, 4000, 2500, 1500, 1000
+    expect(state.cronRuns[0]?.ts).toBe(5000);
+    expect(state.cronRuns[1]?.ts).toBe(4000);
+    expect(state.cronRuns[2]?.ts).toBe(2500);
+    expect(state.cronRuns[3]?.ts).toBe(1500);
+    expect(state.cronRuns[4]?.ts).toBe(1000);
+  });
+
+  it("sorts run history oldest-first (ascending) by ts with out-of-order synthetic data", async () => {
+    type ClientNN = Exclude<CronState["client"], null>;
+    type Request = ClientNN["request"];
+    const requestMock = vi.fn(async (method: string, _payload?: unknown): Promise<unknown> => {
+      if (method !== "cron.runs") {
+        return {};
+      }
+      // Return intentionally out-of-order timestamps to test sorting
+      return {
+        entries: RUN_ENTRIES_FIXTURE,
+        total: 5,
+        hasMore: false,
+        nextOffset: null,
+      };
+    });
+    const request: Request = async <T = unknown>(method: string, _payload?: unknown) =>
+      requestMock(method, _payload) as Promise<T>;
+    const client: ClientNN = {
+      request,
+    } as ClientNN;
+    const state = createState({
+      client,
+      cronRunsSortDir: "asc",
+    });
+
+    await loadCronRuns(state, "job-1");
+
+    // Assert gateway call contract
+    expect(requestMock).toHaveBeenCalledOnce();
+    expect(requestMock).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({
+        sortDir: "asc",
+        offset: 0,
+        limit: 50,
+      }),
+    );
+
+    expect(state.cronRuns).toHaveLength(5);
+    // Verify strict ascending order
+    for (let i = 0; i < state.cronRuns.length - 1; i++) {
+      const current = state.cronRuns[i]?.ts ?? 0;
+      const next = state.cronRuns[i + 1]?.ts ?? 0;
+      expect(current).toBeLessThan(next);
+    }
+    // Verify exact order: 1000, 1500, 2500, 4000, 5000
+    expect(state.cronRuns[0]?.ts).toBe(1000);
+    expect(state.cronRuns[1]?.ts).toBe(1500);
+    expect(state.cronRuns[2]?.ts).toBe(2500);
+    expect(state.cronRuns[3]?.ts).toBe(4000);
+    expect(state.cronRuns[4]?.ts).toBe(5000);
   });
 });

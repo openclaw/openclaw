@@ -46,3 +46,10 @@ export {
   type CronPreflightCheckOutcome,
   checkCronDispatchCapability,
 } from "./cron-dispatch-checker.js";
+
+// CRON_SCHEDULE execution-boundary gating wrapper
+export {
+  applyCronScheduleGateAndAdd,
+  applyCronScheduleGateAndUpdate,
+  applyCronScheduleGateAndSetEnabled,
+} from "./cron-schedule-gating.js";

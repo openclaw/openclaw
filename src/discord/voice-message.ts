@@ -16,6 +16,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { RequestClient } from "@buape/carbon";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
@@ -264,7 +265,7 @@ export async function sendDiscordVoiceMessage(
 
   // Step 2: Upload the file to Discord's CDN
   // Note: Not wrapped in retry runner - upload URLs are single-use and CDN behavior differs
-  const uploadResponse = await fetch(upload_url, {
+  const uploadResponse = await applyNetworkIOGateAndFetch(upload_url, {
     method: "PUT",
     headers: {
       "Content-Type": "audio/ogg",

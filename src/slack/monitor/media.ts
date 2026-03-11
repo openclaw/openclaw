@@ -1,5 +1,6 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "../../infra/net/hostname.js";
+import { applyNetworkIOGateAndFetch } from "../../clarityburst/network-io-gating.js";
 import type { FetchLike } from "../../media/fetch.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -61,11 +62,11 @@ function createSlackMediaFetch(token: string): FetchLike {
       includeAuth = false;
       const parsed = assertSlackFileUrl(url);
       headers.set("Authorization", `Bearer ${token}`);
-      return fetch(parsed.href, { ...rest, headers, redirect: "manual" });
+      return applyNetworkIOGateAndFetch(parsed.href, { ...rest, headers, redirect: "manual" });
     }
 
     headers.delete("Authorization");
-    return fetch(url, { ...rest, headers, redirect: "manual" });
+    return applyNetworkIOGateAndFetch(url, { ...rest, headers, redirect: "manual" });
   };
 }
 
@@ -79,7 +80,7 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   const parsed = assertSlackFileUrl(url);
 
   // Initial request with auth and manual redirect handling
-  const initialRes = await fetch(parsed.href, {
+  const initialRes = await applyNetworkIOGateAndFetch(parsed.href, {
     headers: { Authorization: `Bearer ${token}` },
     redirect: "manual",
   });
@@ -105,7 +106,7 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
 
   // Follow the redirect without the Authorization header
   // (Slack's CDN URLs are pre-signed and don't need it)
-  return fetch(resolvedUrl.toString(), { redirect: "follow" });
+  return applyNetworkIOGateAndFetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
 /**

@@ -6,6 +6,7 @@ import path from "node:path";
 import { sameFileIdentity } from "./file-identity.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
 import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
+import { applyFileSystemOpsGateAndWrite } from "../clarityburst/file-system-ops-gating.js";
 
 export type SafeOpenErrorCode =
   | "invalid-path"
@@ -257,11 +258,7 @@ export async function writeFileWithinRoot(params: {
       throw new SafeOpenError("invalid-path", "path escapes root");
     }
 
-    if (typeof params.data === "string") {
-      await handle.writeFile(params.data, params.encoding ?? "utf8");
-    } else {
-      await handle.writeFile(params.data);
-    }
+    await applyFileSystemOpsGateAndWrite(ioPath, params.data);
   } finally {
     await handle.close().catch(() => {});
   }

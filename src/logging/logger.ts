@@ -55,29 +55,33 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
 }
 
 function resolveSettings(): ResolvedSettings {
-  let cfg: OpenClawConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
-    try {
-      const loaded = requireConfig?.("../config/config.js") as
-        | {
-            loadConfig?: () => OpenClawConfig;
-          }
-        | undefined;
-      cfg = loaded?.loadConfig?.().logging;
-    } catch {
-      cfg = undefined;
-    }
-  }
-  const defaultLevel =
-    process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
-  const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
-  const envLevel = resolveEnvLogLevelOverride();
-  const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
-  const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes };
-}
+   let cfg: OpenClawConfig["logging"] | undefined =
+     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+   if (!cfg) {
+     try {
+       const loaded = requireConfig?.("../config/config.js") as
+         | {
+             loadConfig?: () => OpenClawConfig;
+           }
+         | undefined;
+       cfg = loaded?.loadConfig?.().logging;
+     } catch {
+       cfg = undefined;
+     }
+   }
+   const defaultLevel = "info";
+   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
+   const envLevel = resolveEnvLogLevelOverride();
+   const level = envLevel ?? fromConfig;
+   const file = cfg?.file ?? defaultRollingPathForToday();
+   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
+   if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+     process.stderr.write(
+       `[logger.resolveSettings] level=${level} file=${file} maxFileBytes=${maxFileBytes}\n`,
+     );
+   }
+   return { level, file, maxFileBytes };
+ }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
@@ -98,18 +102,39 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
-  fs.mkdirSync(path.dirname(settings.file), { recursive: true });
-  // Clean up stale rolling logs when using a dated log filename.
-  if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
-  }
-  let currentFileBytes = getCurrentLogFileBytes(settings.file);
-  let warnedAboutSizeCap = false;
-  const logger = new TsLogger<LogObj>({
-    name: "openclaw",
-    minLevel: levelToMinLevel(settings.level),
-    type: "hidden", // no ansi formatting
-  });
+   if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+     process.stderr.write(
+       `[logger.buildLogger] Creating logger with file=${settings.file}\n`,
+     );
+   }
+   try {
+     fs.mkdirSync(path.dirname(settings.file), { recursive: true });
+     if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+       process.stderr.write(
+         `[logger.buildLogger] Directory created: ${path.dirname(settings.file)}\n`,
+       );
+     }
+   } catch (error) {
+     process.stderr.write(
+       `[logger.buildLogger] Failed to create directory: ${error instanceof Error ? error.message : String(error)}\n`,
+     );
+   }
+   // Clean up stale rolling logs when using a dated log filename.
+   if (isRollingPath(settings.file)) {
+     pruneOldRollingLogs(path.dirname(settings.file));
+   }
+   let currentFileBytes = getCurrentLogFileBytes(settings.file);
+   if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+     process.stderr.write(
+       `[logger.buildLogger] Current file bytes: ${currentFileBytes}\n`,
+     );
+   }
+   let warnedAboutSizeCap = false;
+   const logger = new TsLogger<LogObj>({
+     name: "openclaw",
+     minLevel: levelToMinLevel(settings.level),
+     type: "hidden", // no ansi formatting
+   });
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -118,6 +143,11 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
+      if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+        process.stderr.write(
+          `[logger.transport] Attempting to log: file=${settings.file} currentBytes=${currentFileBytes} payloadBytes=${payloadBytes} nextBytes=${nextBytes} maxBytes=${settings.maxFileBytes}\n`,
+        );
+      }
       if (nextBytes > settings.maxFileBytes) {
         if (!warnedAboutSizeCap) {
           warnedAboutSizeCap = true;
@@ -134,11 +164,22 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         }
         return;
       }
-      if (appendLogLine(settings.file, payload)) {
+      const writeSuccess = appendLogLine(settings.file, payload);
+      if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+        process.stderr.write(
+          `[logger.transport] Write ${writeSuccess ? "succeeded" : "failed"}: file=${settings.file}\n`,
+        );
+      }
+      if (writeSuccess) {
         currentFileBytes = nextBytes;
       }
-    } catch {
+    } catch (error) {
       // never block on logging failures
+      if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+        process.stderr.write(
+          `[logger.transport] Exception: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
     }
   });
   for (const transport of externalTransports) {
@@ -167,7 +208,13 @@ function appendLogLine(file: string, line: string): boolean {
   try {
     fs.appendFileSync(file, line, { encoding: "utf8" });
     return true;
-  } catch {
+  } catch (error) {
+    // Log errors to stderr so we can see what's happening
+    if (process.env.OPENCLAW_DEBUG_LOGGING === "1") {
+      process.stderr.write(
+        `[logger.appendLogLine] Failed to write to ${file}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
     return false;
   }
 }

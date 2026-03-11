@@ -17,6 +17,8 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { applyBrowserAutomateGateAndNavigate } from "../clarityburst/browser-automate-gating.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -418,7 +420,7 @@ async function findPageByTargetId(
         .replace(/^ws:/, "http:")
         .replace(/\/cdp$/, "");
       const listUrl = `${baseUrl}/json/list`;
-      const response = await fetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
+      const response = await applyNetworkIOGateAndFetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
       if (response.ok) {
         const targets = (await response.json()) as Array<{
           id: string;
@@ -747,7 +749,7 @@ export async function createPageViaPlaywright(opts: {
       url: targetUrl,
       ...navigationPolicy,
     });
-    await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
+    await applyBrowserAutomateGateAndNavigate(page, targetUrl, { timeout: 30_000 }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
     });
     await assertBrowserNavigationResultAllowed({

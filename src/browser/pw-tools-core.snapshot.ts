@@ -5,6 +5,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { applyBrowserAutomateGateAndNavigate } from "../clarityburst/browser-automate-gating.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -176,7 +177,7 @@ export async function navigateViaPlaywright(opts: {
   });
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.goto(url, {
+  await applyBrowserAutomateGateAndNavigate(page, url, {
     timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
   });
   const finalUrl = page.url();

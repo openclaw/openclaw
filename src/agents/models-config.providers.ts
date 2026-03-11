@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
@@ -243,7 +244,8 @@ async function queryOllamaContextWindow(
   modelName: string,
 ): Promise<number | undefined> {
   try {
-    const response = await fetch(`${apiBase}/api/show`, {
+    // Apply NETWORK_IO gating before fetch
+    const response = await applyNetworkIOGateAndFetch(`${apiBase}/api/show`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: modelName }),
@@ -280,7 +282,8 @@ async function discoverOllamaModels(
   }
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const response = await fetch(`${apiBase}/api/tags`, {
+    // Apply NETWORK_IO gating before fetch
+    const response = await applyNetworkIOGateAndFetch(`${apiBase}/api/tags`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
@@ -345,7 +348,8 @@ async function discoverVllmModels(
 
   try {
     const trimmedApiKey = apiKey?.trim();
-    const response = await fetch(url, {
+    // Apply NETWORK_IO gating before fetch
+    const response = await applyNetworkIOGateAndFetch(url, {
       headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
       signal: AbortSignal.timeout(5000),
     });

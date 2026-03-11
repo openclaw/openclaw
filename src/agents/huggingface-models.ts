@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 
 const log = createSubsystemLogger("huggingface-models");
 
@@ -162,7 +163,8 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
 
   try {
     // GET https://router.huggingface.co/v1/models — response: { object, data: [{ id, owned_by, architecture: { input_modalities }, providers: [{ provider, context_length?, pricing? }] }] }. POST /v1/chat/completions requires Authorization.
-    const response = await fetch(`${HUGGINGFACE_BASE_URL}/models`, {
+    // Apply NETWORK_IO gating before fetch
+    const response = await applyNetworkIOGateAndFetch(`${HUGGINGFACE_BASE_URL}/models`, {
       signal: AbortSignal.timeout(10_000),
       headers: {
         Authorization: `Bearer ${trimmedKey}`,

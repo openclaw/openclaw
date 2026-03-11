@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,9 +15,7 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
-import { applyNodeInvokeOverrides } from "../../clarityburst/decision-override.js";
-import { ClarityBurstAbstainError } from "../../clarityburst/errors.js";
-import { convertAbstainToBlockedResponse } from "../pi-tool-definition-adapter.js";
+import { dispatchNodeInvokeGuarded, NodeInvokeBlockedError } from "./node-invoke-guard.js";
 
 const CANVAS_ACTIONS = [
   "present",
@@ -80,6 +79,19 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
+// Helper to detect blocked responses (contains outcome field indicating block)
+const isBlockedResponse = (result: unknown): boolean => {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const obj = result as Record<string, unknown>;
+  return (
+    obj.outcome === "ABSTAIN_CONFIRM" ||
+    obj.outcome === "ABSTAIN_CLARIFY" ||
+    obj.status === "blocked"
+  );
+};
+
 export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
@@ -100,36 +112,55 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
       );
 
       const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
-        const nodeCtx = {
-          stageId: "NODE_INVOKE" as const,
-          userConfirmed: false,
-          functionName: command,
-          nodeId,
-        };
-      
-        const gate = await applyNodeInvokeOverrides(nodeCtx);
-      
-        if (gate.outcome === "ABSTAIN_CONFIRM" || gate.outcome === "ABSTAIN_CLARIFY") {
-          return jsonResult(
-            convertAbstainToBlockedResponse(
-              new ClarityBurstAbstainError({
-                stageId: "NODE_INVOKE",
-                outcome: gate.outcome,
-                reason: gate.reason,
-                contractId: gate.contractId ?? null,
-                instructions: gate.instructions ?? "",
-              })
-            )
+        try {
+          // Dispatch through NODE_INVOKE guarded wrapper (handles gating and fail-closed behavior)
+          return await dispatchNodeInvokeGuarded(
+            command,
+            nodeId,
+            {
+              nodeId,
+              command,
+              params: invokeParams,
+              idempotencyKey: crypto.randomUUID(),
+            },
+            gatewayOpts,
           );
+        } catch (err: unknown) {
+          // Handle blocked NODE_INVOKE outcomes via structured error
+          if (err instanceof NodeInvokeBlockedError) {
+            // Return blocked response instead of throwing
+            return jsonResult({
+              status: "blocked",
+              outcome: err.data.outcome,
+              reason: err.data.reason,
+              contractId: err.data.contractId ?? null,
+              instructions: err.data.instructions ?? "",
+              stageId: "NODE_INVOKE",
+            });
+          }
+          // Re-throw if not a gating error
+          throw err;
         }
-      
-        return await callGatewayTool("node.invoke", gatewayOpts, {
-          nodeId,
-          command,
-          params: invokeParams,
-          idempotencyKey: crypto.randomUUID(),
-        });
       };
+      
+             // SECURITY INVARIANT:
+             // All canvas actions MUST propagate blocked responses returned by the ClarityBurst gate.
+             // A blocked gate outcome (ABSTAIN_CONFIRM or ABSTAIN_CLARIFY) must be returned immediately
+             // before any success payload is constructed. Returning success after a blocked outcome
+             // would violate ClarityBurst execution authorization guarantees and allow unsafe
+             // operations to appear successful. All canvas actions must therefore call
+             // `invokeWithBlockCheck()` before formatting action-specific success responses.
+
+             // Helper: wrap invoke() and guarantee blocked responses are returned first
+             // Returns { blocked, invokeResult } where blocked is the response if blocked, else null
+             const invokeWithBlockCheck = async (
+               command: string,
+               invokeParams?: Record<string, unknown>
+             ): Promise<{ blocked: AgentToolResult<unknown> | null; invokeResult: AgentToolResult<unknown> }> => {
+               const invokeResult = (await invoke(command, invokeParams)) as AgentToolResult<unknown>;
+               const blocked = isBlockedResponse(invokeResult?.details) ? invokeResult : null;
+               return { blocked, invokeResult };
+             };
 
       switch (action) {
         case "present": {
@@ -156,27 +187,41 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           ) {
             invokeParams.placement = placement;
           }
-          await invoke("canvas.present", invokeParams);
+          const { blocked } = await invokeWithBlockCheck("canvas.present", invokeParams);
+          if (blocked) {
+            return blocked;
+          }
           return jsonResult({ ok: true });
         }
-        case "hide":
-          await invoke("canvas.hide", undefined);
+        case "hide": {
+          const { blocked } = await invokeWithBlockCheck("canvas.hide", undefined);
+          if (blocked) {
+            return blocked;
+          }
           return jsonResult({ ok: true });
+        }
         case "navigate": {
           // Support `target` as an alias so callers can reuse the same field across present/navigate.
           const url =
             readStringParam(params, "url", { trim: true }) ??
             readStringParam(params, "target", { required: true, trim: true, label: "url" });
-          await invoke("canvas.navigate", { url });
+          const { blocked } = await invokeWithBlockCheck("canvas.navigate", { url });
+          if (blocked) {
+            return blocked;
+          }
           return jsonResult({ ok: true });
         }
         case "eval": {
           const javaScript = readStringParam(params, "javaScript", {
             required: true,
           });
-          const raw = (await invoke("canvas.eval", { javaScript })) as {
+          const { blocked, invokeResult } = await invokeWithBlockCheck("canvas.eval", { javaScript });
+          if (blocked) {
+            return blocked;
+          }
+          const raw = invokeResult?.details as {
             payload?: { result?: string };
-          };
+          } | undefined;
           const result = raw?.payload?.result;
           if (result) {
             return {
@@ -198,11 +243,15 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             typeof params.quality === "number" && Number.isFinite(params.quality)
               ? params.quality
               : undefined;
-          const raw = (await invoke("canvas.snapshot", {
+          const { blocked, invokeResult } = await invokeWithBlockCheck("canvas.snapshot", {
             format,
             maxWidth,
             quality,
-          })) as { payload?: unknown };
+          });
+          if (blocked) {
+            return blocked;
+          }
+          const raw = invokeResult?.details as { payload?: unknown } | undefined;
           const payload = parseCanvasSnapshotPayload(raw?.payload);
           const filePath = canvasSnapshotTempPath({
             ext: payload.format === "jpeg" ? "jpg" : payload.format,
@@ -228,12 +277,19 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
-          await invoke("canvas.a2ui.pushJSONL", { jsonl });
+          const { blocked } = await invokeWithBlockCheck("canvas.a2ui.pushJSONL", { jsonl });
+          if (blocked) {
+            return blocked;
+          }
           return jsonResult({ ok: true });
         }
-        case "a2ui_reset":
-          await invoke("canvas.a2ui.reset", undefined);
+        case "a2ui_reset": {
+          const { blocked } = await invokeWithBlockCheck("canvas.a2ui.reset", undefined);
+          if (blocked) {
+            return blocked;
+          }
           return jsonResult({ ok: true });
+        }
         default:
           throw new Error(`Unknown action: ${action}`);
       }

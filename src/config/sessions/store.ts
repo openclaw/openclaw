@@ -11,6 +11,10 @@ import {
 } from "../../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  applyFileSystemOpsGateAndWrite,
+  applyFileSystemOpsGateAndRename,
+} from "../../clarityburst/file-system-ops-gating.js";
+import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -778,7 +782,8 @@ async function saveSessionStoreUnlocked(
   if (process.platform === "win32") {
     const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
-      await fs.promises.writeFile(tmp, json, "utf-8");
+      // GATE: FILE_SYSTEM_OPS → session-store persistence (temp file write)
+      await applyFileSystemOpsGateAndWrite(tmp, json, "utf-8");
       // Retry rename up to 5 times with increasing backoff — rename can fail
       // on Windows when the target is locked by a concurrent reader.  We do
       // NOT fall back to writeFile or copyFile because both use CREATE_ALWAYS
@@ -788,7 +793,8 @@ async function saveSessionStoreUnlocked(
       // serialized by the write lock) will succeed.
       for (let i = 0; i < 5; i++) {
         try {
-          await fs.promises.rename(tmp, storePath);
+          // GATE: FILE_SYSTEM_OPS → session-store persistence (atomic rename)
+          await applyFileSystemOpsGateAndRename(tmp, storePath);
           break;
         } catch {
           if (i < 4) {
@@ -818,8 +824,10 @@ async function saveSessionStoreUnlocked(
 
   const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
-    await fs.promises.writeFile(tmp, json, { mode: 0o600, encoding: "utf-8" });
-    await fs.promises.rename(tmp, storePath);
+    // GATE: FILE_SYSTEM_OPS → session-store persistence (temp file write)
+    await applyFileSystemOpsGateAndWrite(tmp, json, { mode: 0o600, encoding: "utf-8" });
+    // GATE: FILE_SYSTEM_OPS → session-store persistence (atomic rename)
+    await applyFileSystemOpsGateAndRename(tmp, storePath);
     // Ensure permissions are set even if rename loses them
     await fs.promises.chmod(storePath, 0o600);
   } catch (err) {
@@ -833,7 +841,8 @@ async function saveSessionStoreUnlocked(
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
         await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-        await fs.promises.writeFile(storePath, json, { mode: 0o600, encoding: "utf-8" });
+        // GATE: FILE_SYSTEM_OPS → session-store persistence (direct write fallback)
+        await applyFileSystemOpsGateAndWrite(storePath, json, { mode: 0o600, encoding: "utf-8" });
         await fs.promises.chmod(storePath, 0o600);
       } catch (err2) {
         const code2 =

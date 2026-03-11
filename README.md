@@ -42,6 +42,25 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.6** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
 
+## Deterministic Execution Control Plane
+
+ClarityBurst implements a **deterministic execution control plane for autonomous agents**.
+
+It does not attempt to control reasoning or language generation.
+Instead, it controls **execution of side-effects** by gating high-risk operations before they are allowed to run.
+
+### Core Model
+
+Agent systems typically follow this flow:
+
+1. LLM reasoning generates candidate actions
+2. Agent planning selects an intended action
+3. Execution performs the operation
+
+ClarityBurst inserts a **deterministic arbitration layer** between planning and execution.
+
+---
+
 ## Models (selection + auth)
 
 - Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
@@ -209,6 +228,106 @@ WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBu
 - **[Canvas + A2UI](https://docs.openclaw.ai/platforms/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui)).
 - **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — always‑on speech and continuous conversation.
 - **[Nodes](https://docs.openclaw.ai/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
+
+## ClarityBurst Architecture & Validation
+
+![ClarityBurst Secure Execution Flow](assets/clarityburst-secure-execution-flow.png)
+
+ClarityBurst enforces deterministic execution control through ontology-constrained routing and fail-closed arbitration. Every tool invocation is evaluated against a contract model before authorization.
+
+### Validation & Security Testing
+
+#### Phase 3 — Fault Injection Validation
+
+Five fault scenarios were executed to verify fail-closed behavior and deterministic recovery.
+
+| Validation Dimension | Result |
+|---|---|
+| Data Integrity | PASS (0 corruption) |
+| Fail-Closed Semantics | PASS |
+| Recovery Rate | PASS (83% average) |
+| Cascade Containment | PASS (max cascade depth 142) |
+| Determinism | PASS (seed reproducible) |
+| Success Rate | PASS (74–93%) |
+| Starvation Control | PASS (<13%) |
+
+Overall result:
+
+- 5 / 5 scenarios PASS
+- 35 / 40 validation dimensions PASS
+- 0 critical failures
+
+System approved for production deployment testing.
+
+#### Instruction Override Security Testing
+
+Instruction-hierarchy prompt injection attacks were tested.
+
+| Metric | Result |
+|---|---|
+| Injection variants tested | 7 |
+| Attacks successful | 0 |
+| Unauthorized writes | 0 |
+| Routing determinism | 100% consistent |
+
+All adversarial instruction variants such as "IGNORE PREVIOUS INSTRUCTIONS" and "BYPASS SAFETY" were denied by the router.
+
+#### Execution Coverage Audit
+
+Coverage analysis confirmed that every execution-capable operation in OpenClaw is routed through ClarityBurst.
+
+| Metric | Value |
+|---|---|
+| Contract points | 127 |
+| Execution domains | 12 |
+| Router invocation coverage | 100% |
+| Ungated execution paths | 0 |
+
+All execution operations are mediated through deterministic routing.
+
+#### Bypass Resistance
+
+A bypass test suite evaluated common routing bypass techniques.
+
+| Attack Category | Tests | Result |
+|---|---|---|
+| Retry logic | 5 | Blocked |
+| Background tasks | 5 | Blocked |
+| Cached decisions | 5 | Blocked |
+| Tool adapters | 6 | Blocked |
+| Wrapper utilities | 5 | Blocked |
+| Cron jobs | 4 | Blocked |
+| Recovery flows | 5 | Blocked |
+
+Total bypass attempts: 35
+Successful bypasses: 0
+
+#### Security Model
+
+ClarityBurst enforces deterministic contract-based execution.
+
+1. Operations must match an allowed contract.
+2. Router validates capabilities and stage rules.
+3. Unauthorized operations are denied before execution.
+4. Router failures default to fail-closed behavior.
+
+#### Reproducibility
+
+All validation tests are reproducible using the verification harness:
+
+```
+pnpm clarityburst:verify
+```
+
+Artifacts are written to:
+
+```
+compliance-artifacts/
+```
+
+Full validation documentation: [ClarityBurst Documentation Hub](clarityburst-docs/)
+
+---
 
 ## Tailscale access (Gateway dashboard)
 

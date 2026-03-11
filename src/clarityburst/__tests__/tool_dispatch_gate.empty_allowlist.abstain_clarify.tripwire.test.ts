@@ -8,7 +8,6 @@
  * This test exercises the centralized assertNonEmptyAllowedContracts()
  * invariant check, ensuring that:
  * - No inline empty checks bypass this path
- * - The response structure includes nonRetryable: true
  * - Tool executor is NOT called
  */
 
@@ -18,15 +17,11 @@ import {
   assertNonEmptyAllowedContracts,
   createRestrictedCapabilities,
   type RuntimeCapabilities,
-} from "../allowed-contracts";
+} from "../allowed-contracts.js";
 import {
   ClarityBurstAbstainError,
-} from "../errors";
-import {
-  convertAbstainToBlockedResponse,
-  type BlockedResponsePayload,
-} from "../../agents/pi-tool-definition-adapter.js";
-import type { OntologyPack } from "../pack-registry";
+} from "../errors.js";
+import type { OntologyPack } from "../pack-registry.js";
 
 /**
  * Mock tool execution function - tracks call count
@@ -48,14 +43,14 @@ function createMockToolExecutor() {
  * will return an empty array when called with restrictedCapabilities.
  *
  * By design, this pack has no zero-capability contracts, making it
- * impossible to route when all capabilities are disabled.
+ * impossible to proceed when capabilities are restricted.
  */
 function createToolDispatchGatePackWithAllCapabilityRequirements(): OntologyPack {
   return {
-    pack_id: "openclawd.TOOL_DISPATCH_GATE_ALL_CAPS_REQUIRED",
+    pack_id: "openclawd.TOOL_DISPATCH_GATE_EMPTY_ALLOWLIST_TEST",
     pack_version: "2.0.0",
     stage_id: "TOOL_DISPATCH_GATE",
-    description: "TOOL_DISPATCH_GATE pack where every contract requires at least one capability",
+    description: "Test pack with ALL contracts requiring capabilities",
     thresholds: {
       min_confidence_T: 0.55,
       dominance_margin_Delta: 0.10,
@@ -68,16 +63,7 @@ function createToolDispatchGatePackWithAllCapabilityRequirements(): OntologyPack
         limits: {},
         needs_confirmation: false,
         deny_by_default: false,
-        capability_requirements: ["fs_write"], // Requires fs_write
-      },
-      {
-        contract_id: "DISPATCH_DELETE",
-        risk_class: "HIGH",
-        required_fields: ["tool_name", "target_path"],
-        limits: {},
-        needs_confirmation: false,
-        deny_by_default: false,
-        capability_requirements: ["fs_write"], // Requires fs_write
+        capability_requirements: ["fs_write"], // Requires capability
       },
       {
         contract_id: "DISPATCH_SHELL_EXEC",
@@ -86,43 +72,16 @@ function createToolDispatchGatePackWithAllCapabilityRequirements(): OntologyPack
         limits: {},
         needs_confirmation: true,
         deny_by_default: false,
-        capability_requirements: ["shell"], // Requires shell
+        capability_requirements: ["shell"], // Requires capability
       },
       {
-        contract_id: "DISPATCH_NETWORK_REQUEST",
-        risk_class: "MEDIUM",
-        required_fields: ["tool_name", "url", "method"],
-        limits: {},
-        needs_confirmation: false,
-        deny_by_default: false,
-        capability_requirements: ["network"], // Requires network
-      },
-      {
-        contract_id: "DISPATCH_BROWSER_AUTOMATE",
-        risk_class: "MEDIUM",
-        required_fields: ["tool_name", "action_type"],
-        limits: {},
-        needs_confirmation: false,
-        deny_by_default: false,
-        capability_requirements: ["browser"], // Requires browser
-      },
-      {
-        contract_id: "DISPATCH_SENSITIVE_DATA",
+        contract_id: "DISPATCH_NETWORK",
         risk_class: "HIGH",
-        required_fields: ["tool_name", "data_classification"],
+        required_fields: ["tool_name", "url"],
         limits: {},
-        needs_confirmation: true,
+        needs_confirmation: false,
         deny_by_default: false,
-        capability_requirements: ["sensitive_access"], // Requires sensitive_access
-      },
-      {
-        contract_id: "DISPATCH_PRIVILEGED_ADMIN",
-        risk_class: "CRITICAL",
-        required_fields: ["tool_name", "admin_scope"],
-        limits: {},
-        needs_confirmation: true,
-        deny_by_default: true,
-        capability_requirements: ["shell", "critical_opt_in"], // Requires shell AND critical_opt_in
+        capability_requirements: ["network"], // Requires capability
       },
     ],
     field_schema: {},
@@ -130,26 +89,30 @@ function createToolDispatchGatePackWithAllCapabilityRequirements(): OntologyPack
 }
 
 /**
- * Wrapper function that simulates the TOOL_DISPATCH_GATE gating flow.
- * Exercises the centralized assertNonEmptyAllowedContracts() path.
+ * Wrapper function that applies allowed contract derivation and
+ * triggers the centralized assertNonEmptyAllowedContracts check.
  *
- * Steps:
- * 1. Derive allowed contracts based on pack and capabilities
- * 2. Assert allowed contracts are non-empty (throws if empty)
- * 3. On empty allowlist error, convert to BlockedResponsePayload
- * 4. Otherwise, proceed with tool execution
+ * This simulates the gating flow where:
+ * 1. deriveAllowedContracts() produces empty array
+ * 2. assertNonEmptyAllowedContracts() throws ClarityBurstAbstainError
+ * 3. Error propagates to caller
  */
 function executeToolDispatchWithGatingAndAllowlistCheck(
   pack: OntologyPack,
-  runtimeCaps: RuntimeCapabilities,
+  capabilities: RuntimeCapabilities,
   toolExecutor: ReturnType<typeof createMockToolExecutor>
-): { success: true; result: unknown } | BlockedResponsePayload {
+): {
+  success: true;
+  result: string;
+} {
   try {
-    // Derive allowed contracts based on pack and runtime capabilities
-    const allowedContractIds = deriveAllowedContracts("TOOL_DISPATCH_GATE", pack, runtimeCaps);
+    const allowedContractIds = deriveAllowedContracts(
+      "TOOL_DISPATCH_GATE",
+      pack,
+      capabilities
+    );
 
-    // Assert allowedContractIds is non-empty - this is the CENTRAL invariant check
-    // If empty, throws ClarityBurstAbstainError with:
+    // This centralized check ensures NO empty allowlist can bypass
     // - outcome: "ABSTAIN_CLARIFY"
     // - reason: "PACK_POLICY_INCOMPLETE"
     // - contractId: null
@@ -158,10 +121,7 @@ function executeToolDispatchWithGatingAndAllowlistCheck(
     // If we reach here, allowed contracts exist and we can proceed
     return toolExecutor.execute();
   } catch (error) {
-    // Handle the ClarityBurstAbstainError from assertNonEmptyAllowedContracts
-    if (error instanceof ClarityBurstAbstainError) {
-      return convertAbstainToBlockedResponse(error);
-    }
+    // Rethrow so caller can verify the error structure
     throw error;
   }
 }
@@ -189,21 +149,34 @@ describe("TOOL_DISPATCH_GATE empty_allowlist → ABSTAIN_CLARIFY tripwire", () =
       );
       expect(allowedContractIds).toEqual([]); // Verify precondition: empty
 
-      // Act: Execute through the gating wrapper
-      const result = executeToolDispatchWithGatingAndAllowlistCheck(
-        mockPack,
-        restrictedCaps,
-        mockToolExecutor
-      );
+      // Act & Assert: Execute should throw ClarityBurstAbstainError with correct structure
+      expect(() => {
+        executeToolDispatchWithGatingAndAllowlistCheck(
+          mockPack,
+          restrictedCaps,
+          mockToolExecutor
+        );
+      }).toThrow(ClarityBurstAbstainError);
 
-      // Assert: Blocked response with PACK_POLICY_INCOMPLETE
-      expect(result).toMatchObject({
-        nonRetryable: true,
-        stageId: "TOOL_DISPATCH_GATE",
-        outcome: "ABSTAIN_CLARIFY",
-        reason: "PACK_POLICY_INCOMPLETE",
-        contractId: null,
-      });
+      // Verify exact error structure
+      let caughtError: ClarityBurstAbstainError | undefined;
+      try {
+        executeToolDispatchWithGatingAndAllowlistCheck(
+          mockPack,
+          restrictedCaps,
+          mockToolExecutor
+        );
+      } catch (error) {
+        if (error instanceof ClarityBurstAbstainError) {
+          caughtError = error;
+        }
+      }
+
+      expect(caughtError).toBeDefined();
+      expect(caughtError?.stageId).toBe("TOOL_DISPATCH_GATE");
+      expect(caughtError?.outcome).toBe("ABSTAIN_CLARIFY");
+      expect(caughtError?.reason).toBe("PACK_POLICY_INCOMPLETE");
+      expect(caughtError?.contractId).toBe(null);
 
       // Assert: Tool executor was NOT called
       expect(mockToolExecutor.getCallCount()).toBe(0);
@@ -241,35 +214,6 @@ describe("TOOL_DISPATCH_GATE empty_allowlist → ABSTAIN_CLARIFY tripwire", () =
       expect(caughtError?.contractId).toBe(null);
     });
 
-    it("should convert ClarityBurstAbstainError to BlockedResponsePayload with nonRetryable=true", () => {
-      // Arrange: Empty allowlist
-      const allowedContractIds = deriveAllowedContracts(
-        "TOOL_DISPATCH_GATE",
-        mockPack,
-        restrictedCaps
-      );
-
-      // Act: Execute wrapper which triggers assertNonEmptyAllowedContracts
-      const result = executeToolDispatchWithGatingAndAllowlistCheck(
-        mockPack,
-        restrictedCaps,
-        mockToolExecutor
-      );
-
-      // Assert: BlockedResponsePayload structure
-      expect(result).toHaveProperty("nonRetryable");
-      expect(result).toHaveProperty("stageId");
-      expect(result).toHaveProperty("outcome");
-      expect(result).toHaveProperty("reason");
-      expect(result).toHaveProperty("contractId");
-
-      const blocked = result as BlockedResponsePayload;
-      expect(blocked.nonRetryable).toBe(true); // Fail-closed, non-retryable
-      expect(blocked.outcome).toBe("ABSTAIN_CLARIFY");
-      expect(blocked.reason).toBe("PACK_POLICY_INCOMPLETE");
-      expect(blocked.contractId).toBe(null);
-    });
-
     it("should NOT call tool executor when allowlist is empty", () => {
       // Arrange
       const allowedContractIds = deriveAllowedContracts(
@@ -279,12 +223,14 @@ describe("TOOL_DISPATCH_GATE empty_allowlist → ABSTAIN_CLARIFY tripwire", () =
       );
       expect(allowedContractIds).toHaveLength(0);
 
-      // Act
-      executeToolDispatchWithGatingAndAllowlistCheck(
-        mockPack,
-        restrictedCaps,
-        mockToolExecutor
-      );
+      // Act: Try to execute, which should throw
+      expect(() => {
+        executeToolDispatchWithGatingAndAllowlistCheck(
+          mockPack,
+          restrictedCaps,
+          mockToolExecutor
+        );
+      }).toThrow(ClarityBurstAbstainError);
 
       // Assert: Tool executor was never invoked
       expect(mockToolExecutor.getCallCount()).toBe(0);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { applyCanvasUiOverrides } from "../clarityburst/decision-override.js";
+import { applyCanvasUiOverrides, type OverrideOutcome } from "../clarityburst/decision-override.js";
 
 export type NodeSession = {
   nodeId: string;
@@ -129,12 +129,38 @@ export class NodeRegistry {
       timeoutMs: params.timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
-    await applyCanvasUiOverrides({
+    
+    // Canvas safety gate: check override outcome before dispatch
+    const canvasOutcome = await applyCanvasUiOverrides({
       stageId: "CANVAS_UI",
       userConfirmed: false,
       componentType: payload.command,
       canvasId: requestId,
     });
+    
+    // Block dispatch if canvas gate is not PROCEED
+    if (canvasOutcome.outcome !== "PROCEED") {
+      // Return blocked/abstain response using repo pattern
+      if (canvasOutcome.outcome === "ABSTAIN_CONFIRM") {
+        return {
+          ok: false,
+          error: {
+            code: "CANVAS_CONFIRMATION_REQUIRED",
+            message: `Canvas UI confirmation required for ${payload.command}`,
+          },
+        };
+      }
+      if (canvasOutcome.outcome === "ABSTAIN_CLARIFY") {
+        return {
+          ok: false,
+          error: {
+            code: "CANVAS_ABSTAIN",
+            message: `Canvas UI operation blocked: ${canvasOutcome.reason ?? "blocked by canvas safety gate"}`,
+          },
+        };
+      }
+    }
+    
     const ok = this.sendEventToSession(node, "node.invoke.request", payload);
     if (!ok) {
       return {

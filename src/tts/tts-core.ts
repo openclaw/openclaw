@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -554,7 +555,7 @@ export async function elevenLabsTTS(params: {
       url.searchParams.set("output_format", outputFormat);
     }
 
-    const response = await fetch(url.toString(), {
+    const response = await applyNetworkIOGateAndFetch(url.toString(), {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
@@ -609,7 +610,7 @@ export async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
+    const response = await applyNetworkIOGateAndFetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,

@@ -24,6 +24,42 @@ import { normalizeToolName } from "./tool-policy.js";
 /** Track tool execution start times and args for after_tool_call hook */
 const toolStartData = new Map<string, { startTime: number; args: unknown }>();
 
+/**
+ * Create a redacted summary of tool arguments showing only keys and value types/lengths.
+ * Redaction prevents sensitive secrets from leaking into logs.
+ */
+function redactToolArgs(args: unknown): string {
+  if (args === null || args === undefined) {
+    return "null";
+  }
+  if (typeof args !== "object") {
+    return typeof args;
+  }
+  if (Array.isArray(args)) {
+    return `array[${args.length}]`;
+  }
+  const record = args as Record<string, unknown>;
+  const entries: string[] = [];
+  const sensitiveKeyPattern = /(authorization|auth|token|api[-_]?key|apikey|secret|password|passwd|cookie|session|bearer)/i;
+  for (const [key, value] of Object.entries(record)) {
+    const displayKey = sensitiveKeyPattern.test(key) ? "<redacted>" : key;
+    if (value === null || value === undefined) {
+      entries.push(`${displayKey}:null`);
+    } else if (typeof value === "string") {
+      entries.push(`${displayKey}:string[${value.length}]`);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      entries.push(`${displayKey}:${typeof value}`);
+    } else if (Array.isArray(value)) {
+      entries.push(`${displayKey}:array[${value.length}]`);
+    } else if (typeof value === "object") {
+      entries.push(`${displayKey}:object`);
+    } else {
+      entries.push(`${displayKey}:${typeof value}`);
+    }
+  }
+  return `{${entries.join(",")}}`;
+}
+
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
     return false;
@@ -206,6 +242,9 @@ export async function handleToolExecutionStart(
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+  );
+  ctx.log.debug(
+    `embedded run tool args: runId=${ctx.params.runId} toolCallId=${toolCallId} args=${redactToolArgs(args)}`,
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();

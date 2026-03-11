@@ -1,3 +1,4 @@
+
 /**
  * ClarityBurst router client for contract routing decisions.
  */
@@ -5,6 +6,10 @@
 import { ClarityBurstAbstainError } from './errors.js';
 import type { ClarityBurstStageId } from './stages.js';
 import configManager from './config.js';
+import { createSubsystemLogger } from '../logging/subsystem.js';
+import { applyNetworkIOGateAndFetch } from './network-io-gating.js';
+
+const routerClientLog = createSubsystemLogger('clarityburst-router-client');
 
 export type RouterContractMatch = {
   contract_id: string;
@@ -133,97 +138,215 @@ function validateAllowedContractIds(
  * @throws ClarityBurstAbstainError if allowedContractIds contains duplicates or non-string values
  */
 export async function routeClarityBurst(input: RouterInput): Promise<RouterResult> {
-  // ─────────────────────────────────────────────────────────────────────────────
-  // INVARIANT: allowedContractIds must be valid before routing
-  // Hard-blocks with ClarityBurstAbstainError(ABSTAIN_CLARIFY, PACK_POLICY_INCOMPLETE)
-  // if allowedContractIds contains duplicates or non-string values.
-  // ─────────────────────────────────────────────────────────────────────────────
-  validateAllowedContractIds(input.allowedContractIds, input.stageId);
+   routerClientLog.info('CB_RT_SENTINEL_ROUTE_ENTER', { stageId: input.stageId, packId: input.packId, routerUrl: configManager.getRouterUrl() });
 
-  const routerEndpoint = getRouterEndpoint();
-  const timeoutMs = getTimeoutMs();
+   // ─────────────────────────────────────────────────────────────────────────────
+   // INVARIANT: allowedContractIds must be valid before routing
+   // Hard-blocks with ClarityBurstAbstainError(ABSTAIN_CLARIFY, PACK_POLICY_INCOMPLETE)
+   // if allowedContractIds contains duplicates or non-string values.
+   // ─────────────────────────────────────────────────────────────────────────────
+   validateAllowedContractIds(input.allowedContractIds, input.stageId);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+   const routerEndpoint = getRouterEndpoint();
+   const timeoutMs = getTimeoutMs();
 
-  try {
-    const response = await fetch(routerEndpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(input),
-      signal: controller.signal,
-    });
+   const controller = new AbortController();
+   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    clearTimeout(timeoutId);
+   console.log('[ClarityBurst Runtime] routeClarityBurst invoked', {
+     stageId: input.stageId,
+     packId: input.packId,
+     'allowedContractIds.length': input.allowedContractIds.length,
+     'userText.length': input.userText.length,
+   });
 
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: `HTTP ${response.status}: ${response.statusText}`,
-        status: response.status,
-      };
-    }
+   const t0 = Date.now();
 
-    let data: unknown;
-    try {
-      data = await response.json();
-    } catch {
-      return {
-        ok: false,
-        error: "Failed to parse JSON response",
-        status: response.status,
-      };
-    }
+   // Extract runId from context if available
+   const runId = typeof input.context?.runId === 'string' ? (input.context.runId) : undefined;
 
-    // Basic shape validation
-    const parsed = data as Record<string, unknown>;
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      !parsed.top1 ||
-      !parsed.top2 ||
-      typeof (parsed.top1 as RouterContractMatch).contract_id !== "string" ||
-      typeof (parsed.top1 as RouterContractMatch).score !== "number" ||
-      typeof (parsed.top2 as RouterContractMatch).contract_id !== "string" ||
-      typeof (parsed.top2 as RouterContractMatch).score !== "number"
-    ) {
-      return {
-        ok: false,
-        error: "Invalid response shape: missing or malformed top1/top2",
-        status: response.status,
-      };
-    }
+   try {
+     routerClientLog.info('[routeClarityBurst] Routing request', {
+       stageId: input.stageId,
+       packId: input.packId,
+       'allowedContractIds.length': input.allowedContractIds.length,
+       routerUrl: routerEndpoint,
+     });
 
-    return {
-      ok: true,
-      data: {
-        top1: parsed.top1 as RouterContractMatch,
-        top2: parsed.top2 as RouterContractMatch,
-        router_version:
-          typeof parsed.router_version === "string" ? parsed.router_version : undefined,
-      },
-    };
-  } catch (err) {
-    clearTimeout(timeoutId);
+     // Log router self-call being gated through NETWORK_IO
+     const logStartPayload: Record<string, unknown> = {
+       routerUrl: routerEndpoint,
+       method: 'POST',
+       contractId: input.allowedContractIds[0],
+       stageId: input.stageId,
+       packId: input.packId,
+       timeoutMs: timeoutMs,
+       governance: 'NETWORK_IO_GATE',
+       callType: 'ROUTER_SELF_CALL_INTERNAL',
+     };
+     if (runId) {logStartPayload.runId = runId;}
+     routerClientLog.info('ROUTER_CALL_START', logStartPayload);
 
-    if (err instanceof Error) {
-      if (err.name === "AbortError") {
-        return {
-          ok: false,
-          error: `Request timed out after ${timeoutMs}ms`,
-        };
-      }
-      return {
-        ok: false,
-        error: err.message,
-      };
-    }
+     // SECURITY: Router self-call must pass through NETWORK_IO gate
+     // This ensures the router invocation is subject to ClarityBurst execution-boundary control
+     // and cannot bypass governance constraints.
+     const response = await applyNetworkIOGateAndFetch(routerEndpoint, {
+       method: "POST",
+       headers: {
+         "Content-Type": "application/json",
+       },
+       body: JSON.stringify(input),
+       signal: controller.signal,
+     });
 
-    return {
-      ok: false,
-      error: "Unknown error",
-    };
-  }
-}
+     clearTimeout(timeoutId);
+     const latencyMs = Date.now() - t0;
+
+     if (!response.ok) {
+       const errPayload: Record<string, unknown> = {
+         latencyMs,
+         errorName: 'HttpError',
+         errorMessage: `HTTP ${response.status}: ${response.statusText}`,
+         httpStatus: response.status,
+         contractId: input.allowedContractIds[0],
+         governance: 'NETWORK_IO_GATE',
+         callType: 'ROUTER_SELF_CALL_INTERNAL',
+       };
+       if (runId) {errPayload.runId = runId;}
+       routerClientLog.warn('ROUTER_CALL_ERR', errPayload);
+       return {
+         ok: false,
+         error: `HTTP ${response.status}: ${response.statusText}`,
+         status: response.status,
+       };
+     }
+
+     let data: unknown;
+     try {
+       data = await response.json();
+     } catch (parseErr) {
+       const latencyMsOnErr = Date.now() - t0;
+       const errPayload: Record<string, unknown> = {
+         latencyMs: latencyMsOnErr,
+         errorName: 'JsonParseError',
+         errorMessage: 'Failed to parse JSON response',
+         httpStatus: response.status,
+         contractId: input.allowedContractIds[0],
+         governance: 'NETWORK_IO_GATE',
+         callType: 'ROUTER_SELF_CALL_INTERNAL',
+       };
+       if (runId) {errPayload.runId = runId;}
+       routerClientLog.warn('ROUTER_CALL_ERR', errPayload);
+       return {
+         ok: false,
+         error: "Failed to parse JSON response",
+         status: response.status,
+       };
+     }
+
+     // Basic shape validation
+     const parsed = data as Record<string, unknown>;
+     if (
+       !parsed ||
+       typeof parsed !== "object" ||
+       !parsed.top1 ||
+       !parsed.top2 ||
+       typeof (parsed.top1 as RouterContractMatch).contract_id !== "string" ||
+       typeof (parsed.top1 as RouterContractMatch).score !== "number" ||
+       typeof (parsed.top2 as RouterContractMatch).contract_id !== "string" ||
+       typeof (parsed.top2 as RouterContractMatch).score !== "number"
+     ) {
+       const errPayload: Record<string, unknown> = {
+         latencyMs,
+         errorName: 'InvalidResponseShape',
+         errorMessage: 'Invalid response shape: missing or malformed top1/top2',
+         httpStatus: response.status,
+         contractId: input.allowedContractIds[0],
+         governance: 'NETWORK_IO_GATE',
+         callType: 'ROUTER_SELF_CALL_INTERNAL',
+       };
+       if (runId) {errPayload.runId = runId;}
+       routerClientLog.warn('ROUTER_CALL_ERR', errPayload);
+       return {
+         ok: false,
+         error: "Invalid response shape: missing or malformed top1/top2",
+         status: response.status,
+       };
+     }
+
+     const result: RouterResult = {
+       ok: true,
+       data: {
+         top1: parsed.top1 as RouterContractMatch,
+         top2: parsed.top2 as RouterContractMatch,
+         router_version:
+           typeof parsed.router_version === "string" ? parsed.router_version : undefined,
+       },
+     };
+
+     const okPayload: Record<string, unknown> = {
+       latencyMs,
+       httpStatus: response.status,
+       routeOk: result.ok,
+       contractId: result.data.top1.contract_id,
+       governance: 'NETWORK_IO_GATE',
+       callType: 'ROUTER_SELF_CALL_INTERNAL',
+     };
+     if (runId) {okPayload.runId = runId;}
+     routerClientLog.info('ROUTER_CALL_OK', okPayload);
+
+     return result;
+   } catch (err) {
+     clearTimeout(timeoutId);
+     const latencyMs = Date.now() - t0;
+
+     if (err instanceof Error) {
+       if (err.name === "AbortError") {
+         const errPayload: Record<string, unknown> = {
+           latencyMs,
+           errorName: 'AbortError',
+           errorMessage: `Request timed out after ${timeoutMs}ms`,
+           contractId: input.allowedContractIds[0],
+           governance: 'NETWORK_IO_GATE',
+           callType: 'ROUTER_SELF_CALL_INTERNAL',
+         };
+         if (runId) {errPayload.runId = runId;}
+         routerClientLog.warn('ROUTER_CALL_ERR', errPayload);
+         return {
+           ok: false,
+           error: `Request timed out after ${timeoutMs}ms`,
+         };
+       }
+       const errorMsg = err.message.slice(0, 200);
+       const errPayload: Record<string, unknown> = {
+         latencyMs,
+         errorName: err.name,
+         errorMessage: errorMsg,
+         contractId: input.allowedContractIds[0],
+         governance: 'NETWORK_IO_GATE',
+         callType: 'ROUTER_SELF_CALL_INTERNAL',
+       };
+       if (runId) {errPayload.runId = runId;}
+       routerClientLog.warn('ROUTER_CALL_ERR', errPayload);
+       return {
+         ok: false,
+         error: err.message,
+       };
+     }
+
+     const errPayload: Record<string, unknown> = {
+       latencyMs,
+       errorName: 'UnknownError',
+       errorMessage: 'Unknown error',
+       contractId: input.allowedContractIds[0],
+       governance: 'NETWORK_IO_GATE',
+       callType: 'ROUTER_SELF_CALL_INTERNAL',
+     };
+     if (runId) {errPayload.runId = runId;}
+     routerClientLog.warn('ROUTER_CALL_ERR', errPayload);
+     return {
+       ok: false,
+       error: "Unknown error",
+     };
+   }
+ }

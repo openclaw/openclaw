@@ -8,6 +8,8 @@ import {
   startBrowserControlServiceFromConfig,
 } from "./control-service.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
+import { ClarityBurstAbstainError } from "../clarityburst/errors.js";
 
 // Application-level error from the browser control service (service is reachable
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
@@ -146,12 +148,23 @@ async function fetchHttpJson<T>(
 
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    const res = await applyNetworkIOGateAndFetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
+  } catch (error) {
+    // Re-throw ClarityBurst gate abstain errors (fail-closed before network activity)
+    if (error instanceof ClarityBurstAbstainError) {
+      throw error;
+    }
+    // Re-throw application errors from the browser service
+    if (error instanceof BrowserServiceError) {
+      throw error;
+    }
+    // Other errors (abort, timeout, etc.) will be wrapped by the caller
+    throw error;
   } finally {
     clearTimeout(t);
     if (upstreamSignal && upstreamAbortListener) {
@@ -248,6 +261,9 @@ export async function fetchBrowserJson<T>(
     }
     return result.body as T;
   } catch (err) {
+    if (err instanceof ClarityBurstAbstainError) {
+      throw err;
+    }
     if (err instanceof BrowserServiceError) {
       throw err;
     }

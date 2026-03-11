@@ -1,0 +1,983 @@
+# ClarityBurst Coverage Manifest (Auto-Generated)
+manifest_version: "1.0.0"
+generated_at: "2026-03-06T01:08:55.164Z"
+
+clarityburst:
+  total_stages: 13
+  total_contracts: 127
+  risk_points:
+    CRITICAL: 22
+    HIGH: 29
+    MEDIUM: 41
+    LOW: 35
+
+stages:
+  - stage_id: "TOOL_DISPATCH_GATE"
+    pack_file: "TOOL_DISPATCH_GATE.json"
+    pack_version: "2.0.0"
+    total_contracts: 9
+    risk_breakdown:
+      CRITICAL: 1
+      HIGH: 3
+      MEDIUM: 3
+      LOW: 2
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_OPEN_ONLY_ON_MISMATCH (mismatch detection required)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "DISPATCH_NOOP"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "DISPATCH_READ_ONLY"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "DISPATCH_WRITE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: ["fs_write"]
+      - contract_id: "DISPATCH_DELETE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: ["fs_write"]
+      - contract_id: "DISPATCH_SHELL_EXEC"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: ["shell"]
+      - contract_id: "DISPATCH_NETWORK_REQUEST"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: ["network"]
+      - contract_id: "DISPATCH_BROWSER_AUTOMATE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: ["browser"]
+      - contract_id: "DISPATCH_SENSITIVE_DATA"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: ["sensitive_access"]
+      - contract_id: "DISPATCH_PRIVILEGED_ADMIN"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: ["shell", "critical_opt_in"]
+  - stage_id: "NETWORK_IO"
+    pack_file: "NETWORK_IO.json"
+    pack_version: "1.0.0"
+    total_contracts: 11
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 2
+      MEDIUM: 4
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "NETWORK_GET_PUBLIC"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_DNS_LOOKUP"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_HEAD_REQUEST"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_POST_DATA"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_DOWNLOAD_RESOURCE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_UPLOAD_RESOURCE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_WEBSOCKET_CONNECT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_AUTHENTICATED_REQUEST"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_INTERNAL_ENDPOINT"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NETWORK_RAW_SOCKET"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "NETWORK_PROXY_TUNNEL"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "FILE_SYSTEM_OPS"
+    pack_file: "FILE_SYSTEM_OPS.json"
+    pack_version: "1.0.0"
+    total_contracts: 12
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 3
+      MEDIUM: 4
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: true
+    contracts:
+      - contract_id: "FS_READ_FILE"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_LIST_DIRECTORY"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_GET_METADATA"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_WRITE_WORKSPACE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_CREATE_DIRECTORY"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_COPY_FILE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_MOVE_FILE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_DELETE_FILE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_DELETE_DIRECTORY"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_WRITE_OUTSIDE_WORKSPACE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "FS_MODIFY_PERMISSIONS"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "FS_ACCESS_SYSTEM_FILES"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "SHELL_EXEC"
+    pack_file: "SHELL_EXEC.json"
+    pack_version: "1.0.0"
+    total_contracts: 14
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 4
+      MEDIUM: 5
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "SHELL_RUN_READONLY"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_LIST_PROCESSES"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_PRINT_ENV"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_RUN_BUILD_TOOL"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_RUN_LINTER"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_RUN_TEST"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_SET_ENV"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_RUN_WITH_ARGS"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_PIPE_COMMANDS"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_RUN_ARBITRARY"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_BACKGROUND_PROCESS"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_KILL_PROCESS"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SHELL_RUN_SUDO"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "SHELL_MODIFY_SYSTEM"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "MEMORY_MODIFY"
+    pack_file: "MEMORY_MODIFY.json"
+    pack_version: "1.0.0"
+    total_contracts: 8
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 2
+      MEDIUM: 2
+      LOW: 2
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: true
+    contracts:
+      - contract_id: "MEMORY_READ_CONTEXT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEMORY_STORE_SESSION"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEMORY_STORE_PERSISTENT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEMORY_UPDATE_KNOWLEDGE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEMORY_DELETE_ENTRY"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEMORY_BULK_MODIFY"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEMORY_CLEAR_SCOPE"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "MEMORY_MODIFY_CORE_IDENTITY"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "SUBAGENT_SPAWN"
+    pack_file: "SUBAGENT_SPAWN.json"
+    pack_version: "1.0.0"
+    total_contracts: 10
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 2
+      MEDIUM: 3
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: true
+    contracts:
+      - contract_id: "SPAWN_READONLY_AGENT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_EPHEMERAL_WORKER"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_SANDBOXED_AGENT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_WITH_RESOURCE_LIMITS"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_PERSISTENT_AGENT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_NETWORKED_AGENT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_WITH_CREDENTIAL_ACCESS"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_ELEVATED_AGENT"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "SPAWN_PRIVILEGED_AGENT"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "SPAWN_UNRESTRICTED_AGENT"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "MESSAGE_EMIT"
+    pack_file: "MESSAGE_EMIT.json"
+    pack_version: "1.0.0"
+    total_contracts: 12
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 2
+      MEDIUM: 4
+      LOW: 4
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "EMIT_LOG_MESSAGE"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_INTERNAL_EVENT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_STATUS_UPDATE"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_USER_RESPONSE"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_BATCH_MESSAGES"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_WEBHOOK_PAYLOAD"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_EXTERNAL_NOTIFICATION"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_WITH_ATTACHMENT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_SENSITIVE_CONTENT"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_BROADCAST_MESSAGE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "EMIT_IMPERSONATED_MESSAGE"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "EMIT_SYSTEM_ALERT"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "MEDIA_GENERATE"
+    pack_file: "MEDIA_GENERATE.json"
+    pack_version: "1.0.0"
+    total_contracts: 10
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 2
+      MEDIUM: 3
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "MEDIA_GENERATE_THUMBNAIL"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_CONVERT_FORMAT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_RESIZE_IMAGE"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_GENERATE_CHART"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_GENERATE_DIAGRAM"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_SYNTHESIZE_AUDIO"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_GENERATE_AI_IMAGE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_GENERATE_AI_VIDEO"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "MEDIA_DEEPFAKE_GENERATION"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "MEDIA_UNRESTRICTED_GENERATION"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "BROWSER_AUTOMATE"
+    pack_file: "BROWSER_AUTOMATE.json"
+    pack_version: "1.0.0"
+    total_contracts: 14
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 4
+      MEDIUM: 4
+      LOW: 4
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "BROWSER_NAVIGATE_PUBLIC"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_SCREENSHOT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_READ_DOM"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_CLICK_ELEMENT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_TYPE_TEXT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_SUBMIT_FORM"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_DOWNLOAD_FILE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_MULTI_TAB"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_UPLOAD_FILE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_RUN_JS"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_ACCESS_COOKIES"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_NAVIGATE_AUTHENTICATED"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "BROWSER_TYPE_PASSWORD"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "BROWSER_BYPASS_SECURITY"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "CANVAS_UI"
+    pack_file: "CANVAS_UI.json"
+    pack_version: "1.0.0"
+    total_contracts: 8
+    risk_breakdown:
+      CRITICAL: 1
+      HIGH: 1
+      MEDIUM: 3
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "CANVAS_RENDER_TEXT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_RENDER_STATIC"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_UPDATE_LAYOUT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_RENDER_INTERACTIVE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_BATCH_UPDATE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_EMBED_MEDIA"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_INJECT_SCRIPT"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CANVAS_FULL_SCREEN_TAKEOVER"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "CRON_SCHEDULE"
+    pack_file: "CRON_SCHEDULE.json"
+    pack_version: "1.0.0"
+    total_contracts: 8
+    risk_breakdown:
+      CRITICAL: 1
+      HIGH: 2
+      MEDIUM: 3
+      LOW: 2
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: true
+    contracts:
+      - contract_id: "CRON_LIST_JOBS"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_GET_JOB_STATUS"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_SCHEDULE_ONESHOT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_SCHEDULE_RECURRING"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_PAUSE_JOB"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_CANCEL_JOB"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_SCHEDULE_PRIVILEGED"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "CRON_SYSTEM_JOB"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "NODE_INVOKE"
+    pack_file: "NODE_INVOKE.json"
+    pack_version: "1.0.0"
+    total_contracts: 10
+    risk_breakdown:
+      CRITICAL: 2
+      HIGH: 2
+      MEDIUM: 3
+      LOW: 3
+    fail_closed_guarantees:
+      pack_missing_behavior: "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: false
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "NODE_REQUIRE_BUILTIN"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_REQUIRE_LOCAL"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_RUN_SCRIPT"
+        risk_class: LOW
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_REQUIRE_NPM_PACKAGE"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_SPAWN_WORKER"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_DYNAMIC_IMPORT"
+        risk_class: MEDIUM
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_EVAL_CODE"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_CREATE_VM_CONTEXT"
+        risk_class: HIGH
+        needs_confirmation: true
+        deny_by_default: false
+        requires_audit: false
+        capabilities: []
+      - contract_id: "NODE_NATIVE_ADDON"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+      - contract_id: "NODE_MODIFY_PROCESS"
+        risk_class: CRITICAL
+        needs_confirmation: true
+        deny_by_default: true
+        requires_audit: true
+        capabilities: []
+  - stage_id: "CRON_PREFLIGHT_GATE"
+    pack_file: "CRON_PREFLIGHT_GATE.json"
+    pack_version: "1.0.0"
+    total_contracts: 1
+    risk_breakdown:
+      CRITICAL: 1
+      HIGH: 0
+      MEDIUM: 0
+      LOW: 0
+    fail_closed_guarantees:
+      pack_missing_behavior: "ESCALATE_BLOCK (pre-flight validation fails, all stages blocked)"
+      router_outage_behavior: "FAIL_CLOSED (no retries, block execution)"
+      preflight_gate: true
+      atomic_commit_required: false
+    contracts:
+      - contract_id: "CRON_PREFLIGHT_VALIDATE"
+        risk_class: CRITICAL
+        needs_confirmation: false
+        deny_by_default: false
+        requires_audit: true
+        capabilities: ["critical_opt_in"]
+
+claims_validation:
+  - claim: "~145 gated contract points across the 12 ClarityBurst stages"
+    evidence: "Manifest lists 127 contracts across 13 stages: TOOL_DISPATCH_GATE(9), NETWORK_IO(11), FILE_SYSTEM_OPS(12), SHELL_EXEC(14), MEMORY_MODIFY(8), SUBAGENT_SPAWN(10), MESSAGE_EMIT(12), MEDIA_GENERATE(10), BROWSER_AUTOMATE(14), CANVAS_UI(8), CRON_SCHEDULE(8), NODE_INVOKE(10), CRON_PREFLIGHT_GATE(1)"
+  - claim: "Fail-closed outage handling on router unavailability"
+    evidence: "12 stages have explicit fail-closed guarantees on router outage"
+  - claim: "Atomic commit discipline for side effects"
+    evidence: "4 stages require atomic commit at decision point: FILE_SYSTEM_OPS, MEMORY_MODIFY, SUBAGENT_SPAWN, CRON_SCHEDULE"
+  - claim: "Pre-flight gating before any tool dispatch"
+    evidence: "CRON_PREFLIGHT_GATE stage executes first, validates ledger state, and blocks all other stages on failure"
+  - claim: "Runtime capability filtering per contract"
+    evidence: "8 contracts have explicit capability requirements"

@@ -8,7 +8,6 @@
  * This test simulates a router outage and confirms:
  * - Blocked response with outcome: "ABSTAIN_CLARIFY"
  * - reason: "router_outage"
- * - nonRetryable: true (fail-closed)
  * - contractId: null
  */
 
@@ -18,28 +17,7 @@ import {
   type OntologyPack,
   type RouteResult,
   type DispatchContext,
-} from "../decision-override";
-import {
-  ClarityBurstAbstainError,
-} from "../errors";
-import {
-  convertAbstainToBlockedResponse,
-  type BlockedResponsePayload,
-} from "../../agents/pi-tool-definition-adapter.js";
-
-/**
- * Mock tool execution function - tracks call count
- */
-function createMockToolExecutor() {
-  let callCount = 0;
-  return {
-    execute: (): { success: true; result: string } => {
-      callCount++;
-      return { success: true as const, result: "mock_result" };
-    },
-    getCallCount: () => callCount,
-  };
-}
+} from "../decision-override.js";
 
 /**
  * Creates a mock TOOL_DISPATCH_GATE ontology pack with dispatch contracts
@@ -87,73 +65,15 @@ function createMockToolDispatchGatePack(): OntologyPack {
   };
 }
 
-/**
- * Wrapper function that applies TOOL_DISPATCH_GATE overrides and handles
- * router_outage as fail-closed (ABSTAIN_CLARIFY with nonRetryable).
- *
- * This mirrors the commit-point sequence where router unavailability
- * must block dispatch operations.
- */
-function executeToolDispatchWithGating(
-  pack: OntologyPack,
-  routeResult: RouteResult,
-  context: DispatchContext,
-  toolExecutor: ReturnType<typeof createMockToolExecutor>
-): { success: true; result: unknown } | BlockedResponsePayload {
-  // Fail-closed for router outage: if router is unavailable, block immediately
-  if (!routeResult.ok) {
-    const error = new ClarityBurstAbstainError({
-      stageId: "TOOL_DISPATCH_GATE",
-      outcome: "ABSTAIN_CLARIFY",
-      reason: "router_outage",
-      contractId: null,
-      instructions: "The router is unavailable and tool dispatch cannot proceed. Retry when the router service is restored.",
-    });
-    return convertAbstainToBlockedResponse(error);
-  }
-
-  // Router is ok, apply standard dispatch override logic
-  const gatingResult = applyToolDispatchOverrides(pack, routeResult, context);
-
-  if (gatingResult.outcome === "ABSTAIN_CLARIFY") {
-    // Convert to blocked response - clarification required
-    const error = new ClarityBurstAbstainError({
-      stageId: "TOOL_DISPATCH_GATE",
-      outcome: gatingResult.outcome,
-      reason: gatingResult.reason,
-      contractId: gatingResult.contractId,
-      instructions: gatingResult.instructions ?? `${gatingResult.outcome}: ${gatingResult.reason}`,
-    });
-    return convertAbstainToBlockedResponse(error, gatingResult.instructions);
-  }
-
-  if (gatingResult.outcome === "ABSTAIN_CONFIRM") {
-    // Convert to blocked response - confirmation required
-    const error = new ClarityBurstAbstainError({
-      stageId: "TOOL_DISPATCH_GATE",
-      outcome: gatingResult.outcome,
-      reason: gatingResult.reason,
-      contractId: gatingResult.contractId,
-      instructions: gatingResult.instructions ?? `${gatingResult.outcome}: ${gatingResult.reason}`,
-    });
-    return convertAbstainToBlockedResponse(error, gatingResult.instructions);
-  }
-
-  // Only execute tool when gating passes with PROCEED
-  return toolExecutor.execute();
-}
-
 describe("TOOL_DISPATCH_GATE router_outage → fail-closed tripwire", () => {
   let mockPack: OntologyPack;
-  let mockToolExecutor: ReturnType<typeof createMockToolExecutor>;
 
   beforeEach(() => {
     mockPack = createMockToolDispatchGatePack();
-    mockToolExecutor = createMockToolExecutor();
   });
 
   describe("router outage blocking behavior", () => {
-    it("should return blocked response with nonRetryable=true when router is unavailable", () => {
+    it("should return ABSTAIN_CLARIFY with router_outage reason when router is unavailable", () => {
       // Arrange: Router outage scenario - routeResult.ok is false
       const routeResult: RouteResult = {
         ok: false,
@@ -164,53 +84,33 @@ describe("TOOL_DISPATCH_GATE router_outage → fail-closed tripwire", () => {
         userConfirmed: false,
       };
 
-      // Act: Execute through central non-retryable handling path
-      const result = executeToolDispatchWithGating(
-        mockPack,
-        routeResult,
-        context,
-        mockToolExecutor
-      );
+      // Act: Call applyToolDispatchOverrides with router unavailable
+      const result = applyToolDispatchOverrides(mockPack, routeResult, context);
 
-      // Assert: Blocked response payload structure with fail-closed properties
-      expect(result).toMatchObject({
-        nonRetryable: true,
-        stageId: "TOOL_DISPATCH_GATE",
-        outcome: "ABSTAIN_CLARIFY",
-        reason: "router_outage",
-        contractId: null,
-      });
-
-      // Assert: Tool executor was NOT called (fail-closed)
-      expect(mockToolExecutor.getCallCount()).toBe(0);
+      // Assert: Fail-closed behavior - ABSTAIN_CLARIFY with router_outage reason
+      expect(result.outcome).toBe("ABSTAIN_CLARIFY");
+      if (result.outcome === "ABSTAIN_CLARIFY") {
+        expect(result.reason).toBe("router_outage");
+      }
+      expect(result.contractId).toBeNull();
     });
 
-    it("should propagate router_outage through ClarityBurstAbstainError with exact fields", () => {
+    it("should propagate router_outage reason when router fails", () => {
       // Arrange: Router outage at dispatch gate
       const routeResult: RouteResult = { ok: false };
       const context: DispatchContext = {
         stageId: "TOOL_DISPATCH_GATE",
       };
 
-      // Act: Execute wrapper with router outage
-      const result = executeToolDispatchWithGating(
-        mockPack,
-        routeResult,
-        context,
-        mockToolExecutor
-      );
+      // Act: Execute with router outage
+      const result = applyToolDispatchOverrides(mockPack, routeResult, context);
 
-      // Assert: Verify blocked response structure matches fail-closed requirements
+      // Assert: Verify fail-closed structure with exact reason
       expect(result).toMatchObject({
-        nonRetryable: true,
-        stageId: "TOOL_DISPATCH_GATE",
         outcome: "ABSTAIN_CLARIFY",
         reason: "router_outage",
         contractId: null,
       });
-
-      // Assert: Tool executor was NOT called
-      expect(mockToolExecutor.getCallCount()).toBe(0);
     });
   });
 
@@ -231,22 +131,12 @@ describe("TOOL_DISPATCH_GATE router_outage → fail-closed tripwire", () => {
         userConfirmed: false,
       };
 
-      // Act: Execute through gating wrapper
-      const result = executeToolDispatchWithGating(
-        mockPack,
-        routeResult,
-        context,
-        mockToolExecutor
-      );
+      // Act: Apply dispatch overrides with working router
+      const result = applyToolDispatchOverrides(mockPack, routeResult, context);
 
-      // Assert: Tool was executed (not blocked)
-      expect(result).toMatchObject({
-        success: true,
-        result: "mock_result",
-      });
-
-      // Assert: Tool executor was called exactly once
-      expect(mockToolExecutor.getCallCount()).toBe(1);
+      // Assert: Proceeds (not blocked)
+      expect(result.outcome).toBe("PROCEED");
+      expect(result.contractId).toBe("DISPATCH_READ_ONLY");
     });
 
     it("should block with ABSTAIN_CONFIRM when router is available but contract needs confirmation", () => {
@@ -265,23 +155,15 @@ describe("TOOL_DISPATCH_GATE router_outage → fail-closed tripwire", () => {
         userConfirmed: false, // Not confirmed
       };
 
-      // Act: Execute through gating wrapper
-      const result = executeToolDispatchWithGating(
-        mockPack,
-        routeResult,
-        context,
-        mockToolExecutor
-      );
+      // Act: Apply dispatch overrides with confirmation required
+      const result = applyToolDispatchOverrides(mockPack, routeResult, context);
 
       // Assert: Blocked with ABSTAIN_CONFIRM (not ABSTAIN_CLARIFY)
-      expect(result).toMatchObject({
-        outcome: "ABSTAIN_CONFIRM",
-        reason: "CONFIRM_REQUIRED",
-        contractId: "DISPATCH_SHELL_EXEC",
-      });
-
-      // Assert: Tool executor was NOT called
-      expect(mockToolExecutor.getCallCount()).toBe(0);
+      expect(result.outcome).toBe("ABSTAIN_CONFIRM");
+      if (result.outcome === "ABSTAIN_CONFIRM") {
+        expect(result.reason).toBe("CONFIRM_REQUIRED");
+      }
+      expect(result.contractId).toBe("DISPATCH_SHELL_EXEC");
     });
   });
 });

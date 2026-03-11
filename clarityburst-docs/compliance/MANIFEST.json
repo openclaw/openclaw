@@ -1,0 +1,1345 @@
+{
+  "manifestVersion": "1.0.0",
+  "generatedAt": "2026-03-06T01:08:55.164Z",
+  "clarityburst": {
+    "totalStages": 13,
+    "totalContracts": 127,
+    "totalRiskPoints": {
+      "CRITICAL": 22,
+      "HIGH": 29,
+      "MEDIUM": 41,
+      "LOW": 35
+    }
+  },
+  "stages": [
+    {
+      "stageId": "TOOL_DISPATCH_GATE",
+      "packFileName": "TOOL_DISPATCH_GATE.json",
+      "packVersion": "2.0.0",
+      "description": "Controls permission slips for distinct tool action regimes. Governs what categories of operations an agent is allowed to dispatch.",
+      "totalContracts": 9,
+      "riskClassBreakdown": {
+        "CRITICAL": 1,
+        "HIGH": 3,
+        "MEDIUM": 3,
+        "LOW": 2
+      },
+      "contracts": [
+        {
+          "contractId": "DISPATCH_NOOP",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_READ_ONLY",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_WRITE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "fs_write"
+          ],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_DELETE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "fs_write"
+          ],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_SHELL_EXEC",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "shell"
+          ],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_NETWORK_REQUEST",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "network"
+          ],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_BROWSER_AUTOMATE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "browser"
+          ],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_SENSITIVE_DATA",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "sensitive_access"
+          ],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "DISPATCH_PRIVILEGED_ADMIN",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [
+            "shell",
+            "critical_opt_in"
+          ],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_OPEN_ONLY_ON_MISMATCH (mismatch detection required)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "NETWORK_IO",
+      "packFileName": "NETWORK_IO.json",
+      "packVersion": "1.0.0",
+      "description": "Controls all network input/output operations including HTTP requests, socket connections, and data transfers. Enforces destination restrictions and bandwidth limits.",
+      "totalContracts": 11,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 2,
+        "MEDIUM": 4,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "NETWORK_GET_PUBLIC",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_DNS_LOOKUP",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_HEAD_REQUEST",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_POST_DATA",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_DOWNLOAD_RESOURCE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_UPLOAD_RESOURCE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_WEBSOCKET_CONNECT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_AUTHENTICATED_REQUEST",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_INTERNAL_ENDPOINT",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NETWORK_RAW_SOCKET",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "NETWORK_PROXY_TUNNEL",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "FILE_SYSTEM_OPS",
+      "packFileName": "FILE_SYSTEM_OPS.json",
+      "packVersion": "1.0.0",
+      "description": "Manages all file system operations including reading, writing, and directory manipulation. Enforces path restrictions, scope boundaries, and permission checks.",
+      "totalContracts": 12,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 3,
+        "MEDIUM": 4,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "FS_READ_FILE",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_LIST_DIRECTORY",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_GET_METADATA",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_WRITE_WORKSPACE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_CREATE_DIRECTORY",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_COPY_FILE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_MOVE_FILE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_DELETE_FILE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_DELETE_DIRECTORY",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_WRITE_OUTSIDE_WORKSPACE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "FS_MODIFY_PERMISSIONS",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "FS_ACCESS_SYSTEM_FILES",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": true
+      }
+    },
+    {
+      "stageId": "SHELL_EXEC",
+      "packFileName": "SHELL_EXEC.json",
+      "packVersion": "1.0.0",
+      "description": "Controls shell command execution including process spawning, environment configuration, and privilege escalation. Enforces command allowlists and execution context restrictions.",
+      "totalContracts": 14,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 4,
+        "MEDIUM": 5,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "SHELL_RUN_READONLY",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_LIST_PROCESSES",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_PRINT_ENV",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_RUN_BUILD_TOOL",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_RUN_LINTER",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_RUN_TEST",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_SET_ENV",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_RUN_WITH_ARGS",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_PIPE_COMMANDS",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_RUN_ARBITRARY",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_BACKGROUND_PROCESS",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_KILL_PROCESS",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SHELL_RUN_SUDO",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "SHELL_MODIFY_SYSTEM",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "MEMORY_MODIFY",
+      "packFileName": "MEMORY_MODIFY.json",
+      "packVersion": "1.0.0",
+      "description": "Controls modifications to agent memory, knowledge stores, and persistent state. Governs what can be remembered, forgotten, or altered in long-term storage.",
+      "totalContracts": 8,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 2,
+        "MEDIUM": 2,
+        "LOW": 2
+      },
+      "contracts": [
+        {
+          "contractId": "MEMORY_READ_CONTEXT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEMORY_STORE_SESSION",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEMORY_STORE_PERSISTENT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEMORY_UPDATE_KNOWLEDGE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEMORY_DELETE_ENTRY",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEMORY_BULK_MODIFY",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEMORY_CLEAR_SCOPE",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "MEMORY_MODIFY_CORE_IDENTITY",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": true
+      }
+    },
+    {
+      "stageId": "SUBAGENT_SPAWN",
+      "packFileName": "SUBAGENT_SPAWN.json",
+      "packVersion": "1.0.0",
+      "description": "Manages the creation and lifecycle of subordinate agent instances. Controls resource allocation and permission inheritance for spawned agents.",
+      "totalContracts": 10,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 2,
+        "MEDIUM": 3,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "SPAWN_READONLY_AGENT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_EPHEMERAL_WORKER",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_SANDBOXED_AGENT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_WITH_RESOURCE_LIMITS",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_PERSISTENT_AGENT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_NETWORKED_AGENT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_WITH_CREDENTIAL_ACCESS",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_ELEVATED_AGENT",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "SPAWN_PRIVILEGED_AGENT",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "SPAWN_UNRESTRICTED_AGENT",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": true
+      }
+    },
+    {
+      "stageId": "MESSAGE_EMIT",
+      "packFileName": "MESSAGE_EMIT.json",
+      "packVersion": "1.0.0",
+      "description": "Controls outbound message emission to users, systems, and external channels. Governs content filtering, rate limiting, and delivery confirmation.",
+      "totalContracts": 12,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 2,
+        "MEDIUM": 4,
+        "LOW": 4
+      },
+      "contracts": [
+        {
+          "contractId": "EMIT_LOG_MESSAGE",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_INTERNAL_EVENT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_STATUS_UPDATE",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_USER_RESPONSE",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_BATCH_MESSAGES",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_WEBHOOK_PAYLOAD",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_EXTERNAL_NOTIFICATION",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_WITH_ATTACHMENT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_SENSITIVE_CONTENT",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_BROADCAST_MESSAGE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "EMIT_IMPERSONATED_MESSAGE",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "EMIT_SYSTEM_ALERT",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "MEDIA_GENERATE",
+      "packFileName": "MEDIA_GENERATE.json",
+      "packVersion": "1.0.0",
+      "description": "Controls the generation of media assets including images, audio, and video content. Governs resource consumption, content safety checks, and output constraints.",
+      "totalContracts": 10,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 2,
+        "MEDIUM": 3,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "MEDIA_GENERATE_THUMBNAIL",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_CONVERT_FORMAT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_RESIZE_IMAGE",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_GENERATE_CHART",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_GENERATE_DIAGRAM",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_SYNTHESIZE_AUDIO",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_GENERATE_AI_IMAGE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_GENERATE_AI_VIDEO",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "MEDIA_DEEPFAKE_GENERATION",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "MEDIA_UNRESTRICTED_GENERATION",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "BROWSER_AUTOMATE",
+      "packFileName": "BROWSER_AUTOMATE.json",
+      "packVersion": "1.0.0",
+      "description": "Governs automated browser interactions including navigation, DOM manipulation, and form submissions. Controls access to sensitive browser capabilities like credential input and script execution.",
+      "totalContracts": 14,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 4,
+        "MEDIUM": 4,
+        "LOW": 4
+      },
+      "contracts": [
+        {
+          "contractId": "BROWSER_NAVIGATE_PUBLIC",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_SCREENSHOT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_READ_DOM",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_CLICK_ELEMENT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_TYPE_TEXT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_SUBMIT_FORM",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_DOWNLOAD_FILE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_MULTI_TAB",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_UPLOAD_FILE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_RUN_JS",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_ACCESS_COOKIES",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_NAVIGATE_AUTHENTICATED",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "BROWSER_TYPE_PASSWORD",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "BROWSER_BYPASS_SECURITY",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "CANVAS_UI",
+      "packFileName": "CANVAS_UI.json",
+      "packVersion": "1.0.0",
+      "description": "Controls user interface rendering and canvas manipulation operations. Governs visual element creation, layout changes, and user interaction handling.",
+      "totalContracts": 8,
+      "riskClassBreakdown": {
+        "CRITICAL": 1,
+        "HIGH": 1,
+        "MEDIUM": 3,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "CANVAS_RENDER_TEXT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_RENDER_STATIC",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_UPDATE_LAYOUT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_RENDER_INTERACTIVE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_BATCH_UPDATE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_EMBED_MEDIA",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_INJECT_SCRIPT",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CANVAS_FULL_SCREEN_TAKEOVER",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "CRON_SCHEDULE",
+      "packFileName": "CRON_SCHEDULE.json",
+      "packVersion": "1.0.0",
+      "description": "Controls the scheduling and management of recurring tasks and cron-like job execution. Governs timing constraints, resource allocation, and job lifecycle.",
+      "totalContracts": 8,
+      "riskClassBreakdown": {
+        "CRITICAL": 1,
+        "HIGH": 2,
+        "MEDIUM": 3,
+        "LOW": 2
+      },
+      "contracts": [
+        {
+          "contractId": "CRON_LIST_JOBS",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_GET_JOB_STATUS",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_SCHEDULE_ONESHOT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_SCHEDULE_RECURRING",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_PAUSE_JOB",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_CANCEL_JOB",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_SCHEDULE_PRIVILEGED",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "CRON_SYSTEM_JOB",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": true
+      }
+    },
+    {
+      "stageId": "NODE_INVOKE",
+      "packFileName": "NODE_INVOKE.json",
+      "packVersion": "1.0.0",
+      "description": "Manages invocation of Node.js modules, scripts, and runtime operations. Controls module loading, script execution contexts, and resource access boundaries.",
+      "totalContracts": 10,
+      "riskClassBreakdown": {
+        "CRITICAL": 2,
+        "HIGH": 2,
+        "MEDIUM": 3,
+        "LOW": 3
+      },
+      "contracts": [
+        {
+          "contractId": "NODE_REQUIRE_BUILTIN",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_REQUIRE_LOCAL",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_RUN_SCRIPT",
+          "riskClass": "LOW",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_REQUIRE_NPM_PACKAGE",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_SPAWN_WORKER",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_DYNAMIC_IMPORT",
+          "riskClass": "MEDIUM",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_EVAL_CODE",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_CREATE_VM_CONTEXT",
+          "riskClass": "HIGH",
+          "needsConfirmation": true,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": false
+        },
+        {
+          "contractId": "NODE_NATIVE_ADDON",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        },
+        {
+          "contractId": "NODE_MODIFY_PROCESS",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": true,
+          "denyByDefault": true,
+          "requiredRuntimeCapabilities": [],
+          "requiresAudit": true
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ABSTAIN_CLARIFY with PACK_POLICY_INCOMPLETE outcome",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": false,
+        "atomicCommitRequired": false
+      }
+    },
+    {
+      "stageId": "CRON_PREFLIGHT_GATE",
+      "packFileName": "CRON_PREFLIGHT_GATE.json",
+      "packVersion": "1.0.0",
+      "description": "Pre-flight validation gate that runs before any tool dispatch. Verifies ledger health and commits to a specific cron task.",
+      "totalContracts": 1,
+      "riskClassBreakdown": {
+        "CRITICAL": 1,
+        "HIGH": 0,
+        "MEDIUM": 0,
+        "LOW": 0
+      },
+      "contracts": [
+        {
+          "contractId": "CRON_PREFLIGHT_VALIDATE",
+          "riskClass": "CRITICAL",
+          "needsConfirmation": false,
+          "denyByDefault": false,
+          "requiredRuntimeCapabilities": [
+            "critical_opt_in"
+          ],
+          "requiresAudit": true,
+          "description": "Validate ledger state and select cron task"
+        }
+      ],
+      "failClosedGuarantees": {
+        "packMissingBehavior": "ESCALATE_BLOCK (pre-flight validation fails, all stages blocked)",
+        "routerOutageBehavior": "FAIL_CLOSED (no retries, block execution)",
+        "preflightGate": true,
+        "atomicCommitRequired": false
+      }
+    }
+  ],
+  "claimsValidation": [
+    {
+      "claim": "~145 gated contract points across the 12 ClarityBurst stages",
+      "evidence": "Manifest lists 127 contracts across 13 stages: TOOL_DISPATCH_GATE(9), NETWORK_IO(11), FILE_SYSTEM_OPS(12), SHELL_EXEC(14), MEMORY_MODIFY(8), SUBAGENT_SPAWN(10), MESSAGE_EMIT(12), MEDIA_GENERATE(10), BROWSER_AUTOMATE(14), CANVAS_UI(8), CRON_SCHEDULE(8), NODE_INVOKE(10), CRON_PREFLIGHT_GATE(1)"
+    },
+    {
+      "claim": "Fail-closed outage handling on router unavailability",
+      "evidence": "12 stages have explicit fail-closed guarantees on router outage"
+    },
+    {
+      "claim": "Atomic commit discipline for side effects",
+      "evidence": "4 stages require atomic commit at decision point: FILE_SYSTEM_OPS, MEMORY_MODIFY, SUBAGENT_SPAWN, CRON_SCHEDULE"
+    },
+    {
+      "claim": "Pre-flight gating before any tool dispatch",
+      "evidence": "CRON_PREFLIGHT_GATE stage executes first, validates ledger state, and blocks all other stages on failure"
+    },
+    {
+      "claim": "Runtime capability filtering per contract",
+      "evidence": "8 contracts have explicit capability requirements"
+    }
+  ]
+}

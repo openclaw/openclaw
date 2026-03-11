@@ -1,3 +1,5 @@
+import { applyNetworkIOGateAndFetch } from "../../clarityburst/network-io-gating.js";
+
 export async function fetchTelegramChatId(params: {
   token: string;
   chatId: string;
@@ -5,7 +7,7 @@ export async function fetchTelegramChatId(params: {
 }): Promise<string | null> {
   const url = `https://api.telegram.org/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
   try {
-    const res = await fetch(url, params.signal ? { signal: params.signal } : undefined);
+    const res = await applyNetworkIOGateAndFetch(url, params.signal ? { signal: params.signal } : undefined);
     if (!res.ok) {
       return null;
     }

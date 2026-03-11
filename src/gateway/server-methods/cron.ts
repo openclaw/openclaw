@@ -19,6 +19,11 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
+import {
+  applyCronScheduleGateAndAdd,
+  applyCronScheduleGateAndUpdate,
+} from "../../clarityburst/cron-schedule-gating.js";
+import { ClarityBurstAbstainError } from "../../clarityburst/errors.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -111,8 +116,27 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
-    respond(true, job, undefined);
+    try {
+      const job = await applyCronScheduleGateAndAdd(
+        jobCreate,
+        async (params) => context.cron.add(params),
+        "create"
+      );
+      respond(true, job, undefined);
+    } catch (err) {
+      if (err instanceof ClarityBurstAbstainError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `ClarityBurst CRON_SCHEDULE gate: ${err.message}`,
+          ),
+        );
+      } else {
+        throw err;
+      }
+    }
   },
   "cron.update": async ({ params, respond, context }) => {
     const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
@@ -157,8 +181,28 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const job = await context.cron.update(jobId, patch);
-    respond(true, job, undefined);
+    try {
+      const job = await applyCronScheduleGateAndUpdate(
+        jobId,
+        patch,
+        async (id, p) => context.cron.update(id, p),
+        "update"
+      );
+      respond(true, job, undefined);
+    } catch (err) {
+      if (err instanceof ClarityBurstAbstainError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `ClarityBurst CRON_SCHEDULE gate: ${err.message}`,
+          ),
+        );
+      } else {
+        throw err;
+      }
+    }
   },
   "cron.remove": async ({ params, respond, context }) => {
     if (!validateCronRemoveParams(params)) {

@@ -667,7 +667,7 @@ export async function loadCronRuns(
     state.cronRuns =
       append && (scope === "all" || state.cronRunsJobId === activeJobId)
         ? [...state.cronRuns, ...entries]
-        : entries;
+        : [...entries];
     if (scope === "job") {
       state.cronRunsJobId = activeJobId ?? null;
     }

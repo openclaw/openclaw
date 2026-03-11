@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { applyFileSystemOpsGateAndWrite } from "../clarityburst/file-system-ops-gating.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -1233,10 +1234,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     );
 
     try {
-      await deps.fs.promises.writeFile(tmp, json, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
+      // Apply FILE_SYSTEM_OPS gate before configuration persistence write
+      // This ensures durable config state cannot be mutated outside ClarityBurst governance
+      await applyFileSystemOpsGateAndWrite(tmp, json, "utf-8");
 
       if (deps.fs.existsSync(configPath)) {
         await rotateConfigBackups(configPath, deps.fs.promises);

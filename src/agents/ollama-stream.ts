@@ -10,6 +10,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -452,7 +453,8 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
+        // Apply NETWORK_IO gating before fetch
+        const response = await applyNetworkIOGateAndFetch(chatUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(body),

@@ -1,5 +1,6 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 
 const QWEN_OAUTH_BASE_URL = "https://chat.qwen.ai";
 const QWEN_OAUTH_TOKEN_ENDPOINT = `${QWEN_OAUTH_BASE_URL}/api/v1/oauth2/token`;
@@ -13,7 +14,7 @@ export async function refreshQwenPortalCredentials(
     throw new Error("Qwen OAuth refresh token missing; re-authenticate.");
   }
 
-  const response = await fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
+  const response = await applyNetworkIOGateAndFetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",

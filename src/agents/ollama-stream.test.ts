@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
 } from "./ollama-stream.js";
+import * as gatingModule from "../clarityburst/network-io-gating.js";
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {
@@ -285,18 +286,30 @@ async function withMockNdjsonFetch(
   run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn(async () => {
+  
+  // Create both mocks - gate wrapper and underlying fetch
+  const fetchMock = vi.fn(async (_url?: string, _init?: RequestInit) => {
     const payload = lines.join("\n");
     return new Response(`${payload}\n`, {
       status: 200,
       headers: { "Content-Type": "application/x-ndjson" },
     });
   });
+  
+  // Create a wrapper mock that tracks gate calls but delegates to fetch
+  const gateMock = vi.fn(async (url: string, init?: RequestInit) => {
+    // Forward to fetch mock with the same parameters for assertion tracking
+    return fetchMock(url, init);
+  });
+  
   globalThis.fetch = fetchMock as unknown as typeof fetch;
+  vi.spyOn(gatingModule, "applyNetworkIOGateAndFetch").mockImplementation(gateMock);
+  
   try {
-    await run(fetchMock);
+    await run(gateMock);
   } finally {
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   }
 }
 

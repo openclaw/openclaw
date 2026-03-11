@@ -26,6 +26,7 @@ import {
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
+import { dispatchNodeInvokeGuarded } from "./tools/node-invoke-guard.js";
 
 export type ExecuteNodeHostCommandParams = {
   command: string;
@@ -281,12 +282,14 @@ export async function executeNodeHostCommand(
       }
 
       try {
-        await callGatewayTool(
-          "node.invoke",
-          { timeoutMs: invokeTimeoutMs },
+        // Dispatch through NODE_INVOKE gating wrapper
+        await dispatchNodeInvokeGuarded(
+          "system.run",
+          nodeId,
           buildInvokeParams(approvedByAsk, approvalDecision, approvalId),
+          { timeoutMs: invokeTimeoutMs },
         );
-      } catch {
+      } catch (err) {
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
           {
@@ -324,10 +327,13 @@ export async function executeNodeHostCommand(
   }
 
   const startedAt = Date.now();
-  const raw = await callGatewayTool(
-    "node.invoke",
-    { timeoutMs: invokeTimeoutMs },
+  
+  // Dispatch through NODE_INVOKE gating wrapper
+  const raw = await dispatchNodeInvokeGuarded(
+    "system.run",
+    nodeId,
     buildInvokeParams(false, null),
+    { timeoutMs: invokeTimeoutMs },
   );
   const payload =
     raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;

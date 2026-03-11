@@ -1,5 +1,6 @@
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -65,7 +66,7 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
-  const res = await fetch(url, {
+  const res = await applyNetworkIOGateAndFetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

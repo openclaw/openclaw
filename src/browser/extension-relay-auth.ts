@@ -1,5 +1,7 @@
 import { createHmac } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
+import { ClarityBurstAbstainError } from "../clarityburst/errors.js";
 
 const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
 const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
@@ -55,7 +57,7 @@ export async function probeAuthenticatedOpenClawRelay(params: {
   const timer = setTimeout(() => ctrl.abort(), params.timeoutMs ?? DEFAULT_RELAY_PROBE_TIMEOUT_MS);
   try {
     const versionUrl = new URL("/json/version", `${params.baseUrl}/`).toString();
-    const res = await fetch(versionUrl, {
+    const res = await applyNetworkIOGateAndFetch(versionUrl, {
       signal: ctrl.signal,
       headers: { [params.relayAuthHeader]: params.relayAuthToken },
     });
@@ -65,7 +67,12 @@ export async function probeAuthenticatedOpenClawRelay(params: {
     const body = (await res.json()) as { Browser?: unknown };
     const browserName = typeof body?.Browser === "string" ? body.Browser.trim() : "";
     return browserName === OPENCLAW_RELAY_BROWSER;
-  } catch {
+  } catch (error) {
+    // Re-throw ClarityBurst gate abstain errors (fail-closed before network activity)
+    if (error instanceof ClarityBurstAbstainError) {
+      throw error;
+    }
+    // Gracefully handle other errors (network timeouts, parsing failures, etc.)
     return false;
   } finally {
     clearTimeout(timer);

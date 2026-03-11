@@ -77,6 +77,14 @@ const gatewayMocks = vi.hoisted(() => ({
 }));
 vi.mock("./gateway.js", () => gatewayMocks);
 
+const nodeInvokeGuardMocks = vi.hoisted(() => ({
+  dispatchNodeInvokeGuarded: vi.fn(async () => ({
+    ok: true,
+    payload: { result: { ok: true, running: true } },
+  })),
+}));
+vi.mock("./node-invoke-guard.js", () => nodeInvokeGuardMocks);
+
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
 }));
@@ -226,13 +234,14 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 20000 },
+    expect(nodeInvokeGuardMocks.dispatchNodeInvokeGuarded).toHaveBeenCalledWith(
+      "browser.proxy",
+      "node-1",
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
       }),
+      { timeoutMs: 20000 },
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });

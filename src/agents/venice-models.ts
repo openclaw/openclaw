@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
+import { applyNetworkIOGateAndFetch } from "../clarityburst/network-io-gating.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("venice-models");
@@ -343,7 +344,8 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
   }
 
   try {
-    const response = await fetch(`${VENICE_BASE_URL}/models`, {
+    // Apply NETWORK_IO gating before fetch
+    const response = await applyNetworkIOGateAndFetch(`${VENICE_BASE_URL}/models`, {
       signal: AbortSignal.timeout(5000),
     });
 

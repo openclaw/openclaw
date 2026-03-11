@@ -21,6 +21,10 @@ import {
   checkCronDispatchCapability,
   isCronMode,
 } from "./cron-dispatch-checker.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import configManager from "./config.js";
+
+const decisionOverrideLog = createSubsystemLogger("clarityburst-decision-override");
 
 /**
  * Check if router-outage fail-closed mode is enabled via CLARITYBURST_ROUTER_REQUIRED=1.
@@ -144,7 +148,7 @@ export interface AbstainConfirmOutcome {
 /** Outcome when clarification is needed due to router uncertainty or incomplete pack policy */
 export interface AbstainClarifyOutcome {
   outcome: "ABSTAIN_CLARIFY";
-  reason: "LOW_DOMINANCE_OR_CONFIDENCE" | "PACK_POLICY_INCOMPLETE" | "router_outage" | "capability_denied" | "ROUTER_UNAVAILABLE";
+  reason: "LOW_DOMINANCE_OR_CONFIDENCE" | "PACK_POLICY_INCOMPLETE" | "router_outage" | "capability_denied" | "ROUTER_UNAVAILABLE" | "EXCEEDS_FILE_SIZE_LIMIT";
   contractId: string | null;
   /** Stage identifier for routing failures */
   stageId?: string;
@@ -318,10 +322,24 @@ export function applyToolDispatchOverrides(
   routeResult: RouteResult,
   context: DispatchContext
 ): OverrideOutcome {
-  // Fail-open: if router result is not ok, proceed with null contractId
+  decisionOverrideLog.info("CB_RT_SENTINEL_TOOL_DISPATCH_ENTER", {
+    stageId: context.stageId ?? null,
+    packId: pack?.pack_id ?? null,
+    routeOk: routeResult?.ok ?? null,
+  });
+
+  decisionOverrideLog.info("CB_RT_SENTINEL_ENV", { CB_TRACE_ONCE: process.env.CB_TRACE_ONCE ?? null });
+
+  if (process.env.CB_TRACE_ONCE === "1") {
+    decisionOverrideLog.info("CB_RT_SENTINEL_TDG_STACK", { stack: new Error("CB_TRACE").stack });
+  }
+
+  // Fail-closed: if router result is not ok, abstain with router_outage reason
   if (!routeResult.ok) {
+    decisionOverrideLog.info('CB_RT_SENTINEL_TDG_RETURN_1', { reason: "router_outage", outcome: "ABSTAIN_CLARIFY" });
     return {
-      outcome: "PROCEED",
+      outcome: "ABSTAIN_CLARIFY",
+      reason: "router_outage",
       contractId: null,
     };
   }
@@ -333,6 +351,7 @@ export function applyToolDispatchOverrides(
   
   // If no contract ID found, fail-open
   if (!contractId) {
+    decisionOverrideLog.info('CB_RT_SENTINEL_TDG_RETURN_2', { outcome: "PROCEED", reason: null });
     return {
       outcome: "PROCEED",
       contractId: null,
@@ -545,6 +564,8 @@ export interface FileSystemContext {
   operation?: string;
   /** Target file or directory path */
   path?: string;
+  /** File size in bytes (for write/append operations) */
+  fileSize?: number;
   runMetrics?: RunMetrics;
   [key: string]: unknown;
 }
@@ -616,8 +637,8 @@ function applyFileSystemOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",
@@ -656,6 +677,22 @@ function applyFileSystemOverridesImpl(
       outcome: "PROCEED",
       contractId,
     };
+  }
+
+  // Validate contract limits (e.g., max_file_size_mb for write operations)
+  if (contract.limits && context.fileSize !== undefined) {
+    const maxFileSizeMb = contract.limits.max_file_size_mb;
+    if (typeof maxFileSizeMb === 'number' && maxFileSizeMb > 0) {
+      const maxSizeBytes = maxFileSizeMb * 1024 * 1024;
+      if (context.fileSize > maxSizeBytes) {
+        return {
+          outcome: "ABSTAIN_CLARIFY",
+          reason: "EXCEEDS_FILE_SIZE_LIMIT",
+          contractId,
+          instructions: `File size (${(context.fileSize / 1024 / 1024).toFixed(1)}MB) exceeds contract limit of ${maxFileSizeMb}MB for contract ${contractId}`,
+        };
+      }
+    }
   }
 
   // Check if confirmation is required and not yet provided
@@ -718,6 +755,14 @@ export async function applyFileSystemOverrides(
       reason: "PACK_POLICY_INCOMPLETE",
       contractId: null,
       instructions: `applyFileSystemOverrides was invoked with stageId "${context.stageId}" but expects "${FILE_SYSTEM_OPS_STAGE_ID}". Fix the wiring to use the correct stage override function.`,
+    };
+  }
+
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
     };
   }
 
@@ -876,8 +921,8 @@ function applyNetworkOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",
@@ -1025,6 +1070,14 @@ async function applyNetworkOverridesAsync(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1169,6 +1222,14 @@ export async function applyMemoryModifyOverrides(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1238,6 +1299,14 @@ async function applySubagentSpawnOverridesImpl(
       contractId: null,
       instructions: `applySubagentSpawnOverrides was invoked with stageId "${context.stageId}" but expects "${SUBAGENT_SPAWN_STAGE_ID}". Fix the wiring to use the correct stage override function.`,
     });
+  }
+
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1477,6 +1546,14 @@ async function applyNodeInvokeOverridesImpl(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1552,8 +1629,8 @@ async function applyNodeInvokeOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",
@@ -1675,6 +1752,14 @@ async function applyBrowserAutomateOverridesImpl(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1750,8 +1835,8 @@ async function applyBrowserAutomateOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",
@@ -1870,6 +1955,14 @@ async function applyCronScheduleOverridesImpl(
      };
    }
 
+   // Early exit if ClarityBurst is disabled
+   if (!configManager.isEnabled()) {
+     return {
+       outcome: "PROCEED",
+       contractId: null,
+     };
+   }
+
    // ─────────────────────────────────────────────────────────────────────────────
    // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
    // ─────────────────────────────────────────────────────────────────────────────
@@ -1945,8 +2038,8 @@ async function applyCronScheduleOverridesImpl(
    // Hard-block if either threshold is missing/undefined - pack policy is incomplete
    if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
      const missingFields: string[] = [];
-     if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-     if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+     if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+     if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
      
      return {
        outcome: "ABSTAIN_CLARIFY",
@@ -2065,6 +2158,14 @@ async function applyMessageEmitOverridesImpl(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2140,8 +2241,8 @@ async function applyMessageEmitOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",
@@ -2260,6 +2361,14 @@ async function applyMediaGenerateOverridesImpl(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2332,8 +2441,8 @@ async function applyMediaGenerateOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",
@@ -2450,6 +2559,14 @@ async function applyCanvasUiOverridesImpl(
     };
   }
 
+  // Early exit if ClarityBurst is disabled
+  if (!configManager.isEnabled()) {
+    return {
+      outcome: "PROCEED",
+      contractId: null,
+    };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // SINGLE SOURCE OF TRUTH: Load pack and derive allowed contracts
   // ─────────────────────────────────────────────────────────────────────────────
@@ -2522,8 +2639,8 @@ async function applyCanvasUiOverridesImpl(
   // Hard-block if either threshold is missing/undefined - pack policy is incomplete
   if (minConfidenceT === undefined || dominanceMarginDelta === undefined) {
     const missingFields: string[] = [];
-    if (minConfidenceT === undefined) missingFields.push("min_confidence_T");
-    if (dominanceMarginDelta === undefined) missingFields.push("dominance_margin_Delta");
+    if (minConfidenceT === undefined) {missingFields.push("min_confidence_T");}
+    if (dominanceMarginDelta === undefined) {missingFields.push("dominance_margin_Delta");}
     
     return {
       outcome: "ABSTAIN_CLARIFY",

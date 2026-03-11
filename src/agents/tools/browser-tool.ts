@@ -28,7 +28,7 @@ import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool } from "./gateway.js";
+import { dispatchNodeInvokeGuarded } from "./node-invoke-guard.js";
 import {
   listNodes,
   resolveNodeIdFromList,
@@ -194,13 +194,16 @@ async function callBrowserProxy(params: {
   timeoutMs?: number;
   profile?: string;
 }): Promise<BrowserProxyResult> {
+  // Calculate gateway timeout
   const gatewayTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const payload = await callGatewayTool<{ payloadJSON?: string; payload?: string }>(
-    "node.invoke",
-    { timeoutMs: gatewayTimeoutMs },
+
+  // Dispatch through NODE_INVOKE gating wrapper (handles gating and fail-closed behavior)
+  const payload = await dispatchNodeInvokeGuarded<{ payloadJSON?: string; payload?: string }>(
+    "browser.proxy",
+    params.nodeId,
     {
       nodeId: params.nodeId,
       command: "browser.proxy",
@@ -214,6 +217,7 @@ async function callBrowserProxy(params: {
       },
       idempotencyKey: crypto.randomUUID(),
     },
+    { timeoutMs: gatewayTimeoutMs },
   );
   const parsed =
     payload?.payload ??
