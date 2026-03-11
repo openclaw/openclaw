@@ -3,61 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pilot Home</title>
-    <link rel="stylesheet" href="/pilot/pilot.css" />
+    <title>Pilot Home | OpenClaw</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   </head>
-  <body class="pilot-shell">
-    <main class="pilot-home-layout">
-      <header class="pilot-header">
-        <p class="pilot-kicker">Moore Bass Pilot</p>
+  <body class="pilot-page">
+    <main class="pilot-shell">
+      <section class="pilot-hero">
+        <div class="pilot-chip">Moore Bass Pilot</div>
         <h1 data-testid="pilot-home-title">Pilot Home</h1>
         <p>
-          Start a new parcel intelligence run with jurisdiction bootstrap, scope framing, and source
-          discovery checkpoints.
+          Launch scoped discovery projects with parcel-first intake, rapid source-pack checks, and
+          project-ready workspaces.
         </p>
-      </header>
+        <button type="button" class="pilot-cta" data-testid="pilot-home-new-project">
+          New pilot project
+        </button>
+      </section>
 
-      <section class="pilot-dashboard-grid" aria-label="Pilot dashboard cards">
-        <article class="pilot-card pilot-card-highlight" aria-live="polite">
-          <div class="pilot-card-heading">
-            <p>Readiness</p>
-            <span>2 min refresh</span>
-          </div>
+      <section class="pilot-grid">
+        <article class="pilot-card">
           <h2 data-testid="pilot-dashboard-card-source-health-title">Source pack health</h2>
-          <p>
-            Core county + municipal feeds are healthy. Last policy index sync completed at 07:08.
-          </p>
-          <ul>
-            <li>County assessor: healthy</li>
-            <li>Permitting index: healthy</li>
-            <li>Planning memo stream: delayed 4 min</li>
+          <p>6 canonical source families online across parcel, zoning, and utility evidence.</p>
+          <dl class="pilot-kpis">
+            <div>
+              <dt>Coverage</dt>
+              <dd>94%</dd>
+            </div>
+            <div>
+              <dt>Latency</dt>
+              <dd>1.8s</dd>
+            </div>
+            <div>
+              <dt>Staleness</dt>
+              <dd>4h</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="pilot-card">
+          <h2>Intake readiness</h2>
+          <p>Project templates are aligned to entitlement and due-diligence discovery workflows.</p>
+          <ul class="pilot-checklist">
+            <li>Parcel and address intake</li>
+            <li>Jurisdiction bootstrap</li>
+            <li>Objective checklist defaults</li>
           </ul>
         </article>
-
-        <article class="pilot-card">
-          <div class="pilot-card-heading">
-            <p>Queue</p>
-            <span>Today</span>
-          </div>
-          <h2>Active project runs</h2>
-          <p>3 discovery runs waiting for legal checklist completion.</p>
-        </article>
-
-        <article class="pilot-card">
-          <div class="pilot-card-heading">
-            <p>Recent output</p>
-            <span>Last 24h</span>
-          </div>
-          <h2>Claim-ready packets</h2>
-          <p>2 projects promoted to QA after source confidence crossed 90%.</p>
-        </article>
       </section>
 
-      <section class="pilot-launch">
-        <a href="/pilot/project/" class="pilot-button" data-testid="pilot-home-new-project">
-          Start new project intake
-        </a>
+      <section id="pilot-home-last-project" class="pilot-card" hidden>
+        <h2>Last created project</h2>
+        <p id="pilot-home-last-project-summary"></p>
       </section>
     </main>
+    <script type="module" src="/src/pilot/home.ts"></script>
   </body>
 </html>

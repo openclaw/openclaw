@@ -3,129 +3,83 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pilot Project Intake</title>
-    <link rel="stylesheet" href="/pilot/pilot.css" />
+    <title>New Pilot Project | OpenClaw</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   </head>
-  <body class="pilot-shell">
-    <main class="pilot-project-layout">
-      <header class="pilot-project-header">
-        <p class="pilot-kicker">Screen 03 Intake</p>
+  <body class="pilot-page">
+    <main class="pilot-shell pilot-project-layout">
+      <section class="pilot-panel">
+        <a class="pilot-back-link" href="/pilot/">Pilot Home</a>
+        <div class="pilot-chip">Screen 03 · Project Setup</div>
         <h1>New pilot project setup</h1>
-        <p>
-          Capture the parcel, site context, and discovery objective so the workspace can bootstrap
-          jurisdiction intelligence and launch source discovery.
-        </p>
-      </header>
+        <p>Capture parcel context, anchor scope, and prepare a source discovery workspace.</p>
 
-      <section class="pilot-project-panel">
-        <div class="pilot-progress" aria-label="Intake progress">
-          <span class="pilot-pill pilot-pill-active">1. Project intake</span>
-          <span class="pilot-pill">2. Source discovery</span>
-          <span class="pilot-pill">3. Claim assessment</span>
-        </div>
+        <form id="pilot-project-form" class="pilot-form">
+          <label class="pilot-field">
+            <span>Parcel ID</span>
+            <input
+              data-testid="pilot-project-parcel-input"
+              name="parcelId"
+              placeholder="APN 123-456-789"
+              autocomplete="off"
+              required
+            />
+          </label>
 
-        <form id="pilot-project-form" novalidate>
-          <div class="pilot-intake-grid">
-            <div class="pilot-field">
-              <label for="pilot-parcel-id">Parcel ID</label>
-              <input
-                id="pilot-parcel-id"
-                name="parcelId"
-                data-testid="pilot-project-parcel-input"
-                placeholder="APN 123-456-789"
-                autocomplete="off"
-                required
-              />
-            </div>
+          <label class="pilot-field">
+            <span>Site address</span>
+            <input
+              data-testid="pilot-project-address-input"
+              name="address"
+              placeholder="100 Main St, Austin, TX"
+              autocomplete="street-address"
+              required
+            />
+          </label>
 
-            <div class="pilot-field">
-              <label for="pilot-project-type">Project type</label>
-              <select id="pilot-project-type" name="projectType">
-                <option>Entitlement review</option>
-                <option>Site acquisition</option>
-                <option>Pre-construction due diligence</option>
-              </select>
-            </div>
+          <label class="pilot-field">
+            <span>Project scope</span>
+            <textarea
+              data-testid="pilot-project-scope-input"
+              name="projectScope"
+              rows="3"
+              placeholder="Civil entitlement due diligence"
+              required
+            ></textarea>
+          </label>
 
-            <div class="pilot-field pilot-field-wide">
-              <label for="pilot-address">Project address</label>
-              <input
-                id="pilot-address"
-                name="address"
-                data-testid="pilot-project-address-input"
-                placeholder="100 Main St, Austin, TX"
-                autocomplete="off"
-                required
-              />
-            </div>
+          <label class="pilot-field">
+            <span>Project type</span>
+            <select name="projectType">
+              <option value="entitlement">Entitlement due diligence</option>
+              <option value="acquisition">Acquisition assessment</option>
+              <option value="redevelopment">Redevelopment feasibility</option>
+            </select>
+          </label>
 
-            <div class="pilot-field">
-              <label for="pilot-jurisdiction">Inferred jurisdiction</label>
-              <input id="pilot-jurisdiction" name="jurisdiction" readonly value="Pending input" />
-              <p class="pilot-help">Auto-derived from address once project is created.</p>
-            </div>
+          <fieldset class="pilot-field pilot-fieldset">
+            <legend>Objective checklist</legend>
+            <label><input type="checkbox" name="objective" value="jurisdiction" checked /> Jurisdiction bootstrap</label>
+            <label><input type="checkbox" name="objective" value="zoning" checked /> Zoning and entitlement scan</label>
+            <label><input type="checkbox" name="objective" value="utilities" checked /> Utility and infrastructure constraints</label>
+          </fieldset>
 
-            <div class="pilot-field pilot-field-wide">
-              <label for="pilot-scope">Project scope objective</label>
-              <textarea
-                id="pilot-scope"
-                name="scope"
-                data-testid="pilot-project-scope-input"
-                placeholder="Civil entitlement due diligence"
-                required
-              ></textarea>
-            </div>
-
-            <fieldset class="pilot-checklist pilot-field-wide">
-              <legend>Discovery checklist focus</legend>
-              <div class="pilot-checklist-grid">
-                <label class="pilot-check-item">
-                  <input type="checkbox" name="checklist" value="zoning" checked />
-                  <span>Zoning and overlays</span>
-                </label>
-                <label class="pilot-check-item">
-                  <input type="checkbox" name="checklist" value="utilities" checked />
-                  <span>Utility and easement constraints</span>
-                </label>
-                <label class="pilot-check-item">
-                  <input type="checkbox" name="checklist" value="flood" />
-                  <span>Floodplain and environmental triggers</span>
-                </label>
-                <label class="pilot-check-item">
-                  <input type="checkbox" name="checklist" value="permits" checked />
-                  <span>Permit sequencing dependencies</span>
-                </label>
-              </div>
-            </fieldset>
-          </div>
-
-          <div class="pilot-form-actions">
-            <button class="pilot-button" type="submit" data-testid="pilot-project-create">
-              Create project and discover sources
-            </button>
-            <a class="pilot-button-ghost" href="/pilot/">Back to Pilot Home</a>
-          </div>
-        </form>
-
-        <section class="pilot-summary" id="pilot-project-summary" hidden>
-          <h2 data-testid="pilot-project-summary-title">Pilot project created</h2>
-          <p class="pilot-summary-note">Jurisdiction bootstrap started. Source crawl queued.</p>
-          <dl>
-            <dt>Parcel</dt>
-            <dd id="pilot-summary-parcel"></dd>
-            <dt>Address</dt>
-            <dd id="pilot-summary-address"></dd>
-            <dt>Scope</dt>
-            <dd id="pilot-summary-scope"></dd>
-            <dt>Jurisdiction</dt>
-            <dd id="pilot-summary-jurisdiction"></dd>
-          </dl>
-          <button class="pilot-button" type="button" data-testid="pilot-project-launch-chat" disabled>
-            Launch project workspace
+          <button type="submit" class="pilot-cta" data-testid="pilot-project-create">
+            Create project and discover sources
           </button>
-        </section>
+        </form>
       </section>
+
+      <aside id="pilot-project-summary" class="pilot-panel pilot-summary-panel" hidden>
+        <h2 data-testid="pilot-project-summary-title">Pilot project created</h2>
+        <p id="pilot-project-summary-copy"></p>
+        <button type="button" class="pilot-cta pilot-cta-secondary" data-testid="pilot-project-launch-chat">
+          Launch project workspace
+        </button>
+      </aside>
     </main>
-    <script type="module" src="./project.ts"></script>
+    <script type="module" src="/src/pilot/project.ts"></script>
   </body>
 </html>

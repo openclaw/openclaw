@@ -31,6 +31,13 @@ export default defineConfig(() => {
       outDir: path.resolve(here, "../dist/control-ui"),
       emptyOutDir: true,
       sourcemap: true,
+      rollupOptions: {
+        input: {
+          main: path.resolve(here, "index.html"),
+          pilot: path.resolve(here, "pilot/index.html"),
+          pilotProject: path.resolve(here, "pilot/project/index.html"),
+        },
+      },
     },
     server: {
       host: true,

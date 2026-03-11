@@ -2,18 +2,29 @@
 
 ## What changed
 
-- Added a dedicated `/pilot/` landing page at `ui/pilot/index.html` with a dashboard-style Pilot Home, including required walkthrough selectors (`pilot-home-title`, `pilot-dashboard-card-source-health-title`, `pilot-home-new-project`).
-- Added `/pilot/project/` intake screen at `ui/pilot/project/index.html` with parcel, address, and project scope fields plus storyboard-aligned setup context (project type, inferred jurisdiction, discovery checklist).
-- Added interactive intake behavior in `ui/pilot/project/project.ts` so submitting the form reveals the project summary state (`pilot-project-summary-title`) and enables `pilot-project-launch-chat`.
-- Added cohesive pilot styling in `ui/pilot/pilot.css` to preserve a project setup workflow feel rather than a plain prompt UI.
+- Added real pilot routes at `/pilot/` and `/pilot/project/` with dedicated entrypoints:
+  - `ui/pilot/index.html`
+  - `ui/pilot/project/index.html`
+- Implemented pilot page behavior and persistence modules:
+  - `ui/src/pilot/home.ts`
+  - `ui/src/pilot/project.ts`
+  - `ui/src/pilot/storage.ts`
+  - `ui/src/pilot/styles.css`
+  - `ui/src/pilot/storage.test.ts`
+- Updated `ui/vite.config.ts` build inputs so pilot pages are first-class UI entries in multi-page Vite output.
 
 ## What I validated
 
-- Ran the canonical task-packet validation command:
+- Ran canonical harness walkthrough:
   - `node --import tsx /Users/clankinbot/Code/openclaw/operator-harness/scripts/run-artifact-walkthrough.ts --task /Users/clankinbot/Code/openclaw/.local/operator-harness/workspaces-v2/END-10/builder/.openclaw-operator/task-builder.json`
-- Validation passed and produced required runtime artifacts in `operator-harness/evidence/END-10/builder`:
-  - `before.png`, `after.png`, `annotated.png`, `walkthrough.webm`, `serve.log`.
+- Walkthrough passed and generated required browser artifacts:
+  - `before.png`, `after.png`, `annotated.png`, `walkthrough.webm`, `serve.log`
+- Verified pilot route assertions in the scripted flow:
+  - Home title and source-health card
+  - New project navigation
+  - Parcel/address/scope intake form submit
+  - Created-project summary and launch-workspace CTA
 
 ## Residual risk
 
-- The intake flow is currently front-end only (no backend persistence or real source discovery execution), so values are session-local and intended for MVP walkthrough validation.
+- `pnpm --dir ui test -- src/pilot/storage.test.ts` currently runs the broader browser suite in this repo setup, so unrelated pre-existing UI failures can appear alongside this ticket's new test.

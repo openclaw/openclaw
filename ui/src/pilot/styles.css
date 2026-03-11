@@ -1,0 +1,245 @@
+:root {
+  --pilot-bg: radial-gradient(circle at 15% -10%, #26456e 0%, transparent 38%),
+    radial-gradient(circle at 90% -15%, #4b2948 0%, transparent 34%), #f3f3ef;
+  --pilot-surface: #ffffff;
+  --pilot-surface-muted: #f5f4ef;
+  --pilot-border: #d8d5cc;
+  --pilot-text: #1d2522;
+  --pilot-text-muted: #4b5853;
+  --pilot-accent: #ac5d2f;
+  --pilot-accent-strong: #8d451a;
+  --pilot-radius: 18px;
+  --pilot-shadow: 0 14px 34px rgba(35, 30, 24, 0.08);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+.pilot-page {
+  background: var(--pilot-bg);
+  color: var(--pilot-text);
+  font-family: "Avenir Next", "Nunito Sans", "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+.pilot-shell {
+  margin: 0 auto;
+  max-width: 1080px;
+  padding: 56px 24px 72px;
+}
+
+.pilot-hero,
+.pilot-panel,
+.pilot-card {
+  background: var(--pilot-surface);
+  border: 1px solid var(--pilot-border);
+  border-radius: var(--pilot-radius);
+  box-shadow: var(--pilot-shadow);
+}
+
+.pilot-hero {
+  padding: 34px;
+}
+
+.pilot-chip {
+  display: inline-block;
+  margin-bottom: 16px;
+  border-radius: 999px;
+  background: #ede7df;
+  color: #6a3f28;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 6px 12px;
+  text-transform: uppercase;
+}
+
+.pilot-hero h1,
+.pilot-panel h1 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 2.5rem);
+  line-height: 1.1;
+}
+
+.pilot-hero p,
+.pilot-panel p,
+.pilot-card p {
+  color: var(--pilot-text-muted);
+  margin-bottom: 0;
+}
+
+.pilot-cta {
+  border: none;
+  border-radius: 12px;
+  background: var(--pilot-accent);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-top: 24px;
+  min-height: 44px;
+  padding: 11px 16px;
+  transition: background-color 160ms ease-in-out;
+}
+
+.pilot-cta:hover {
+  background: var(--pilot-accent-strong);
+}
+
+.pilot-cta:focus-visible {
+  outline: 3px solid color-mix(in oklab, var(--pilot-accent) 46%, white);
+  outline-offset: 2px;
+}
+
+.pilot-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 18px;
+}
+
+.pilot-card {
+  padding: 24px;
+}
+
+.pilot-card h2 {
+  margin: 0 0 10px;
+}
+
+.pilot-kpis {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 18px 0 0;
+}
+
+.pilot-kpis dt {
+  color: var(--pilot-text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.pilot-kpis dd {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 4px 0 0;
+}
+
+.pilot-checklist {
+  margin: 18px 0 0;
+  padding-left: 20px;
+}
+
+.pilot-checklist li {
+  margin-top: 8px;
+}
+
+.pilot-project-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.8fr);
+}
+
+.pilot-panel {
+  padding: 28px;
+}
+
+.pilot-back-link {
+  color: #265e84;
+  display: inline-block;
+  margin-bottom: 12px;
+  text-decoration: none;
+}
+
+.pilot-back-link:hover {
+  text-decoration: underline;
+}
+
+.pilot-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.pilot-field {
+  display: grid;
+  gap: 8px;
+}
+
+.pilot-field span,
+.pilot-fieldset legend {
+  font-size: 0.89rem;
+  font-weight: 700;
+}
+
+.pilot-field input,
+.pilot-field textarea,
+.pilot-field select {
+  border: 1px solid var(--pilot-border);
+  border-radius: 10px;
+  font: inherit;
+  min-height: 42px;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.pilot-field textarea {
+  resize: vertical;
+}
+
+.pilot-fieldset {
+  background: var(--pilot-surface-muted);
+  border: 1px solid var(--pilot-border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.pilot-fieldset label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pilot-summary-panel {
+  align-self: start;
+  background: #fff8f3;
+  border-color: #e0c6b4;
+}
+
+.pilot-summary-panel p {
+  margin-top: 8px;
+}
+
+.pilot-cta-secondary {
+  background: #204665;
+}
+
+.pilot-cta-secondary:hover {
+  background: #193751;
+}
+
+@media (max-width: 900px) {
+  .pilot-shell {
+    padding: 28px 14px 42px;
+  }
+
+  .pilot-hero,
+  .pilot-panel,
+  .pilot-card {
+    padding: 20px;
+  }
+
+  .pilot-project-layout {
+    grid-template-columns: 1fr;
+  }
+}
