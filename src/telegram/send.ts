@@ -761,11 +761,19 @@ export async function sendMessageTelegram(
 
   if (bufferBase64 || mediaUrl) {
     const media = bufferBase64
-      ? {
-          buffer: Buffer.from(bufferBase64, "base64"),
-          contentType: inlineContentType,
-          fileName: inlineFileName,
-        }
+      ? (() => {
+          const decoded = Buffer.from(bufferBase64, "base64");
+          if (decoded.byteLength > mediaMaxBytes) {
+            throw new Error(
+              `Inline buffer size ${decoded.byteLength} exceeds the allowed limit of ${mediaMaxBytes} bytes`,
+            );
+          }
+          return {
+            buffer: decoded,
+            contentType: inlineContentType,
+            fileName: inlineFileName,
+          };
+        })()
       : await loadWebMedia(
           mediaUrl!,
           buildOutboundMediaLoadOptions({
