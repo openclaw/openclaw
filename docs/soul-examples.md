@@ -10,7 +10,7 @@ This document contains various SOUL file examples for different use cases.
 4. [Customer Support](#customer-support)
 5. [Personal Assistant](#personal-assistant)
 6. [Technical Documentation](#technical-documentation)
-7. [Learning Companion](#learning-companion)
+7. Learning Companion
 
 ---
 

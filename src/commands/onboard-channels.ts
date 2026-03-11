@@ -815,7 +815,7 @@ async function maybeConfigureSoulFiles(params: {
         if (trimmed.startsWith(".")) {
           return "Filename must not start with a dot";
         }
-        return true;
+        return undefined;
       },
     });
 

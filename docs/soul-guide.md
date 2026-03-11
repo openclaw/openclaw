@@ -253,5 +253,5 @@ Each account has its own personality while sharing the same OpenClaw instance.
 ## See Also
 
 - [SOUL Examples](./soul-examples.md) - More example SOUL files
-- [Configuration Guide](./configuration.md) - Full config reference
-- [Onboard Wizard](./onboard.md) - Interactive setup
+- [Configuration Guide](./gateway/configuration.md) - Full config reference
+- [Onboard Wizard](./start/onboarding.md) - Interactive setup
