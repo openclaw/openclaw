@@ -143,6 +143,11 @@ def resolve_beta_build_number(api_key:, version:)
   next_build.to_s
 end
 
+def beta_build_number_needs_asc_auth?
+  explicit = ENV["IOS_BETA_BUILD_NUMBER"]
+  !env_present?(explicit)
+end
+
 def prepare_beta_release!(version:, build_number:)
   script_path = File.join(repo_root, "scripts", "ios-beta-prepare.sh")
   UI.message("Preparing iOS beta release #{version} (build #{build_number}).")
@@ -235,8 +240,10 @@ platform :ios do
     api_key
   end
 
-  private_lane :prepare_beta_context do
-    api_key = asc_api_key
+  private_lane :prepare_beta_context do |options|
+    require_api_key = options[:require_api_key] == true
+    needs_api_key = require_api_key || beta_build_number_needs_asc_auth?
+    api_key = needs_api_key ? asc_api_key : nil
     version = read_root_package_version
     build_number = resolve_beta_build_number(api_key: api_key, version: version)
     beta_xcconfig = prepare_beta_release!(version: version, build_number: build_number)
@@ -252,7 +259,7 @@ platform :ios do
 
   desc "Build a beta archive locally without uploading"
   lane :beta_archive do
-    context = prepare_beta_context
+    context = prepare_beta_context(require_api_key: false)
     build = build_beta_release(context)
     UI.success("Built iOS beta archive: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
     build
@@ -262,7 +269,7 @@ platform :ios do
 
   desc "Build + upload a beta to TestFlight"
   lane :beta do
-    context = prepare_beta_context
+    context = prepare_beta_context(require_api_key: true)
     build = build_beta_release(context)
 
     upload_to_testflight(
