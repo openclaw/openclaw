@@ -32,6 +32,7 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -999,6 +1000,22 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
+
+    // Per-turn model override from CLI --model flag.
+    // This is intentionally NOT persisted to the session store — it applies
+    // to the current turn only, following the same pattern as --thinking.
+    const turnModelOverride = opts.modelOverrideOnce?.trim();
+    if (turnModelOverride) {
+      const parsed = parseModelRef(turnModelOverride, provider);
+      if (parsed) {
+        const key = modelKey(parsed.provider, parsed.model);
+        if (isCliProvider(parsed.provider, cfg) || allowAnyModel || allowedModelKeys.has(key)) {
+          provider = parsed.provider;
+          model = parsed.model;
+        }
+      }
+    }
+
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
       if (authProfileId) {

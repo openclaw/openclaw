@@ -42,6 +42,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Per-turn model override (not persisted to session store). */
+  modelOverrideOnce?: string;
   verbose?: string;
   json?: boolean;
   timeout?: string;
