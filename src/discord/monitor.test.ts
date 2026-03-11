@@ -1126,9 +1126,25 @@ describe("discord DM reaction handling", () => {
     enqueueSystemEventSpy.mockClear();
     resolveAgentRouteMock.mockClear();
 
-    const data = makeReactionEvent({ botAsAuthor: true, emojiName: "✅" });
-    const client = makeReactionClient({ channelType: ChannelType.DM });
-    const listener = new DiscordReactionListener(makeReactionListenerParams());
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      botAsAuthor: true,
+      emojiName: "✅",
+      userId: "123",
+      guild: { name: "Test Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "own",
+            users: ["123"],
+          },
+        }),
+      }),
+    );
 
     await listener.handle(data, client);
 
@@ -1148,6 +1164,40 @@ describe("discord DM reaction handling", () => {
     expect(secondCall[0]).toContain("Reaction command: accept (✅)");
     expect(secondCall[1].sessionKey).toBe(firstCall[1].sessionKey);
     expect(secondCall[1].contextKey).toBe(firstCall[1].contextKey);
+  });
+
+  it("does not emit triage reaction commands for unauthorized reactors", async () => {
+    enqueueSystemEventSpy.mockClear();
+    resolveAgentRouteMock.mockClear();
+
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      botAsAuthor: true,
+      emojiName: "✅",
+      userId: "untrusted-user",
+      guild: { name: "Test Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            slug: "guild-123",
+            reactionNotifications: "own",
+            users: ["123"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+
+    const [text] = enqueueSystemEventSpy.mock.calls[0] as [string, { sessionKey: string }];
+    expect(text).toContain("Discord reaction added");
+    expect(text).not.toContain("Reaction command:");
   });
 });
 

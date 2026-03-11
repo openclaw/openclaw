@@ -24,6 +24,7 @@ import {
   normalizeDiscordSlug,
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
+  resolveDiscordMemberAllowed,
   resolveGroupDmAllow,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
@@ -528,11 +529,33 @@ async function handleDiscordReactionEvent(
         contextKey,
       });
     };
+    const canEmitReactionCommand = (params: {
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+    }) => {
+      const userAllowList = params.channelConfig?.users ?? guildInfo?.users;
+      const roleAllowList = params.channelConfig?.roles ?? guildInfo?.roles;
+      const hasRestriction =
+        (Array.isArray(userAllowList) && userAllowList.length > 0) ||
+        (Array.isArray(roleAllowList) && roleAllowList.length > 0);
+      if (!hasRestriction) {
+        return false;
+      }
+      return resolveDiscordMemberAllowed({
+        userAllowList,
+        roleAllowList,
+        memberRoleIds,
+        userId: user.id,
+        userName: user.username,
+        userTag: formatDiscordUserTag(user),
+        allowNameMatching: params.allowNameMatching,
+      });
+    };
     const emitReactionCommand = (params: {
       route: ReturnType<typeof resolveAgentRoute>;
       contextKey: string;
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
     }) => {
-      if (action !== "added") {
+      if (action !== "added" || !canEmitReactionCommand({ channelConfig: params.channelConfig })) {
         return;
       }
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
@@ -634,6 +657,8 @@ async function handleDiscordReactionEvent(
           return;
         }
 
+        const threadChannelConfig = resolveThreadChannelConfig();
+
         // For allowlist mode, check if user is in allowlist first
         if (reactionMode === "allowlist") {
           if (!shouldNotifyReaction({ mode: reactionMode })) {
@@ -644,7 +669,7 @@ async function handleDiscordReactionEvent(
         const route = resolveReactionRoute(parentId);
         const { baseText, contextKey } = resolveReactionBase();
         emitReaction(baseText, route, contextKey);
-        emitReactionCommand({ route, contextKey });
+        emitReactionCommand({ route, contextKey, channelConfig: threadChannelConfig });
         return;
       }
 
@@ -662,10 +687,11 @@ async function handleDiscordReactionEvent(
         return;
       }
 
+      const threadChannelConfig = resolveThreadChannelConfig();
       const route = resolveReactionRoute(parentId);
       const { contextKey } = resolveReactionBase();
       emitReactionWithAuthor(message, route, contextKey);
-      emitReactionCommand({ route, contextKey });
+      emitReactionCommand({ route, contextKey, channelConfig: threadChannelConfig });
       return;
     }
 
@@ -706,7 +732,7 @@ async function handleDiscordReactionEvent(
       const route = resolveReactionRoute(parentId);
       const { baseText, contextKey } = resolveReactionBase();
       emitReaction(baseText, route, contextKey);
-      emitReactionCommand({ route, contextKey });
+      emitReactionCommand({ route, contextKey, channelConfig });
       return;
     }
 
@@ -720,7 +746,7 @@ async function handleDiscordReactionEvent(
     const route = resolveReactionRoute(parentId);
     const { contextKey } = resolveReactionBase();
     emitReactionWithAuthor(message, route, contextKey);
-    emitReactionCommand({ route, contextKey });
+    emitReactionCommand({ route, contextKey, channelConfig });
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
