@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { INITIAL_CHAT_HISTORY_WINDOW } from "../chat/constants.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -483,8 +484,6 @@ export function renderChat(props: ChatProps) {
 // The chat page is an intervention surface, not a full transcript viewer.
 // Keep the render window conservative so oversized session histories do not
 // freeze the page during initial load.
-const CHAT_HISTORY_RENDER_LIMIT = 80;
-
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -536,14 +535,14 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
+  const historyStart = Math.max(0, history.length - INITIAL_CHAT_HISTORY_WINDOW);
   if (historyStart > 0) {
     items.push({
       kind: "message",
       key: "chat:history:notice",
       message: {
         role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
+        content: `Showing last ${INITIAL_CHAT_HISTORY_WINDOW} messages (${historyStart} hidden).`,
         timestamp: Date.now(),
       },
     });

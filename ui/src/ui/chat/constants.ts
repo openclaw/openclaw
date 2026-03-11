@@ -2,6 +2,9 @@
  * Chat-related constants for the UI layer.
  */
 
+/** Initial Control UI chat history hydration/render window */
+export const INITIAL_CHAT_HISTORY_WINDOW = 80;
+
 /** Character threshold for showing tool output inline vs collapsed */
 export const TOOL_INLINE_THRESHOLD = 80;
 
