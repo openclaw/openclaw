@@ -230,6 +230,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        blockOffset = 0;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }

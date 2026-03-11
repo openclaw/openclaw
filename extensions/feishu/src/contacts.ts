@@ -1,12 +1,4 @@
-/**
- * Feishu contact search and auto-sync.
- *
- * Uses a local SQLite database (via sqlite3 CLI) for fast fuzzy lookups.
- * When a search returns no results, automatically syncs contacts from
- * the Feishu API and retries.
- */
-
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -45,16 +37,28 @@ function ensureDb(): void {
   `);
 }
 
+/** Execute SQL silently — returns empty string on error (safe for reads/schema). */
 function sqliteExec(sql: string): string {
   const dbPath = getDbPath();
   try {
-    return execSync(`sqlite3 "${dbPath}" "${sql.replace(/"/g, '\\"')}"`, {
+    return execFileSync("sqlite3", [dbPath], {
       encoding: "utf-8",
+      input: sql,
       timeout: 10_000,
     }).trim();
   } catch {
     return "";
   }
+}
+
+/** Execute SQL strictly — throws on error (use for writes that must succeed). */
+function sqliteExecStrict(sql: string): void {
+  const dbPath = getDbPath();
+  execFileSync("sqlite3", [dbPath], {
+    encoding: "utf-8",
+    input: sql,
+    timeout: 10_000,
+  });
 }
 
 function sqliteQuery(sql: string): string[][] {
@@ -165,7 +169,7 @@ export async function syncContactsFromAPI(params: {
   for (const user of users) {
     if (!user.open_id) continue;
     const esc = (s?: string) => (s ?? "").replace(/'/g, "''");
-    sqliteExec(
+    sqliteExecStrict(
       `INSERT OR REPLACE INTO contacts (open_id, name, en_name, email, mobile, department_name, department_id, job_title, status, updated_at) VALUES ('${esc(user.open_id)}', '${esc(user.name)}', '${esc(user.en_name)}', '${esc(user.email)}', '${esc(user.mobile)}', '${esc(user.department_id)}', '${esc(user.department_id)}', '${esc(user.job_title)}', ${user.is_activated ? 1 : 0}, datetime('now'))`,
     );
     totalSynced++;

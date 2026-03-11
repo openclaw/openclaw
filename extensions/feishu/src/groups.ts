@@ -1,11 +1,4 @@
-/**
- * List Feishu groups (chats) that the bot is a member of.
- *
- * Caches results in the local SQLite contacts database for quick lookups.
- * Uses sqlite3 CLI to avoid native dependency.
- */
-
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,16 +15,28 @@ function getDbPath(): string {
   return path.join(os.homedir(), ".openclaw", "data", "feishu-contacts.db");
 }
 
+/** Execute SQL silently — returns empty string on error (safe for reads/schema). */
 function sqliteExec(sql: string): string {
   const dbPath = getDbPath();
   try {
-    return execSync(`sqlite3 "${dbPath}" "${sql.replace(/"/g, '\\"')}"`, {
+    return execFileSync("sqlite3", [dbPath], {
       encoding: "utf-8",
+      input: sql,
       timeout: 10_000,
     }).trim();
   } catch {
     return "";
   }
+}
+
+/** Execute SQL strictly — throws on error (use for writes that must succeed). */
+function sqliteExecStrict(sql: string): void {
+  const dbPath = getDbPath();
+  execFileSync("sqlite3", [dbPath], {
+    encoding: "utf-8",
+    input: sql,
+    timeout: 10_000,
+  });
 }
 
 function sqliteQuery(sql: string): string[][] {
@@ -160,7 +165,7 @@ export async function syncGroupsFromAPI(params: {
       for (const group of items) {
         if (!group.chat_id) continue;
         const esc = (s?: string) => (s ?? "").replace(/'/g, "''");
-        sqliteExec(
+        sqliteExecStrict(
           `INSERT OR REPLACE INTO groups (chat_id, name, description, owner_id, member_count, updated_at) VALUES ('${esc(group.chat_id)}', '${esc(group.name)}', '${esc(group.description)}', '${esc(group.owner_id)}', ${Number(group.member_count) || 0}, datetime('now'))`,
         );
         totalSynced++;
