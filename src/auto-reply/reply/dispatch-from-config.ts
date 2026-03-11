@@ -225,14 +225,11 @@ export async function dispatchReplyFromConfig(params: {
       toPluginMessageContext(hookContext),
     );
     if (beforeDispatchResult?.block) {
-      if (beforeDispatchResult.replyText) {
-        dispatcher.sendFinalReply({ text: beforeDispatchResult.replyText });
-      }
+      const queuedFinal = beforeDispatchResult.replyText
+        ? dispatcher.sendFinalReply({ text: beforeDispatchResult.replyText })
+        : false;
       recordProcessed("skipped", { reason: "before_dispatch_blocked" });
-      return {
-        queuedFinal: Boolean(beforeDispatchResult.replyText),
-        counts: dispatcher.getQueuedCounts(),
-      };
+      return { queuedFinal, counts: dispatcher.getQueuedCounts() };
     }
   }
 

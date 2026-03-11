@@ -439,6 +439,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * Allows plugins to block the entire message dispatch before LLM invocation
    * and optionally send a reply text directly to the user.
    * Runs sequentially — first handler that returns { block: true } wins.
+   *
+   * **Error semantics:** Like all hooks, errors are caught and logged when
+   * `catchErrors` is true (the default). This means a throwing handler
+   * results in permit-by-default (fail-open). Security-critical plugins
+   * should handle errors internally to implement fail-closed behavior.
    */
   async function runBeforeDispatch(
     event: PluginHookBeforeDispatchEvent,
