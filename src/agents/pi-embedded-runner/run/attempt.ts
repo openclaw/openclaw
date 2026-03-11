@@ -242,38 +242,21 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
-    // Keep whitespace-only placeholders unchanged so they do not collapse to
-    // empty names (which can later surface as toolName="" loops).
-    return rawName;
-  }
+function resolveAllowedToolNameCandidate(
+  candidates: Set<string>,
+  allowedToolNames?: Set<string>,
+): string | undefined {
   if (!allowedToolNames || allowedToolNames.size === 0) {
-    return trimmed;
+    return undefined;
   }
 
-  const candidateNames = new Set<string>([trimmed, normalizeToolName(trimmed)]);
-  const normalizedDelimiter = trimmed.replace(/\//g, ".");
-  const segments = normalizedDelimiter
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  if (segments.length > 1) {
-    for (let index = 1; index < segments.length; index += 1) {
-      const suffix = segments.slice(index).join(".");
-      candidateNames.add(suffix);
-      candidateNames.add(normalizeToolName(suffix));
-    }
-  }
-
-  for (const candidate of candidateNames) {
+  for (const candidate of candidates) {
     if (allowedToolNames.has(candidate)) {
       return candidate;
     }
   }
 
-  for (const candidate of candidateNames) {
+  for (const candidate of candidates) {
     const folded = candidate.toLowerCase();
     let caseInsensitiveMatch: string | null = null;
     for (const name of allowedToolNames) {
@@ -287,6 +270,105 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
     }
     if (caseInsensitiveMatch) {
       return caseInsensitiveMatch;
+    }
+  }
+
+  return undefined;
+}
+
+function collectToolNameCandidates(raw: string): Set<string> {
+  const candidates = new Set<string>([raw, normalizeToolName(raw)]);
+  const normalizedDelimiter = raw.replace(/[/:]/g, ".");
+  const segments = normalizedDelimiter
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length > 1) {
+    for (let index = 1; index < segments.length; index += 1) {
+      const suffix = segments.slice(index).join(".");
+      candidates.add(suffix);
+      candidates.add(normalizeToolName(suffix));
+    }
+  }
+  return candidates;
+}
+
+function inferToolNameFromToolCallId(
+  rawToolCallId: string,
+  allowedToolNames?: Set<string>,
+): string | undefined {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return undefined;
+  }
+  const trimmedId = rawToolCallId.trim();
+  if (!trimmedId) {
+    return undefined;
+  }
+
+  const idCandidates = collectToolNameCandidates(trimmedId);
+  const trimmedNumericSuffix = trimmedId.replace(/[:._-]?\d+$/u, "");
+  if (trimmedNumericSuffix && trimmedNumericSuffix !== trimmedId) {
+    for (const candidate of collectToolNameCandidates(trimmedNumericSuffix)) {
+      idCandidates.add(candidate);
+    }
+  }
+
+  const directMatch = resolveAllowedToolNameCandidate(idCandidates, allowedToolNames);
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const compactId = trimmedId.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const compactNoIndex = compactId.replace(/\d+$/u, "");
+  const allowedByLengthDesc = Array.from(allowedToolNames).toSorted(
+    (left, right) => right.length - left.length,
+  );
+  for (const allowedName of allowedByLengthDesc) {
+    const normalizedAllowed = allowedName.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!normalizedAllowed) {
+      continue;
+    }
+    if (compactNoIndex.endsWith(normalizedAllowed)) {
+      return allowedName;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeToolCallNameForDispatch(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+  toolCallId?: string,
+): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    const inferred =
+      typeof toolCallId === "string"
+        ? inferToolNameFromToolCallId(toolCallId, allowedToolNames)
+        : undefined;
+    if (inferred) {
+      return inferred;
+    }
+    // Keep whitespace-only placeholders unchanged so they do not collapse to
+    // empty names (which can later surface as toolName="" loops).
+    return rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+
+  const directMatch = resolveAllowedToolNameCandidate(
+    collectToolNameCandidates(trimmed),
+    allowedToolNames,
+  );
+  if (directMatch) {
+    return directMatch;
+  }
+  if (typeof toolCallId === "string") {
+    const inferred = inferToolNameFromToolCallId(toolCallId, allowedToolNames);
+    if (inferred) {
+      return inferred;
     }
   }
 
@@ -366,11 +448,26 @@ function trimWhitespaceFromToolCallNamesInMessage(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
       continue;
     }
-    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
+    const toolCallId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
+    if (typeof typedBlock.name !== "string") {
+      const inferred =
+        typeof toolCallId === "string"
+          ? inferToolNameFromToolCallId(toolCallId, allowedToolNames)
+          : undefined;
+      if (inferred) {
+        typedBlock.name = inferred;
+      }
+      continue;
+    }
+    const normalized = normalizeToolCallNameForDispatch(
+      typedBlock.name,
+      allowedToolNames,
+      toolCallId,
+    );
     if (normalized !== typedBlock.name) {
       typedBlock.name = normalized;
     }

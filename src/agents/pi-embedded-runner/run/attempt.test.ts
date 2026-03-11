@@ -304,6 +304,29 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("exec");
   });
 
+  it("maps colon-delimited provider-prefixed tool names to allowed canonical tools", async () => {
+    const partialToolCall = { type: "toolCall", name: " functions:read " };
+    const messageToolCall = { type: "toolCall", name: " tools:write " };
+    const finalToolCall = { type: "toolCall", name: " provider:exec " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+      message: { role: "assistant", content: [messageToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(messageToolCall.name).toBe("write");
+    expect(finalToolCall.name).toBe("exec");
+  });
+
   it("normalizes toolUse and functionCall names before dispatch", async () => {
     const partialToolCall = { type: "toolUse", name: " functions.read " };
     const messageToolCall = { type: "functionCall", name: " functions.exec " };
@@ -370,6 +393,58 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(partialToolCall.name).toBe("   ");
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("infers blank tool call names from call ids when possible", async () => {
+    const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "  " };
+    const finalToolCall = { type: "toolCall", id: "functionsexec0", name: " " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const { baseFn } = createEventStream({ event, finalToolCall });
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "exec"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(finalToolCall.name).toBe("exec");
+  });
+
+  it("fills missing tool call names from call ids when possible", async () => {
+    const partialToolCall: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functions.write:2",
+    };
+    const finalToolCall: { type: string; id: string; name?: string } = {
+      type: "toolCall",
+      id: "functions.read:3",
+    };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("write");
+    expect(finalToolCall.name).toBe("read");
   });
 
   it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
