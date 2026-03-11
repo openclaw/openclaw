@@ -160,7 +160,7 @@ const RUNNING_RESULT_CODES = new Set(["0x41301"]);
 const QUEUED_RESULT_CODES = new Set(["0x41325"]);
 const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
-const TASK_ACTIVE_STATUSES = new Set(["queued"]);
+const TASK_ACTIVE_STATUSES = new Set(["queued", "running"]);
 const TASK_STOP_WAIT_ATTEMPTS = 40;
 const TASK_STOP_WAIT_DELAY_MS = 250;
 
@@ -343,6 +343,11 @@ async function waitForScheduledTaskStop(taskName: string): Promise<void> {
       return;
     }
     await sleep(TASK_STOP_WAIT_DELAY_MS);
+  }
+
+  const { parsed: finalInfo } = await queryScheduledTaskInfo(taskName);
+  if (!finalInfo || !isScheduledTaskActive(finalInfo)) {
+    return;
   }
 
   const waitSeconds = Math.ceil((TASK_STOP_WAIT_ATTEMPTS * TASK_STOP_WAIT_DELAY_MS) / 1000);
