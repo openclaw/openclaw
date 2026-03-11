@@ -274,6 +274,9 @@ describe("failover-error", () => {
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENOTFOUND" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EPROTO" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EADDRNOTAVAIL" })).toBe("timeout");
   });
 
   it("infers timeout from abort/error stop-reason messages", () => {
@@ -303,6 +306,18 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
       "timeout",
     );
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Client network socket disconnected before secure TLS connection was established",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Error: socket disconnected" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ message: "Error: write EPROTO" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({ message: "Error: connect EADDRNOTAVAIL 0.0.0.0:443" }),
+    ).toBe("timeout");
   });
 
   it("treats AbortError reason=abort as timeout", () => {

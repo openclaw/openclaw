@@ -171,6 +171,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
       "ENETUNREACH",
       "EHOSTUNREACH",
       "ENETRESET",
+      "ENOTFOUND",
+      "EPROTO",
+      "EADDRNOTAVAIL",
       "EAI_AGAIN",
     ].includes(code)
   ) {
