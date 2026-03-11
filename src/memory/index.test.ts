@@ -48,15 +48,19 @@ vi.mock("./embeddings.js", () => {
                   inputs: Array<{
                     text: string;
                     parts?: Array<
-                      { type: "text"; text: string } | { type: "inline-data"; mimeType: string }
+                      | { type: "text"; text: string }
+                      | { type: "inline-data"; mimeType: string; data: string }
                     >;
                   }>,
                 ) => {
                   embedBatchInputCalls += 1;
                   return inputs.map((input) => {
-                    const mimeType = input.parts?.find(
-                      (part) => part.type === "inline-data",
-                    )?.mimeType;
+                    const inlineData = input.parts?.find((part) => part.type === "inline-data");
+                    if (inlineData?.type === "inline-data" && inlineData.data.length > 9000) {
+                      throw new Error("payload too large");
+                    }
+                    const mimeType =
+                      inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
                     if (mimeType?.startsWith("image/")) {
                       return [0, 0, 1, 0];
                     }
@@ -309,6 +313,31 @@ describe("memory index", () => {
 
     const audioResults = await manager.search("audio");
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
+  });
+
+  it("skips oversized multimodal inputs without aborting sync", async () => {
+    const mediaDir = path.join(workspaceDir, "media-oversize");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "huge.png"), Buffer.alloc(7000, 1));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-oversize-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await manager.sync({ reason: "test" });
+
+    expect(embedBatchInputCalls).toBeGreaterThan(0);
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("huge.png"))).toBe(false);
+
+    const alphaResults = await manager.search("alpha");
+    expect(alphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+
+    await manager.close?.();
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {

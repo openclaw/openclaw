@@ -318,6 +318,7 @@ Notes:
 - Multimodal indexing applies only to files discovered through `memorySearch.extraPaths`.
 - Supported modalities in this phase: image and audio.
 - `memorySearch.fallback` must stay `"none"` while multimodal memory is enabled.
+- Matching image/audio file bytes are uploaded to the configured Gemini embedding endpoint during indexing.
 - Supported image extensions: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`.
 - Supported audio extensions: `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.flac`.
 - Search queries remain text, but Gemini can compare those text queries against indexed image/audio embeddings.

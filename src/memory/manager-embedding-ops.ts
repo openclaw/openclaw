@@ -758,6 +758,45 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
   }
 
+  private clearIndexedFileData(pathname: string, source: MemorySource): void {
+    if (this.vector.enabled) {
+      try {
+        this.db
+          .prepare(
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+          )
+          .run(pathname, source);
+      } catch {}
+    }
+    if (this.fts.enabled && this.fts.available && this.provider) {
+      try {
+        this.db
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+          .run(pathname, source, this.provider.model);
+      } catch {}
+    }
+    this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
+  }
+
+  private upsertFileRecord(entry: MemoryFileEntry | SessionFileEntry, source: MemorySource): void {
+    this.db
+      .prepare(
+        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+           source=excluded.source,
+           hash=excluded.hash,
+           mtime=excluded.mtime,
+           size=excluded.size`,
+      )
+      .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
+  }
+
+  private isStructuredInputTooLargeError(message: string): boolean {
+    return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
+      message,
+    );
+  }
+
   protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
@@ -772,11 +811,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     let chunks: MemoryChunk[];
+    let structuredInputBytes: number | undefined;
     if ("kind" in entry && entry.kind === "multimodal") {
       const embeddingInput = await loadMultimodalEmbeddingInput(entry);
       if (!embeddingInput) {
+        this.clearIndexedFileData(entry.path, options.source);
         return;
       }
+      structuredInputBytes = estimateStructuredEmbeddingInputBytes(embeddingInput);
       chunks = [
         {
           startLine: 1,
@@ -799,31 +841,35 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         remapChunkLines(chunks, entry.lineMap);
       }
     }
-    const embeddings = this.batch.enabled
-      ? await this.embedChunksWithBatch(chunks, entry, options.source)
-      : await this.embedChunksInBatches(chunks);
+    let embeddings: number[][];
+    try {
+      embeddings = this.batch.enabled
+        ? await this.embedChunksWithBatch(chunks, entry, options.source)
+        : await this.embedChunksInBatches(chunks);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        "kind" in entry &&
+        entry.kind === "multimodal" &&
+        this.isStructuredInputTooLargeError(message)
+      ) {
+        log.warn("memory embeddings: skipping multimodal file rejected as too large", {
+          path: entry.path,
+          bytes: structuredInputBytes,
+          provider: this.provider.id,
+          model: this.provider.model,
+          error: message,
+        });
+        this.clearIndexedFileData(entry.path, options.source);
+        this.upsertFileRecord(entry, options.source);
+        return;
+      }
+      throw err;
+    }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();
-    if (vectorReady) {
-      try {
-        this.db
-          .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-          .run(entry.path, options.source);
-      } catch {}
-    }
-    if (this.fts.enabled && this.fts.available) {
-      try {
-        this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-          .run(entry.path, options.source, this.provider.model);
-      } catch {}
-    }
-    this.db
-      .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
-      .run(entry.path, options.source);
+    this.clearIndexedFileData(entry.path, options.source);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
@@ -878,15 +924,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           );
       }
     }
-    this.db
-      .prepare(
-        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET
-           source=excluded.source,
-           hash=excluded.hash,
-           mtime=excluded.mtime,
-           size=excluded.size`,
-      )
-      .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size);
+    this.upsertFileRecord(entry, options.source);
   }
 }
