@@ -79,12 +79,21 @@ describe("normalizeStoredCronJobs", () => {
   it("does not report already-canonical payload kinds as legacy kind migrations", () => {
     const jobs = [
       {
-        id: "canonical-kind",
+        id: "canonical-agent-turn",
         schedule: { kind: "every", everyMs: 60_000 },
         state: {},
         payload: {
           kind: "agentTurn",
           message: "ping",
+        },
+      },
+      {
+        id: "canonical-system-event",
+        schedule: { kind: "every", everyMs: 60_000 },
+        state: {},
+        payload: {
+          kind: "systemEvent",
+          text: "ping",
         },
       },
     ] as Array<Record<string, unknown>>;
@@ -95,6 +104,10 @@ describe("normalizeStoredCronJobs", () => {
     expect(jobs[0]?.payload).toMatchObject({
       kind: "agentTurn",
       message: "ping",
+    });
+    expect(jobs[1]?.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "ping",
     });
   });
 
