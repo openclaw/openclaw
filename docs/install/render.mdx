@@ -33,6 +33,7 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
+    dockerCommand: node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080
     envVars:
       - key: PORT
         value: "8080"
@@ -52,13 +53,18 @@ services:
 
 Key Blueprint features used:
 
-| Feature               | Purpose                                                    |
-| --------------------- | ---------------------------------------------------------- |
-| `runtime: docker`     | Builds from the repo's Dockerfile                          |
-| `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
-| `sync: false`         | Prompts for value during deploy (secrets)                  |
-| `generateValue: true` | Auto-generates a cryptographically secure value            |
-| `disk`                | Persistent storage that survives redeploys                 |
+| Feature               | Purpose                                                                   |
+| --------------------- | ------------------------------------------------------------------------- |
+| `runtime: docker`     | Builds from the repo's Dockerfile                                         |
+| `dockerCommand`       | Overrides the Dockerfile default so Render listens on its public web port |
+| `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances                |
+| `sync: false`         | Prompts for value during deploy (secrets)                                 |
+| `generateValue: true` | Auto-generates a cryptographically secure value                           |
+| `disk`                | Persistent storage that survives redeploys                                |
+
+The Dockerfile intentionally defaults to a safer local-only launch (`127.0.0.1:18789`). Render web
+services need the process to listen on the public service port instead, so the Blueprint overrides
+the command to bind LAN (`0.0.0.0`) on port `8080`.
 
 ## Choosing a plan
 
@@ -140,7 +146,7 @@ This downloads a portable backup you can restore on any OpenClaw host.
 Check the deploy logs in the Render Dashboard. Common issues:
 
 - Missing `SETUP_PASSWORD` — the Blueprint prompts for this, but verify it's set
-- Port mismatch — ensure `PORT=8080` matches the Dockerfile's exposed port
+- Blueprint drift — ensure `render.yaml` still sets `dockerCommand: node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080`
 
 ### Slow cold starts (free tier)
 
