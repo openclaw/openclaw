@@ -158,16 +158,24 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/openclaw/ms-playwright
 ARG OPENCLAW_INSTALL_BROWSER=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" /opt/openclaw/bin && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright; \
+      chromium_path="$(find "$PLAYWRIGHT_BROWSERS_PATH" -maxdepth 4 -type f -path '*/chrome-linux*/chrome' | head -n1)" && \
+      if [ -z "$chromium_path" ]; then \
+        echo "ERROR: Chromium binary not found under $PLAYWRIGHT_BROWSERS_PATH" >&2; \
+        exit 1; \
+      fi && \
+      ln -sfn "$chromium_path" /opt/openclaw/bin/chromium && \
+      ln -sfn "$chromium_path" /usr/local/bin/chromium && \
+      ln -sfn "$chromium_path" /usr/local/bin/chrome && \
+      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH" /opt/openclaw/bin; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.

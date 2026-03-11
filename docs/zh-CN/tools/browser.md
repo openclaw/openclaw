@@ -321,7 +321,7 @@ docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-要持久化浏览器下载，设置 `PLAYWRIGHT_BROWSERS_PATH`（例如 `/home/node/.cache/ms-playwright`）并确保 `/home/node` 通过 `OPENCLAW_HOME_VOLUME` 或绑定挂载持久化。参见 [Docker](/install/docker)。
+要持久化浏览器下载，设置 `PLAYWRIGHT_BROWSERS_PATH`（例如 `/opt/openclaw/ms-playwright`），并通过 `OPENCLAW_EXTRA_MOUNTS` 或直接绑定挂载该路径。参见 [Docker](/install/docker)。
 
 ## 工作原理（内部）
 

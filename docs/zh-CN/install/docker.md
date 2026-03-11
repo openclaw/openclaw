@@ -190,8 +190,8 @@ docker compose run --rm openclaw-cli \
 
 4. **持久化 Playwright 浏览器下载**：
 
-- 在 `docker-compose.yml` 中设置 `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright`。
-- 确保 `/home/node` 通过 `OPENCLAW_HOME_VOLUME` 持久化，或通过 `OPENCLAW_EXTRA_MOUNTS` 挂载 `/home/node/.cache/ms-playwright`。
+- 在 `docker-compose.yml` 中设置 `PLAYWRIGHT_BROWSERS_PATH=/opt/openclaw/ms-playwright`。
+- 如果希望浏览器二进制在容器重建后保留，请通过 `OPENCLAW_EXTRA_MOUNTS`（或直接 bind mount）挂载 `/opt/openclaw/ms-playwright`。
 
 ### 权限 + EACCES
 
