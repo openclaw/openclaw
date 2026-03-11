@@ -1,0 +1,7 @@
+{
+  "message": "Use execute_revenue_command with command: sell coaching program $47 for John Smith",
+  "metadata": {
+    "source": "revenue-executor-smoke",
+    "channel": "n8n"
+  }
+}

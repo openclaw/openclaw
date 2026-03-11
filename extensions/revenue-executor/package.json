@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/revenue-executor",
+  "version": "2026.3.10",
+  "private": true,
+  "description": "OpenClaw revenue execution plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

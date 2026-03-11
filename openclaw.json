@@ -29,8 +29,35 @@
           "allowHostControl": true
         }
       },
+      "systemPrompt": "You are the AI Business Twin Revenue Executor. For revenue operations, parse the request into structured fields, deduplicate contacts in GoHighLevel before creation, create the opportunity, create a Stripe payment link when price is greater than zero, and return valid JSON only.",
       "model": {
         "primary": "${OPENCLAW_AGENT_MODEL}"
+      },
+      "tools": {
+        "alsoAllow": [
+          "parse-revenue-command",
+          "ghl-check-contact",
+          "ghl-create-contact",
+          "ghl-create-opportunity",
+          "stripe-create-payment-link"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "revenue-executor": {
+        "enabled": true,
+        "config": {
+          "ghlApiKey": "${GHL_API_KEY}",
+          "ghlLocationId": "${GHL_LOCATION_ID}",
+          "ghlPipelineId": "${GHL_PIPELINE_ID}",
+          "stripeSecretKey": "${STRIPE_SECRET_KEY}",
+          "defaultTags": [
+            "ai-coo",
+            "telegram-lead"
+          ]
+        }
       }
     }
   }

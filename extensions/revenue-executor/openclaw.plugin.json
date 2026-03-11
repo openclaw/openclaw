@@ -1,0 +1,23 @@
+{
+  "id": "revenue-executor",
+  "name": "Revenue Executor",
+  "description": "Revenue automation tools for parsing commands, deduplicating GHL contacts, creating opportunities, and issuing Stripe payment links.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackUrl": { "type": "string" },
+      "defaultCurrency": { "type": "string" },
+      "ghlBaseUrl": { "type": "string" },
+      "ghlApiKey": { "type": "string" },
+      "ghlLocationId": { "type": "string" },
+      "ghlPipelineId": { "type": "string" },
+      "stripeSecretKey": { "type": "string" },
+      "stripeSuccessUrl": { "type": "string" },
+      "defaultTags": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  }
+}

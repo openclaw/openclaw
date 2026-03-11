@@ -442,6 +442,8 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/revenue-executor: {}
+
   extensions/signal: {}
 
   extensions/slack: {}
