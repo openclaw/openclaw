@@ -240,10 +240,19 @@ export type ResetLaneOptions = {
    */
   dropQueued?: boolean;
   /**
-   * Fail closed when tasks are still marked active to avoid clearing runtime
-   * bookkeeping while work may still be executing.
+   * Fail closed by default when tasks are still marked active to avoid
+   * clearing runtime bookkeeping while work may still be executing.
+   *
+   * Defaults to `true` when omitted.
    */
   skipIfActive?: boolean;
+  /**
+   * Explicitly allow reset with active tasks.
+   *
+   * For safety, callers must set BOTH `skipIfActive: false` and `force: true`
+   * to reset a lane that still has active task IDs.
+   */
+  force?: boolean;
 };
 
 export type ResetLaneResult = {
@@ -269,7 +278,10 @@ export function resetLane(lane: string, opts?: ResetLaneOptions): ResetLaneResul
   const activeBefore = state.activeTaskIds.size;
   let droppedQueued = 0;
 
-  if (opts?.skipIfActive && activeBefore > 0) {
+  const skipIfActive = opts?.skipIfActive ?? true;
+  const force = opts?.force === true;
+
+  if (activeBefore > 0 && (skipIfActive || !force)) {
     return { lane: cleaned, reset: false, activeBefore, droppedQueued };
   }
 

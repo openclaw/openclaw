@@ -294,7 +294,7 @@ describe("command queue", () => {
     await expect(first).resolves.toBe("first");
   });
 
-  it("resetLane preserves queued tasks when skipIfActive blocks the reset", async () => {
+  it("resetLane preserves queued tasks when active tasks exist (safe default)", async () => {
     const lane = `reset-safe-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
 
@@ -313,7 +313,7 @@ describe("command queue", () => {
       expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
     });
 
-    const result = resetLane(lane, { dropQueued: true, skipIfActive: true });
+    const result = resetLane(lane, { dropQueued: true });
     expect(result.reset).toBe(false);
     expect(result.activeBefore).toBe(1);
     expect(result.droppedQueued).toBe(0);
@@ -321,6 +321,39 @@ describe("command queue", () => {
     releaseFirst();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+  });
+
+  it("resetLane requires explicit force to reset with active tasks", async () => {
+    const lane = `reset-force-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    let releaseFirst!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = enqueueCommandInLane(lane, async () => {
+      await blocker;
+      return "first";
+    });
+    const second = enqueueCommandInLane(lane, async () => "second");
+
+    await vi.waitFor(() => {
+      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+    });
+
+    const result = resetLane(lane, {
+      dropQueued: true,
+      skipIfActive: false,
+      force: true,
+    });
+    expect(result.reset).toBe(true);
+    expect(result.activeBefore).toBe(1);
+    expect(result.droppedQueued).toBe(1);
+
+    await expect(second).rejects.toBeInstanceOf(CommandLaneClearedError);
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
   });
 
   it("resetLane drops queued tasks and resets when lane is idle", () => {

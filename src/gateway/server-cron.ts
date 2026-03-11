@@ -302,7 +302,7 @@ export function buildGatewayCronService(params: {
       const runLaneReset = (lane: string) => {
         const result = resetLane(lane, {
           dropQueued: false,
-          skipIfActive: false,
+          skipIfActive: true,
         });
         if (result.droppedQueued > 0) {
           cronLogger.warn(
