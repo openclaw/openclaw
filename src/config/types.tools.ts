@@ -348,6 +348,11 @@ export type MemorySearchConfig = {
   fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /**
+   * Gemini embedding-2 models only: output vector dimensions.
+   * Supported values today are 768, 1536, and 3072.
+   */
+  outputDimensionality?: number;
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */

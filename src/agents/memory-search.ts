@@ -31,6 +31,7 @@ export type ResolvedMemorySearchConfig = {
   };
   fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   model: string;
+  outputDimensionality?: number;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -197,6 +198,7 @@ function mergeConfig(
               ? DEFAULT_OLLAMA_MODEL
               : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
+  const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
@@ -325,6 +327,7 @@ function mergeConfig(
     },
     fallback,
     model,
+    outputDimensionality,
     local,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
