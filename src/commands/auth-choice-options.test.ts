@@ -41,6 +41,7 @@ describe("buildAuthChoiceOptions", () => {
       "volcengine-api-key",
       "byteplus-api-key",
       "vllm",
+      "opencode-go",
     ]) {
       expect(options.some((opt) => opt.value === value)).toBe(true);
     }
@@ -79,5 +80,17 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+  });
+
+  it("groups OpenCode Zen and Go under one OpenCode entry", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const openCodeGroup = groups.find((group) => group.value === "opencode");
+
+    expect(openCodeGroup).toBeDefined();
+    expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-zen")).toBe(true);
+    expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-go")).toBe(true);
   });
 });
