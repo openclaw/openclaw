@@ -54,6 +54,7 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
     argv,
     cwd: normalizeNonEmptyString(candidate.cwd),
     rawCommand: normalizeNonEmptyString(candidate.rawCommand),
+    commandPreview: normalizeNonEmptyString(candidate.commandPreview),
     agentId: normalizeNonEmptyString(candidate.agentId),
     sessionKey: normalizeNonEmptyString(candidate.sessionKey),
     mutableFileOperand: mutableFileOperand ?? undefined,
