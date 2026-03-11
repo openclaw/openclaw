@@ -44,6 +44,15 @@ describe("scheduled task runtime derivation", () => {
     ).toEqual({ status: "running" });
   });
 
+  it("treats Queued + 0x41325 as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Queued",
+        lastRunResult: "0x41325",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
   it("treats Running without numeric result as unknown", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({

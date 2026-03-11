@@ -17,6 +17,7 @@ import type {
   GatewayServiceManageArgs,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
+import { sleep } from "../utils.js";
 
 function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -156,8 +157,29 @@ function normalizeTaskResultCode(value?: string): string | null {
 }
 
 const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const QUEUED_RESULT_CODES = new Set(["0x41325"]);
 const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
+const TASK_ACTIVE_STATUSES = new Set(["queued"]);
+const TASK_STOP_WAIT_ATTEMPTS = 40;
+const TASK_STOP_WAIT_DELAY_MS = 250;
+
+function normalizeTaskStatus(value?: string): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || null;
+}
+
+function isScheduledTaskActive(parsed: ScheduledTaskInfo): boolean {
+  const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
+  if (normalizedResult != null) {
+    if (RUNNING_RESULT_CODES.has(normalizedResult) || QUEUED_RESULT_CODES.has(normalizedResult)) {
+      return true;
+    }
+  }
+
+  const normalizedStatus = normalizeTaskStatus(parsed.status);
+  return normalizedStatus != null && TASK_ACTIVE_STATUSES.has(normalizedStatus);
+}
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
@@ -165,7 +187,7 @@ export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
 } {
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
   if (normalizedResult != null) {
-    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
+    if (RUNNING_RESULT_CODES.has(normalizedResult) || QUEUED_RESULT_CODES.has(normalizedResult)) {
       return { status: "running" };
     }
     return {
@@ -303,6 +325,32 @@ function isTaskNotRunning(res: { stdout: string; stderr: string; code: number })
   return detail.includes("not running");
 }
 
+async function queryScheduledTaskInfo(taskName: string): Promise<{
+  res: { stdout: string; stderr: string; code: number };
+  parsed: ScheduledTaskInfo | null;
+}> {
+  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+  return {
+    res,
+    parsed: res.code === 0 ? parseSchtasksQuery(res.stdout || "") : null,
+  };
+}
+
+async function waitForScheduledTaskStop(taskName: string): Promise<void> {
+  for (let attempt = 0; attempt < TASK_STOP_WAIT_ATTEMPTS; attempt += 1) {
+    const { parsed: info } = await queryScheduledTaskInfo(taskName);
+    if (!info || !isScheduledTaskActive(info)) {
+      return;
+    }
+    await sleep(TASK_STOP_WAIT_DELAY_MS);
+  }
+
+  const waitSeconds = Math.ceil((TASK_STOP_WAIT_ATTEMPTS * TASK_STOP_WAIT_DELAY_MS) / 1000);
+  throw new Error(
+    `Scheduled Task "${taskName}" did not stop within ${waitSeconds}s after /End; refusing to queue another instance.`,
+  );
+}
+
 export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
@@ -319,7 +367,11 @@ export async function restartScheduledTask({
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
-  await execSchtasks(["/End", "/TN", taskName]);
+  const end = await execSchtasks(["/End", "/TN", taskName]);
+  if (end.code === 0) {
+    // Task Scheduler queues a second launch if /Run races with a still-stopping instance.
+    await waitForScheduledTaskStop(taskName);
+  }
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
@@ -346,8 +398,8 @@ export async function readScheduledTaskRuntime(
     };
   }
   const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
-  if (res.code !== 0) {
+  const { res, parsed } = await queryScheduledTaskInfo(taskName);
+  if (!parsed) {
     const detail = (res.stderr || res.stdout).trim();
     const missing = detail.toLowerCase().includes("cannot find the file");
     return {
@@ -356,7 +408,6 @@ export async function readScheduledTaskRuntime(
       missingUnit: missing,
     };
   }
-  const parsed = parseSchtasksQuery(res.stdout || "");
   const derived = deriveScheduledTaskRuntimeStatus(parsed);
   return {
     status: derived.status,
