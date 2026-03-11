@@ -232,6 +232,42 @@ export function createOpenAIServiceTierWrapper(
   };
 }
 
+/**
+ * Strip the `store` field from openai-completions payloads when the model
+ * declares `compat.supportsStore: false`.
+ *
+ * Some OpenAI-compatible backends (e.g. Google AI's
+ * `generativelanguage.googleapis.com/v1beta/openai`) reject requests that
+ * include unknown fields such as `store` with a 400 INVALID_ARGUMENT error.
+ * The `compat.supportsStore` flag is already used in the openai-responses path;
+ * this wrapper applies the same guard for the openai-completions API path.
+ *
+ * Fixes: openclaw/openclaw#43086
+ */
+export function createOpenAICompletionsStripStoreWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "openai-completions" ||
+      (model as { compat?: { supportsStore?: boolean } }).compat?.supportsStore !== false
+    ) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          delete (payload as Record<string, unknown>).store;
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
