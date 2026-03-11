@@ -16,8 +16,8 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "./pi-embedded.js";
+import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   captureSubagentCompletionReply,
@@ -682,7 +682,11 @@ function restoreSubagentRunsOnce() {
     }
     // Resume pending work.
     ensureListener();
-    if ([...subagentRuns.values()].some((entry) => entry.archiveAtMs)) {
+    if (
+      [...subagentRuns.values()].some(
+        (entry) => entry.archiveAtMs || entry.stallNudgeAfterSeconds || entry.stallKillAfterSeconds,
+      )
+    ) {
       startSweeper();
     }
     for (const runId of subagentRuns.keys()) {
@@ -807,16 +811,22 @@ async function checkStallRecovery() {
             params: {
               sessionKey: entry.childSessionKey,
               message: nudgeMessage,
+              idempotencyKey: `stall-nudge:${runId}:${now}`,
             },
             timeoutMs: 10_000,
           });
+          nudged = true;
         } catch {
           log.warn(`Stall nudge delivery failed: runId=${runId}`);
         }
       }
 
-      entry.stallNudgedAt = now;
-      persistSubagentRuns();
+      // Only mark nudge as sent if at least one delivery path succeeded.
+      // If delivery failed, leave stallNudgedAt unset so the next sweep retries.
+      if (nudged) {
+        entry.stallNudgedAt = now;
+        persistSubagentRuns();
+      }
     }
   }
 }

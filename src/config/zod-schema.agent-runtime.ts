@@ -741,6 +741,8 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        stallNudgeAfterSeconds: z.number().int().min(0).optional(),
+        stallKillAfterSeconds: z.number().int().min(0).optional(),
       })
       .strict()
       .optional(),

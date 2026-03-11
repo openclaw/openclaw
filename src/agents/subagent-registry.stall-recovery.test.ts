@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentDefaultsSchema } from "../config/zod-schema.agent-defaults.js";
+import { AgentEntrySchema } from "../config/zod-schema.agent-runtime.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -150,14 +151,18 @@ vi.mock("./timeout.js", () => ({
   resolveAgentTimeoutMs: vi.fn(() => 600_000),
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({
+vi.mock("../logging/subsystem.js", () => {
+  const makeLogger = (): Record<string, unknown> => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
-  })),
-}));
+    child: vi.fn(() => makeLogger()),
+  });
+  return {
+    createSubsystemLogger: vi.fn(() => makeLogger()),
+  };
+});
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn() },
@@ -599,5 +604,139 @@ describe("stall recovery detection (sweeper)", () => {
       (call: unknown[]) => (call[0] as { method?: string })?.method === "agent",
     );
     expect(agentCalls).toHaveLength(0);
+  });
+
+  it("gateway fallback includes idempotencyKey (Bug #1 fix)", async () => {
+    const baseTime = 1_000_000;
+    vi.setSystemTime(baseTime);
+
+    queueEmbeddedPiMessageSpy.mockReturnValue(false);
+
+    registerSubagentRun({
+      runId: "run-idem-key",
+      childSessionKey: "agent:main:subagent:stall-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "idempotency key test",
+      cleanup: "keep",
+      stallNudgeAfterSeconds: 5,
+      stallKillAfterSeconds: 10,
+    });
+
+    callGatewaySpy.mockClear();
+    callGatewaySpy.mockImplementation(async (params: { method?: string }) => {
+      if (params?.method === "agent.wait") {
+        return new Promise(() => {});
+      }
+      return { status: "ok" };
+    });
+    queueEmbeddedPiMessageSpy.mockClear();
+    queueEmbeddedPiMessageSpy.mockReturnValue(false);
+
+    // Advance past nudge threshold and trigger sweeper.
+    vi.setSystemTime(baseTime + 6_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const agentCalls = callGatewaySpy.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { method?: string })?.method === "agent",
+    );
+    expect(agentCalls.length).toBeGreaterThanOrEqual(1);
+    const nudgeCall = agentCalls[0][0] as {
+      params?: { idempotencyKey?: string };
+    };
+    // The gateway requires idempotencyKey — verify it's present and non-empty.
+    expect(nudgeCall.params?.idempotencyKey).toBeDefined();
+    expect(nudgeCall.params!.idempotencyKey!.length).toBeGreaterThan(0);
+    expect(nudgeCall.params!.idempotencyKey).toContain("stall-nudge");
+  });
+
+  it("nudge not marked sent when both delivery paths fail (Bug #1 fix)", async () => {
+    const baseTime = 1_000_000;
+    vi.setSystemTime(baseTime);
+
+    // Both delivery paths will fail.
+    queueEmbeddedPiMessageSpy.mockReturnValue(false);
+
+    registerSubagentRun({
+      runId: "run-nudge-fail",
+      childSessionKey: "agent:main:subagent:stall-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "nudge fail test",
+      cleanup: "keep",
+      stallNudgeAfterSeconds: 5,
+      stallKillAfterSeconds: 10,
+    });
+
+    callGatewaySpy.mockClear();
+    callGatewaySpy.mockImplementation(async (params: { method?: string }) => {
+      if (params?.method === "agent.wait") {
+        return new Promise(() => {});
+      }
+      // Simulate gateway failure for nudge delivery.
+      if (params?.method === "agent") {
+        throw new Error("gateway unavailable");
+      }
+      return { status: "ok" };
+    });
+    queueEmbeddedPiMessageSpy.mockClear();
+    queueEmbeddedPiMessageSpy.mockReturnValue(false);
+
+    // Advance past nudge threshold and trigger sweeper.
+    vi.setSystemTime(baseTime + 6_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Both paths failed — stallNudgedAt should NOT be set.
+    const runs = listSubagentRunsForRequester("agent:main:main");
+    const entry = runs.find((r) => r.runId === "run-nudge-fail");
+    expect(entry).toBeDefined();
+    expect(entry!.stallNudgedAt).toBeUndefined();
+
+    // On the next sweep, nudge should be retried (not skipped).
+    callGatewaySpy.mockClear();
+    callGatewaySpy.mockImplementation(async (params: { method?: string }) => {
+      if (params?.method === "agent.wait") {
+        return new Promise(() => {});
+      }
+      return { status: "ok" };
+    });
+    queueEmbeddedPiMessageSpy.mockClear();
+    queueEmbeddedPiMessageSpy.mockReturnValue(false);
+
+    // Trigger another sweep (still past the nudge threshold).
+    vi.setSystemTime(baseTime + 12_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // The nudge should be retried via callGateway.
+    const retryCalls = callGatewaySpy.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { method?: string })?.method === "agent",
+    );
+    expect(retryCalls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("stall recovery per-agent config validation (Bug #3 fix)", () => {
+  it("per-agent subagents schema accepts stallNudgeAfterSeconds", () => {
+    const result = AgentEntrySchema.safeParse({
+      id: "test",
+      subagents: { stallNudgeAfterSeconds: 120 },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("per-agent subagents schema accepts stallKillAfterSeconds", () => {
+    const result = AgentEntrySchema.safeParse({
+      id: "test",
+      subagents: { stallKillAfterSeconds: 300 },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("per-agent subagents schema rejects negative stall values", () => {
+    const result = AgentEntrySchema.safeParse({
+      id: "test",
+      subagents: { stallNudgeAfterSeconds: -1 },
+    });
+    expect(result.success).toBe(false);
   });
 });
