@@ -177,4 +177,71 @@ describe("agent run trace", () => {
       model: "gpt-5",
     });
   });
+
+  it("starts a new retry attempt with plan after prior tool activity", () => {
+    startAgentRunTraceModelTurn({
+      runId: "run-4",
+      attempt: 1,
+      at: 100,
+    });
+    startAgentRunTraceTool({
+      runId: "run-4",
+      attempt: 1,
+      at: 120,
+      toolName: "fetch",
+      toolCallId: "tool-1",
+    });
+    finishAgentRunTraceTool({
+      runId: "run-4",
+      attempt: 1,
+      toolCallId: "tool-1",
+      status: "ok",
+      at: 150,
+    });
+    finishAgentRunTraceRetry({
+      runId: "run-4",
+      status: "error",
+      at: 180,
+      failureReason: "tool_retry",
+      error: "retry requested",
+    });
+    startAgentRunTraceModelTurn({
+      runId: "run-4",
+      attempt: 2,
+      at: 210,
+    });
+
+    const timeline = getAgentRunTraceTimeline("run-4");
+    expect(timeline?.attemptCount).toBe(2);
+    expect(timeline?.spans.map((span) => span.stage)).toEqual([
+      "plan",
+      "tool",
+      "observation",
+      "plan",
+    ]);
+    expect(timeline?.spans[2]).toMatchObject({
+      status: "error",
+      failureReason: "tool_retry",
+      error: "retry requested",
+    });
+    expect(timeline?.spans[3]).toMatchObject({
+      attempt: 2,
+      stage: "plan",
+      status: "running",
+    });
+  });
+
+  it("prunes stale running timelines after the extended retention window", () => {
+    startAgentRunTraceModelTurn({
+      runId: "run-5",
+      attempt: 1,
+      at: 100,
+    });
+
+    vi.advanceTimersByTime(29 * 60_000);
+    expect(getAgentRunTraceTimeline("run-5")?.status).toBe("running");
+
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(getAgentRunTraceTimeline("run-5")).toBeUndefined();
+  });
 });

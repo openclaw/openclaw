@@ -72,6 +72,7 @@ type FinishCommon = {
 };
 
 const TIMELINE_RETENTION_MS = 10 * 60_000;
+const RUNNING_TIMELINE_RETENTION_MS = 30 * 60_000;
 const MAX_TERMINAL_TIMELINES = 200;
 
 const timelines = new Map<string, MutableTimeline>();
@@ -137,6 +138,7 @@ function cloneTimeline(timeline: MutableTimeline): AgentRunTraceTimeline {
       ...span,
       ...(span.usage ? { usage: { ...span.usage } } : {}),
     }));
+  const totalCostUsd = computeTotalCostUsd(spans);
   return {
     runId: timeline.runId,
     ...(timeline.sessionKey ? { sessionKey: timeline.sessionKey } : {}),
@@ -144,9 +146,7 @@ function cloneTimeline(timeline: MutableTimeline): AgentRunTraceTimeline {
     ...(timeline.startedAt !== undefined ? { startedAt: timeline.startedAt } : {}),
     ...(timeline.endedAt !== undefined ? { endedAt: timeline.endedAt } : {}),
     attemptCount: timeline.attemptCount,
-    ...(computeTotalCostUsd(spans) !== undefined
-      ? { totalCostUsd: computeTotalCostUsd(spans) }
-      : {}),
+    ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
     spans,
   };
 }
@@ -273,13 +273,18 @@ function createClosedSpan(
 }
 
 function pruneTimelines() {
-  const cutoff = Date.now() - TIMELINE_RETENTION_MS;
+  const terminalCutoff = Date.now() - TIMELINE_RETENTION_MS;
+  const runningCutoff = Date.now() - RUNNING_TIMELINE_RETENTION_MS;
   for (const runId of timelineOrder.slice()) {
     const timeline = timelines.get(runId);
     if (!timeline) {
       continue;
     }
-    if (timeline.status !== "running" && timeline.lastTouchedAt < cutoff) {
+    if (timeline.status === "running" && timeline.lastTouchedAt < runningCutoff) {
+      timelines.delete(runId);
+      continue;
+    }
+    if (timeline.status !== "running" && timeline.lastTouchedAt < terminalCutoff) {
       timelines.delete(runId);
     }
   }
@@ -476,6 +481,7 @@ export function finishAgentRunTraceRetry(params: FinishCommon): AgentRunTraceTim
   });
   timeline.status = "running";
   timeline.endedAt = undefined;
+  timeline.completedToolCount = 0;
   return cloneTimeline(timeline);
 }
 
@@ -497,11 +503,11 @@ export function finalizeAgentRunTrace(params: FinishCommon): AgentRunTraceTimeli
 }
 
 export function getAgentRunTraceTimeline(runId: string): AgentRunTraceTimeline | undefined {
+  pruneTimelines();
   const timeline = timelines.get(runId);
   if (!timeline) {
     return undefined;
   }
-  pruneTimelines();
   return cloneTimeline(timeline);
 }
 
