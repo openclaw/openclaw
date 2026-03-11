@@ -66,6 +66,34 @@ function extractDetailPath(detail: string, prefix: string): string | null {
   return value.length > 0 ? value : null;
 }
 
+function renderLegacyGatewayServiceCleanupHints(services: ExtraGatewayService[]): string[] {
+  const hints = new Set<string>();
+  for (const svc of services) {
+    if (svc.platform === "darwin") {
+      const plistPath = extractDetailPath(svc.detail, "plist:");
+      if (plistPath) {
+        hints.add(`launchctl bootout gui/$UID/${svc.label}`);
+        hints.add(`rm ${plistPath}`);
+      }
+      continue;
+    }
+
+    if (svc.platform === "linux") {
+      const unitPath = extractDetailPath(svc.detail, "unit:");
+      hints.add(`systemctl --user disable --now ${svc.label}`);
+      if (unitPath) {
+        hints.add(`rm ${unitPath}`);
+      }
+      continue;
+    }
+
+    if (svc.platform === "win32") {
+      hints.add(`schtasks /Delete /TN "${svc.label}" /F`);
+    }
+  }
+  return [...hints];
+}
+
 async function cleanupLegacyLaunchdService(params: {
   label: string;
   plistPath: string;
@@ -391,6 +419,7 @@ export async function maybeScanExtraGatewayServices(
   );
 
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
+  let legacyCleanupHints: string[] = [];
   if (legacyServices.length > 0) {
     const shouldRemove = await prompter.confirmSkipInNonInteractive({
       message: "Remove legacy gateway services (clawdbot/moltbot) now?",
@@ -417,15 +446,24 @@ export async function maybeScanExtraGatewayServices(
         note(removed.map((line) => `- ${line}`).join("\n"), "Legacy gateway removed");
       }
       if (failed.length > 0) {
-        note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
+        note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup incomplete");
+        const failedServices = legacyServices.filter((svc) =>
+          failed.some((line) => line.startsWith(svc.label)),
+        );
+        legacyCleanupHints = renderLegacyGatewayServiceCleanupHints(
+          failedServices.length > 0 ? failedServices : legacyServices,
+        );
       }
       if (removed.length > 0) {
         runtime.log("Legacy gateway services removed. Installing OpenClaw gateway next.");
       }
+    } else {
+      legacyCleanupHints = renderLegacyGatewayServiceCleanupHints(legacyServices);
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  const cleanupHints =
+    legacyServices.length > 0 ? legacyCleanupHints : renderGatewayServiceCleanupHints();
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }

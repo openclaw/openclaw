@@ -406,4 +406,86 @@ describe("maybeScanExtraGatewayServices", () => {
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
     );
   });
+
+  it("does not show generic cleanup hints after successful legacy removal", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "moltbot-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/moltbot-gateway.service",
+        scope: "user",
+        legacy: true,
+      },
+    ]);
+    mocks.uninstallLegacySystemdUnits.mockResolvedValue([
+      {
+        name: "moltbot-gateway",
+        unitPath: "/home/test/.config/systemd/user/moltbot-gateway.service",
+        enabled: true,
+        exists: true,
+      },
+    ]);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([
+      "systemctl --user disable --now openclaw-gateway.service",
+    ]);
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const prompter = {
+      confirm: vi.fn(),
+      confirmRepair: vi.fn(),
+      confirmAggressive: vi.fn(),
+      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+      select: vi.fn(),
+      shouldRepair: false,
+      shouldForce: false,
+    };
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);
+
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("openclaw-gateway.service"),
+      "Cleanup hints",
+    );
+  });
+
+  it("shows legacy-specific cleanup hints when cleanup cannot complete", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "moltbot-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/moltbot-gateway.service",
+        scope: "system",
+        legacy: true,
+      },
+    ]);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([
+      "systemctl --user disable --now openclaw-gateway.service",
+    ]);
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const prompter = {
+      confirm: vi.fn(),
+      confirmRepair: vi.fn(),
+      confirmAggressive: vi.fn(),
+      confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+      select: vi.fn(),
+      shouldRepair: false,
+      shouldForce: false,
+    };
+
+    await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("moltbot-gateway.service (system)"),
+      "Legacy gateway cleanup incomplete",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("systemctl --user disable --now moltbot-gateway.service"),
+      "Cleanup hints",
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("openclaw-gateway.service"),
+      "Cleanup hints",
+    );
+  });
 });
