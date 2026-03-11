@@ -654,16 +654,10 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    const effectiveOptions: ModelFallbackRunOptions | undefined = (() => {
-      if (!previousFailureReason && !runOptions) {
-        return undefined;
-      }
-      const opts: ModelFallbackRunOptions = { ...runOptions };
-      if (previousFailureReason) {
-        opts.previousFailureReason = previousFailureReason;
-      }
-      return opts;
-    })();
+    const effectiveOptions: ModelFallbackRunOptions | undefined =
+      previousFailureReason || runOptions
+        ? { ...runOptions, ...(previousFailureReason && { previousFailureReason }) }
+        : undefined;
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
