@@ -36,6 +36,7 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
+  looksLikeSessionKey,
   shouldResolveSessionIdInput,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -189,8 +190,20 @@ export function createSessionStatusTool(opts?: {
       const a2aPolicy = createAgentToAgentPolicy(cfg);
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
-      let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
-      if (!requestedKeyRaw?.trim()) {
+      // When no explicit sessionKey is provided by the model and the implicit fallback
+      // from opts.agentSessionKey is not key-shaped (e.g. a bare CLI --session-id like
+      // "local-status-probe"), canonicalize to the agent's main session key so local
+      // embedded runs don't fail with "Unknown sessionId: <raw-cli-id>".
+      const fallbackRaw = opts?.agentSessionKey?.trim();
+      let requestedKeyRaw: string;
+      if (requestedKeyParam) {
+        requestedKeyRaw = requestedKeyParam;
+      } else if (fallbackRaw && looksLikeSessionKey(fallbackRaw)) {
+        requestedKeyRaw = fallbackRaw;
+      } else if (fallbackRaw) {
+        // Bare CLI id – derive the canonical main session key for the default agent.
+        requestedKeyRaw = buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey });
+      } else {
         throw new Error("sessionKey required");
       }
 
