@@ -43,6 +43,14 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
 
+  it("does not advertise subagent spawn in command metadata", () => {
+    const subagents = listChatCommands().find((spec) => spec.key === "subagents");
+    expect(subagents).toBeTruthy();
+    expect(subagents?.description).not.toContain("spawn");
+    const actionArg = subagents?.args?.find((arg) => arg.name === "action");
+    expect(actionArg?.choices).toEqual(["list", "kill", "log", "info", "send", "steer"]);
+  });
+
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, debug: false },

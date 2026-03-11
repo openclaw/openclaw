@@ -1637,6 +1637,17 @@ describe("handleCommands subagents", () => {
     }
   });
 
+  it("does not advertise spawn in generic subagents help", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents foo", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).not.toContain("/subagents spawn");
+  });
+
   it("returns info for a subagent", async () => {
     const now = Date.now();
     addSubagentRunForTests({
