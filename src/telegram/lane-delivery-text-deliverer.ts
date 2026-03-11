@@ -1,7 +1,11 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
-import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isSafeToRetrySendError,
+  isTelegramClientRejection,
+} from "./network-errors.js";
 
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
@@ -270,10 +274,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           params.markDelivered();
           return "retained";
         }
+        if (isTelegramClientRejection(err)) {
+          params.log(
+            `telegram: ${args.laneName} preview final edit rejected by Telegram (client error); falling back to standard send (${String(err)})`,
+          );
+          return "fallback";
+        }
+        // Default: ambiguous error — prefer incomplete over duplicate
         params.log(
-          `telegram: ${args.laneName} preview final edit rejected by Telegram; falling back to standard send (${String(err)})`,
+          `telegram: ${args.laneName} preview final edit failed with ambiguous error; keeping existing preview to avoid duplicate (${String(err)})`,
         );
-        return "fallback";
+        params.markDelivered();
+        return "retained";
       }
       params.log(
         `telegram: ${args.laneName} preview ${args.context} edit failed; falling back to standard send (${String(err)})`,
@@ -353,6 +365,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         context,
       });
       if (typeof previewTargetAfterStop.previewMessageId !== "number") {
+        if (lane.stream?.sendMayHaveLanded?.()) {
+          params.log(
+            `telegram: ${laneName} first preview send may have landed despite missing message id; keeping to avoid duplicate`,
+          );
+          params.markDelivered();
+          return "retained";
+        }
         return "fallback";
       }
       return finalizePreview(previewTargetAfterStop.previewMessageId, true, false);
@@ -367,6 +386,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       context,
     });
     if (typeof previewTargetAfterStop.previewMessageId !== "number") {
+      // Only retain for final delivery when a prior preview is already visible
+      // to the user — otherwise falling back is safer than silence. For updates,
+      // always fall back so the caller can attempt sendPayload without stale
+      // markDelivered() state.
+      if (context === "final" && lane.hasStreamedMessage && lane.stream?.sendMayHaveLanded?.()) {
+        params.log(
+          `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
+        );
+        params.markDelivered();
+        return "retained";
+      }
       return "fallback";
     }
     const activePreviewMessageId = lane.stream?.messageId();
