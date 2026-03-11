@@ -61,6 +61,9 @@ function formatOutputBlock(text: string) {
 
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
+  if (trimmed.startsWith("![")) {
+    return null;
+  }
   let restSource = "";
   if (trimmed.toLowerCase().startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);

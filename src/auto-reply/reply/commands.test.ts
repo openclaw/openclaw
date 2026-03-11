@@ -92,6 +92,11 @@ vi.mock("../../agents/pi-embedded.js", () => {
   };
 });
 
+const execToolExecuteMock = vi.hoisted(() => vi.fn());
+vi.mock("../../agents/bash-tools.js", () => ({
+  createExecTool: () => ({ execute: execToolExecuteMock }),
+}));
+
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
@@ -657,12 +662,54 @@ describe("handleCommands bash alias", () => {
       commands: { bash: true, text: true },
       whatsapp: { allowFrom: ["*"] },
     } as OpenClawConfig;
-    for (const aliasCommand of ["!poll", "!stop"]) {
+    for (const aliasCommand of ["!poll", "! poll", "!stop"]) {
       resetBashChatCommandForTests();
       const params = buildParams(aliasCommand, cfg);
       const result = await handleCommands(params);
       expect(result.shouldContinue).toBe(false);
       expect(result.reply?.text).toContain("No active bash job");
+    }
+  });
+
+  it("does not treat markdown image syntax as a bash command", async () => {
+    const cfg = {
+      commands: { bash: true, text: true },
+      whatsapp: { allowFrom: ["*"] },
+    } as OpenClawConfig;
+    resetBashChatCommandForTests();
+    const params = buildParams("![image] hello", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(true);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("accepts bang aliases and /bash run commands", async () => {
+    const cfg = {
+      commands: { bash: true, text: true },
+      whatsapp: { allowFrom: ["*"] },
+    } as OpenClawConfig;
+    execToolExecuteMock.mockResolvedValue({
+      details: { status: "completed", exitCode: 0, aggregated: "ok" },
+      content: [],
+    });
+
+    const cases = [
+      { commandBody: "!ls", expectedCommand: "ls" },
+      { commandBody: "!: ls", expectedCommand: "ls" },
+      { commandBody: "/bash echo hi", expectedCommand: "echo hi" },
+    ];
+
+    for (const testCase of cases) {
+      resetBashChatCommandForTests();
+      execToolExecuteMock.mockClear();
+      const params = buildParams(testCase.commandBody, cfg);
+      const result = await handleCommands(params);
+      expect(result.shouldContinue).toBe(false);
+      expect(result.reply?.text).toContain(`bash: ${testCase.expectedCommand}`);
+      expect(execToolExecuteMock).toHaveBeenCalledWith(
+        "chat-bash",
+        expect.objectContaining({ command: testCase.expectedCommand }),
+      );
     }
   });
 });
