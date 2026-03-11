@@ -126,4 +126,13 @@ export const pt_BR: TranslationMap = {
     de: "Deutsch (Alemão)",
     es: "Español (Espanhol)",
   },
+  config: {
+    rawEditor: {
+      lineCol: "Linha {line} Col {col}",
+      path: "Caminho",
+      root: "Raiz",
+      noSelection: "Sem seleção",
+      selected: "{count} selecionados",
+    },
+  },
 };

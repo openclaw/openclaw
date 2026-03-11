@@ -123,6 +123,15 @@ export const zh_CN: TranslationMap = {
     de: "Deutsch (德语)",
     es: "Español (西班牙语)",
   },
+  config: {
+    rawEditor: {
+      lineCol: "第 {line} 行 第 {col} 列",
+      path: "路径",
+      root: "根",
+      noSelection: "未选择",
+      selected: "已选择 {count} 个字符",
+    },
+  },
   cron: {
     summary: {
       enabled: "已启用",

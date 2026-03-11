@@ -123,4 +123,13 @@ export const zh_TW: TranslationMap = {
     de: "Deutsch (德語)",
     es: "Español (西班牙語)",
   },
+  config: {
+    rawEditor: {
+      lineCol: "第 {line} 行 第 {col} 列",
+      path: "路徑",
+      root: "根",
+      noSelection: "未選取",
+      selected: "已選取 {count} 個字元",
+    },
+  },
 };

@@ -626,11 +626,24 @@
   padding: 22px;
 }
 
-.config-raw-field textarea {
-  min-height: 500px;
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.55;
+.config-raw-field config-raw-editor {
+  display: block;
+}
+
+.config-raw-shell {
+  border: 1px solid var(--input);
+  background: var(--card);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+  overflow: hidden;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.config-raw-shell:focus-within {
+  border-color: var(--input);
+  box-shadow: var(--focus-ring);
 }
 
 /* Loading State */
