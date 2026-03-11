@@ -257,14 +257,7 @@ export async function promptModelMetadata(
     });
     compat.maxTokensField = maxTokensFieldChoice;
 
-    for (const [k, v] of Object.entries(compat)) {
-      if (v === false && k !== "supportsTools") {
-        delete compat[k];
-      }
-    }
-    if (Object.keys(compat).length > 0) {
-      result.compat = compat as ModelDefinitionConfig["compat"];
-    }
+    result.compat = compat as ModelDefinitionConfig["compat"];
   }
 
   return result;
