@@ -234,7 +234,7 @@ export async function reconcileAssistantOutputs(params: {
       break;
     }
     for (const segment of extractAssistantOutputSegments(msg, {
-      fallbackMessageStableId: `finalized-${absoluteIndex}`,
+      fallbackMessageStableId: resolveLiveAssistantFallbackMessageId(msg),
     })) {
       if (params.seenSegmentIds.has(segment.segmentId)) {
         continue;

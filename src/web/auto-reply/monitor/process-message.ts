@@ -421,11 +421,18 @@ export async function processMessage(params: {
     });
     didSendReply = true;
     const shouldLog = normalized.payload.text ? true : undefined;
-    params.rememberSentText(normalized.payload.text, {
-      combinedBody,
-      combinedBodySessionKey: params.route.sessionKey,
-      logVerboseMessage: shouldLog,
-    });
+    params.rememberSentText(
+      normalized.payload.text,
+      kind === "final"
+        ? {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: shouldLog,
+          }
+        : {
+            logVerboseMessage: shouldLog,
+          },
+    );
     const fromDisplay =
       params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
     if (kind === "commentary") {

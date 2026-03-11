@@ -351,6 +351,13 @@ describe("web processMessage inbound contract", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+    const [, finalRememberOptions] = rememberSentText.mock.calls[0] ?? [];
+    expect(finalRememberOptions).toEqual(
+      expect.objectContaining({
+        combinedBody: expect.any(String),
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1555",
+      }),
+    );
   });
 
   it("forces disableBlockStreaming for WhatsApp dispatch", async () => {
@@ -380,6 +387,17 @@ describe("web processMessage inbound contract", () => {
 
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+    const [, commentaryRememberOptions] = rememberSentText.mock.calls[0] ?? [];
+    expect(commentaryRememberOptions).toEqual(
+      expect.objectContaining({
+        logVerboseMessage: true,
+      }),
+    );
+    expect(commentaryRememberOptions).not.toEqual(
+      expect.objectContaining({
+        combinedBody: "echo",
+      }),
+    );
   });
 
   it("keeps live WhatsApp commentary disabled by default", async () => {

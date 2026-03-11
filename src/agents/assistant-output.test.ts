@@ -226,16 +226,20 @@ describe("assistant output reconciliation", () => {
       seenSegmentIds,
     });
 
-    expect(result.newOutputs).toEqual([
-      {
-        segmentId: "assistant:finalized-0:segment:0",
+    expect(result.newOutputs).toHaveLength(2);
+    expect(result.newOutputs[0]).toEqual(
+      expect.objectContaining({
         text: "First assistant message.",
-      },
-      {
-        segmentId: "assistant:finalized-1:segment:0",
+      }),
+    );
+    expect(result.newOutputs[1]).toEqual(
+      expect.objectContaining({
         text: "Second assistant message.",
-      },
-    ]);
+      }),
+    );
+    expect(result.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(result.newOutputs[1]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(result.newOutputs[0]?.segmentId).not.toBe(result.newOutputs[1]?.segmentId);
     expect(result.nextStartIndex).toBe(2);
   });
 
@@ -264,12 +268,13 @@ describe("assistant output reconciliation", () => {
       startIndex: 0,
       seenSegmentIds,
     });
-    expect(firstPass.newOutputs).toEqual([
-      {
-        segmentId: "assistant:finalized-0:segment:0",
+    expect(firstPass.newOutputs).toHaveLength(1);
+    expect(firstPass.newOutputs[0]).toEqual(
+      expect.objectContaining({
         text: "Done before in-flight.",
-      },
-    ]);
+      }),
+    );
+    expect(firstPass.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
     expect(firstPass.nextStartIndex).toBe(1);
 
     Object.assign(messages[1], { stopReason: "toolUse" });
@@ -280,16 +285,20 @@ describe("assistant output reconciliation", () => {
       seenSegmentIds,
     });
 
-    expect(secondPass.newOutputs).toEqual([
-      {
-        segmentId: "assistant:finalized-1:segment:0",
+    expect(secondPass.newOutputs).toHaveLength(2);
+    expect(secondPass.newOutputs[0]).toEqual(
+      expect.objectContaining({
         text: "Still streaming.",
-      },
-      {
-        segmentId: "assistant:finalized-2:segment:0",
+      }),
+    );
+    expect(secondPass.newOutputs[1]).toEqual(
+      expect.objectContaining({
         text: "Completed after in-flight.",
-      },
-    ]);
+      }),
+    );
+    expect(secondPass.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(secondPass.newOutputs[1]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(secondPass.newOutputs[0]?.segmentId).not.toBe(secondPass.newOutputs[1]?.segmentId);
     expect(secondPass.nextStartIndex).toBe(3);
   });
 
@@ -310,12 +319,13 @@ describe("assistant output reconciliation", () => {
       seenSegmentIds,
     });
 
-    expect(result.newOutputs).toEqual([
-      {
-        segmentId: "assistant:finalized-0:segment:0",
+    expect(result.newOutputs).toHaveLength(1);
+    expect(result.newOutputs[0]).toEqual(
+      expect.objectContaining({
         text: "Final output after compaction.",
-      },
-    ]);
+      }),
+    );
+    expect(result.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
     expect(result.nextStartIndex).toBe(1);
   });
 
@@ -412,5 +422,45 @@ describe("assistant output reconciliation", () => {
     expect(firstResult.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
     expect(secondResult.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
     expect(onCommentary).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses fallback segment ids between live and finalized reconciliation", async () => {
+    const onCommentary = vi.fn();
+    const seenSegmentIds = new Set<string>();
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Live commentary without ids.",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const liveResult = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: message as any,
+      seenSegmentIds,
+      onCommentary,
+    });
+    expect(liveResult.newOutputs).toHaveLength(1);
+
+    Object.assign(message, { stopReason: "toolUse" });
+    const finalizedResult = await reconcileAssistantOutputs({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: [message] as any,
+      startIndex: 0,
+      seenSegmentIds,
+    });
+
+    expect(finalizedResult.newOutputs).toEqual([]);
+    expect(finalizedResult.nextStartIndex).toBe(1);
   });
 });
