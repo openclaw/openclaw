@@ -247,12 +247,17 @@ function resolveFeishuGroupSession(params: {
 }): ResolvedFeishuGroupSession {
   const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
 
-  const normalizedThreadId = threadId?.trim();
-  const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
-  const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
+  const normalizedThreadId = threadId?.trim();                                                                                                                                                                                                                            
+  const normalizedRootId = rootId?.trim();                                                                                                                                                                                                                                
+  const threadReply = Boolean(normalizedThreadId || normalizedRootId);                                                                                                                                                                                                    
+  const configValue = groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled";                                                                                                                                                                               
+  // FIX: Explicit "disabled" config should override raw threadReply detection                                                                                                                                                                                            
+  const replyInThread =                                                                                                                                                                                                                                                   
+    configValue === "enabled"                                                                                                                                                                                                                                             
+      ? true                                                                                                                                                                                                                                                              
+      : configValue === "disabled"                                                                                                                                                                                                                                        
+      ? false                                                                                                                                                                                                                                                             
+      : threadReply;
 
   const legacyTopicSessionMode =
     groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
@@ -1356,7 +1361,7 @@ export async function handleFeishuMessage(params: {
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
       isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
-    const threadReply = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
