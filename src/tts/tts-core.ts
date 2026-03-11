@@ -139,17 +139,27 @@ export function parseTtsDirectives(
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
     const tokens = body.split(/\s+/).filter(Boolean);
-    for (const token of tokens) {
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
       const eqIndex = token.indexOf("=");
       if (eqIndex === -1) {
         continue;
       }
       const rawKey = token.slice(0, eqIndex).trim();
-      const rawValue = token.slice(eqIndex + 1).trim();
+      let rawValue = token.slice(eqIndex + 1).trim();
       if (!rawKey || !rawValue) {
         continue;
       }
       const key = rawKey.toLowerCase();
+      // Collect remaining tokens without '=' for multi-word values (e.g. instructions)
+      if (key === "instructions") {
+        const parts = [rawValue];
+        while (i + 1 < tokens.length && !tokens[i + 1].includes("=")) {
+          i++;
+          parts.push(tokens[i]);
+        }
+        rawValue = parts.join(" ");
+      }
       try {
         switch (key) {
           case "provider":
