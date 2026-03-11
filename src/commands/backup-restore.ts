@@ -377,7 +377,8 @@ async function assertSafeWorkspaceRestoreTarget(params: {
     isUnsafeRestoreTarget(resolved, canonicalHomeDir) ||
     isPathWithin(resolved, stateDir) ||
     resolved === configPath ||
-    resolved === oauthDir
+    resolved === oauthDir ||
+    isPathWithin(resolved, oauthDir)
   ) {
     throw new Error(`Refusing to restore workspace to an unsafe path: ${resolved}`);
   }
@@ -475,6 +476,7 @@ export async function buildRestoreOperations(params: {
       ];
       let workspaceTargetError: Error | undefined;
       let restoredWorkspace = false;
+      let workspaceCoveredByState = false;
       for (const candidateDirs of workspaceTargetCandidates) {
         const workspaceTargetsBySourcePath = await mapWorkspaceTargetsBySourcePath(
           candidateDirs,
@@ -531,6 +533,7 @@ export async function buildRestoreOperations(params: {
           continue;
         }
         if (candidateOperations.length === 0 && params.mode === "full-host" && stateAsset) {
+          workspaceCoveredByState = true;
           continue;
         }
         operations.push(...candidateOperations);
@@ -541,7 +544,7 @@ export async function buildRestoreOperations(params: {
         if (workspaceTargetError) {
           throw workspaceTargetError;
         }
-        if (!(params.mode === "full-host" && stateAsset)) {
+        if (!(params.mode === "full-host" && stateAsset && workspaceCoveredByState)) {
           throw new Error(
             `Workspace restore target mismatch: archive has ${workspaceAssets.length} workspace asset(s), but no compatible restore target set was found.`,
           );

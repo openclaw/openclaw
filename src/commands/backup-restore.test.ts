@@ -403,6 +403,104 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects workspace restore targets nested under the oauth directory", async () => {
+    const originalOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const oauthDir = path.join(tempHome.home, "external-oauth");
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const unsafeWorkspace = path.join(oauthDir, "workspace");
+    try {
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+      await fs.mkdir(path.join(rootDir, "assets", "workspace"), { recursive: true });
+
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [unsafeWorkspace],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: unsafeWorkspace,
+                archivePath: "archive-root/assets/workspace",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow("Refusing to restore workspace to an unsafe path");
+    } finally {
+      if (originalOAuthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOAuthDir;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails full-host restore when archived workspace assets cannot be mapped", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archivedWorkspaceA = path.join("/tmp", "archived-workspace-a");
+    const archivedWorkspaceB = path.join("/tmp", "archived-workspace-b");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "state"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-a"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-b"), { recursive: true });
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [
+                archivedWorkspaceA,
+                path.join("/tmp", "missing-workspace"),
+                path.join("/tmp", "missing-workspace-2"),
+              ],
+            },
+            assets: [
+              {
+                kind: "state",
+                sourcePath: stateDir,
+                archivePath: "archive-root/assets/state",
+              },
+              {
+                kind: "workspace",
+                sourcePath: archivedWorkspaceA,
+                archivePath: "archive-root/assets/workspace-a",
+              },
+              {
+                kind: "workspace",
+                sourcePath: archivedWorkspaceB,
+                archivePath: "archive-root/assets/workspace-b",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow("Workspace restore target mismatch");
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("emits a single JSON payload when restore runs with --json", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-json-"));
