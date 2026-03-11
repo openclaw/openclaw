@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
+  toAgentRequestSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
@@ -149,9 +150,10 @@ export function resolveSessionKeyForRequest(opts: {
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const requestTo = opts.to?.trim();
   const explicitSessionKey = opts.sessionKey?.trim() || undefined;
   const explicitAgentSessionKey =
-    !explicitSessionKey && !requestedSessionId && !opts.to?.trim()
+    !explicitSessionKey && !requestedSessionId && !requestTo
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
           agentId: requestedAgentId,
@@ -165,16 +167,18 @@ export function resolveSessionKeyForRequest(opts: {
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
+  const ctx: MsgContext | undefined = requestTo ? { From: requestTo } : undefined;
+  const agentScopedRequestKey =
+    requestedAgentId && requestTo ? (toAgentRequestSessionKey(requestTo) ?? requestTo) : requestTo;
   const derivedToSessionKey =
-    !explicitSessionKey && ctx
+    !explicitSessionKey && requestTo
       ? requestedAgentId
         ? toAgentStoreSessionKey({
             agentId: requestedAgentId,
-            requestKey: opts.to,
+            requestKey: agentScopedRequestKey,
             mainKey,
           })
-        : resolveSessionKey(scope, ctx, mainKey)
+        : resolveSessionKey(scope, ctx as MsgContext, mainKey)
       : undefined;
   let sessionKey: string | undefined =
     explicitSessionKey ?? derivedToSessionKey ?? explicitAgentSessionKey;
