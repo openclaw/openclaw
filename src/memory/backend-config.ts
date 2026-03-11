@@ -184,6 +184,9 @@ function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig
   if (raw?.maxResults && raw.maxResults > 0) {
     parsed.maxResults = Math.floor(raw.maxResults);
   }
+  if (raw?.minScore && raw.minScore > 0 && raw.minScore < 1) {
+    parsed.minScore = raw.minScore;
+  }
   if (raw?.maxSnippetChars && raw.maxSnippetChars > 0) {
     parsed.maxSnippetChars = Math.floor(raw.maxSnippetChars);
   }

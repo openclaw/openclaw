@@ -61,6 +61,7 @@ export type MemoryQmdUpdateConfig = {
 
 export type MemoryQmdLimitsConfig = {
   maxResults?: number;
+  minScore?: number;
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;
