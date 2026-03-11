@@ -3,7 +3,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("waits for multiple compaction retries before resolving", async () => {
+  it("waits for compaction retries to actually start and finish before resolving", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-3",
     });
@@ -19,8 +19,17 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
     expect(resolved).toBe(false);
 
+    // The original run ends before pi-coding-agent schedules the retry via continue().
     emit({ type: "agent_end" });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
 
+    emit({ type: "agent_start" });
+    emit({ type: "agent_end" });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    emit({ type: "agent_start" });
     await Promise.resolve();
     expect(resolved).toBe(false);
 

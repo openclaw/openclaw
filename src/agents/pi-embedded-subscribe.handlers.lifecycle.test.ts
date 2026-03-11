@@ -21,6 +21,7 @@ function createContext(
     state: {
       lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
+      pendingCompactionRetryStarts: 0,
       blockState: {
         thinking: true,
         final: true,
@@ -32,6 +33,7 @@ function createContext(
       warn: vi.fn(),
     },
     flushBlockReplyBuffer: vi.fn(),
+    markCompactionRetryStarted: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;

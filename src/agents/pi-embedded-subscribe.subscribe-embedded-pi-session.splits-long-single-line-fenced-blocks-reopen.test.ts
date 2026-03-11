@@ -25,7 +25,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
     expectFencedChunks(onBlockReply.mock.calls, "```json");
   });
-  it("waits for auto-compaction retry and clears buffered text", async () => {
+  it("waits for auto-compaction retry to resume before clearing the wait", async () => {
     const listeners: SessionEventHandler[] = [];
     const session = {
       subscribe: (listener: SessionEventHandler) => {
@@ -74,6 +74,14 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(resolved).toBe(false);
 
     for (const listener of listeners) {
+      listener({ type: "agent_end" });
+    }
+
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    for (const listener of listeners) {
+      listener({ type: "agent_start" });
       listener({ type: "agent_end" });
     }
 

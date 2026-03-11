@@ -15,6 +15,10 @@ export {
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
+  // auto_compaction_end(willRetry=true) lands before pi-coding-agent schedules continue()
+  if (ctx.state.pendingCompactionRetryStarts > 0) {
+    ctx.markCompactionRetryStarted();
+  }
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
     runId: ctx.params.runId,
@@ -105,9 +109,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
 
-  if (ctx.state.pendingCompactionRetry > 0) {
+  // Ignore the pre-retry agent_end from the original run; only started retries can clear the wait.
+  const startedCompactionRetries =
+    ctx.state.pendingCompactionRetry - ctx.state.pendingCompactionRetryStarts;
+  if (startedCompactionRetries > 0) {
     ctx.resolveCompactionRetry();
-  } else {
+  } else if (ctx.state.pendingCompactionRetry === 0) {
     ctx.maybeResolveCompactionWait();
   }
 }
