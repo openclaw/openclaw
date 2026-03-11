@@ -1,5 +1,6 @@
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { isKnownCoreToolId } from "./tool-catalog.js";
 import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
@@ -88,7 +89,12 @@ export function applyToolPolicyPipeline(params: {
 
     let policy: ToolPolicyLike | undefined = step.policy;
     if (step.stripPluginOnlyAllowlist) {
-      const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
+      const resolved = stripPluginOnlyAllowlist(
+        policy,
+        pluginGroups,
+        coreToolNames,
+        isKnownCoreToolId,
+      );
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
         const suffix = resolved.strippedAllowlist
