@@ -5,12 +5,14 @@ import {
   LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
 import {
+  bootstrapWithRetry,
   installLaunchAgent,
   isLaunchAgentListed,
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  waitForPidExitWithEscalation,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -18,6 +20,9 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
+  // Bootstrap errors to return sequentially (shifts on each bootstrap call).
+  // When empty, falls back to bootstrapError for all remaining calls.
+  bootstrapErrorSequence: [] as string[],
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -46,8 +51,12 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "print") {
       return { stdout: state.printOutput, stderr: "", code: 0 };
     }
-    if (call[0] === "bootstrap" && state.bootstrapError) {
-      return { stdout: "", stderr: state.bootstrapError, code: 1 };
+    if (call[0] === "bootstrap") {
+      const seqError = state.bootstrapErrorSequence.shift();
+      const err = seqError ?? state.bootstrapError;
+      if (err) {
+        return { stdout: "", stderr: err, code: 1 };
+      }
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -109,6 +118,7 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
+  state.bootstrapErrorSequence.length = 0;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -342,8 +352,9 @@ describe("launchd install", () => {
     state.printOutput = ["state = running", "pid = 4242"].join("\n");
     const killSpy = vi.spyOn(process, "kill");
     killSpy
-      .mockImplementationOnce(() => true)
+      .mockImplementationOnce(() => true) // first kill(4242, 0): alive
       .mockImplementationOnce(() => {
+        // second kill(4242, 0): gone
         const err = new Error("no such process") as NodeJS.ErrnoException;
         err.code = "ESRCH";
         throw err;
@@ -371,6 +382,36 @@ describe("launchd install", () => {
       vi.useRealTimers();
       killSpy.mockRestore();
     }
+  });
+
+  it("bootstrap retries on EIO and succeeds when process finally exits", async () => {
+    const env = createDefaultLaunchdEnv();
+    const eioError = "Bootstrap failed: 5: Input/output error";
+    // First two bootstrap attempts return EIO; third succeeds.
+    state.bootstrapErrorSequence.push(eioError, eioError);
+
+    vi.useFakeTimers();
+    try {
+      const restartPromise = restartLaunchAgent({ env, stdout: new PassThrough() });
+      // Advance through both retry delays (500 ms + 1000 ms).
+      await vi.advanceTimersByTimeAsync(2000);
+      await restartPromise;
+      const bootstrapCalls = state.launchctlCalls.filter((c) => c[0] === "bootstrap");
+      expect(bootstrapCalls.length).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bootstrap does not retry on non-EIO errors", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootstrapError = "Operation not permitted";
+
+    await expect(restartLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "launchctl bootstrap failed: Operation not permitted",
+    );
+    const bootstrapCalls = state.launchctlCalls.filter((c) => c[0] === "bootstrap");
+    expect(bootstrapCalls.length).toBe(1);
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
@@ -402,6 +443,187 @@ describe("launchd install", () => {
         programArguments: defaultProgramArguments,
       }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+  });
+});
+
+describe("waitForPidExitWithEscalation", () => {
+  it("returns immediately when pid is invalid", async () => {
+    // No kill calls should be made for invalid pids.
+    const killSpy = vi.spyOn(process, "kill");
+    await waitForPidExitWithEscalation(0);
+    await waitForPidExitWithEscalation(-1);
+    await waitForPidExitWithEscalation(NaN);
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it("returns immediately when the process is already gone (ESRCH on first check)", async () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const err = new Error("no such process") as NodeJS.ErrnoException;
+      err.code = "ESRCH";
+      throw err;
+    });
+    await waitForPidExitWithEscalation(9999);
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    killSpy.mockRestore();
+  });
+
+  it("escalates to SIGKILL after the graceful window and resolves once the process exits", async () => {
+    let sigkillReceived = false;
+    let probesAfterKill = 0;
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (signal === "SIGKILL") {
+        sigkillReceived = true;
+        return true;
+      }
+      if (signal === 0) {
+        if (!sigkillReceived) {
+          // Still in graceful window — report alive.
+          return true;
+        }
+        probesAfterKill++;
+        if (probesAfterKill >= 2) {
+          // Process reaped after two post-SIGKILL probes.
+          const err = new Error("no such process") as NodeJS.ErrnoException;
+          err.code = "ESRCH";
+          throw err;
+        }
+        return true;
+      }
+      return true;
+    });
+
+    vi.useFakeTimers();
+    try {
+      const waitPromise = waitForPidExitWithEscalation(1234);
+      // Advance past the graceful window (15 s) to trigger SIGKILL.
+      await vi.advanceTimersByTimeAsync(15_200);
+      // Advance through the post-SIGKILL polling window.
+      await vi.advanceTimersByTimeAsync(600);
+      await waitPromise;
+
+      expect(sigkillReceived).toBe(true);
+      expect(killSpy).toHaveBeenCalledWith(1234, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+    }
+  });
+
+  it("treats EPERM as process-alive and continues waiting", async () => {
+    let callCount = 0;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((_, signal) => {
+      if (signal === 0) {
+        callCount++;
+        if (callCount === 1) {
+          // First check: EPERM means process exists (different user).
+          const err = new Error("operation not permitted") as NodeJS.ErrnoException;
+          err.code = "EPERM";
+          throw err;
+        }
+        // Second check: ESRCH means gone.
+        const err = new Error("no such process") as NodeJS.ErrnoException;
+        err.code = "ESRCH";
+        throw err;
+      }
+      return true;
+    });
+
+    vi.useFakeTimers();
+    try {
+      const waitPromise = waitForPidExitWithEscalation(5678);
+      await vi.advanceTimersByTimeAsync(400);
+      await waitPromise;
+      // Must have probed at least twice (EPERM then ESRCH).
+      expect(callCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+    }
+  });
+});
+
+describe("bootstrapWithRetry", () => {
+  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+  const plistPath = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+
+  it("returns success immediately when bootstrap succeeds on the first attempt", async () => {
+    const result = await bootstrapWithRetry(domain, plistPath);
+    expect(result.code).toBe(0);
+    const bootstrapCalls = state.launchctlCalls.filter((c) => c[0] === "bootstrap");
+    expect(bootstrapCalls.length).toBe(1);
+  });
+
+  it("retries on EIO and succeeds once the process table clears", async () => {
+    const eioMsg = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapErrorSequence.push(eioMsg, eioMsg);
+
+    vi.useFakeTimers();
+    try {
+      const retryPromise = bootstrapWithRetry(domain, plistPath);
+      // Advance through retry delays: 500 ms, 1000 ms.
+      await vi.advanceTimersByTimeAsync(2000);
+      const result = await retryPromise;
+      expect(result.code).toBe(0);
+      const bootstrapCalls = state.launchctlCalls.filter((c) => c[0] === "bootstrap");
+      expect(bootstrapCalls.length).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("also retries on the 'input/output error' message variant", async () => {
+    // Some macOS versions emit the text without the errno prefix.
+    state.bootstrapErrorSequence.push("Bootstrap failed: input/output error");
+
+    vi.useFakeTimers();
+    try {
+      const retryPromise = bootstrapWithRetry(domain, plistPath);
+      await vi.advanceTimersByTimeAsync(1000);
+      const result = await retryPromise;
+      expect(result.code).toBe(0);
+      const bootstrapCalls = state.launchctlCalls.filter((c) => c[0] === "bootstrap");
+      expect(bootstrapCalls.length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry on unsupported GUI domain error (errno 125)", async () => {
+    state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+    const result = await bootstrapWithRetry(domain, plistPath);
+    expect(result.code).toBe(1);
+    const bootstrapCalls = state.launchctlCalls.filter((c) => c[0] === "bootstrap");
+    expect(bootstrapCalls.length).toBe(1);
+  });
+
+  it("does not retry on generic permission errors", async () => {
+    state.bootstrapError = "Operation not permitted";
+    const result = await bootstrapWithRetry(domain, plistPath);
+    expect(result.code).toBe(1);
+    expect(state.launchctlCalls.filter((c) => c[0] === "bootstrap").length).toBe(1);
+  });
+
+  it("exhausts all retries and returns the last failure when EIO persists", async () => {
+    const eioMsg = "Bootstrap failed: 5: Input/output error";
+    // Fill all 4 retry slots + the initial attempt = 5 EIO failures.
+    for (let i = 0; i < 5; i++) {
+      state.bootstrapErrorSequence.push(eioMsg);
+    }
+
+    vi.useFakeTimers();
+    try {
+      const retryPromise = bootstrapWithRetry(domain, plistPath);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await retryPromise;
+      expect(result.code).toBe(1);
+      expect((result.stderr || result.stdout).trim()).toBe(eioMsg);
+      // Initial attempt + 4 retries = 5 bootstrap calls.
+      expect(state.launchctlCalls.filter((c) => c[0] === "bootstrap").length).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

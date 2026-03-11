@@ -352,8 +352,32 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
-const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
-const RESTART_PID_WAIT_INTERVAL_MS = 200;
+/**
+ * Detect errno 5 (EIO): launchd rejects bootstrap while the old process is still
+ * alive in the process table, even after bootout succeeds. This happens when
+ * Node's graceful shutdown (draining connections, flushing queues) outlasts the
+ * caller's wait window. Retrying after a brief delay resolves it once the kernel
+ * reaps the process.
+ */
+function isBootstrapProcessStillAlive(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  // "Bootstrap failed: 5" is launchctl's errno 5 (EIO).
+  // Guard against confusing it with errno 125 (unsupported GUI domain).
+  return (
+    normalized.includes("bootstrap failed: 5:") ||
+    (normalized.includes("input/output error") && !normalized.includes("bootstrap failed: 125"))
+  );
+}
+
+// How long to wait for Node's graceful SIGTERM shutdown before escalating.
+const RESTART_GRACEFUL_WAIT_MS = 15_000;
+// How long to wait for SIGKILL to take effect after the graceful window expires.
+const RESTART_SIGKILL_WAIT_MS = 5_000;
+const RESTART_WAIT_INTERVAL_MS = 200;
+// Retry bootstrap up to this many times when EIO indicates the old process is
+// still alive (e.g. kernel hasn't reaped it yet despite SIGKILL).
+const BOOTSTRAP_EIO_RETRY_COUNT = 4;
+const BOOTSTRAP_EIO_RETRY_BASE_MS = 500;
 
 async function sleepMs(ms: number): Promise<void> {
   await new Promise((resolve) => {
@@ -361,23 +385,99 @@ async function sleepMs(ms: number): Promise<void> {
   });
 }
 
-async function waitForPidExit(pid: number): Promise<void> {
+/**
+ * Returns true while the process is alive and reachable by the current user.
+ * ESRCH means the process is gone. EPERM means the process exists but is owned
+ * by a different user — treat as alive so we don't stop waiting prematurely.
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Wait for a process to exit, escalating to SIGKILL if it does not honour SIGTERM
+ * within the graceful window.
+ *
+ * Node.js gateways can take >10 s to shut down gracefully (draining in-flight
+ * agent replies, flushing delivery queues, closing WebSocket connections). The old
+ * 10 s hard-stop caused `launchctl bootstrap` to be called while the process was
+ * still alive, producing `Bootstrap failed: 5: Input/output error` (EIO) and
+ * leaving the service permanently unregistered.
+ *
+ * Escalation schedule:
+ *   0 – 15 s  poll every 200 ms for voluntary exit (SIGTERM already sent by bootout)
+ *   15 s      send SIGKILL
+ *   15 – 20 s poll every 200 ms for kernel reap after SIGKILL
+ *   20 s+     give up waiting; bootstrap retry handles any residual EIO
+ */
+export async function waitForPidExitWithEscalation(pid: number): Promise<void> {
   if (!Number.isFinite(pid) || pid <= 1) {
     return;
   }
-  const deadline = Date.now() + RESTART_PID_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH" || code === "EPERM") {
-        return;
-      }
+
+  // Phase 1: wait for graceful SIGTERM-induced shutdown.
+  const gracefulDeadline = Date.now() + RESTART_GRACEFUL_WAIT_MS;
+  while (Date.now() < gracefulDeadline) {
+    if (!isProcessAlive(pid)) {
       return;
     }
-    await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
+    await sleepMs(RESTART_WAIT_INTERVAL_MS);
   }
+
+  // Phase 2: process survived the graceful window — escalate to SIGKILL.
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Process may have exited between the liveness check and the kill call.
+  }
+
+  const killDeadline = Date.now() + RESTART_SIGKILL_WAIT_MS;
+  while (Date.now() < killDeadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleepMs(RESTART_WAIT_INTERVAL_MS);
+  }
+  // Process survived SIGKILL (zombie or kernel-protected task). Proceed to
+  // bootstrap; the EIO retry loop below handles any residual launchd conflict.
+}
+
+/**
+ * Execute `launchctl bootstrap` with automatic retry on EIO (errno 5).
+ *
+ * launchd returns EIO when the old process is still present in the kernel
+ * process table even though bootout succeeded and the process is no longer
+ * scheduled. This race is common on macOS 15+ where kernel reaping is
+ * asynchronous relative to launchd's domain book-keeping. Retrying with
+ * exponential backoff lets the kernel catch up without requiring callers to
+ * handle the error.
+ *
+ * Non-retriable errors (unsupported GUI domain, permission denied, etc.) are
+ * returned immediately on the first attempt.
+ */
+export async function bootstrapWithRetry(
+  domain: string,
+  plistPath: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  let result = await execLaunchctl(["bootstrap", domain, plistPath]);
+  for (let attempt = 1; attempt <= BOOTSTRAP_EIO_RETRY_COUNT; attempt++) {
+    if (result.code === 0) {
+      return result;
+    }
+    const detail = (result.stderr || result.stdout).trim();
+    if (!isBootstrapProcessStillAlive(detail)) {
+      // Not an EIO/process-alive error — don't retry.
+      return result;
+    }
+    await sleepMs(BOOTSTRAP_EIO_RETRY_BASE_MS * attempt);
+    result = await execLaunchctl(["bootstrap", domain, plistPath]);
+  }
+  return result;
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
@@ -438,7 +538,7 @@ export async function installLaunchAgent({
   await execLaunchctl(["unload", plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await execLaunchctl(["enable", `${domain}/${label}`]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  const boot = await bootstrapWithRetry(domain, plistPath);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
@@ -488,13 +588,13 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
   }
   if (typeof previousPid === "number") {
-    await waitForPidExit(previousPid);
+    await waitForPidExitWithEscalation(previousPid);
   }
 
   // launchd can persist "disabled" state after bootout; clear it before bootstrap
   // (matches the same guard in installLaunchAgent).
   await execLaunchctl(["enable", `${domain}/${label}`]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  const boot = await bootstrapWithRetry(domain, plistPath);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
