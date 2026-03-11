@@ -564,6 +564,36 @@ describe("modelsAuthCleanCommand", () => {
     );
   });
 
+  it("non-main agent: pre-lock readOnly:false migration trigger passes agent-specific agentDir, not main path (#2915653312)", async () => {
+    // Guard: the pre-lock readOnly:false migration trigger must explicitly pass the
+    // agent-specific agentDir to loadAgentLocalAuthProfileStore — not the default
+    // (main) path and not undefined.  Without the explicit agentDir, the call
+    // resolves to the main agent's auth-profiles.json and cleanup silently operates
+    // on the wrong store (scope bleed, misleading no-op). (#2915653312)
+    const workerAgentDir = "/home/user/.openclaw/agents/worker/agent";
+    const mainAgentDir = "/home/user/.openclaw/agents/main/agent"; // default mock value
+    const store = makeStore(["anthropic:worker-profile", "anthropic:worker-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:worker-profile"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce(workerAgentDir);
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime());
+
+    // Every call to loadAgentLocalAuthProfileStore must use the worker-specific
+    // agentDir — never the main agent dir and never undefined (which would also
+    // resolve to the main dir).
+    const calls = mocks.loadAgentLocalAuthProfileStore.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [dir] of calls) {
+      expect(dir).toBe(workerAgentDir);
+      expect(dir).not.toBe(mainAgentDir);
+      expect(dir).not.toBeUndefined();
+    }
+  });
+
   it("default agent: does not set agentLocalOnly on updateAuthProfileStoreWithLock", async () => {
     // Default agent uses the merged store (ensureAuthProfileStore path) — no agentLocalOnly.
     const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
