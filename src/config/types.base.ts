@@ -131,6 +131,11 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /**
+   * When false, non-DM channels share the agent's main session instead of
+   * per-channel sessions. DM scoping is unaffected. Default: true.
+   */
+  channelIsolation?: boolean;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
 };

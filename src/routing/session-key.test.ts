@@ -5,6 +5,7 @@ import {
   isCronSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentPeerSessionKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
@@ -128,5 +129,62 @@ describe("isValidAgentId", () => {
     expect(isValidAgentId("Agent not found: xyz")).toBe(false);
     expect(isValidAgentId("../../../etc/passwd")).toBe(false);
     expect(isValidAgentId("a".repeat(65))).toBe(false);
+  });
+});
+
+describe("buildAgentPeerSessionKey channelIsolation", () => {
+  it("returns main session key when channelIsolation is false for non-DM peers", () => {
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "channel",
+      peerId: "C123",
+      channelIsolation: false,
+    });
+    expect(key).toBe("agent:main:main");
+  });
+
+  it("returns main session key for group peers when channelIsolation is false", () => {
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "group",
+      peerId: "G456",
+      channelIsolation: false,
+    });
+    expect(key).toBe("agent:main:main");
+  });
+
+  it("does not affect DM peers when channelIsolation is false", () => {
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "direct",
+      peerId: "U789",
+      dmScope: "per-peer",
+      channelIsolation: false,
+    });
+    // DMs should still use per-peer scoping, not main session
+    expect(key).toContain("direct");
+    expect(key).toContain("u789");
+  });
+
+  it("preserves per-channel behavior when channelIsolation is undefined", () => {
+    const withoutFlag = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "channel",
+      peerId: "C123",
+    });
+    const withUndefined = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "channel",
+      peerId: "C123",
+      channelIsolation: undefined,
+    });
+    expect(withoutFlag).toBe(withUndefined);
+    expect(withoutFlag).toContain("slack");
+    expect(withoutFlag).toContain("channel");
   });
 });

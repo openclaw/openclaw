@@ -134,6 +134,8 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** When false, non-DM peers share the agent's main session. Default: true. */
+  channelIsolation?: boolean;
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
@@ -163,6 +165,13 @@ export function buildAgentPeerSessionKey(params: {
     if (dmScope === "per-peer" && peerId) {
       return `agent:${normalizeAgentId(params.agentId)}:direct:${peerId}`;
     }
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: params.mainKey,
+    });
+  }
+  // When channel isolation is disabled, non-DM peers share the agent's main session.
+  if (params.channelIsolation === false) {
     return buildAgentMainSessionKey({
       agentId: params.agentId,
       mainKey: params.mainKey,

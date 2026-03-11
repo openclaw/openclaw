@@ -253,6 +253,20 @@ Manual reply tags are supported:
 
 Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. The difference reflects the platform threading models: Slack threads hide messages from the channel, while Telegram replies remain visible in the main chat flow.
 
+### Shared session across channels (`session.channelIsolation`)
+
+By default, each non-DM channel or group gets its own session key (`agent:<id>:<channel>:<peerKind>:<peerId>`). Set `session.channelIsolation: false` to make all non-DM channels share the agent's main session instead.
+
+```yaml
+session:
+  channelIsolation: false
+```
+
+When disabled:
+
+- Non-DM peers (channels, groups) all resolve to the agent's main session key (`agent:<id>:main`).
+- DM scoping (`session.dmScope`) is unaffected — DMs still follow their own isolation rules.
+
 ## Media, chunking, and delivery
 
 <AccordionGroup>
