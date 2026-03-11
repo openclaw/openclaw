@@ -522,6 +522,39 @@ describe("resolveModel", () => {
     });
   });
 
+  it("applies canonical gpt-5.4 overrides when request uses gpt-5.4-codex alias", () => {
+    mockOpenAICodexTemplateModel();
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.4",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 333000,
+                maxTokens: 65000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4-codex", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      reasoning: false,
+      contextWindow: 333000,
+      maxTokens: 65000,
+    });
+  });
+
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel({
       provider: "openai",
