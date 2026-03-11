@@ -347,6 +347,9 @@ export function normalizeProviders(params: {
           apiKey: normalizedConfiguredApiKey,
         };
       }
+      if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
+        params.secretRefManagedProviders?.add(normalizedKey);
+      }
       if (
         profileApiKey &&
         profileApiKey.source !== "plaintext" &&
@@ -370,6 +373,7 @@ export function normalizeProviders(params: {
       if (envVarName && env[envVarName] === currentApiKey) {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+        params.secretRefManagedProviders?.add(normalizedKey);
       }
     }
 
