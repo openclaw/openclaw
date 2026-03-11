@@ -618,6 +618,17 @@ async function resolveCloudflareAiGatewayImplicitProvider(
 async function resolveOllamaImplicitProvider(
   ctx: ImplicitProviderContext,
 ): Promise<Record<string, ProviderConfig> | undefined> {
+  // Allow users to completely disable Ollama auto-discovery via env var or
+  // config flag. This prevents repeated fetch-failed warnings when no local
+  // Ollama instance is running — a common pain point for cloud-only setups.
+  if (
+    ctx.env.OPENCLAW_OLLAMA_DISABLED === "1" ||
+    ctx.env.OPENCLAW_OLLAMA_DISABLED === "true" ||
+    ctx.config?.models?.ollamaDiscovery?.enabled === false
+  ) {
+    return undefined;
+  }
+
   const ollamaKey = ctx.resolveProviderApiKey("ollama").apiKey;
   const explicitOllama = ctx.explicitProviders?.ollama;
   const hasExplicitModels =
@@ -653,6 +664,12 @@ async function resolveVllmImplicitProvider(
   ctx: ImplicitProviderContext,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   if (ctx.explicitProviders?.vllm) {
+    return undefined;
+  }
+  if (
+    ctx.env.OPENCLAW_VLLM_DISABLED === "1" ||
+    ctx.env.OPENCLAW_VLLM_DISABLED === "true"
+  ) {
     return undefined;
   }
   const { apiKey: vllmKey, discoveryApiKey } = ctx.resolveProviderApiKey("vllm");

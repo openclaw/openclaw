@@ -69,8 +69,20 @@ export type BedrockDiscoveryConfig = {
   defaultMaxTokens?: number;
 };
 
+/**
+ * Control automatic discovery of local Ollama instances.
+ * Set `enabled: false` to suppress repeated "Failed to discover Ollama models"
+ * warnings when no local Ollama is running.
+ *
+ * Can also be disabled via env var: `OPENCLAW_OLLAMA_DISABLED=1`
+ */
+export type OllamaDiscoveryConfig = {
+  enabled?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   bedrockDiscovery?: BedrockDiscoveryConfig;
+  ollamaDiscovery?: OllamaDiscoveryConfig;
 };
