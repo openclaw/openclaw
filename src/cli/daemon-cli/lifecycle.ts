@@ -6,11 +6,11 @@ import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
-import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
 import {
   formatDoctorNonInteractiveHint,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -208,9 +208,9 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
-  const gatewayPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
+  const gatewayPort = await resolveGatewayLifecyclePort(service)
+    .then((ctx) => ctx.port)
+    .catch(() => resolveGatewayPortFallback());
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
