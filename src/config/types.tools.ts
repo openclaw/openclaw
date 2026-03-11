@@ -320,6 +320,15 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
+  /** Optional multimodal file indexing for selected extra paths. */
+  multimodal?: {
+    /** Enable image/audio embeddings from extraPaths. */
+    enabled?: boolean;
+    /** Which non-text file types to index. */
+    modalities?: Array<"image" | "audio" | "all">;
+    /** Max bytes allowed per multimodal file before it is skipped. */
+    maxFileBytes?: number;
+  };
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */

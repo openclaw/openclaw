@@ -319,6 +319,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
   "agents.defaults.memorySearch.extraPaths": "Extra Memory Paths",
+  "agents.defaults.memorySearch.multimodal": "Memory Search Multimodal",
+  "agents.defaults.memorySearch.multimodal.enabled": "Enable Memory Search Multimodal",
+  "agents.defaults.memorySearch.multimodal.modalities": "Memory Search Multimodal Modalities",
+  "agents.defaults.memorySearch.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Memory Search Session Index (Experimental)",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
