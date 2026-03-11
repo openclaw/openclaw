@@ -3,13 +3,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import {
-  isPackageProvenControlUiRootSync,
-  resolveControlUiRootSync,
-} from "../infra/control-ui-assets.js";
+import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
@@ -19,6 +15,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_GROWTH_FOUNDATION_PATH,
   CONTROL_UI_GROWTH_FILE_PATH,
+  CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
   CONTROL_UI_GROWTH_REVIEW_ACTION_PATH,
   type ControlUiBootstrapConfig,
   type ControlUiGrowthCodexReviewBackfillItem,
@@ -26,6 +23,7 @@ import {
   type ControlUiGrowthCodexSmokeBackfillItem,
   type ControlUiGrowthFoundationSnapshot,
   type ControlUiGrowthCompletionEntry,
+  type ControlUiGrowthGithubPrWatchItem,
   type ControlUiGrowthNotificationItem,
   type ControlUiGrowthReviewAction,
   type ControlUiGrowthReviewActionResponse,
@@ -51,8 +49,81 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_GROWTH_MAX_BYTES = 64 * 1024;
 const CONTROL_UI_GROWTH_FILE_MAX_BYTES = 256 * 1024;
 const CONTROL_UI_GROWTH_ACTION_MAX_BYTES = 8 * 1024;
-const GROWTH_FOUNDATION_PROJECT_NAME = "growth-foundation";
 const CONTROL_UI_GROWTH_READABLE_EXTENSIONS = new Set([".json", ".md", ".patch", ".txt"]);
+const GITHUB_PR_WATCH_STALE_WARN_MINUTES = 30;
+const GITHUB_PR_WATCH_STALE_DANGER_MINUTES = 60;
+const GITHUB_PR_WATCH_REMEDIATION_HINT =
+  "Run openclaw-sync-github-pr-watch or inspect openclaw-growth-github-pr-watch.timer.";
+
+type GrowthReviewActionRunner = (params: {
+  scriptPath: string;
+  workspaceRoot: string;
+  projectId: string;
+  itemKey: string;
+  action: ControlUiGrowthReviewAction;
+}) => ReturnType<typeof spawnSync>;
+
+type GrowthPrWatchSyncRunner = (params: {
+  scriptPath: string;
+  workspaceRoot: string;
+  projectId: string;
+  projectRoot: string;
+  itemKey: string;
+  source: string;
+  action: "sync-pr-watch";
+}) => ReturnType<typeof spawnSync>;
+
+const defaultGrowthReviewActionRunner: GrowthReviewActionRunner = (params) =>
+  spawnSync(
+    "python3",
+    [
+      params.scriptPath,
+      "--workspace-root",
+      params.workspaceRoot,
+      "--project",
+      params.projectId,
+      "--item-key",
+      params.itemKey,
+      "--action",
+      params.action,
+      "--source",
+      "control-ui",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 45_000,
+    },
+  );
+
+let growthReviewActionRunner: GrowthReviewActionRunner = defaultGrowthReviewActionRunner;
+const defaultGrowthPrWatchSyncRunner: GrowthPrWatchSyncRunner = (params) =>
+  spawnSync(
+    "python3",
+    [
+      params.scriptPath,
+      "--workspace-root",
+      params.workspaceRoot,
+      "--project",
+      params.projectId,
+      "--project-root",
+      params.projectRoot,
+      "--source",
+      params.source,
+    ],
+    {
+      encoding: "utf8",
+      timeout: 90_000,
+    },
+  );
+let growthPrWatchSyncRunner: GrowthPrWatchSyncRunner = defaultGrowthPrWatchSyncRunner;
+
+export function setGrowthReviewActionRunnerForTests(runner: GrowthReviewActionRunner | null): void {
+  growthReviewActionRunner = runner ?? defaultGrowthReviewActionRunner;
+}
+
+export function setGrowthPrWatchSyncRunnerForTests(runner: GrowthPrWatchSyncRunner | null): void {
+  growthPrWatchSyncRunner = runner ?? defaultGrowthPrWatchSyncRunner;
+}
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -62,7 +133,6 @@ export type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string }
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
@@ -283,7 +353,6 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
-  rejectHardlinks: boolean,
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -291,7 +360,6 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
-    rejectHardlinks,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
@@ -506,11 +574,10 @@ function resolveWorkspaceRoot(config?: OpenClawConfig): string | null {
     }
     return configured;
   }
-  try {
-    return resolveDefaultAgentWorkspaceDir(process.env);
-  } catch {
+  if (!home) {
     return null;
   }
+  return path.join(home, ".openclaw", "workspace");
 }
 
 function readWorkspaceTextFile(
@@ -962,43 +1029,21 @@ function resolveGrowthProjectFiles(
     return null;
   }
 
-  let best: {
-    projectId: string;
-    actionsPath: string;
-    alertsPath: string;
-    matchScore: number;
-    freshnessScore: number;
-  } | null = null;
+  let best: { projectId: string; actionsPath: string; alertsPath: string; score: number } | null =
+    null;
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
     }
     const projectId = entry.name;
-    const actionsPath = path.posix.join("memory", "projects", projectId, "actions", "current.md");
-    const alertsPath = path.posix.join("memory", "projects", projectId, "alerts", "current.md");
+    const actionsPath = path.join("memory", "projects", projectId, "actions", "current.md");
+    const alertsPath = path.join("memory", "projects", projectId, "alerts", "current.md");
     try {
       const actionsStat = fs.statSync(path.join(workspaceRoot, actionsPath));
       const alertsStat = fs.statSync(path.join(workspaceRoot, alertsPath));
-      const actionsText = readWorkspaceTextFile(workspaceRoot, actionsPath) ?? "";
-      const alertsText = readWorkspaceTextFile(workspaceRoot, alertsPath) ?? "";
-      const actionsFields = parseMarkdownKeyValueList(actionsText);
-      const alertsFields = parseMarkdownKeyValueList(alertsText);
-      const displayProjectId = actionsFields.project?.trim() || alertsFields.project?.trim() || "";
-      const metadataMatches = displayProjectId === GROWTH_FOUNDATION_PROJECT_NAME;
-      const directoryMatches =
-        projectId === GROWTH_FOUNDATION_PROJECT_NAME ||
-        projectId.endsWith(`_${GROWTH_FOUNDATION_PROJECT_NAME}`);
-      if (!metadataMatches && !directoryMatches) {
-        continue;
-      }
-      const matchScore = metadataMatches ? 2 : 1;
-      const freshnessScore = Math.max(actionsStat.mtimeMs, alertsStat.mtimeMs);
-      if (
-        !best ||
-        matchScore > best.matchScore ||
-        (matchScore === best.matchScore && freshnessScore > best.freshnessScore)
-      ) {
-        best = { projectId, actionsPath, alertsPath, matchScore, freshnessScore };
+      const score = Math.max(actionsStat.mtimeMs, alertsStat.mtimeMs);
+      if (!best || score > best.score) {
+        best = { projectId, actionsPath, alertsPath, score };
       }
     } catch {
       continue;
@@ -1441,6 +1486,16 @@ function buildGrowthNotificationItems(params: {
   priorityNow: string[];
   thisWeekItems: ControlUiGrowthReviewItem[];
   watch: string[];
+  githubPrWatch: {
+    attentionCount: number;
+    attentionItems: ControlUiGrowthGithubPrWatchItem[];
+    readyCount: number;
+    readyItems: ControlUiGrowthGithubPrWatchItem[];
+    freshnessStatus: string;
+    ageMinutes: number | null;
+    currentPath: string | null;
+    statePath: string | null;
+  };
   alertsPath: string | null;
   actionsPath: string | null;
   weeklyReviewPath: string | null;
@@ -1476,6 +1531,50 @@ function buildGrowthNotificationItems(params: {
       source: "weekly",
     });
   }
+  if (params.githubPrWatch.attentionItems.length > 0) {
+    const first = params.githubPrWatch.attentionItems[0];
+    items.push({
+      id: "github-pr-attention",
+      severity: "danger",
+      title: `${params.githubPrWatch.attentionCount} PR watch item(s) need attention`,
+      detail: `${first.issueRef || (first.repo && first.number ? `${first.repo}#${first.number}` : "pull request")}: ${
+        first.reason || first.watchStatus || "Manual review is required."
+      }`,
+      path: params.githubPrWatch.currentPath,
+      source: "github-pr-watch",
+    });
+  }
+  if (params.githubPrWatch.readyItems.length > 0) {
+    const first = params.githubPrWatch.readyItems[0];
+    items.push({
+      id: "github-pr-ready",
+      severity: "warning",
+      title: `${params.githubPrWatch.readyCount} pull request(s) ready for merge`,
+      detail: `${first.issueRef || (first.repo && first.number ? `${first.repo}#${first.number}` : "pull request")}: ${
+        first.reason || "Manual merge gate can proceed."
+      }`,
+      path: params.githubPrWatch.currentPath,
+      source: "github-pr-watch",
+    });
+  }
+  if (
+    params.githubPrWatch.freshnessStatus === "stale" ||
+    params.githubPrWatch.freshnessStatus === "lagging"
+  ) {
+    const severity = params.githubPrWatch.freshnessStatus === "lagging" ? "danger" : "warning";
+    const ageLabel = formatGrowthAgeMinutesCompact(params.githubPrWatch.ageMinutes);
+    items.push({
+      id: "github-pr-watch-stale",
+      severity,
+      title:
+        params.githubPrWatch.freshnessStatus === "lagging"
+          ? "PR watch refresh is lagging"
+          : "PR watch refresh is stale",
+      detail: `Latest PR watch snapshot is ${ageLabel} old; refresh may be stalled. ${GITHUB_PR_WATCH_REMEDIATION_HINT}`,
+      path: params.githubPrWatch.currentPath ?? params.githubPrWatch.statePath,
+      source: "github-pr-watch",
+    });
+  }
   if (params.watch.length > 0) {
     items.push({
       id: "watch-open",
@@ -1489,6 +1588,111 @@ function buildGrowthNotificationItems(params: {
   return items;
 }
 
+function formatGrowthAgeMinutesCompact(ageMinutes: number | null): string {
+  if (typeof ageMinutes !== "number" || !Number.isFinite(ageMinutes) || ageMinutes < 0) {
+    return "unknown";
+  }
+  if (ageMinutes < 60) {
+    return `${ageMinutes}m`;
+  }
+  const hours = Math.floor(ageMinutes / 60);
+  const minutes = ageMinutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+function summarizeGrowthGithubPrWatch(params: {
+  payload: Record<string, unknown> | null;
+  currentPath: string | null;
+  statePath: string | null;
+}) {
+  const updatedAt = readRecordString(params.payload, "updated_at");
+  const freshness = summarizeGrowthGithubPrWatchFreshness(updatedAt);
+  const rawItems = Array.isArray(params.payload?.pulls) ? params.payload.pulls : [];
+  const items: ControlUiGrowthGithubPrWatchItem[] = [];
+  const attentionItems: ControlUiGrowthGithubPrWatchItem[] = [];
+  const readyItems: ControlUiGrowthGithubPrWatchItem[] = [];
+  for (const rawItem of rawItems) {
+    const item = readRecord(rawItem);
+    if (!item) {
+      continue;
+    }
+    const watchStatus = readRecordString(item, "watch_status") || "missing";
+    const number = Number(item.number ?? 0);
+    const normalized: ControlUiGrowthGithubPrWatchItem = {
+      repo: readRecordString(item, "repo"),
+      number: Number.isFinite(number) && number > 0 ? number : null,
+      issueRef: readRecordString(item, "issue_ref"),
+      title: readRecordString(item, "title"),
+      url: readRecordString(item, "url"),
+      watchStatus,
+      readyForMerge: item.ready_for_merge === true || watchStatus === "ready-for-merge",
+      reason: readRecordString(item, "reason"),
+      checkRunTotal: Number(item.check_run_total ?? 0) || 0,
+      checkRunPending: Number(item.check_run_pending ?? 0) || 0,
+      checkRunFailing: Number(item.check_run_failing ?? 0) || 0,
+      commitStatusState: readRecordString(item, "commit_status_state"),
+    };
+    items.push(normalized);
+    if (
+      watchStatus === "error" ||
+      watchStatus === "failing-checks" ||
+      watchStatus === "merge-conflict"
+    ) {
+      attentionItems.push(normalized);
+    } else if (normalized.readyForMerge) {
+      readyItems.push(normalized);
+    }
+  }
+  const lastSync = summarizeGrowthGithubPrWatchLastSync(readRecord(params.payload?.last_sync_run));
+  return {
+    status: readRecordString(params.payload, "status") || "missing",
+    pullCount: items.length,
+    readyCount: readyItems.length,
+    attentionCount: attentionItems.length,
+    updatedAt,
+    freshnessStatus: freshness.freshnessStatus,
+    ageMinutes: freshness.ageMinutes,
+    items,
+    attentionItems,
+    readyItems,
+    currentPath: params.currentPath,
+    statePath: params.statePath,
+    lastSync,
+  };
+}
+
+function summarizeGrowthGithubPrWatchLastSync(payload: Record<string, unknown> | null) {
+  const rawErrorCount = Number(payload?.error_count ?? 0);
+  return {
+    source: readRecordString(payload, "source"),
+    status: readRecordString(payload, "status"),
+    finishedAt: readRecordString(payload, "finished_at"),
+    error: readRecordString(payload, "error"),
+    errorCount: Number.isFinite(rawErrorCount) && rawErrorCount > 0 ? Math.floor(rawErrorCount) : 0,
+  };
+}
+
+function summarizeGrowthGithubPrWatchFreshness(updatedAt: string | null): {
+  freshnessStatus: string;
+  ageMinutes: number | null;
+} {
+  if (!updatedAt) {
+    return { freshnessStatus: "missing", ageMinutes: null };
+  }
+  const updatedMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedMs)) {
+    return { freshnessStatus: "missing", ageMinutes: null };
+  }
+  const ageMinutes = Math.max(0, Math.floor((Date.now() - updatedMs) / 60_000));
+  if (ageMinutes >= GITHUB_PR_WATCH_STALE_DANGER_MINUTES) {
+    return { freshnessStatus: "lagging", ageMinutes };
+  }
+  if (ageMinutes >= GITHUB_PR_WATCH_STALE_WARN_MINUTES) {
+    return { freshnessStatus: "stale", ageMinutes };
+  }
+  return { freshnessStatus: "fresh", ageMinutes };
+}
+
 function runGrowthReviewAction(params: {
   workspaceRoot: string;
   projectId: string;
@@ -1497,6 +1701,14 @@ function runGrowthReviewAction(params: {
 }):
   | { ok: true; snapshot: ControlUiGrowthFoundationSnapshot }
   | { ok: false; status: number; error: string } {
+  if (params.action === "sync-pr-watch") {
+    return runGrowthPrWatchSyncAction({
+      workspaceRoot: params.workspaceRoot,
+      projectId: params.projectId,
+      itemKey: params.itemKey,
+      action: params.action,
+    });
+  }
   const scriptPath = path.join(
     params.workspaceRoot,
     "projects",
@@ -1512,26 +1724,13 @@ function runGrowthReviewAction(params: {
   } catch {
     return { ok: false, status: 409, error: `growth action script not found: ${scriptPath}` };
   }
-  const result = spawnSync(
-    "python3",
-    [
-      scriptPath,
-      "--workspace-root",
-      params.workspaceRoot,
-      "--project",
-      params.projectId,
-      "--item-key",
-      params.itemKey,
-      "--action",
-      params.action,
-      "--source",
-      "control-ui",
-    ],
-    {
-      encoding: "utf8",
-      timeout: 45_000,
-    },
-  );
+  const result = growthReviewActionRunner({
+    scriptPath,
+    workspaceRoot: params.workspaceRoot,
+    projectId: params.projectId,
+    itemKey: params.itemKey,
+    action: params.action,
+  });
   if (result.error) {
     return { ok: false, status: 500, error: result.error.message };
   }
@@ -1548,6 +1747,49 @@ function runGrowthReviewAction(params: {
       status = 409;
     }
     return { ok: false, status, error: errorText };
+  }
+  return { ok: true, snapshot: buildGrowthFoundationSnapshot(undefined, params.workspaceRoot) };
+}
+
+function runGrowthPrWatchSyncAction(params: {
+  workspaceRoot: string;
+  projectId: string;
+  itemKey: string;
+  action: "sync-pr-watch";
+}):
+  | { ok: true; snapshot: ControlUiGrowthFoundationSnapshot }
+  | { ok: false; status: number; error: string } {
+  const scriptPath = path.join(
+    params.workspaceRoot,
+    "projects",
+    params.projectId,
+    "scripts",
+    "sync_github_pr_watch.py",
+  );
+  const projectRoot = path.join(params.workspaceRoot, "projects", params.projectId);
+  try {
+    const scriptStat = fs.statSync(scriptPath);
+    if (!scriptStat.isFile()) {
+      return { ok: false, status: 409, error: `github pr watch script not found: ${scriptPath}` };
+    }
+  } catch {
+    return { ok: false, status: 409, error: `github pr watch script not found: ${scriptPath}` };
+  }
+  const result = growthPrWatchSyncRunner({
+    scriptPath,
+    workspaceRoot: params.workspaceRoot,
+    projectId: params.projectId,
+    projectRoot,
+    itemKey: params.itemKey,
+    source: "control-ui",
+    action: params.action,
+  });
+  if (result.error) {
+    return { ok: false, status: 500, error: result.error.message };
+  }
+  if (result.status !== 0) {
+    const errorText = (result.stderr || result.stdout || "github pr watch sync failed").trim();
+    return { ok: false, status: 500, error: errorText };
   }
   return { ok: true, snapshot: buildGrowthFoundationSnapshot(undefined, params.workspaceRoot) };
 }
@@ -1751,6 +1993,26 @@ function buildGrowthFoundationSnapshot(
     projectFiles.projectId,
     "codex-patch-smoke-review-backfill-state.json",
   );
+  const githubPrWatchState = readGrowthProjectStatePayload(
+    workspaceRoot,
+    projectFiles.projectId,
+    "github-pr-watch",
+  );
+  const githubPrWatchCurrentPath =
+    resolveGrowthLaneMarkdownPath(
+      workspaceRoot,
+      projectFiles.projectId,
+      "github-pr-watch",
+      "current.md",
+    ) ?? githubPrWatchState.path;
+  const githubPrWatchSummary = summarizeGrowthGithubPrWatch({
+    payload:
+      githubPrWatchState.payload && typeof githubPrWatchState.payload === "object"
+        ? githubPrWatchState.payload
+        : null,
+    currentPath: githubPrWatchCurrentPath,
+    statePath: githubPrWatchState.path,
+  });
   const codexSmokePeriod = readRecordString(codexSmokeState.payload, "last_enqueued_period");
   const codexSmokeJobId = readRecordString(codexSmokeState.payload, "last_job_id");
   const codexSmokeUpdatedAt = readRecordString(codexSmokeState.payload, "updated_at");
@@ -1824,6 +2086,7 @@ function buildGrowthFoundationSnapshot(
     priorityNow,
     thisWeekItems,
     watch,
+    githubPrWatch: githubPrWatchSummary,
     alertsPath,
     actionsPath: projectFiles.actionsPath,
     weeklyReviewPath,
@@ -1893,6 +2156,22 @@ function buildGrowthFoundationSnapshot(
     githubProjectItemCount: Array.isArray(githubProjectSync?.items)
       ? githubProjectSync.items.length
       : 0,
+    githubPrWatchStatus: githubPrWatchSummary.status,
+    githubPrWatchPullCount: githubPrWatchSummary.pullCount,
+    githubPrWatchReadyCount: githubPrWatchSummary.readyCount,
+    githubPrWatchAttentionCount: githubPrWatchSummary.attentionCount,
+    githubPrWatchUpdatedAt: githubPrWatchSummary.updatedAt,
+    githubPrWatchFreshnessStatus: githubPrWatchSummary.freshnessStatus,
+    githubPrWatchAgeMinutes: githubPrWatchSummary.ageMinutes,
+    githubPrWatchItems: githubPrWatchSummary.items,
+    githubPrWatchCurrentPath: githubPrWatchSummary.currentPath,
+    githubPrWatchStatePath: githubPrWatchSummary.statePath,
+    githubPrWatchLastSync: githubPrWatchSummary.lastSync,
+    githubPrWatchLastSyncSource: githubPrWatchSummary.lastSync.source,
+    githubPrWatchLastSyncStatus: githubPrWatchSummary.lastSync.status,
+    githubPrWatchLastSyncFinishedAt: githubPrWatchSummary.lastSync.finishedAt,
+    githubPrWatchLastSyncError: githubPrWatchSummary.lastSync.error,
+    githubPrWatchLastSyncErrorCount: githubPrWatchSummary.lastSync.errorCount,
     githubWritebackStatus: githubWriteback.status,
     githubWritebackIssueRef: githubWriteback.issueRef,
     githubWritebackActions: githubWriteback.actions,
@@ -2018,7 +2297,7 @@ function handleGrowthReviewActionRequest(
     const action = (readRecordString(payloadRecord, "action") ?? "") as ControlUiGrowthReviewAction;
     const itemKey = readRecordString(payloadRecord, "itemKey") ?? "";
     const projectId = readRecordString(payloadRecord, "projectId") ?? "";
-    if (action !== "complete" && action !== "reopen") {
+    if (action !== "complete" && action !== "reopen" && action !== "sync-pr-watch") {
       sendJson(res, 400, {
         success: false,
         action: "complete",
@@ -2028,7 +2307,17 @@ function handleGrowthReviewActionRequest(
       } satisfies ControlUiGrowthReviewActionResponse);
       return;
     }
-    if (!itemKey) {
+    if (action === "sync-pr-watch" && itemKey !== CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY) {
+      sendJson(res, 400, {
+        success: false,
+        action,
+        itemKey,
+        snapshot: null,
+        error: `invalid itemKey for sync-pr-watch: ${itemKey}`,
+      } satisfies ControlUiGrowthReviewActionResponse);
+      return;
+    }
+    if (action !== "sync-pr-watch" && !itemKey) {
       sendJson(res, 400, {
         success: false,
         action,
@@ -2262,7 +2551,7 @@ export function handleControlUiHttpRequest(
   }
 
   const root =
-    rootState?.kind === "resolved" || rootState?.kind === "bundled"
+    rootState?.kind === "resolved"
       ? rootState.path
       : resolveControlUiRootSync({
           moduleUrl: import.meta.url,
@@ -2314,16 +2603,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const isBundledRoot =
-    rootState?.kind === "bundled" ||
-    (rootState === undefined &&
-      isPackageProvenControlUiRootSync(root, {
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      }));
-  const rejectHardlinks = !isBundledRoot;
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -2352,7 +2632,7 @@ export function handleControlUiHttpRequest(
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {

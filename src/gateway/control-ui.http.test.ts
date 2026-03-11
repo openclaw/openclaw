@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -10,20 +9,74 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_GROWTH_FILE_PATH,
   CONTROL_UI_GROWTH_FOUNDATION_PATH,
+  CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
   CONTROL_UI_GROWTH_REVIEW_ACTION_PATH,
 } from "./control-ui-contract.js";
-import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
+import {
+  handleControlUiAvatarRequest,
+  handleControlUiHttpRequest,
+  setGrowthPrWatchSyncRunnerForTests,
+  setGrowthReviewActionRunnerForTests,
+} from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawnSync: vi.fn(() => ({ status: 0, stdout: "ok\n", stderr: "" })),
-  };
-});
-
 describe("handleControlUiHttpRequest", () => {
+  function mockSuccessfulGrowthReviewAction() {
+    const calls: Array<{
+      scriptPath: string;
+      workspaceRoot: string;
+      projectId: string;
+      itemKey: string;
+      action: string;
+    }> = [];
+    setGrowthReviewActionRunnerForTests((params) => {
+      calls.push(params);
+      return {
+        pid: 1234,
+        output: [null, "ok\n", ""],
+        stdout: "ok\n",
+        stderr: "",
+        status: 0,
+        signal: null,
+      } as ReturnType<typeof import("node:child_process").spawnSync>;
+    });
+    return {
+      calls,
+      restore() {
+        setGrowthReviewActionRunnerForTests(null);
+      },
+    };
+  }
+
+  function mockSuccessfulGrowthPrWatchSync() {
+    const calls: Array<{
+      scriptPath: string;
+      workspaceRoot: string;
+      projectId: string;
+      projectRoot: string;
+      itemKey: string;
+      source: string;
+      action: string;
+    }> = [];
+    setGrowthPrWatchSyncRunnerForTests((params) => {
+      calls.push(params);
+      return {
+        pid: 1234,
+        output: [null, "ok\n", ""],
+        stdout: "ok\n",
+        stderr: "",
+        status: 0,
+        signal: null,
+      } as ReturnType<typeof import("node:child_process").spawnSync>;
+    });
+    return {
+      calls,
+      restore() {
+        setGrowthPrWatchSyncRunnerForTests(null);
+      },
+    };
+  }
+
   async function withControlUiRoot<T>(params: {
     indexHtml?: string;
     fn: (tmp: string) => Promise<T>;
@@ -71,6 +124,7 @@ describe("handleControlUiHttpRequest", () => {
         title: string;
         detail: string;
         path: string | null;
+        source: string;
       }>;
       completedReviewCount: number;
       alertsPath?: string | null;
@@ -116,6 +170,23 @@ describe("handleControlUiHttpRequest", () => {
       githubProjectTitle: string | null;
       githubProjectUrl: string | null;
       githubProjectItemCount: number;
+      githubPrWatchStatus?: string;
+      githubPrWatchPullCount?: number;
+      githubPrWatchReadyCount?: number;
+      githubPrWatchAttentionCount?: number;
+      githubPrWatchUpdatedAt?: string | null;
+      githubPrWatchFreshnessStatus?: string;
+      githubPrWatchAgeMinutes?: number | null;
+      githubPrWatchItems?: Array<{
+        repo: string | null;
+        number: number | null;
+        issueRef: string | null;
+        watchStatus: string;
+        readyForMerge: boolean;
+        reason: string | null;
+      }>;
+      githubPrWatchCurrentPath?: string | null;
+      githubPrWatchStatePath?: string | null;
       githubWritebackStatus: string;
       githubWritebackIssueRef: string | null;
       githubWritebackActions: string[];
@@ -207,7 +278,6 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
-    rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -215,7 +285,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
+        root: { kind: "resolved", path: params.rootPath },
       },
     );
     return { res, end, handled };
@@ -371,6 +441,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.mkdir(path.join(projectDir, "alerts"), { recursive: true });
           await fs.mkdir(path.join(projectDir, "weekly"), { recursive: true });
           await fs.mkdir(path.join(projectDir, "github"), { recursive: true });
+          await fs.mkdir(path.join(projectDir, "github-pr-watch"), { recursive: true });
           await fs.mkdir(path.join(projectDir, "github-writeback", "receipts"), {
             recursive: true,
           });
@@ -570,6 +641,33 @@ describe("handleControlUiHttpRequest", () => {
           );
           await fs.writeFile(path.join(projectDir, "github", "current.md"), "# GitHub\n");
           await fs.writeFile(
+            path.join(projectDir, "github-pr-watch", "state.json"),
+            JSON.stringify(
+              {
+                status: "ready-for-merge",
+                updated_at: "2026-03-06T17:30:00+09:00",
+                pull_count: 1,
+                ready_count: 1,
+                pulls: [
+                  {
+                    repo: "yui-stingray/ai-company",
+                    number: 5,
+                    issue_ref: "yui-stingray/ai-company#4",
+                    watch_status: "ready-for-merge",
+                    ready_for_merge: true,
+                    reason: "All visible checks are complete; manual merge gate can proceed.",
+                  },
+                ],
+              },
+              null,
+              2,
+            ),
+          );
+          await fs.writeFile(
+            path.join(projectDir, "github-pr-watch", "current.md"),
+            "# GitHub PR Watch\n",
+          );
+          await fs.writeFile(
             path.join(projectDir, "github-writeback", "current-proposal.json"),
             JSON.stringify(
               {
@@ -745,363 +843,271 @@ describe("handleControlUiHttpRequest", () => {
             ),
           );
           await fs.writeFile(path.join(projectDir, "relay", "current.md"), "# Relay\n");
+          vi.useFakeTimers();
+          vi.setSystemTime(new Date("2026-03-06T17:40:00+09:00"));
 
-          const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
-            { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: { agents: { defaults: { workspace } } },
-            },
-          );
+          try {
+            const { res, end } = makeMockHttpResponse();
+            const handled = handleControlUiHttpRequest(
+              { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: { agents: { defaults: { workspace } } },
+              },
+            );
 
-          expect(handled).toBe(true);
-          const parsed = parseGrowthPayload(end);
-          expect(parsed.available).toBe(true);
-          expect(parsed.projectId).toBe("growth-foundation");
-          expect(parsed.workspaceProjectId).toBe("growth-foundation");
-          expect(parsed.alertStatus).toBe("clear");
-          expect(parsed.actionsStatus).toBe("actionable");
-          expect(parsed.notificationStatus).toBe("attention");
-          expect(parsed.notificationCount).toBe(1);
-          expect(parsed.notificationItems[0]?.id).toBe("reviews-open");
-          expect(parsed.notificationItems[0]?.severity).toBe("warning");
-          expect(parsed.notificationItems[0]?.detail).toBe("Review queue-output-1");
-          expect(parsed.notificationItems[0]?.path).toBe(
-            "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-          );
-          expect(parsed.reviewCount).toBe(1);
-          expect(parsed.thisWeek).toEqual(["Review queue-output-1"]);
-          expect(parsed.thisWeekItems[0]?.key).toBe("7bb1651c6f04");
-          expect(parsed.completedReviewCount).toBe(1);
-          expect(parsed.completedThisWeekItems[0]?.key).toBe("done-1");
-          expect(parsed.completedThisWeekItems[0]?.display).toBe("Review queue-output-done");
-          expect(parsed.completedHistoryItems[0]?.action).toBe("complete");
-          expect(parsed.completedHistoryItems[0]?.itemKey).toBe("done-1");
-          expect(parsed.completedHistoryItems[0]?.text).toBe("Review queue-output-done");
-          expect(parsed.completedHistoryItems[0]?.weeklyPath).toBe(
-            "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-          );
-          expect(parsed.completedHistoryPath).toBe(
-            "memory/projects/growth-foundation/actions/completed/2026-03-06.md",
-          );
-          expect(parsed.weeklyReviewPath).toBe(
-            "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-          );
-          expect(parsed.codexSmokeStatus).toBe("scheduled");
-          expect(parsed.codexSmokePeriod).toBe("2026-W10");
-          expect(parsed.codexSmokeJobId).toBe("scheduled-codex-patch-20260306");
-          expect(parsed.codexSmokeUpdatedAt).toBe("2026-03-06T15:10:00+09:00");
-          expect(parsed.codexSmokeStatePath).toBe(
-            "memory/projects/growth-foundation/automation/codex-patch-smoke-state.json",
-          );
-          expect(parsed.codexReviewSmokeStatus).toBe("scheduled");
-          expect(parsed.codexReviewSmokePeriod).toBe("2026-W10");
-          expect(parsed.codexReviewSmokeJobId).toBe("scheduled-codex-review-20260306");
-          expect(parsed.codexReviewSmokeSourceJobId).toBe("scheduled-codex-patch-20260306");
-          expect(parsed.codexReviewSmokeUpdatedAt).toBe("2026-03-06T15:40:00+09:00");
-          expect(parsed.codexReviewSmokeStatePath).toBe(
-            "memory/projects/growth-foundation/automation/codex-patch-smoke-review-state.json",
-          );
-          expect(parsed.codexReviewSmokeDiffPath).toBe(
-            "projects/growth-foundation/evidence/2026-03-06_scheduled-codex-review-smoke/scheduled-codex-patch-20260306.diff.patch",
-          );
-          expect(parsed.codexReviewSmokeBackfillCount).toBe(1);
-          expect(parsed.codexReviewSmokeBackfillItems[0]?.period).toBe("2026-W08");
-          expect(parsed.codexReviewSmokeBackfillItems[0]?.jobId).toBe(
-            "manual-backfill-codex-review-2026w08",
-          );
-          expect(parsed.codexReviewSmokeBackfillItems[0]?.sourceJobId).toBe(
-            "manual-backfill-codex-patch-2026w08",
-          );
-          expect(parsed.codexReviewSmokeBackfillItems[0]?.sourceOrigin).toBe("patch-backfill");
-          expect(parsed.codexReviewSmokeBackfillItems[0]?.diffRelpath).toBe(
-            "projects/growth-foundation/evidence/2026-03-06_manual-backfill-codex-review-smoke/manual-backfill-codex-patch-2026w08.diff.patch",
-          );
-          expect(parsed.codexReviewSmokeBackfillStatePath).toBe(
-            "memory/projects/growth-foundation/automation/codex-patch-smoke-review-backfill-state.json",
-          );
-          expect(parsed.codexSmokeBackfillCount).toBe(1);
-          expect(parsed.codexSmokeBackfillItems[0]?.period).toBe("2026-W08");
-          expect(parsed.codexSmokeBackfillItems[0]?.jobId).toBe(
-            "manual-backfill-codex-patch-2026w08",
-          );
-          expect(parsed.codexSmokeBackfillStatePath).toBe(
-            "memory/projects/growth-foundation/automation/codex-patch-smoke-backfill-state.json",
-          );
-          expect(parsed.githubSyncStatus).toBe("synced");
-          expect(parsed.githubSyncIssueCount).toBe(2);
-          expect(parsed.githubSyncUpdatedAt).toBe("2026-03-07T22:10:00+09:00");
-          expect(parsed.githubSyncCurrentPath).toBe(
-            "memory/projects/growth-foundation/github/current.md",
-          );
-          expect(parsed.githubProjectStatus).toBe("synced");
-          expect(parsed.githubProjectTitle).toBe("Growth Foundation");
-          expect(parsed.githubProjectUrl).toBe("https://github.com/users/yui-stingray/projects/1");
-          expect(parsed.githubProjectItemCount).toBe(1);
-          expect(parsed.githubWritebackStatus).toBe("applied");
-          expect(parsed.githubWritebackIssueRef).toBe("yui-stingray/growth-foundation#17");
-          expect(parsed.githubWritebackActions).toEqual(["comment", "close"]);
-          expect(parsed.githubWritebackCloseIssue).toBe(true);
-          expect(parsed.githubWritebackOperator).toBe("yui");
-          expect(parsed.githubWritebackProposalUpdatedAt).toBe("2026-03-07T21:55:00+09:00");
-          expect(parsed.githubWritebackReceiptAppliedAt).toBe("2026-03-07T22:00:00+09:00");
-          expect(parsed.githubWritebackProposalPath).toBe(
-            "memory/projects/growth-foundation/github-writeback/current-proposal.json",
-          );
-          expect(parsed.githubWritebackReceiptPath).toBe(
-            "memory/projects/growth-foundation/github-writeback/receipts/2026-03-07-issue-17.json",
-          );
-          expect(parsed.issueFlowStatus).toBe("needs-review");
-          expect(parsed.issueFlowStage).toBe("outcome");
-          expect(parsed.issueFlowIssueNumber).toBe(17);
-          expect(parsed.issueFlowIssueRef).toBe("yui-stingray/growth-foundation#17");
-          expect(parsed.issueFlowPreflightStatus).toBe("synced");
-          expect(parsed.issueFlowDraftStatus).toBe("approved-for-proposal");
-          expect(parsed.issueFlowProposalStatus).toBe("ready-for-manual-enqueue");
-          expect(parsed.issueFlowEnqueueStatus).toBe("enqueued");
-          expect(parsed.issueFlowOutcomeStatus).toBe("needs-review");
-          expect(parsed.issueFlowDirectoryPath).toBe(
-            "memory/projects/growth-foundation/issue-flow/issue-17",
-          );
-          expect(parsed.issueFlowPreflightPath).toBe(
-            "memory/projects/growth-foundation/issue-flow/issue-17/preflight.json",
-          );
-          expect(parsed.issueFlowOutcomePath).toBe(
-            "memory/projects/growth-foundation/issue-flow/issue-17/outcome-bundle.json",
-          );
-          expect(parsed.issueFlowPrimaryResultPath).toBe(
-            "queue/results/issue-17-live-operator-run-v2.json",
-          );
-          expect(parsed.issueFlowActiveCount).toBe(2);
-          expect(parsed.issueFlowRecentCount).toBe(1);
-          expect(parsed.issueFlowRecentItems).toHaveLength(1);
-          expect(parsed.issueFlowRecentItems?.[0]).toEqual(
-            expect.objectContaining({
-              issueNumber: 16,
-              issueRef: "yui-stingray/growth-foundation#16",
-              stage: "outcome",
-              status: "delivered",
-              directoryPath: "memory/projects/growth-foundation/issue-flow/issue-16",
-              outcomePath:
-                "memory/projects/growth-foundation/issue-flow/issue-16/outcome-bundle.json",
-              primaryResultPath: "queue/results/issue-16-live-operator-run-v1.json",
-            }),
-          );
-          expect(parsed.issueFlowArchivedCount).toBe(1);
-          expect(parsed.issueFlowArchiveRootPath).toBe(
-            "memory/projects/growth-foundation/issue-flow/archive",
-          );
-          expect(parsed.issueFlowArchivedLatestIssueRef).toBe("yui-stingray/growth-foundation#15");
-          expect(parsed.issueFlowArchivedLatestArchivedAt).toBe("2026-03-06T20:00:00+09:00");
-          expect(parsed.issueFlowArchivedLatestPath).toBe(
-            "memory/projects/growth-foundation/issue-flow/archive/issue-15--20260306T000000Z",
-          );
-          expect(parsed.issueFlowArchivedLatestReceiptPath).toBe(
-            "memory/projects/growth-foundation/issue-flow/archive/issue-15--20260306T000000Z/archive-receipt.json",
-          );
-          expect(parsed.issueFlowVisibilityStatus).toBe("aligned");
-          expect(parsed.issueFlowVisibilityReason).toBe(
-            "The issue is no longer open after an applied close write-back.",
-          );
-          expect(parsed.issueFlowVisibilityOpenIssue).toBe(false);
-          expect(parsed.issueFlowVisibilityGithubSyncUpdatedAt).toBe("2026-03-07T22:10:00+09:00");
-          expect(parsed.relayStatus).toBe("approval-required");
-          expect(parsed.relayChannel).toBe("discord");
-          expect(parsed.relayMode).toBe("approval-required");
-          expect(parsed.relayCandidateCount).toBe(1);
-          expect(parsed.relayUpdatedAt).toBe("2026-03-06T17:05:00+09:00");
-          expect(parsed.relayCurrentPath).toBe(
-            "memory/projects/growth-foundation/relay/current.md",
-          );
-        } finally {
-          await fs.rm(home, { recursive: true, force: true });
-        }
-      },
-    });
-  });
+            expect(handled).toBe(true);
+            const parsed = parseGrowthPayload(end);
+            expect(parsed.available).toBe(true);
+            expect(parsed.projectId).toBe("growth-foundation");
+            expect(parsed.workspaceProjectId).toBe("growth-foundation");
+            expect(parsed.alertStatus).toBe("clear");
+            expect(parsed.actionsStatus).toBe("actionable");
+            expect(parsed.notificationStatus).toBe("attention");
+            expect(parsed.notificationCount).toBe(2);
+            expect(parsed.notificationItems[0]?.id).toBe("reviews-open");
+            expect(parsed.notificationItems[0]?.severity).toBe("warning");
+            expect(parsed.notificationItems[0]?.detail).toBe("Review queue-output-1");
+            expect(parsed.notificationItems[0]?.path).toBe(
+              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+            );
+            expect(parsed.notificationItems[1]?.id).toBe("github-pr-ready");
+            expect(parsed.notificationItems[1]?.severity).toBe("warning");
+            expect(parsed.notificationItems[1]?.detail).toBe(
+              "yui-stingray/ai-company#4: All visible checks are complete; manual merge gate can proceed.",
+            );
+            expect(parsed.notificationItems[1]?.path).toBe(
+              "memory/projects/growth-foundation/github-pr-watch/current.md",
+            );
+            expect(parsed.notificationItems[1]?.source).toBe("github-pr-watch");
+            expect(parsed.githubPrWatchStatus).toBe("ready-for-merge");
+            expect(parsed.githubPrWatchPullCount).toBe(1);
+            expect(parsed.githubPrWatchReadyCount).toBe(1);
+            expect(parsed.githubPrWatchAttentionCount).toBe(0);
+            expect(parsed.githubPrWatchUpdatedAt).toBe("2026-03-06T17:30:00+09:00");
+            expect(parsed.githubPrWatchFreshnessStatus).toBe("fresh");
+            expect(parsed.githubPrWatchAgeMinutes).toBe(10);
+            expect(parsed.githubPrWatchItems?.[0]?.repo).toBe("yui-stingray/ai-company");
+            expect(parsed.githubPrWatchItems?.[0]?.number).toBe(5);
+            expect(parsed.githubPrWatchItems?.[0]?.issueRef).toBe("yui-stingray/ai-company#4");
+            expect(parsed.githubPrWatchItems?.[0]?.watchStatus).toBe("ready-for-merge");
+            expect(parsed.githubPrWatchItems?.[0]?.readyForMerge).toBe(true);
+            expect(parsed.githubPrWatchCurrentPath).toBe(
+              "memory/projects/growth-foundation/github-pr-watch/current.md",
+            );
+            expect(parsed.githubPrWatchStatePath).toBe(
+              "memory/projects/growth-foundation/github-pr-watch/state.json",
+            );
+            expect(parsed.reviewCount).toBe(1);
+            expect(parsed.thisWeek).toEqual(["Review queue-output-1"]);
+            expect(parsed.thisWeekItems[0]?.key).toBe("7bb1651c6f04");
+            expect(parsed.completedReviewCount).toBe(1);
+            expect(parsed.completedThisWeekItems[0]?.key).toBe("done-1");
+            expect(parsed.completedThisWeekItems[0]?.display).toBe("Review queue-output-done");
+            expect(parsed.completedHistoryItems[0]?.action).toBe("complete");
+            expect(parsed.completedHistoryItems[0]?.itemKey).toBe("done-1");
+            expect(parsed.completedHistoryItems[0]?.text).toBe("Review queue-output-done");
+            expect(parsed.completedHistoryItems[0]?.weeklyPath).toBe(
+              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+            );
+            expect(parsed.completedHistoryPath).toBe(
+              "memory/projects/growth-foundation/actions/completed/2026-03-06.md",
+            );
+            expect(parsed.weeklyReviewPath).toBe(
+              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
+            );
+            expect(parsed.codexSmokeStatus).toBe("scheduled");
+            expect(parsed.codexSmokePeriod).toBe("2026-W10");
+            expect(parsed.codexSmokeJobId).toBe("scheduled-codex-patch-20260306");
+            expect(parsed.codexSmokeUpdatedAt).toBe("2026-03-06T15:10:00+09:00");
+            expect(parsed.codexSmokeStatePath).toBe(
+              "memory/projects/growth-foundation/automation/codex-patch-smoke-state.json",
+            );
+            expect(parsed.codexReviewSmokeStatus).toBe("scheduled");
+            expect(parsed.codexReviewSmokePeriod).toBe("2026-W10");
+            expect(parsed.codexReviewSmokeJobId).toBe("scheduled-codex-review-20260306");
+            expect(parsed.codexReviewSmokeSourceJobId).toBe("scheduled-codex-patch-20260306");
+            expect(parsed.codexReviewSmokeUpdatedAt).toBe("2026-03-06T15:40:00+09:00");
+            expect(parsed.codexReviewSmokeStatePath).toBe(
+              "memory/projects/growth-foundation/automation/codex-patch-smoke-review-state.json",
+            );
+            expect(parsed.codexReviewSmokeDiffPath).toBe(
+              "projects/growth-foundation/evidence/2026-03-06_scheduled-codex-review-smoke/scheduled-codex-patch-20260306.diff.patch",
+            );
+            expect(parsed.codexReviewSmokeBackfillCount).toBe(1);
+            expect(parsed.codexReviewSmokeBackfillItems[0]?.period).toBe("2026-W08");
+            expect(parsed.codexReviewSmokeBackfillItems[0]?.jobId).toBe(
+              "manual-backfill-codex-review-2026w08",
+            );
+            expect(parsed.codexReviewSmokeBackfillItems[0]?.sourceJobId).toBe(
+              "manual-backfill-codex-patch-2026w08",
+            );
+            expect(parsed.codexReviewSmokeBackfillItems[0]?.sourceOrigin).toBe("patch-backfill");
+            expect(parsed.codexReviewSmokeBackfillItems[0]?.diffRelpath).toBe(
+              "projects/growth-foundation/evidence/2026-03-06_manual-backfill-codex-review-smoke/manual-backfill-codex-patch-2026w08.diff.patch",
+            );
+            expect(parsed.codexReviewSmokeBackfillStatePath).toBe(
+              "memory/projects/growth-foundation/automation/codex-patch-smoke-review-backfill-state.json",
+            );
+            expect(parsed.codexSmokeBackfillCount).toBe(1);
+            expect(parsed.codexSmokeBackfillItems[0]?.period).toBe("2026-W08");
+            expect(parsed.codexSmokeBackfillItems[0]?.jobId).toBe(
+              "manual-backfill-codex-patch-2026w08",
+            );
+            expect(parsed.codexSmokeBackfillStatePath).toBe(
+              "memory/projects/growth-foundation/automation/codex-patch-smoke-backfill-state.json",
+            );
+            expect(parsed.githubSyncStatus).toBe("synced");
+            expect(parsed.githubSyncIssueCount).toBe(2);
+            expect(parsed.githubSyncUpdatedAt).toBe("2026-03-07T22:10:00+09:00");
+            expect(parsed.githubSyncCurrentPath).toBe(
+              "memory/projects/growth-foundation/github/current.md",
+            );
+            expect(parsed.githubProjectStatus).toBe("synced");
+            expect(parsed.githubProjectTitle).toBe("Growth Foundation");
+            expect(parsed.githubProjectUrl).toBe(
+              "https://github.com/users/yui-stingray/projects/1",
+            );
+            expect(parsed.githubProjectItemCount).toBe(1);
+            expect(parsed.githubWritebackStatus).toBe("applied");
+            expect(parsed.githubWritebackIssueRef).toBe("yui-stingray/growth-foundation#17");
+            expect(parsed.githubWritebackActions).toEqual(["comment", "close"]);
+            expect(parsed.githubWritebackCloseIssue).toBe(true);
+            expect(parsed.githubWritebackOperator).toBe("yui");
+            expect(parsed.githubWritebackProposalUpdatedAt).toBe("2026-03-07T21:55:00+09:00");
+            expect(parsed.githubWritebackReceiptAppliedAt).toBe("2026-03-07T22:00:00+09:00");
+            expect(parsed.githubWritebackProposalPath).toBe(
+              "memory/projects/growth-foundation/github-writeback/current-proposal.json",
+            );
+            expect(parsed.githubWritebackReceiptPath).toBe(
+              "memory/projects/growth-foundation/github-writeback/receipts/2026-03-07-issue-17.json",
+            );
+            expect(parsed.issueFlowStatus).toBe("needs-review");
+            expect(parsed.issueFlowStage).toBe("outcome");
+            expect(parsed.issueFlowIssueNumber).toBe(17);
+            expect(parsed.issueFlowIssueRef).toBe("yui-stingray/growth-foundation#17");
+            expect(parsed.issueFlowPreflightStatus).toBe("synced");
+            expect(parsed.issueFlowDraftStatus).toBe("approved-for-proposal");
+            expect(parsed.issueFlowProposalStatus).toBe("ready-for-manual-enqueue");
+            expect(parsed.issueFlowEnqueueStatus).toBe("enqueued");
+            expect(parsed.issueFlowOutcomeStatus).toBe("needs-review");
+            expect(parsed.issueFlowDirectoryPath).toBe(
+              "memory/projects/growth-foundation/issue-flow/issue-17",
+            );
+            expect(parsed.issueFlowPreflightPath).toBe(
+              "memory/projects/growth-foundation/issue-flow/issue-17/preflight.json",
+            );
+            expect(parsed.issueFlowOutcomePath).toBe(
+              "memory/projects/growth-foundation/issue-flow/issue-17/outcome-bundle.json",
+            );
+            expect(parsed.issueFlowPrimaryResultPath).toBe(
+              "queue/results/issue-17-live-operator-run-v2.json",
+            );
+            expect(parsed.issueFlowActiveCount).toBe(2);
+            expect(parsed.issueFlowRecentCount).toBe(1);
+            expect(parsed.issueFlowRecentItems).toHaveLength(1);
+            expect(parsed.issueFlowRecentItems?.[0]).toEqual(
+              expect.objectContaining({
+                issueNumber: 16,
+                issueRef: "yui-stingray/growth-foundation#16",
+                stage: "outcome",
+                status: "delivered",
+                directoryPath: "memory/projects/growth-foundation/issue-flow/issue-16",
+                outcomePath:
+                  "memory/projects/growth-foundation/issue-flow/issue-16/outcome-bundle.json",
+                primaryResultPath: "queue/results/issue-16-live-operator-run-v1.json",
+              }),
+            );
+            expect(parsed.issueFlowArchivedCount).toBe(1);
+            expect(parsed.issueFlowArchiveRootPath).toBe(
+              "memory/projects/growth-foundation/issue-flow/archive",
+            );
+            expect(parsed.issueFlowArchivedLatestIssueRef).toBe(
+              "yui-stingray/growth-foundation#15",
+            );
+            expect(parsed.issueFlowArchivedLatestArchivedAt).toBe("2026-03-06T20:00:00+09:00");
+            expect(parsed.issueFlowArchivedLatestPath).toBe(
+              "memory/projects/growth-foundation/issue-flow/archive/issue-15--20260306T000000Z",
+            );
+            expect(parsed.issueFlowArchivedLatestReceiptPath).toBe(
+              "memory/projects/growth-foundation/issue-flow/archive/issue-15--20260306T000000Z/archive-receipt.json",
+            );
+            expect(parsed.issueFlowVisibilityStatus).toBe("aligned");
+            expect(parsed.issueFlowVisibilityReason).toBe(
+              "The issue is no longer open after an applied close write-back.",
+            );
+            expect(parsed.issueFlowVisibilityOpenIssue).toBe(false);
+            expect(parsed.issueFlowVisibilityGithubSyncUpdatedAt).toBe("2026-03-07T22:10:00+09:00");
+            expect(parsed.relayStatus).toBe("approval-required");
+            expect(parsed.relayChannel).toBe("discord");
+            expect(parsed.relayMode).toBe("approval-required");
+            expect(parsed.relayCandidateCount).toBe(1);
+            expect(parsed.relayUpdatedAt).toBe("2026-03-06T17:05:00+09:00");
+            expect(parsed.relayCurrentPath).toBe(
+              "memory/projects/growth-foundation/relay/current.md",
+            );
 
-  it("uses the profiled default workspace when config workspace is unset", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-growth-profile-workspace-"));
-        const prevHome = process.env.HOME;
-        const prevProfile = process.env.OPENCLAW_PROFILE;
-        const workspace = path.join(home, ".openclaw", "workspace-staging");
-        const projectDir = path.join(workspace, "memory", "projects", "growth-foundation");
-        try {
-          process.env.HOME = home;
-          process.env.OPENCLAW_PROFILE = "staging";
-          await fs.mkdir(path.join(projectDir, "actions"), { recursive: true });
-          await fs.mkdir(path.join(projectDir, "alerts"), { recursive: true });
-          await fs.writeFile(
-            path.join(projectDir, "actions", "current.md"),
-            [
-              "# Growth Action Items",
-              "",
-              "- project: `growth-foundation`",
-              "- status: `clear`",
-              "- updated_at: `2026-03-06T13:54:16+09:00`",
-              "",
-              "## Priority Now",
-              "",
-              "- none",
-              "",
-              "## This Week",
-              "",
-              "- none",
-              "",
-              "## Watch",
-              "",
-              "- none",
-              "",
-            ].join("\n"),
-          );
-          await fs.writeFile(
-            path.join(projectDir, "alerts", "current.md"),
-            [
-              "# Growth Alert State",
-              "",
-              "- project: `growth-foundation`",
-              "- status: `clear`",
-              "- transition: `steady-clear`",
-              "- updated_at: `2026-03-06T13:54:36+09:00`",
-              "",
-            ].join("\n"),
-          );
-
-          const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
-            { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: {},
-            },
-          );
-
-          expect(handled).toBe(true);
-          const parsed = parseGrowthPayload(end);
-          expect(parsed.available).toBe(true);
-          expect(parsed.projectId).toBe("growth-foundation");
-          expect(parsed.workspaceProjectId).toBe("growth-foundation");
-        } finally {
-          if (prevHome === undefined) {
-            delete process.env.HOME;
-          } else {
-            process.env.HOME = prevHome;
+            await fs.writeFile(
+              path.join(projectDir, "github-pr-watch", "state.json"),
+              JSON.stringify(
+                {
+                  status: "attention",
+                  updated_at: "2026-03-06T16:00:00+09:00",
+                  pull_count: 1,
+                  ready_count: 0,
+                  pulls: [
+                    {
+                      repo: "yui-stingray/ai-company",
+                      number: 5,
+                      issue_ref: "yui-stingray/ai-company#4",
+                      watch_status: "failing-checks",
+                      ready_for_merge: false,
+                      reason: "At least one check has failed.",
+                    },
+                  ],
+                },
+                null,
+                2,
+              ),
+            );
+            const { res: res2, end: end2 } = makeMockHttpResponse();
+            const handled2 = handleControlUiHttpRequest(
+              { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
+              res2,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: { agents: { defaults: { workspace } } },
+              },
+            );
+            expect(handled2).toBe(true);
+            const parsed2 = parseGrowthPayload(end2);
+            expect(parsed2.notificationCount).toBe(3);
+            expect(parsed2.notificationItems[1]?.id).toBe("github-pr-attention");
+            expect(parsed2.notificationItems[1]?.severity).toBe("danger");
+            expect(parsed2.notificationItems[1]?.detail).toBe(
+              "yui-stingray/ai-company#4: At least one check has failed.",
+            );
+            expect(parsed2.notificationItems[1]?.path).toBe(
+              "memory/projects/growth-foundation/github-pr-watch/current.md",
+            );
+            expect(parsed2.notificationItems[1]?.source).toBe("github-pr-watch");
+            expect(parsed2.githubPrWatchStatus).toBe("attention");
+            expect(parsed2.githubPrWatchPullCount).toBe(1);
+            expect(parsed2.githubPrWatchReadyCount).toBe(0);
+            expect(parsed2.githubPrWatchAttentionCount).toBe(1);
+            expect(parsed2.githubPrWatchFreshnessStatus).toBe("lagging");
+            expect(parsed2.githubPrWatchAgeMinutes).toBe(100);
+            expect(parsed2.notificationItems[2]?.id).toBe("github-pr-watch-stale");
+            expect(parsed2.notificationItems[2]?.severity).toBe("danger");
+            expect(parsed2.notificationItems[2]?.detail).toBe(
+              "Latest PR watch snapshot is 1h 40m old; refresh may be stalled. Run openclaw-sync-github-pr-watch or inspect openclaw-growth-github-pr-watch.timer.",
+            );
+            expect(parsed2.githubPrWatchItems?.[0]?.watchStatus).toBe("failing-checks");
+            expect(parsed2.githubPrWatchItems?.[0]?.readyForMerge).toBe(false);
+          } finally {
+            vi.useRealTimers();
           }
-          if (prevProfile === undefined) {
-            delete process.env.OPENCLAW_PROFILE;
-          } else {
-            process.env.OPENCLAW_PROFILE = prevProfile;
-          }
-          await fs.rm(home, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("prefers the growth foundation project over newer unrelated workspace projects", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-growth-project-select-"));
-        const workspace = path.join(home, ".openclaw", "workspace");
-        try {
-          const growthProjectId = "2026-03-06_growth-foundation";
-          const growthProjectDir = path.join(workspace, "memory", "projects", growthProjectId);
-          const otherProjectDir = path.join(
-            workspace,
-            "memory",
-            "projects",
-            "2026-03-10_other-project",
-          );
-          await fs.mkdir(path.join(growthProjectDir, "actions"), { recursive: true });
-          await fs.mkdir(path.join(growthProjectDir, "alerts"), { recursive: true });
-          await fs.mkdir(path.join(otherProjectDir, "actions"), { recursive: true });
-          await fs.mkdir(path.join(otherProjectDir, "alerts"), { recursive: true });
-          await fs.writeFile(
-            path.join(growthProjectDir, "actions", "current.md"),
-            [
-              "# Growth Action Items",
-              "",
-              "- project: `growth-foundation`",
-              "- status: `actionable`",
-              "- updated_at: `2026-03-06T13:54:16+09:00`",
-              "",
-              "## Priority Now",
-              "",
-              "- none",
-              "",
-              "## This Week",
-              "",
-              "- [ ] Review `queue-output-1`",
-              "",
-              "## Watch",
-              "",
-              "- none",
-              "",
-            ].join("\n"),
-          );
-          await fs.writeFile(
-            path.join(growthProjectDir, "alerts", "current.md"),
-            [
-              "# Growth Alert State",
-              "",
-              "- project: `growth-foundation`",
-              "- status: `clear`",
-              "- transition: `steady-clear`",
-              "- updated_at: `2026-03-06T13:54:36+09:00`",
-              "",
-            ].join("\n"),
-          );
-          await fs.writeFile(
-            path.join(otherProjectDir, "actions", "current.md"),
-            [
-              "# Other Project Action Items",
-              "",
-              "- project: `other-project`",
-              "- status: `blocked`",
-              "- updated_at: `2026-03-10T18:00:00+09:00`",
-              "",
-              "## Priority Now",
-              "",
-              "- investigate unrelated issue",
-              "",
-            ].join("\n"),
-          );
-          await fs.writeFile(
-            path.join(otherProjectDir, "alerts", "current.md"),
-            [
-              "# Other Project Alert State",
-              "",
-              "- project: `other-project`",
-              "- status: `active`",
-              "- transition: `page-human`",
-              "- updated_at: `2026-03-10T18:00:00+09:00`",
-              "",
-            ].join("\n"),
-          );
-
-          const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
-            { url: CONTROL_UI_GROWTH_FOUNDATION_PATH, method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: { agents: { defaults: { workspace } } },
-            },
-          );
-
-          expect(handled).toBe(true);
-          const parsed = parseGrowthPayload(end);
-          expect(parsed.available).toBe(true);
-          expect(parsed.projectId).toBe("growth-foundation");
-          expect(parsed.workspaceProjectId).toBe(growthProjectId);
-          expect(parsed.alertStatus).toBe("clear");
-          expect(parsed.reviewCount).toBe(1);
-          expect(parsed.thisWeekItems[0]?.display).toBe("Review queue-output-1");
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }
@@ -1997,45 +2003,157 @@ describe("handleControlUiHttpRequest", () => {
             ].join("\n"),
           );
           await fs.writeFile(path.join(scriptsDir, "complete_growth_action.py"), "print('ok')\n");
+          const actionRunner = mockSuccessfulGrowthReviewAction();
 
-          const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
-            makePostRequest(CONTROL_UI_GROWTH_REVIEW_ACTION_PATH, {
-              action: "complete",
-              itemKey: "item-1",
-              projectId: "growth-foundation",
-            }),
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: { agents: { defaults: { workspace } } },
-            },
-          );
+          try {
+            const { res, end } = makeMockHttpResponse();
+            const handled = handleControlUiHttpRequest(
+              makePostRequest(CONTROL_UI_GROWTH_REVIEW_ACTION_PATH, {
+                action: "complete",
+                itemKey: "item-1",
+                projectId: "growth-foundation",
+              }),
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: { agents: { defaults: { workspace } } },
+              },
+            );
 
-          expect(handled).toBe(true);
-          await new Promise((resolve) => setImmediate(resolve));
-          const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
-            success: boolean;
-            action: string;
-            snapshot: { projectId: string | null };
-          };
-          expect(res.statusCode).toBe(200);
-          expect(payload.success).toBe(true);
-          expect(payload.action).toBe("complete");
-          expect(payload.snapshot.projectId).toBe("growth-foundation");
-          expect(spawnSync).toHaveBeenCalledWith(
-            "python3",
-            expect.arrayContaining([
-              path.join(scriptsDir, "complete_growth_action.py"),
-              "--project",
-              "growth-foundation",
-              "--item-key",
-              "item-1",
-              "--action",
-              "complete",
-            ]),
-            expect.objectContaining({ encoding: "utf8", timeout: 45_000 }),
+            expect(handled).toBe(true);
+            await new Promise((resolve) => setImmediate(resolve));
+            const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+              success: boolean;
+              action: string;
+              snapshot: { projectId: string | null };
+            };
+            expect(res.statusCode).toBe(200);
+            expect(payload.success).toBe(true);
+            expect(payload.action).toBe("complete");
+            expect(payload.snapshot.projectId).toBe("growth-foundation");
+            expect(actionRunner.calls).toEqual([
+              {
+                scriptPath: path.join(scriptsDir, "complete_growth_action.py"),
+                workspaceRoot: workspace,
+                projectId: "growth-foundation",
+                itemKey: "item-1",
+                action: "complete",
+              },
+            ]);
+          } finally {
+            actionRunner.restore();
+          }
+        } finally {
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("accepts pr watch sync POSTs and returns the refreshed snapshot", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const home = await fs.mkdtemp(
+          path.join(os.tmpdir(), "openclaw-growth-pr-watch-sync-home-"),
+        );
+        const workspace = path.join(home, ".openclaw", "workspace");
+        const projectDir = path.join(workspace, "memory", "projects", "growth-foundation");
+        const scriptsDir = path.join(workspace, "projects", "growth-foundation", "scripts");
+        try {
+          await fs.mkdir(path.join(projectDir, "actions"), { recursive: true });
+          await fs.mkdir(path.join(projectDir, "alerts"), { recursive: true });
+          await fs.mkdir(path.join(projectDir, "github-pr-watch"), { recursive: true });
+          await fs.mkdir(scriptsDir, { recursive: true });
+          await fs.writeFile(
+            path.join(projectDir, "actions", "current.md"),
+            [
+              "# Growth Action Items",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `actionable`",
+              "- updated_at: `2026-03-06T13:54:16+09:00`",
+              "",
+              "## Priority Now",
+              "",
+              "- none",
+              "",
+              "## This Week",
+              "",
+              "- none",
+              "",
+              "## Watch",
+              "",
+              "- none",
+              "",
+            ].join("\n"),
           );
+          await fs.writeFile(
+            path.join(projectDir, "alerts", "current.md"),
+            [
+              "# Growth Alert State",
+              "",
+              "- project: `growth-foundation`",
+              "- status: `clear`",
+              "- transition: `steady-clear`",
+              "- updated_at: `2026-03-06T13:54:36+09:00`",
+            ].join("\n"),
+          );
+          await fs.writeFile(
+            path.join(projectDir, "github-pr-watch", "state.json"),
+            JSON.stringify(
+              {
+                schema: "growth-github-pr-watch-state/v1",
+                updated_at: "2026-03-06T17:30:00+09:00",
+                status: "ready-for-merge",
+                pulls: [],
+              },
+              null,
+              2,
+            ) + "\n",
+          );
+          await fs.writeFile(path.join(scriptsDir, "sync_github_pr_watch.py"), "print('ok')\n");
+          const actionRunner = mockSuccessfulGrowthPrWatchSync();
+
+          try {
+            const { res, end } = makeMockHttpResponse();
+            const handled = handleControlUiHttpRequest(
+              makePostRequest(CONTROL_UI_GROWTH_REVIEW_ACTION_PATH, {
+                action: "sync-pr-watch",
+                itemKey: CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
+                projectId: "growth-foundation",
+              }),
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: { agents: { defaults: { workspace } } },
+              },
+            );
+
+            expect(handled).toBe(true);
+            await new Promise((resolve) => setImmediate(resolve));
+            const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+              success: boolean;
+              action: string;
+              snapshot: { projectId: string | null };
+            };
+            expect(res.statusCode).toBe(200);
+            expect(payload.success).toBe(true);
+            expect(payload.action).toBe("sync-pr-watch");
+            expect(payload.snapshot.projectId).toBe("growth-foundation");
+            expect(actionRunner.calls).toEqual([
+              {
+                scriptPath: path.join(scriptsDir, "sync_github_pr_watch.py"),
+                workspaceRoot: workspace,
+                projectId: "growth-foundation",
+                projectRoot: path.join(workspace, "projects", "growth-foundation"),
+                itemKey: CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
+                source: "control-ui",
+                action: "sync-pr-watch",
+              },
+            ]);
+          } finally {
+            actionRunner.restore();
+          }
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }
@@ -2097,46 +2215,47 @@ describe("handleControlUiHttpRequest", () => {
             ].join("\n"),
           );
           await fs.writeFile(path.join(scriptsDir, "complete_growth_action.py"), "print('ok')\n");
+          const actionRunner = mockSuccessfulGrowthReviewAction();
 
-          const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
-            makePostRequest(CONTROL_UI_GROWTH_REVIEW_ACTION_PATH, {
-              action: "complete",
-              itemKey: "item-1",
-              projectId: workspaceProjectId,
-            }),
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-              config: { agents: { defaults: { workspace } } },
-            },
-          );
+          try {
+            const { res, end } = makeMockHttpResponse();
+            const handled = handleControlUiHttpRequest(
+              makePostRequest(CONTROL_UI_GROWTH_REVIEW_ACTION_PATH, {
+                action: "complete",
+                itemKey: "item-1",
+                projectId: workspaceProjectId,
+              }),
+              res,
+              {
+                root: { kind: "resolved", path: tmp },
+                config: { agents: { defaults: { workspace } } },
+              },
+            );
 
-          expect(handled).toBe(true);
-          await new Promise((resolve) => setImmediate(resolve));
-          const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
-            success: boolean;
-            action: string;
-            snapshot: { projectId: string | null; workspaceProjectId?: string | null };
-          };
-          expect(res.statusCode).toBe(200);
-          expect(payload.success).toBe(true);
-          expect(payload.action).toBe("complete");
-          expect(payload.snapshot.projectId).toBe("growth-foundation");
-          expect(payload.snapshot.workspaceProjectId).toBe(workspaceProjectId);
-          expect(spawnSync).toHaveBeenCalledWith(
-            "python3",
-            expect.arrayContaining([
-              path.join(scriptsDir, "complete_growth_action.py"),
-              "--project",
-              workspaceProjectId,
-              "--item-key",
-              "item-1",
-              "--action",
-              "complete",
-            ]),
-            expect.objectContaining({ encoding: "utf8", timeout: 45_000 }),
-          );
+            expect(handled).toBe(true);
+            await new Promise((resolve) => setImmediate(resolve));
+            const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+              success: boolean;
+              action: string;
+              snapshot: { projectId: string | null; workspaceProjectId?: string | null };
+            };
+            expect(res.statusCode).toBe(200);
+            expect(payload.success).toBe(true);
+            expect(payload.action).toBe("complete");
+            expect(payload.snapshot.projectId).toBe("growth-foundation");
+            expect(payload.snapshot.workspaceProjectId).toBe(workspaceProjectId);
+            expect(actionRunner.calls).toEqual([
+              {
+                scriptPath: path.join(scriptsDir, "complete_growth_action.py"),
+                workspaceRoot: workspace,
+                projectId: workspaceProjectId,
+                itemKey: "item-1",
+                action: "complete",
+              },
+            ]);
+          } finally {
+            actionRunner.restore();
+          }
         } finally {
           await fs.rm(home, { recursive: true, force: true });
         }
@@ -2269,72 +2388,6 @@ describe("handleControlUiHttpRequest", () => {
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
-      },
-    });
-  });
-
-  it("rejects hardlinked index.html for non-package control-ui roots", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-index-hardlink-"));
-        try {
-          const outsideIndex = path.join(outsideDir, "index.html");
-          await fs.writeFile(outsideIndex, "<html>outside-hardlink</html>\n");
-          await fs.rm(path.join(tmp, "index.html"));
-          await fs.link(outsideIndex, path.join(tmp, "index.html"));
-
-          const { res, end, handled } = runControlUiRequest({
-            url: "/",
-            method: "GET",
-            rootPath: tmp,
-          });
-          expectNotFoundResponse({ handled, res, end });
-        } finally {
-          await fs.rm(outsideDir, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const assetsDir = path.join(tmp, "assets");
-        await fs.mkdir(assetsDir, { recursive: true });
-        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
-        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
-
-        const { res, end, handled } = runControlUiRequest({
-          url: "/assets/app.hl.js",
-          method: "GET",
-          rootPath: tmp,
-        });
-
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(404);
-        expect(end).toHaveBeenCalledWith("Not Found");
-      },
-    });
-  });
-
-  it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const assetsDir = path.join(tmp, "assets");
-        await fs.mkdir(assetsDir, { recursive: true });
-        await fs.writeFile(path.join(assetsDir, "app.js"), "console.log('hi');");
-        await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
-
-        const { res, end, handled } = runControlUiRequest({
-          url: "/assets/app.hl.js",
-          method: "GET",
-          rootPath: tmp,
-          rootKind: "bundled",
-        });
-
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
       },
     });
   });

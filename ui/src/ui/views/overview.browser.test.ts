@@ -1,13 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function createProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
   return {
-    basePath: "",
     connected: true,
     hello: null,
     settings: {
@@ -49,7 +48,13 @@ describe("renderOverview growth foundation panel", () => {
     await i18n.setLocale("en");
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders the growth foundation summary when available", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T17:40:00+09:00"));
     const container = document.createElement("div");
     render(
       renderOverview(
@@ -177,6 +182,33 @@ describe("renderOverview growth foundation panel", () => {
             githubProjectTitle: "Growth Foundation",
             githubProjectUrl: "https://github.com/users/yui-stingray/projects/1",
             githubProjectItemCount: 1,
+            githubPrWatchStatus: "ready-for-merge",
+            githubPrWatchPullCount: 1,
+            githubPrWatchReadyCount: 1,
+            githubPrWatchAttentionCount: 0,
+            githubPrWatchUpdatedAt: "2026-03-06T17:30:00+09:00",
+            githubPrWatchFreshnessStatus: "fresh",
+            githubPrWatchAgeMinutes: 10,
+            githubPrWatchItems: [
+              {
+                repo: "yui-stingray/ai-company",
+                number: 4,
+                issueRef: "yui-stingray/ai-company#4",
+                title: "fix: queue output handling",
+                url: "https://github.com/yui-stingray/ai-company/pull/4",
+                watchStatus: "ready-for-merge",
+                readyForMerge: true,
+                reason: "All visible checks are complete; manual merge gate can proceed.",
+                checkRunTotal: 4,
+                checkRunPending: 0,
+                checkRunFailing: 0,
+                commitStatusState: "success",
+              },
+            ],
+            githubPrWatchCurrentPath:
+              "memory/projects/2026-03-06_growth-foundation/github-pr-watch/current.md",
+            githubPrWatchStatePath:
+              "memory/projects/2026-03-06_growth-foundation/github-pr-watch/state.json",
             githubWritebackStatus: "applied",
             githubWritebackIssueRef: "yui-stingray/growth-foundation#10",
             githubWritebackActions: ["comment"],
@@ -275,6 +307,13 @@ describe("renderOverview growth foundation panel", () => {
     expect(container.textContent).toContain("Codex Smoke");
     expect(container.textContent).toContain("Review Smoke");
     expect(container.textContent).toContain("GitHub Sync");
+    expect(container.textContent).toContain("GitHub PR Watch");
+    expect(container.textContent).toContain("PR Watch: ready-for-merge");
+    expect(container.textContent).toContain("Ready PRs: 1");
+    expect(container.textContent).toContain("PR Attention: 0");
+    expect(container.textContent).toContain("PR Freshness: fresh");
+    expect(container.textContent).toContain("freshness: fresh");
+    expect(container.textContent).toContain("10m");
     expect(container.textContent).toContain("Issue Flow");
     expect(container.textContent).toContain("Active Flow Runs");
     expect(container.textContent).toContain("Recent Issue Flow Runs");
@@ -291,6 +330,9 @@ describe("renderOverview growth foundation panel", () => {
     expect(container.textContent).toContain("yui-stingray/growth-foundation#15");
     expect(container.textContent).toContain("state-drift");
     expect(container.textContent).toContain("Growth Foundation");
+    expect(container.textContent).toContain(
+      "All visible checks are complete; manual merge gate can proceed.",
+    );
     expect(container.textContent).toContain("Relay");
     expect(container.textContent).toContain("approval-required");
     expect(container.textContent).toContain("discord");
@@ -305,223 +347,27 @@ describe("renderOverview growth foundation panel", () => {
       node.getAttribute("href"),
     );
     expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
     );
     expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Factions%2Fcurrent.md",
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Factions%2Fcurrent.md",
     );
     expect(links).toContain("https://github.com/users/yui-stingray/projects/1");
+    expect(links).toContain("https://github.com/yui-stingray/ai-company/pull/4");
     expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Fcurrent-proposal.json",
-    );
-    expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Freceipts%2F2026-03-06-issue-10.json",
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Fcurrent-proposal.json",
     );
     expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Fissue-17%2Foutcome-bundle.json",
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fgithub-writeback%2Freceipts%2F2026-03-06-issue-10.json",
     );
     expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Farchive%2Fissue-15--20260306T000000Z%2Farchive-receipt.json",
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Fissue-17%2Foutcome-bundle.json",
     );
     expect(links).toContain(
-      "http://127.0.0.1:18789/__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Frelay%2Fcurrent.md",
-    );
-  });
-
-  it("targets the active gateway origin for growth file links when basePath is remote", () => {
-    const container = document.createElement("div");
-    render(
-      renderOverview(
-        createProps({
-          settings: {
-            ...createProps().settings,
-            gatewayUrl: "wss://gateway.example.com/openclaw",
-          },
-          growthFoundation: {
-            available: true,
-            projectId: "growth-foundation",
-            alertStatus: "clear",
-            alertTransition: "steady-clear",
-            alertUpdatedAt: null,
-            actionsStatus: "actionable",
-            actionsUpdatedAt: null,
-            priorityNow: [],
-            thisWeek: [],
-            thisWeekItems: [],
-            completedThisWeekItems: [],
-            completedHistoryItems: [],
-            notificationStatus: "clear",
-            notificationCount: 1,
-            notificationItems: [
-              {
-                id: "weekly",
-                severity: "info",
-                title: "Weekly review",
-                detail: "Open the weekly review",
-                path: "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-                source: "weekly",
-              },
-            ],
-            watch: [],
-            reviewCount: 0,
-            completedReviewCount: 0,
-            alertsPath: null,
-            actionsPath: null,
-            completedHistoryPath: null,
-            heartbeatPath: null,
-            weeklyReviewPath:
-              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-            codexSmokeStatus: "missing",
-            codexSmokePeriod: null,
-            codexSmokeJobId: null,
-            codexSmokeUpdatedAt: null,
-            codexSmokeStatePath: null,
-            codexReviewSmokeStatus: "missing",
-            codexReviewSmokePeriod: null,
-            codexReviewSmokeJobId: null,
-            codexReviewSmokeSourceJobId: null,
-            codexReviewSmokeUpdatedAt: null,
-            codexReviewSmokeStatePath: null,
-            codexReviewSmokeDiffPath: null,
-            codexReviewSmokeBackfillCount: 0,
-            codexReviewSmokeBackfillItems: [],
-            codexReviewSmokeBackfillStatePath: null,
-            codexSmokeBackfillCount: 0,
-            codexSmokeBackfillItems: [],
-            codexSmokeBackfillStatePath: null,
-            githubSyncStatus: "missing",
-            githubSyncIssueCount: 0,
-            githubSyncUpdatedAt: null,
-            githubSyncCurrentPath: null,
-            githubProjectStatus: "missing",
-            githubProjectTitle: null,
-            githubProjectUrl: null,
-            githubProjectItemCount: 0,
-            githubWritebackStatus: "missing",
-            githubWritebackIssueRef: null,
-            githubWritebackActions: [],
-            githubWritebackCloseIssue: false,
-            githubWritebackOperator: null,
-            githubWritebackProposalUpdatedAt: null,
-            githubWritebackReceiptAppliedAt: null,
-            githubWritebackProposalPath: null,
-            githubWritebackReceiptPath: null,
-            relayStatus: "missing",
-            relayChannel: null,
-            relayMode: null,
-            relayCandidateCount: 0,
-            relayUpdatedAt: null,
-            relayCurrentPath: null,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const links = Array.from(container.querySelectorAll("a")).map((node) =>
-      node.getAttribute("href"),
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Fissue-flow%2Farchive%2Fissue-15--20260306T000000Z%2Farchive-receipt.json",
     );
     expect(links).toContain(
-      "https://gateway.example.com/openclaw/__openclaw/growth-foundation/file?path=memory%2Fprojects%2Fgrowth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
-    );
-  });
-
-  it("falls back to the mounted basePath for growth file links when gatewayUrl is empty", () => {
-    const container = document.createElement("div");
-    render(
-      renderOverview(
-        createProps({
-          basePath: "/openclaw",
-          settings: {
-            ...createProps().settings,
-            gatewayUrl: "",
-          },
-          growthFoundation: {
-            available: true,
-            projectId: "growth-foundation",
-            alertStatus: "clear",
-            alertTransition: "steady-clear",
-            alertUpdatedAt: null,
-            actionsStatus: "actionable",
-            actionsUpdatedAt: null,
-            priorityNow: [],
-            thisWeek: [],
-            thisWeekItems: [],
-            completedThisWeekItems: [],
-            completedHistoryItems: [],
-            notificationStatus: "clear",
-            notificationCount: 1,
-            notificationItems: [
-              {
-                id: "weekly",
-                severity: "info",
-                title: "Weekly review",
-                detail: "Open the weekly review",
-                path: "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-                source: "weekly",
-              },
-            ],
-            watch: [],
-            reviewCount: 0,
-            completedReviewCount: 0,
-            alertsPath: null,
-            actionsPath: null,
-            completedHistoryPath: null,
-            heartbeatPath: null,
-            weeklyReviewPath:
-              "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
-            codexSmokeStatus: "missing",
-            codexSmokePeriod: null,
-            codexSmokeJobId: null,
-            codexSmokeUpdatedAt: null,
-            codexSmokeStatePath: null,
-            codexReviewSmokeStatus: "missing",
-            codexReviewSmokePeriod: null,
-            codexReviewSmokeJobId: null,
-            codexReviewSmokeSourceJobId: null,
-            codexReviewSmokeUpdatedAt: null,
-            codexReviewSmokeStatePath: null,
-            codexReviewSmokeDiffPath: null,
-            codexReviewSmokeBackfillCount: 0,
-            codexReviewSmokeBackfillItems: [],
-            codexReviewSmokeBackfillStatePath: null,
-            codexSmokeBackfillCount: 0,
-            codexSmokeBackfillItems: [],
-            codexSmokeBackfillStatePath: null,
-            githubSyncStatus: "missing",
-            githubSyncIssueCount: 0,
-            githubSyncUpdatedAt: null,
-            githubSyncCurrentPath: null,
-            githubProjectStatus: "missing",
-            githubProjectTitle: null,
-            githubProjectUrl: null,
-            githubProjectItemCount: 0,
-            githubWritebackStatus: "missing",
-            githubWritebackIssueRef: null,
-            githubWritebackActions: [],
-            githubWritebackCloseIssue: false,
-            githubWritebackOperator: null,
-            githubWritebackProposalUpdatedAt: null,
-            githubWritebackReceiptAppliedAt: null,
-            githubWritebackProposalPath: null,
-            githubWritebackReceiptPath: null,
-            relayStatus: "missing",
-            relayChannel: null,
-            relayMode: null,
-            relayCandidateCount: 0,
-            relayUpdatedAt: null,
-            relayCurrentPath: null,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const links = Array.from(container.querySelectorAll("a")).map((node) =>
-      node.getAttribute("href"),
-    );
-    expect(links).toContain(
-      "/openclaw/__openclaw/growth-foundation/file?path=memory%2Fprojects%2Fgrowth-foundation%2Fweekly%2F2026-03-06-weekly-review.md",
+      "./__openclaw/growth-foundation/file?path=memory%2Fprojects%2F2026-03-06_growth-foundation%2Frelay%2Fcurrent.md",
     );
   });
 
@@ -661,5 +507,150 @@ describe("renderOverview growth foundation panel", () => {
     expect(buttons.every((node) => node.disabled)).toBe(true);
     expect(buttons[0]?.textContent).toContain("Updating");
     expect(buttons[1]?.textContent).toContain("Reopen");
+  });
+
+  it("shows pr watch remediation guidance when freshness is lagging", () => {
+    const container = document.createElement("div");
+    render(
+      renderOverview(
+        createProps({
+          growthFoundation: {
+            available: true,
+            projectId: "2026-03-06_growth-foundation",
+            alertStatus: "clear",
+            alertTransition: "steady-clear",
+            alertUpdatedAt: null,
+            actionsStatus: "actionable",
+            actionsUpdatedAt: null,
+            priorityNow: [],
+            thisWeek: [],
+            thisWeekItems: [],
+            completedThisWeekItems: [],
+            completedHistoryItems: [],
+            notificationStatus: "attention",
+            notificationCount: 1,
+            notificationItems: [
+              {
+                id: "github-pr-watch-stale",
+                severity: "danger",
+                title: "PR watch refresh is lagging",
+                detail:
+                  "Latest PR watch snapshot is 1h 40m old; refresh may be stalled. Run openclaw-sync-github-pr-watch or inspect openclaw-growth-github-pr-watch.timer.",
+                path: "memory/projects/2026-03-06_growth-foundation/github-pr-watch/current.md",
+                source: "github-pr-watch",
+              },
+            ],
+            watch: [],
+            reviewCount: 0,
+            completedReviewCount: 0,
+            alertsPath: null,
+            actionsPath: null,
+            completedHistoryPath: null,
+            heartbeatPath: null,
+            weeklyReviewPath: null,
+            codexSmokeStatus: "missing",
+            codexSmokePeriod: null,
+            codexSmokeJobId: null,
+            codexSmokeUpdatedAt: null,
+            codexSmokeStatePath: null,
+            codexReviewSmokeStatus: "missing",
+            codexReviewSmokePeriod: null,
+            codexReviewSmokeJobId: null,
+            codexReviewSmokeSourceJobId: null,
+            codexReviewSmokeUpdatedAt: null,
+            codexReviewSmokeStatePath: null,
+            codexReviewSmokeDiffPath: null,
+            codexReviewSmokeBackfillCount: 0,
+            codexReviewSmokeBackfillItems: [],
+            codexReviewSmokeBackfillStatePath: null,
+            codexSmokeBackfillCount: 0,
+            codexSmokeBackfillItems: [],
+            codexSmokeBackfillStatePath: null,
+            githubSyncStatus: "synced",
+            githubSyncIssueCount: 0,
+            githubSyncUpdatedAt: null,
+            githubSyncCurrentPath: null,
+            githubProjectStatus: "synced",
+            githubProjectTitle: "Growth Foundation",
+            githubProjectUrl: null,
+            githubProjectItemCount: 0,
+            githubPrWatchStatus: "waiting-checks",
+            githubPrWatchPullCount: 1,
+            githubPrWatchReadyCount: 0,
+            githubPrWatchAttentionCount: 0,
+            githubPrWatchUpdatedAt: "2026-03-06T16:00:00+09:00",
+            githubPrWatchFreshnessStatus: "lagging",
+            githubPrWatchAgeMinutes: 100,
+            githubPrWatchItems: [],
+            githubPrWatchCurrentPath:
+              "memory/projects/2026-03-06_growth-foundation/github-pr-watch/current.md",
+            githubPrWatchStatePath:
+              "memory/projects/2026-03-06_growth-foundation/github-pr-watch/state.json",
+            githubPrWatchLastSyncSource: "control-ui",
+            githubPrWatchLastSyncStatus: "attention",
+            githubPrWatchLastSyncFinishedAt: "2026-03-06T15:45:00+09:00",
+            githubPrWatchLastSyncError:
+              "yui-stingray/ai-company#5: combined status is still pending.",
+            githubPrWatchLastSyncErrorCount: 1,
+            githubWritebackStatus: "missing",
+            githubWritebackIssueRef: null,
+            githubWritebackActions: [],
+            githubWritebackCloseIssue: false,
+            githubWritebackOperator: null,
+            githubWritebackProposalUpdatedAt: null,
+            githubWritebackReceiptAppliedAt: null,
+            githubWritebackProposalPath: null,
+            githubWritebackReceiptPath: null,
+            issueFlowStatus: "missing",
+            issueFlowStage: null,
+            issueFlowIssueNumber: null,
+            issueFlowIssueRef: null,
+            issueFlowUpdatedAt: null,
+            issueFlowDirectoryPath: null,
+            issueFlowPreflightStatus: "missing",
+            issueFlowDraftStatus: "missing",
+            issueFlowProposalStatus: "missing",
+            issueFlowEnqueueStatus: "missing",
+            issueFlowOutcomeStatus: "missing",
+            issueFlowPreflightPath: null,
+            issueFlowDraftPath: null,
+            issueFlowProposalPath: null,
+            issueFlowReceiptPath: null,
+            issueFlowOutcomePath: null,
+            issueFlowPrimaryResultPath: null,
+            issueFlowActiveCount: 0,
+            issueFlowRecentCount: 0,
+            issueFlowRecentItems: [],
+            issueFlowArchivedCount: 0,
+            issueFlowArchiveRootPath: null,
+            issueFlowArchivedLatestIssueRef: null,
+            issueFlowArchivedLatestArchivedAt: null,
+            issueFlowArchivedLatestPath: null,
+            issueFlowArchivedLatestReceiptPath: null,
+            issueFlowVisibilityStatus: "missing",
+            issueFlowVisibilityReason: null,
+            issueFlowVisibilityOpenIssue: null,
+            issueFlowVisibilityGithubSyncUpdatedAt: null,
+            relayStatus: "missing",
+            relayChannel: null,
+            relayMode: null,
+            relayCandidateCount: 0,
+            relayUpdatedAt: null,
+            relayCurrentPath: null,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("PR Freshness: lagging");
+    expect(text).toContain("openclaw-sync-github-pr-watch");
+    expect(text).toContain("openclaw-growth-github-pr-watch.timer");
+    expect(text).toContain("Sync PR Watch");
+    expect(text).toContain("last sync: control-ui");
+    expect(text).toContain(
+      "last sync note: yui-stingray/ai-company#5: combined status is still pending.",
+    );
   });
 });

@@ -1,8 +1,7 @@
 import { html } from "lit";
-import { CONTROL_UI_GROWTH_FILE_PATH } from "../../../../src/gateway/control-ui-contract.js";
+import { CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY } from "../../../../src/gateway/control-ui-contract.js";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { t, i18n, SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
-import { buildControlUiHttpUrl } from "../control-ui-url.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
@@ -11,11 +10,9 @@ import type { UiSettings } from "../storage.ts";
 import type { GrowthFoundationSummary } from "../types.ts";
 import { shouldShowPairingHint } from "./overview-hints.ts";
 
-type GrowthReviewAction = "complete" | "reopen";
-type GrowthFileHrefBuilder = (relPath: string) => string;
+type GrowthReviewAction = "complete" | "reopen" | "sync-pr-watch";
 
 export type OverviewProps = {
-  basePath: string;
   connected: boolean;
   hello: GatewayHelloOk | null;
   settings: UiSettings;
@@ -54,12 +51,54 @@ function growthBadgeClass(status: string): string {
   return "warn";
 }
 
+function growthCountBadgeClass(count: number, nonZeroClass: "warn" | "danger"): string {
+  return count > 0 ? nonZeroClass : "ok";
+}
+
+function growthPrWatchBadgeClass(growth: GrowthFoundationSummary): string {
+  if ((growth.githubPrWatchAttentionCount ?? 0) > 0) {
+    return "danger";
+  }
+  if ((growth.githubPrWatchReadyCount ?? 0) > 0 || (growth.githubPrWatchPullCount ?? 0) > 0) {
+    return "warn";
+  }
+  return growthBadgeClass(growth.githubPrWatchStatus ?? "clear");
+}
+
+function growthPrWatchFreshnessBadgeClass(growth: GrowthFoundationSummary): string {
+  switch ((growth.githubPrWatchFreshnessStatus ?? "").trim().toLowerCase()) {
+    case "fresh":
+      return "ok";
+    case "stale":
+      return "warn";
+    case "lagging":
+      return "danger";
+    default:
+      return "warn";
+  }
+}
+
 function toRelativeTimeLabel(value: string | null): string {
   if (!value) {
     return t("common.na");
   }
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? formatRelativeTimestamp(ms) : t("common.na");
+}
+
+function formatGrowthAgeMinutes(ageMinutes: number | null | undefined): string {
+  if (typeof ageMinutes !== "number" || !Number.isFinite(ageMinutes) || ageMinutes < 0) {
+    return t("common.na");
+  }
+  return formatDurationHuman(ageMinutes * 60_000);
+}
+
+function growthPrWatchRemediationHint(growth: GrowthFoundationSummary): string | null {
+  const freshnessStatus = (growth.githubPrWatchFreshnessStatus ?? "").trim().toLowerCase();
+  if (freshnessStatus !== "stale" && freshnessStatus !== "lagging") {
+    return null;
+  }
+  return "remediation: run openclaw-sync-github-pr-watch; timer: openclaw-growth-github-pr-watch.timer";
 }
 
 function normalizeGrowthItem(text: string): string {
@@ -69,16 +108,8 @@ function normalizeGrowthItem(text: string): string {
     .trim();
 }
 
-function buildGrowthFileHref(
-  gatewayUrl: string | null | undefined,
-  basePath: string,
-  relPath: string,
-): string {
-  return buildControlUiHttpUrl({
-    gatewayUrl,
-    basePath,
-    path: `${CONTROL_UI_GROWTH_FILE_PATH}?path=${encodeURIComponent(relPath)}`,
-  });
+function buildGrowthFileHref(relPath: string): string {
+  return `./__openclaw/growth-foundation/file?path=${encodeURIComponent(relPath)}`;
 }
 
 function renderGrowthList(items: string[], emptyLabel: string) {
@@ -134,7 +165,6 @@ function renderGrowthCompletionHistory(
     weeklyPath: string | null;
   }>,
   emptyLabel: string,
-  fileHref: GrowthFileHrefBuilder,
 ) {
   if (items.length === 0) {
     return html`<div class="muted">${emptyLabel}</div>`;
@@ -152,7 +182,7 @@ function renderGrowthCompletionHistory(
               ? html`<div style="margin-top:8px;">
                   <a
                     class="session-link"
-                    href=${fileHref(item.weeklyPath)}
+                    href=${buildGrowthFileHref(item.weeklyPath)}
                     target="_blank"
                     rel="noopener noreferrer"
                     >Open weekly review</a
@@ -190,7 +220,6 @@ function renderGrowthCodexSmoke(growth: GrowthFoundationSummary, labels: { none:
 function renderGrowthCodexReviewSmoke(
   growth: GrowthFoundationSummary,
   labels: { none: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
 ) {
   const status = growth.codexReviewSmokeStatus || labels.none;
   const period = growth.codexReviewSmokePeriod || labels.none;
@@ -212,7 +241,7 @@ function renderGrowthCodexReviewSmoke(
           ? html`<div style="margin-top:8px;">
               <a
                 class="session-link"
-                href=${fileHref(growth.codexReviewSmokeDiffPath)}
+                href=${buildGrowthFileHref(growth.codexReviewSmokeDiffPath)}
                 target="_blank"
                 rel="noopener noreferrer"
                 >${labels.openLabel}</a
@@ -247,7 +276,7 @@ function renderGrowthCodexReviewSmoke(
                         ? html`<div style="margin-top:8px;">
                             <a
                               class="session-link"
-                              href=${fileHref(item.diffRelpath)}
+                              href=${buildGrowthFileHref(item.diffRelpath)}
                               target="_blank"
                               rel="noopener noreferrer"
                               >${labels.openLabel}</a
@@ -337,10 +366,123 @@ function renderGrowthGithubSummary(
   `;
 }
 
+function renderGrowthGithubPrWatchSummary(
+  growth: GrowthFoundationSummary,
+  labels: { none: string; openLabel: string },
+) {
+  const items = growth.githubPrWatchItems ?? [];
+  const pullCount = growth.githubPrWatchPullCount ?? items.length;
+  const readyCount = growth.githubPrWatchReadyCount ?? 0;
+  const attentionCount = growth.githubPrWatchAttentionCount ?? 0;
+  const freshnessStatus = growth.githubPrWatchFreshnessStatus ?? labels.none;
+  const freshnessAge = formatGrowthAgeMinutes(growth.githubPrWatchAgeMinutes);
+  const remediationHint = growthPrWatchRemediationHint(growth);
+  const lastSyncSource = growth.githubPrWatchLastSyncSource ?? labels.none;
+  const lastSyncStatus = growth.githubPrWatchLastSyncStatus ?? labels.none;
+  const lastSyncFinished = growth.githubPrWatchLastSyncFinishedAt
+    ? toRelativeTimeLabel(growth.githubPrWatchLastSyncFinishedAt)
+    : labels.none;
+  const lastSyncErrorCount = String(growth.githubPrWatchLastSyncErrorCount ?? 0);
+  const lastSyncError = growth.githubPrWatchLastSyncError ?? null;
+  const freshnessTone =
+    freshnessStatus === "lagging"
+      ? "var(--danger-color, #d14343)"
+      : freshnessStatus === "stale"
+        ? "#b58100"
+        : "var(--muted)";
+  return html`
+    <div style="border:1px solid var(--border-color); border-radius:12px; padding:10px 12px;">
+      <div>${growth.githubPrWatchStatus ?? labels.none}</div>
+      <div class="muted" style="margin-top:6px;">
+        ready: ${readyCount} · attention: ${attentionCount} · pulls: ${pullCount}
+      </div>
+      <div class="muted" style="margin-top:6px; color:${freshnessTone};">
+        freshness: ${freshnessStatus} · age: ${freshnessAge}
+      </div>
+      ${
+        remediationHint
+          ? html`<div class="muted" style="margin-top:6px; color:${freshnessTone};">${remediationHint}</div>`
+          : null
+      }
+      <div class="muted" style="margin-top:6px;">
+        updated: ${growth.githubPrWatchUpdatedAt ? toRelativeTimeLabel(growth.githubPrWatchUpdatedAt) : labels.none}
+      </div>
+      <div class="muted" style="margin-top:6px;">
+        last sync: ${lastSyncSource} · ${lastSyncStatus} · ${lastSyncFinished} · errors: ${lastSyncErrorCount}
+      </div>
+      ${
+        lastSyncError
+          ? html`<div class="muted" style="margin-top:6px;">last sync note: ${lastSyncError}</div>`
+          : null
+      }
+      ${
+        items.length > 0
+          ? html`<div style="display:grid; gap:8px; margin-top:10px;">
+              ${items.map(
+                (item) => html`
+                  <div style="border:1px solid var(--border-color); border-radius:10px; padding:8px 10px;">
+                    <div>${item.repo ?? labels.none}#${item.number ?? labels.none}</div>
+                    <div class="muted" style="margin-top:4px;">
+                      ${item.watchStatus} · ready: ${String(item.readyForMerge)}
+                    </div>
+                    <div class="muted" style="margin-top:4px;">
+                      checks: total=${item.checkRunTotal} · pending=${item.checkRunPending} · failing=${item.checkRunFailing}
+                    </div>
+                    <div class="muted" style="margin-top:4px;">
+                      issue: ${item.issueRef ?? labels.none} · commit: ${item.commitStatusState ?? labels.none}
+                    </div>
+                    <div class="muted" style="margin-top:4px;">${item.reason ?? labels.none}</div>
+                    ${
+                      item.url
+                        ? html`<div style="margin-top:8px;">
+                            <a
+                              class="session-link"
+                              href=${item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              >${labels.openLabel}</a
+                            >
+                          </div>`
+                        : null
+                    }
+                  </div>
+                `,
+              )}
+            </div>`
+          : html`
+              <div class="muted" style="margin-top: 8px">No watched pull requests are configured.</div>
+            `
+      }
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+        ${
+          growth.githubPrWatchCurrentPath
+            ? html`<a
+                class="session-link"
+                href=${buildGrowthFileHref(growth.githubPrWatchCurrentPath)}
+                target="_blank"
+                rel="noopener noreferrer"
+                >${labels.openLabel}</a
+              >`
+            : null
+        }
+      </div>
+      ${
+        growth.githubPrWatchCurrentPath
+          ? html`<div class="muted" style="margin-top:8px;">${growth.githubPrWatchCurrentPath}</div>`
+          : null
+      }
+      ${
+        growth.githubPrWatchStatePath
+          ? html`<div class="muted" style="margin-top:8px;">${growth.githubPrWatchStatePath}</div>`
+          : null
+      }
+    </div>
+  `;
+}
+
 function renderGrowthWritebackSummary(
   growth: GrowthFoundationSummary,
   labels: { none: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
 ) {
   const actions =
     growth.githubWritebackActions.length > 0
@@ -366,7 +508,7 @@ function renderGrowthWritebackSummary(
           growth.githubWritebackProposalPath
             ? html`<a
                 class="session-link"
-                href=${fileHref(growth.githubWritebackProposalPath)}
+                href=${buildGrowthFileHref(growth.githubWritebackProposalPath)}
                 target="_blank"
                 rel="noopener noreferrer"
                 >${labels.openLabel}</a
@@ -377,7 +519,7 @@ function renderGrowthWritebackSummary(
           growth.githubWritebackReceiptPath
             ? html`<a
                 class="session-link"
-                href=${fileHref(growth.githubWritebackReceiptPath)}
+                href=${buildGrowthFileHref(growth.githubWritebackReceiptPath)}
                 target="_blank"
                 rel="noopener noreferrer"
                 >Receipt</a
@@ -402,7 +544,6 @@ function renderGrowthWritebackSummary(
 function renderGrowthIssueFlowSummary(
   growth: GrowthFoundationSummary,
   labels: { none: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
 ) {
   const issueRef = growth.issueFlowIssueRef ?? labels.none;
   const stage = growth.issueFlowStage ?? labels.none;
@@ -452,7 +593,7 @@ function renderGrowthIssueFlowSummary(
                 ([label, relPath]) => html`
                   <a
                     class="session-link"
-                    href=${fileHref(relPath)}
+                    href=${buildGrowthFileHref(relPath)}
                     target="_blank"
                     rel="noopener noreferrer"
                     >${label}</a
@@ -479,7 +620,6 @@ function renderGrowthIssueFlowSummary(
 function renderGrowthIssueFlowRecentHistory(
   growth: GrowthFoundationSummary,
   labels: { none: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
 ) {
   const items = growth.issueFlowRecentItems ?? [];
   if (items.length === 0) {
@@ -516,7 +656,7 @@ function renderGrowthIssueFlowRecentHistory(
                   ([label, relPath]) => html`
                     <a
                       class="session-link"
-                      href=${fileHref(relPath)}
+                      href=${buildGrowthFileHref(relPath)}
                       target="_blank"
                       rel="noopener noreferrer"
                       >${label}</a
@@ -535,7 +675,6 @@ function renderGrowthIssueFlowRecentHistory(
 function renderGrowthIssueFlowArchiveSummary(
   growth: GrowthFoundationSummary,
   labels: { none: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
 ) {
   const activeCount = growth.issueFlowActiveCount ?? 0;
   const archivedCount = growth.issueFlowArchivedCount ?? 0;
@@ -554,7 +693,7 @@ function renderGrowthIssueFlowArchiveSummary(
           ? html`<div style="margin-top:8px;">
               <a
                 class="session-link"
-                href=${fileHref(growth.issueFlowArchivedLatestReceiptPath)}
+                href=${buildGrowthFileHref(growth.issueFlowArchivedLatestReceiptPath)}
                 target="_blank"
                 rel="noopener noreferrer"
                 >${labels.openLabel}</a
@@ -579,7 +718,6 @@ function renderGrowthIssueFlowArchiveSummary(
 function renderGrowthRelaySummary(
   growth: GrowthFoundationSummary,
   labels: { none: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
 ) {
   return html`
     <div style="border:1px solid var(--border-color); border-radius:12px; padding:10px 12px;">
@@ -596,7 +734,7 @@ function renderGrowthRelaySummary(
           ? html`<div style="margin-top:8px;">
               <a
                 class="session-link"
-                href=${fileHref(growth.relayCurrentPath)}
+                href=${buildGrowthFileHref(growth.relayCurrentPath)}
                 target="_blank"
                 rel="noopener noreferrer"
                 >${labels.openLabel}</a
@@ -617,13 +755,19 @@ function renderGrowthNotifications(
     detail: string;
     path: string | null;
   }>,
-  labels: { emptyLabel: string; openLabel: string },
-  fileHref: GrowthFileHrefBuilder,
+  params: {
+    emptyLabel: string;
+    openLabel: string;
+    busyKey: string | null;
+    onSubmit: (action: GrowthReviewAction, itemKey: string) => void;
+  },
 ) {
   if (items.length === 0) {
-    return html`<div class="muted">${labels.emptyLabel}</div>`;
+    return html`<div class="muted">${params.emptyLabel}</div>`;
   }
   const tone = items.some((item) => item.severity === "danger") ? "danger" : "";
+  const actionsBusy = params.busyKey !== null;
+  const syncBusy = params.busyKey === CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY;
   return html`
     <div class="callout ${tone}" style="margin-top: 12px;">
       <div style="display:grid; gap:10px;">
@@ -638,11 +782,23 @@ function renderGrowthNotifications(
                 item.path
                   ? html`<a
                       class="session-link"
-                      href=${fileHref(item.path)}
+                      href=${buildGrowthFileHref(item.path)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      >${labels.openLabel}</a
+                      >${params.openLabel}</a
                     >`
+                  : null
+              }
+              ${
+                item.id === "github-pr-watch-stale"
+                  ? html`<button
+                    class="btn btn--sm"
+                    ?disabled=${actionsBusy}
+                    @click=${() =>
+                      params.onSubmit("sync-pr-watch", CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY)}
+                  >
+                    ${syncBusy ? "Syncing..." : "Sync PR Watch"}
+                  </button>`
                   : null
               }
             </div>
@@ -673,8 +829,6 @@ export function renderOverview(props: OverviewProps) {
   const growthHistoryItems = growth?.completedHistoryItems ?? [];
   const growthNotifications = growth?.notificationItems ?? [];
   const growthCodexSmokeBackfills = growth?.codexSmokeBackfillItems ?? [];
-  const growthFileHref: GrowthFileHrefBuilder = (relPath) =>
-    buildGrowthFileHref(props.settings.gatewayUrl, props.basePath, relPath);
 
   const pairingHint = (() => {
     if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
@@ -839,11 +993,7 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
+                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
               }}
               placeholder="ws://100.x.y.z:18789"
             />
@@ -1008,6 +1158,10 @@ export function renderOverview(props: OverviewProps) {
                   >${t("overview.growth.backfills")}: ${growth.codexSmokeBackfillCount}</span
                 >
                 <span class="pill ${growthBadgeClass(growth.githubSyncStatus)}">GitHub: ${growth.githubSyncStatus}</span>
+                <span class="pill ${growthPrWatchBadgeClass(growth)}">PR Watch: ${growth.githubPrWatchStatus ?? t("overview.growth.none")}</span>
+                <span class="pill ${growthCountBadgeClass(growth.githubPrWatchReadyCount ?? 0, "warn")}">Ready PRs: ${growth.githubPrWatchReadyCount ?? 0}</span>
+                <span class="pill ${growthCountBadgeClass(growth.githubPrWatchAttentionCount ?? 0, "danger")}">PR Attention: ${growth.githubPrWatchAttentionCount ?? 0}</span>
+                <span class="pill ${growthPrWatchFreshnessBadgeClass(growth)}">PR Freshness: ${growth.githubPrWatchFreshnessStatus ?? t("overview.growth.none")}</span>
                 <span class="pill ${growthBadgeClass(growth.issueFlowStatus ?? "missing")}">Issue Flow: ${growth.issueFlowStatus ?? t("overview.growth.none")}</span>
                 <span class="pill">Active Flow Runs: ${growth.issueFlowActiveCount ?? 0}</span>
                 <span class="pill">Recent Flow Runs: ${growth.issueFlowRecentCount ?? 0}</span>
@@ -1023,14 +1177,12 @@ export function renderOverview(props: OverviewProps) {
                     </div>`
                   : null
               }
-              ${renderGrowthNotifications(
-                growthNotifications,
-                {
-                  emptyLabel: t("overview.growth.none"),
-                  openLabel: t("overview.growth.openSource"),
-                },
-                growthFileHref,
-              )}
+              ${renderGrowthNotifications(growthNotifications, {
+                emptyLabel: t("overview.growth.none"),
+                openLabel: t("overview.growth.openSource"),
+                busyKey: props.growthFoundationActionBusyKey,
+                onSubmit: props.onGrowthReviewAction,
+              })}
               <div class="stat-grid" style="margin-top: 16px;">
                 <div class="stat">
                   <div class="stat-label">${t("overview.growth.project")}</div>
@@ -1051,7 +1203,7 @@ export function renderOverview(props: OverviewProps) {
                       growth.weeklyReviewPath
                         ? html`<a
                             class="session-link"
-                            href=${growthFileHref(growth.weeklyReviewPath)}
+                            href=${buildGrowthFileHref(growth.weeklyReviewPath)}
                             target="_blank"
                             rel="noopener noreferrer"
                             >Open</a
@@ -1106,11 +1258,7 @@ export function renderOverview(props: OverviewProps) {
                 </div>
                 <div>
                   <div class="note-title">${t("overview.growth.history")}</div>
-                  ${renderGrowthCompletionHistory(
-                    growthHistoryItems,
-                    t("overview.growth.none"),
-                    growthFileHref,
-                  )}
+                  ${renderGrowthCompletionHistory(growthHistoryItems, t("overview.growth.none"))}
                   ${
                     growth.completedHistoryPath
                       ? html`<div class="muted" style="margin-top:8px;">${growth.completedHistoryPath}</div>`
@@ -1123,14 +1271,10 @@ export function renderOverview(props: OverviewProps) {
                 </div>
                 <div>
                   <div class="note-title">${t("overview.growth.codexReviewSmoke")}</div>
-                  ${renderGrowthCodexReviewSmoke(
-                    growth,
-                    {
-                      none: t("overview.growth.none"),
-                      openLabel: t("overview.growth.openSource"),
-                    },
-                    growthFileHref,
-                  )}
+                  ${renderGrowthCodexReviewSmoke(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
                 </div>
                 <div>
                   <div class="note-title">${t("overview.growth.backfillHistory")}</div>
@@ -1152,59 +1296,46 @@ export function renderOverview(props: OverviewProps) {
                   })}
                 </div>
                 <div>
+                  <div class="note-title">GitHub PR Watch</div>
+                  ${renderGrowthGithubPrWatchSummary(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
+                </div>
+                <div>
                   <div class="note-title">GitHub Write-Back</div>
-                  ${renderGrowthWritebackSummary(
-                    growth,
-                    {
-                      none: t("overview.growth.none"),
-                      openLabel: t("overview.growth.openSource"),
-                    },
-                    growthFileHref,
-                  )}
+                  ${renderGrowthWritebackSummary(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
                 </div>
                 <div>
                   <div class="note-title">Live Issue Flow</div>
-                  ${renderGrowthIssueFlowSummary(
-                    growth,
-                    {
-                      none: t("overview.growth.none"),
-                      openLabel: t("overview.growth.openSource"),
-                    },
-                    growthFileHref,
-                  )}
+                  ${renderGrowthIssueFlowSummary(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
                 </div>
                 <div>
                   <div class="note-title">Recent Issue Flow Runs</div>
-                  ${renderGrowthIssueFlowRecentHistory(
-                    growth,
-                    {
-                      none: t("overview.growth.none"),
-                      openLabel: t("overview.growth.openSource"),
-                    },
-                    growthFileHref,
-                  )}
+                  ${renderGrowthIssueFlowRecentHistory(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
                 </div>
                 <div>
                   <div class="note-title">Issue Flow Archive</div>
-                  ${renderGrowthIssueFlowArchiveSummary(
-                    growth,
-                    {
-                      none: t("overview.growth.none"),
-                      openLabel: t("overview.growth.openSource"),
-                    },
-                    growthFileHref,
-                  )}
+                  ${renderGrowthIssueFlowArchiveSummary(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
                 </div>
                 <div>
                   <div class="note-title">Relay</div>
-                  ${renderGrowthRelaySummary(
-                    growth,
-                    {
-                      none: t("overview.growth.none"),
-                      openLabel: t("overview.growth.openSource"),
-                    },
-                    growthFileHref,
-                  )}
+                  ${renderGrowthRelaySummary(growth, {
+                    none: t("overview.growth.none"),
+                    openLabel: t("overview.growth.openSource"),
+                  })}
                 </div>
                 <div>
                   <div class="note-title">${t("overview.growth.watch")}</div>

@@ -2,8 +2,9 @@ export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/__openclaw/control-ui-config.j
 export const CONTROL_UI_GROWTH_FOUNDATION_PATH = "/__openclaw/growth-foundation.json";
 export const CONTROL_UI_GROWTH_FILE_PATH = "/__openclaw/growth-foundation/file";
 export const CONTROL_UI_GROWTH_REVIEW_ACTION_PATH = "/__openclaw/growth-foundation/review-action";
+export const CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY = "github-pr-watch-sync";
 
-export type ControlUiGrowthReviewAction = "complete" | "reopen";
+export type ControlUiGrowthReviewAction = "complete" | "reopen" | "sync-pr-watch";
 
 export type ControlUiBootstrapConfig = {
   basePath: string;
@@ -58,7 +59,30 @@ export type ControlUiGrowthNotificationItem = {
   title: string;
   detail: string;
   path: string | null;
-  source: "alerts" | "actions" | "weekly";
+  source: "alerts" | "actions" | "weekly" | "github-pr-watch";
+};
+
+export type ControlUiGrowthGithubPrWatchItem = {
+  repo: string | null;
+  number: number | null;
+  issueRef: string | null;
+  title: string | null;
+  url: string | null;
+  watchStatus: string;
+  readyForMerge: boolean;
+  reason: string | null;
+  checkRunTotal: number;
+  checkRunPending: number;
+  checkRunFailing: number;
+  commitStatusState: string | null;
+};
+
+export type ControlUiGrowthGithubPrWatchLastSync = {
+  source: string | null;
+  status: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  errorCount: number;
 };
 
 export type ControlUiGrowthIssueFlowRun = {
@@ -132,6 +156,22 @@ export type ControlUiGrowthFoundationSnapshot = {
   githubProjectTitle: string | null;
   githubProjectUrl: string | null;
   githubProjectItemCount: number;
+  githubPrWatchStatus?: string;
+  githubPrWatchPullCount?: number;
+  githubPrWatchReadyCount?: number;
+  githubPrWatchAttentionCount?: number;
+  githubPrWatchUpdatedAt?: string | null;
+  githubPrWatchFreshnessStatus?: string;
+  githubPrWatchAgeMinutes?: number | null;
+  githubPrWatchItems?: ControlUiGrowthGithubPrWatchItem[];
+  githubPrWatchCurrentPath?: string | null;
+  githubPrWatchStatePath?: string | null;
+  githubPrWatchLastSync?: ControlUiGrowthGithubPrWatchLastSync | null;
+  githubPrWatchLastSyncSource?: string | null;
+  githubPrWatchLastSyncStatus?: string | null;
+  githubPrWatchLastSyncFinishedAt?: string | null;
+  githubPrWatchLastSyncError?: string | null;
+  githubPrWatchLastSyncErrorCount?: number;
   githubWritebackStatus: string;
   githubWritebackIssueRef: string | null;
   githubWritebackActions: string[];

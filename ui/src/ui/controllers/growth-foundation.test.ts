@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTROL_UI_GROWTH_FOUNDATION_PATH,
+  CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
   CONTROL_UI_GROWTH_REVIEW_ACTION_PATH,
 } from "../../../../src/gateway/control-ui-contract.js";
 import {
@@ -37,7 +38,7 @@ describe("loadGrowthFoundationSummary", () => {
         completedThisWeekItems: [],
         completedHistoryItems: [],
         notificationStatus: "attention",
-        notificationCount: 1,
+        notificationCount: 2,
         notificationItems: [
           {
             id: "reviews-open",
@@ -46,6 +47,15 @@ describe("loadGrowthFoundationSummary", () => {
             detail: "Review queue output",
             path: "memory/projects/growth-foundation/weekly/2026-03-06-weekly-review.md",
             source: "weekly",
+          },
+          {
+            id: "github-pr-ready",
+            severity: "warning",
+            title: "1 pull request(s) ready for merge",
+            detail:
+              "yui-stingray/ai-company#4: All visible checks are complete; manual merge gate can proceed.",
+            path: "memory/projects/growth-foundation/github-pr-watch/current.md",
+            source: "github-pr-watch",
           },
         ],
         watch: [],
@@ -109,6 +119,31 @@ describe("loadGrowthFoundationSummary", () => {
         githubProjectTitle: "Growth Foundation",
         githubProjectUrl: "https://github.com/users/yui-stingray/projects/1",
         githubProjectItemCount: 1,
+        githubPrWatchStatus: "ready-for-merge",
+        githubPrWatchPullCount: 1,
+        githubPrWatchReadyCount: 1,
+        githubPrWatchAttentionCount: 0,
+        githubPrWatchUpdatedAt: "2026-03-06T17:30:00+09:00",
+        githubPrWatchFreshnessStatus: "fresh",
+        githubPrWatchAgeMinutes: 10,
+        githubPrWatchItems: [
+          {
+            repo: "yui-stingray/ai-company",
+            number: 4,
+            issueRef: "yui-stingray/ai-company#4",
+            title: "fix: queue output handling",
+            url: "https://github.com/yui-stingray/ai-company/pull/4",
+            watchStatus: "ready-for-merge",
+            readyForMerge: true,
+            reason: "All visible checks are complete; manual merge gate can proceed.",
+            checkRunTotal: 4,
+            checkRunPending: 0,
+            checkRunFailing: 0,
+            commitStatusState: "success",
+          },
+        ],
+        githubPrWatchCurrentPath: "memory/projects/growth-foundation/github-pr-watch/current.md",
+        githubPrWatchStatePath: "memory/projects/growth-foundation/github-pr-watch/state.json",
         githubWritebackStatus: "applied",
         githubWritebackIssueRef: "yui-stingray/growth-foundation#10",
         githubWritebackActions: ["comment"],
@@ -203,6 +238,17 @@ describe("loadGrowthFoundationSummary", () => {
     );
     expect(state.growthFoundation?.projectId).toBe("growth-foundation");
     expect(state.growthFoundation?.reviewCount).toBe(1);
+    expect(state.growthFoundation?.notificationCount).toBe(2);
+    expect(state.growthFoundation?.notificationItems[1]?.id).toBe("github-pr-ready");
+    expect(state.growthFoundation?.notificationItems[1]?.source).toBe("github-pr-watch");
+    expect(state.growthFoundation?.githubPrWatchStatus).toBe("ready-for-merge");
+    expect(state.growthFoundation?.githubPrWatchReadyCount).toBe(1);
+    expect(state.growthFoundation?.githubPrWatchAttentionCount).toBe(0);
+    expect(state.growthFoundation?.githubPrWatchFreshnessStatus).toBe("fresh");
+    expect(state.growthFoundation?.githubPrWatchAgeMinutes).toBe(10);
+    expect(state.growthFoundation?.githubPrWatchItems?.[0]?.issueRef).toBe(
+      "yui-stingray/ai-company#4",
+    );
     expect(state.growthFoundation?.githubWritebackStatus).toBe("applied");
     expect(state.growthFoundation?.issueFlowStatus).toBe("needs-review");
     expect(state.growthFoundation?.issueFlowIssueRef).toBe("yui-stingray/growth-foundation#17");
@@ -303,36 +349,6 @@ describe("loadGrowthFoundationSummary", () => {
     );
     expect(state.growthFoundation?.projectId).toBe("growth-foundation");
     expect(state.growthFoundation?.githubWritebackStatus).toBe("missing");
-
-    vi.unstubAllGlobals();
-  });
-
-  it("loads the growth foundation summary from the active gateway when gatewayUrl is cross-origin", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ available: true, projectId: "growth-foundation", reviewCount: 1 }),
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const state = {
-      basePath: "/openclaw",
-      settings: { gatewayUrl: "wss://gateway.example.com/openclaw", token: "shared-token" },
-      growthFoundation: null,
-    };
-
-    await loadGrowthFoundationSummary(state);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://gateway.example.com/openclaw/__openclaw/growth-foundation.json",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          Authorization: "Bearer shared-token",
-        }),
-      }),
-    );
-    expect(state.growthFoundation?.projectId).toBe("growth-foundation");
 
     vi.unstubAllGlobals();
   });
@@ -573,49 +589,213 @@ describe("loadGrowthFoundationSummary", () => {
     vi.unstubAllGlobals();
   });
 
-  it("submits review actions to the active gateway when gatewayUrl is cross-origin", async () => {
+  it("submits a pr watch sync action and updates the snapshot", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         success: true,
-        action: "complete",
-        itemKey: "item-1",
-        snapshot: { available: true, projectId: "growth-foundation", reviewCount: 0 },
+        action: "sync-pr-watch",
+        itemKey: CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
+        snapshot: {
+          available: true,
+          projectId: "growth-foundation",
+          workspaceProjectId: "2026-03-06_growth-foundation",
+          alertStatus: "clear",
+          alertTransition: "steady-clear",
+          alertUpdatedAt: null,
+          actionsStatus: "actionable",
+          actionsUpdatedAt: null,
+          priorityNow: [],
+          thisWeek: [],
+          thisWeekItems: [],
+          completedThisWeekItems: [],
+          completedHistoryItems: [],
+          notificationStatus: "clear",
+          notificationCount: 0,
+          notificationItems: [],
+          watch: [],
+          reviewCount: 0,
+          completedReviewCount: 0,
+          alertsPath: null,
+          actionsPath: null,
+          completedHistoryPath: null,
+          heartbeatPath: null,
+          weeklyReviewPath: null,
+          codexSmokeStatus: "missing",
+          codexSmokePeriod: null,
+          codexSmokeJobId: null,
+          codexSmokeUpdatedAt: null,
+          codexSmokeStatePath: null,
+          codexReviewSmokeStatus: "missing",
+          codexReviewSmokePeriod: null,
+          codexReviewSmokeJobId: null,
+          codexReviewSmokeSourceJobId: null,
+          codexReviewSmokeUpdatedAt: null,
+          codexReviewSmokeStatePath: null,
+          codexReviewSmokeDiffPath: null,
+          codexReviewSmokeBackfillCount: 0,
+          codexReviewSmokeBackfillItems: [],
+          codexReviewSmokeBackfillStatePath: null,
+          codexSmokeBackfillCount: 0,
+          codexSmokeBackfillItems: [],
+          codexSmokeBackfillStatePath: null,
+          githubSyncStatus: "synced",
+          githubSyncIssueCount: 0,
+          githubSyncUpdatedAt: null,
+          githubSyncCurrentPath: null,
+          githubProjectStatus: "synced",
+          githubProjectTitle: null,
+          githubProjectUrl: null,
+          githubProjectItemCount: 0,
+          githubPrWatchStatus: "waiting-checks",
+          githubPrWatchPullCount: 1,
+          githubPrWatchReadyCount: 0,
+          githubPrWatchAttentionCount: 0,
+          githubPrWatchUpdatedAt: "2026-03-06T17:45:00+09:00",
+          githubPrWatchFreshnessStatus: "fresh",
+          githubPrWatchAgeMinutes: 0,
+          githubPrWatchItems: [],
+          githubPrWatchCurrentPath: "memory/projects/growth-foundation/github-pr-watch/current.md",
+          githubPrWatchStatePath: "memory/projects/growth-foundation/github-pr-watch/state.json",
+          githubWritebackStatus: "missing",
+          githubWritebackIssueRef: null,
+          githubWritebackActions: [],
+          githubWritebackCloseIssue: false,
+          githubWritebackOperator: null,
+          githubWritebackProposalUpdatedAt: null,
+          githubWritebackReceiptAppliedAt: null,
+          githubWritebackProposalPath: null,
+          githubWritebackReceiptPath: null,
+          issueFlowVisibilityStatus: "missing",
+          issueFlowVisibilityReason: null,
+          issueFlowVisibilityOpenIssue: null,
+          issueFlowVisibilityGithubSyncUpdatedAt: null,
+          relayStatus: "missing",
+          relayChannel: null,
+          relayMode: null,
+          relayCandidateCount: 0,
+          relayUpdatedAt: null,
+          relayCurrentPath: null,
+        },
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const state = {
-      basePath: "/openclaw",
-      settings: { gatewayUrl: "wss://gateway.example.com/openclaw", token: "shared-token" },
+      basePath: "",
       growthFoundation: {
         available: true,
         projectId: "growth-foundation",
         workspaceProjectId: "2026-03-06_growth-foundation",
+        alertStatus: "clear",
+        alertTransition: "steady-clear",
+        alertUpdatedAt: null,
+        actionsStatus: "actionable",
+        actionsUpdatedAt: null,
+        priorityNow: [],
+        thisWeek: [],
+        thisWeekItems: [],
+        completedThisWeekItems: [],
+        completedHistoryItems: [],
+        notificationStatus: "attention",
+        notificationCount: 1,
+        notificationItems: [
+          {
+            id: "github-pr-watch-stale",
+            severity: "danger",
+            title: "PR watch refresh is lagging",
+            detail: "Latest PR watch snapshot is stale",
+            path: "memory/projects/growth-foundation/github-pr-watch/current.md",
+            source: "github-pr-watch",
+          },
+        ],
+        watch: [],
+        reviewCount: 0,
+        completedReviewCount: 0,
+        alertsPath: null,
+        actionsPath: null,
+        completedHistoryPath: null,
+        heartbeatPath: null,
+        weeklyReviewPath: null,
+        codexSmokeStatus: "missing",
+        codexSmokePeriod: null,
+        codexSmokeJobId: null,
+        codexSmokeUpdatedAt: null,
+        codexSmokeStatePath: null,
+        codexReviewSmokeStatus: "missing",
+        codexReviewSmokePeriod: null,
+        codexReviewSmokeJobId: null,
+        codexReviewSmokeSourceJobId: null,
+        codexReviewSmokeUpdatedAt: null,
+        codexReviewSmokeStatePath: null,
+        codexReviewSmokeDiffPath: null,
+        codexReviewSmokeBackfillCount: 0,
+        codexReviewSmokeBackfillItems: [],
+        codexReviewSmokeBackfillStatePath: null,
+        codexSmokeBackfillCount: 0,
+        codexSmokeBackfillItems: [],
+        codexSmokeBackfillStatePath: null,
+        githubSyncStatus: "synced",
+        githubSyncIssueCount: 0,
+        githubSyncUpdatedAt: null,
+        githubSyncCurrentPath: null,
+        githubProjectStatus: "synced",
+        githubProjectTitle: null,
+        githubProjectUrl: null,
+        githubProjectItemCount: 0,
+        githubPrWatchStatus: "waiting-checks",
+        githubPrWatchPullCount: 1,
+        githubPrWatchReadyCount: 0,
+        githubPrWatchAttentionCount: 0,
+        githubPrWatchUpdatedAt: "2026-03-06T16:00:00+09:00",
+        githubPrWatchFreshnessStatus: "lagging",
+        githubPrWatchAgeMinutes: 100,
+        githubPrWatchItems: [],
+        githubPrWatchCurrentPath: "memory/projects/growth-foundation/github-pr-watch/current.md",
+        githubPrWatchStatePath: "memory/projects/growth-foundation/github-pr-watch/state.json",
+        githubWritebackStatus: "missing",
+        githubWritebackIssueRef: null,
+        githubWritebackActions: [],
+        githubWritebackCloseIssue: false,
+        githubWritebackOperator: null,
+        githubWritebackProposalUpdatedAt: null,
+        githubWritebackReceiptAppliedAt: null,
+        githubWritebackProposalPath: null,
+        githubWritebackReceiptPath: null,
+        issueFlowVisibilityStatus: "missing",
+        issueFlowVisibilityReason: null,
+        issueFlowVisibilityOpenIssue: null,
+        issueFlowVisibilityGithubSyncUpdatedAt: null,
+        relayStatus: "missing",
+        relayChannel: null,
+        relayMode: null,
+        relayCandidateCount: 0,
+        relayUpdatedAt: null,
+        relayCurrentPath: null,
       },
       growthFoundationActionBusyKey: null,
       growthFoundationActionError: null,
     };
 
-    await submitGrowthFoundationReviewAction(state, { action: "complete", itemKey: "item-1" });
+    await submitGrowthFoundationReviewAction(state, {
+      action: "sync-pr-watch",
+      itemKey: CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://gateway.example.com/openclaw/__openclaw/growth-foundation/review-action",
+      CONTROL_UI_GROWTH_REVIEW_ACTION_PATH,
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          Authorization: "Bearer shared-token",
-        }),
         body: JSON.stringify({
-          action: "complete",
-          itemKey: "item-1",
+          action: "sync-pr-watch",
+          itemKey: CONTROL_UI_GROWTH_PR_WATCH_SYNC_ITEM_KEY,
           projectId: "2026-03-06_growth-foundation",
         }),
       }),
     );
-    expect(state.growthFoundation?.projectId).toBe("growth-foundation");
+    expect(state.growthFoundation?.githubPrWatchFreshnessStatus).toBe("fresh");
+    expect(state.growthFoundation?.githubPrWatchAgeMinutes).toBe(0);
+    expect(state.growthFoundationActionBusyKey).toBeNull();
     expect(state.growthFoundationActionError).toBeNull();
 
     vi.unstubAllGlobals();

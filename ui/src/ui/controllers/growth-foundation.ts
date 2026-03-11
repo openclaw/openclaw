@@ -1,5 +1,5 @@
 // ui/src/ui/controllers/growth-foundation.ts
-// Fetches growth foundation data from the currently selected gateway target.
+// Fetches the same-origin Control UI summary for the growth foundation panel.
 import {
   CONTROL_UI_GROWTH_FOUNDATION_PATH,
   CONTROL_UI_GROWTH_REVIEW_ACTION_PATH,
@@ -7,28 +7,14 @@ import {
   type ControlUiGrowthReviewAction,
   type ControlUiGrowthReviewActionResponse,
 } from "../../../../src/gateway/control-ui-contract.js";
-import { buildControlUiHttpUrl } from "../control-ui-url.ts";
+import { normalizeBasePath } from "../navigation.ts";
 
 export type GrowthFoundationState = {
   basePath: string;
-  settings?: { gatewayUrl?: string | null; token?: string | null };
-  password?: string | null;
-  hello?: { auth?: { deviceToken?: string | null } } | null;
   growthFoundation: ControlUiGrowthFoundationSnapshot | null;
   growthFoundationActionBusyKey?: string | null;
   growthFoundationActionError?: string | null;
 };
-
-function buildGrowthFoundationHeaders(
-  state: GrowthFoundationState,
-  headers: Record<string, string>,
-): Record<string, string> {
-  const deviceToken = state.hello?.auth?.deviceToken?.trim();
-  const sharedToken = state.settings?.token?.trim();
-  const password = state.password?.trim();
-  const authToken = deviceToken || sharedToken || password;
-  return authToken ? { ...headers, Authorization: `Bearer ${authToken}` } : headers;
-}
 
 export async function loadGrowthFoundationSummary(state: GrowthFoundationState) {
   if (typeof window === "undefined") {
@@ -38,16 +24,15 @@ export async function loadGrowthFoundationSummary(state: GrowthFoundationState) 
     return;
   }
 
-  const url = buildControlUiHttpUrl({
-    gatewayUrl: state.settings?.gatewayUrl,
-    basePath: state.basePath,
-    path: CONTROL_UI_GROWTH_FOUNDATION_PATH,
-  });
+  const basePath = normalizeBasePath(state.basePath ?? "");
+  const url = basePath
+    ? `${basePath}${CONTROL_UI_GROWTH_FOUNDATION_PATH}`
+    : CONTROL_UI_GROWTH_FOUNDATION_PATH;
 
   try {
     const res = await fetch(url, {
       method: "GET",
-      headers: buildGrowthFoundationHeaders(state, { Accept: "application/json" }),
+      headers: { Accept: "application/json" },
       credentials: "same-origin",
     });
     if (!res.ok) {
@@ -69,20 +54,19 @@ export async function submitGrowthFoundationReviewAction(
   if (state.growthFoundationActionBusyKey) {
     return;
   }
-  const url = buildControlUiHttpUrl({
-    gatewayUrl: state.settings?.gatewayUrl,
-    basePath: state.basePath,
-    path: CONTROL_UI_GROWTH_REVIEW_ACTION_PATH,
-  });
+  const basePath = normalizeBasePath(state.basePath ?? "");
+  const url = basePath
+    ? `${basePath}${CONTROL_UI_GROWTH_REVIEW_ACTION_PATH}`
+    : CONTROL_UI_GROWTH_REVIEW_ACTION_PATH;
   state.growthFoundationActionBusyKey = params.itemKey;
   state.growthFoundationActionError = null;
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: buildGrowthFoundationHeaders(state, {
+      headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-      }),
+      },
       credentials: "same-origin",
       body: JSON.stringify({
         action: params.action,
