@@ -267,8 +267,9 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
+  // Keep per-session metadata out of the system prompt to preserve Anthropic prefix caching.
+  // inboundMetaPrompt is prepended to the user message instead (see baseBodyForPrompt below).
   const extraSystemPromptParts = [
-    inboundMetaPrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
@@ -303,7 +304,7 @@ export async function runPreparedReply(
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+    : [inboundMetaPrompt, inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
