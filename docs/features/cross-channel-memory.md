@@ -178,6 +178,6 @@ openclaw agents bindings --agent main
 
 ## Related Links
 
-- [Routing Bindings Documentation](./routing-bindings.md)
-- [Agent Configuration Documentation](./agent-config.md)
-- [Session Management Documentation](./session-management.md)
+- [Channel Routing](../channels/channel-routing.md)
+- [Sessions CLI](../cli/sessions.md)
+- [Session Concept](../concepts/session.md)
