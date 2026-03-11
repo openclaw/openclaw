@@ -3,18 +3,18 @@ import { createAnthropicVertexStreamFn } from "./anthropic-vertex-stream.js";
 
 // Mock the auth module to avoid real GCP token refresh
 vi.mock("./anthropic-vertex-auth.js", async (importOriginal) => {
-  const original = await importOriginal();
+  const mod: Record<string, unknown> = await importOriginal();
   return {
-    ...original,
+    ...mod,
     getVertexAccessToken: vi.fn().mockResolvedValue("test-gcp-access-token"),
   };
 });
 
 // Mock streamSimple to capture what's passed to it
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal();
+  const mod: Record<string, unknown> = await importOriginal();
   return {
-    ...original,
+    ...mod,
     streamSimple: vi.fn((_model, _context, _options) => {
       // Return a minimal event stream mock
       return {
