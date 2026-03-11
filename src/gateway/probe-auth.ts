@@ -3,21 +3,34 @@ import { resolveGatewayCredentialsWithSecretInputs } from "./call.js";
 import {
   type ExplicitGatewayAuth,
   isGatewaySecretRefUnavailableError,
-  resolveGatewayCredentialsFromConfig,
+  resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
+
+function buildGatewayProbeCredentialPolicy(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+  env?: NodeJS.ProcessEnv;
+  explicitAuth?: ExplicitGatewayAuth;
+}) {
+  return {
+    config: params.cfg,
+    cfg: params.cfg,
+    env: params.env,
+    explicitAuth: params.explicitAuth,
+    modeOverride: params.mode,
+    mode: params.mode,
+    includeLegacyEnv: false,
+    remoteTokenFallback: "remote-only" as const,
+  };
+}
 
 export function resolveGatewayProbeAuth(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
 }): { token?: string; password?: string } {
-  return resolveGatewayCredentialsFromConfig({
-    cfg: params.cfg,
-    env: params.env,
-    modeOverride: params.mode,
-    includeLegacyEnv: false,
-    remoteTokenFallback: "remote-only",
-  });
+  const policy = buildGatewayProbeCredentialPolicy(params);
+  return resolveGatewayProbeCredentialsFromConfig(policy);
 }
 
 export async function resolveGatewayProbeAuthWithSecretInputs(params: {
@@ -26,13 +39,14 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
 }): Promise<{ token?: string; password?: string }> {
+  const policy = buildGatewayProbeCredentialPolicy(params);
   return await resolveGatewayCredentialsWithSecretInputs({
-    config: params.cfg,
-    env: params.env,
-    explicitAuth: params.explicitAuth,
-    modeOverride: params.mode,
-    includeLegacyEnv: false,
-    remoteTokenFallback: "remote-only",
+    config: policy.config,
+    env: policy.env,
+    explicitAuth: policy.explicitAuth,
+    modeOverride: policy.modeOverride,
+    includeLegacyEnv: policy.includeLegacyEnv,
+    remoteTokenFallback: policy.remoteTokenFallback,
   });
 }
 
