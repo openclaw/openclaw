@@ -122,6 +122,7 @@ export abstract class MemoryManagerSyncOps {
   } = { enabled: false, available: false };
   protected vectorReady: Promise<boolean> | null = null;
   protected watcher: FSWatcher | null = null;
+  protected dbInode: number | null = null;
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
@@ -251,7 +252,35 @@ export abstract class MemoryManagerSyncOps {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
-    return this.openDatabaseAtPath(dbPath);
+    const db = this.openDatabaseAtPath(dbPath);
+    try {
+      this.dbInode = fsSync.statSync(dbPath).ino;
+    } catch {
+      this.dbInode = null;
+    }
+    return db;
+  }
+
+  /**
+   * Check if the SQLite database file has been replaced externally
+   * (e.g., by `openclaw memory index --force` in a separate CLI process).
+   * If the inode has changed, re-open the database connection.
+   */
+  protected reopenDatabaseIfReplaced(): boolean {
+    const dbPath = resolveUserPath(this.settings.store.path);
+    try {
+      const currentInode = fsSync.statSync(dbPath).ino;
+      if (this.dbInode !== null && currentInode !== this.dbInode) {
+        log.info("memory: database file replaced externally, re-opening connection");
+        try { this.db.close(); } catch { /* ignore */ }
+        this.db = this.openDatabase();
+        this.ensureSchema();
+        return true;
+      }
+    } catch {
+      // DB file missing — will be recreated on next sync
+    }
+    return false;
   }
 
   private openDatabaseAtPath(dbPath: string): DatabaseSync {
@@ -647,6 +676,13 @@ export abstract class MemoryManagerSyncOps {
     if (!this.provider) {
       log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
       return;
+    }
+
+    // If the DB file was replaced externally (e.g., `openclaw memory index --force`),
+    // re-open the connection so we read fresh data instead of the deleted inode.
+    const dbReplaced = this.reopenDatabaseIfReplaced();
+    if (dbReplaced) {
+      params.needsFullReindex = true;
     }
 
     const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
