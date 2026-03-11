@@ -199,7 +199,6 @@ describe("extractAssistantText", () => {
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );
   });
-
   it("preserves successful turns with stale background errorMessage", () => {
     const message = {
       role: "assistant",
@@ -208,6 +207,23 @@ describe("extractAssistantText", () => {
       content: [{ type: "text", text: "Handle payment required errors in your API." }],
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+  });
+  it("ignores stale errorMessage metadata on non-error turns", () => {
+    const message = {
+      role: "assistant",
+      errorMessage: "insufficient credits",
+      content: [{ type: "text", text: "Billing is fixed now; continue with the rollout." }],
+    };
+    expect(extractAssistantText(message)).toBe("Billing is fixed now; continue with the rollout.");
+  });
+
+  it("classifies content-only role ordering errors for actual error turns", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "error",
+      content: [{ type: "text", text: "400 Incorrect role information" }],
+    };
+    expect(extractAssistantText(message)).toContain("Message ordering conflict");
   });
 });
 

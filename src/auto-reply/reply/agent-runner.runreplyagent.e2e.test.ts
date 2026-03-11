@@ -1549,6 +1549,22 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("preserves transient HTTP status context for pre-reply failures", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error("503 Service Unavailable");
+    });
+
+    const { run } = createMinimalRun({});
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("HTTP 503: Service Unavailable"),
+    });
+    expect(res).toMatchObject({
+      text: expect.not.stringContaining("LLM request timed out"),
+    });
+  });
+
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [
