@@ -263,6 +263,7 @@ type LoginOptions = {
   provider?: string;
   method?: string;
   setDefault?: boolean;
+  replace?: boolean;
 };
 
 export function resolveRequestedLoginProviderOrThrow(
@@ -318,6 +319,7 @@ async function runBuiltInOpenAICodexLogin(params: {
 
   const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
     syncSiblingAgents: true,
+    replaceExisting: params.opts.replace === true,
   });
   await updateConfig((cfg) => {
     let next = applyAuthProfileConfig(cfg, {

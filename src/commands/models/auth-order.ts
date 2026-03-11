@@ -2,6 +2,7 @@ import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
+  listProfilesForProvider,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -132,4 +133,68 @@ export async function modelsAuthOrderSetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Order override: ${describeOrder(updated, provider).join(", ")}`);
+}
+
+export async function modelsAuthListCommand(
+  opts: { provider: string; agent?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const { agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const profiles = listProfilesForProvider(store, provider).toSorted((a, b) => a.localeCompare(b));
+  const explicitOrder = describeOrder(store, provider);
+  const fallbackCurrent = profiles[0] ?? null;
+  const current = explicitOrder[0] ?? fallbackCurrent;
+  const ordered =
+    explicitOrder.length > 0
+      ? [...explicitOrder, ...profiles.filter((id) => !explicitOrder.includes(id))]
+      : profiles;
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          agentId,
+          provider,
+          current,
+          profiles: ordered,
+          explicitOrder: explicitOrder.length > 0 ? explicitOrder : null,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  runtime.log(`Agent: ${agentId}`);
+  runtime.log(`Provider: ${provider}`);
+  runtime.log(`Current: ${current ?? "(none)"}`);
+  runtime.log(`Profiles: ${ordered.length > 0 ? ordered.join(", ") : "(none)"}`);
+}
+
+export async function modelsAuthSetDefaultCommand(
+  opts: { provider: string; profile: string; agent?: string },
+  runtime: RuntimeEnv,
+) {
+  const { agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const profile = opts.profile?.trim();
+  if (!profile) {
+    throw new Error("Missing --profile.");
+  }
+
+  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const existing = listProfilesForProvider(store, provider);
+  if (!existing.includes(profile)) {
+    throw new Error(`Auth profile "${profile}" not found for provider ${provider}.`);
+  }
+  const nextOrder = [profile, ...existing.filter((id) => id !== profile)];
+  const updated = await setAuthProfileOrder({ agentDir, provider, order: nextOrder });
+  if (!updated) {
+    throw new Error("Failed to update auth-profiles.json (lock busy?).");
+  }
+
+  runtime.log(`Agent: ${agentId}`);
+  runtime.log(`Provider: ${provider}`);
+  runtime.log(`Default profile set: ${profile}`);
 }

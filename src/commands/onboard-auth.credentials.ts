@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   coerceSecretRef,
@@ -105,6 +105,7 @@ function buildApiKeyCredential(
 
 export type WriteOAuthCredentialsOptions = {
   syncSiblingAgents?: boolean;
+  replaceExisting?: boolean;
 };
 
 /** Resolve real path, returning null if the target doesn't exist. */
@@ -155,16 +156,58 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   return result;
 }
 
+function resolveOpenAICodexProfileId(
+  provider: string,
+  creds: OAuthCredentials,
+  existingProfiles: Set<string>,
+): string {
+  const email = typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "";
+  if (email) {
+    return `${provider}:${email}`;
+  }
+
+  const accountIdRaw =
+    typeof (creds as { accountId?: unknown }).accountId === "string"
+      ? (creds as { accountId?: string }).accountId?.trim()
+      : "";
+  if (accountIdRaw) {
+    const normalized = accountIdRaw
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .slice(0, 8)
+      .toLowerCase();
+    const base = `${provider}:acct_${normalized || "unknown"}`;
+    if (!existingProfiles.has(base)) {
+      return base;
+    }
+    let suffix = 2;
+    while (existingProfiles.has(`${base}_${suffix}`)) {
+      suffix += 1;
+    }
+    return `${base}_${suffix}`;
+  }
+
+  return `${provider}:default`;
+}
+
 export async function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
   options?: WriteOAuthCredentialsOptions,
 ): Promise<string> {
-  const email =
-    typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
-  const profileId = `${provider}:${email}`;
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
+  const existingStore = ensureAuthProfileStore(resolvedAgentDir, { allowKeychainPrompt: false });
+  const profileId = resolveOpenAICodexProfileId(
+    provider,
+    creds,
+    new Set(Object.keys(existingStore.profiles ?? {})),
+  );
+  if (existingStore.profiles[profileId] && options?.replaceExisting !== true) {
+    throw new Error(
+      `Auth profile "${profileId}" already exists. Re-run with --replace to overwrite it.`,
+    );
+  }
+
   const targetAgentDirs = options?.syncSiblingAgents
     ? resolveSiblingAgentDirs(resolvedAgentDir)
     : [resolvedAgentDir];

@@ -5,11 +5,13 @@ import {
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
+  modelsAuthListCommand,
   modelsAuthLoginCommand,
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
+  modelsAuthSetDefaultCommand,
   modelsAuthSetupTokenCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
@@ -304,11 +306,54 @@ export function registerModelsCli(program: Command) {
     });
 
   auth
+    .command("list")
+    .description("List auth profiles for a provider")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsAuthListCommand(
+          {
+            provider: opts.provider as string,
+            agent,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("set-default")
+    .description("Set default auth profile for a provider")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .requiredOption("--profile <id>", "Profile id (e.g. openai-codex:user@example.com)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsAuthSetDefaultCommand(
+          {
+            provider: opts.provider as string,
+            profile: opts.profile as string,
+            agent,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
     .command("login")
     .description("Run a provider plugin auth flow (OAuth/API key)")
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--set-default", "Apply the provider's default model recommendation", false)
+    .option("--replace", "Replace existing profile if resolved id already exists", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsAuthLoginCommand(
@@ -316,6 +361,7 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
             setDefault: Boolean(opts.setDefault),
+            replace: Boolean(opts.replace),
           },
           defaultRuntime,
         );

@@ -159,6 +159,80 @@ describe("writeOAuthCredentials", () => {
     ).rejects.toThrow();
   });
 
+  it("uses email-based profile id when OAuth email is present", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-email-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      refresh: "refresh-email",
+      access: "access-email",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds);
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:user@example.com"]).toMatchObject({
+      access: "access-email",
+      type: "oauth",
+    });
+  });
+
+  it("uses accountId fallback profile when email is missing", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-account-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      refresh: "refresh-account",
+      access: "access-account",
+      expires: Date.now() + 60_000,
+      accountId: "acc-1234-xyz",
+    } satisfies OAuthCredentials & { accountId: string };
+
+    await writeOAuthCredentials("openai-codex", creds);
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:acct_acc1234x"]).toMatchObject({
+      access: "access-account",
+      type: "oauth",
+    });
+  });
+
+  it("does not overwrite an existing OAuth profile unless replaceExisting is true", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-no-overwrite-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      refresh: "refresh-1",
+      access: "access-1",
+      expires: Date.now() + 60_000,
+      email: "same@example.com",
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds);
+
+    await expect(writeOAuthCredentials("openai-codex", creds)).rejects.toThrow(
+      "already exists. Re-run with --replace",
+    );
+
+    await writeOAuthCredentials("openai-codex", { ...creds, access: "access-2" }, undefined, {
+      replaceExisting: true,
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:same@example.com"]).toMatchObject({
+      access: "access-2",
+      type: "oauth",
+    });
+  });
+
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
