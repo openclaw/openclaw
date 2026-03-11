@@ -127,3 +127,11 @@ vault/nodes/
 vault/edges/
 vault/*.db
 vault/chroma/
+
+# OpenBodhi — runtime state and personal data (never commit)
+**/budget-state.json
+**/pm-memory.md
+**/personal-baseline.json
+**/tasks.md
+packages/bodhi_vault/.venv/
+**/.venv/

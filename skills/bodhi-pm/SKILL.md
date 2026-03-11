@@ -128,16 +128,19 @@ Reply: `Effort → <level> 🟢`
 Append task to `~/.openclaw/tasks.md`:
 
 ```bash
-python3 -c "
-import pathlib, os, sys, datetime
-desc = ' '.join(sys.argv[1:])
+BODHI_DESC='<description>' python3 -c "
+import pathlib, os
+desc = os.environ.get('BODHI_DESC', '').strip()
+if not desc:
+    print('INVALID_ARG')
+    exit()
 f = pathlib.Path(os.path.expanduser('~/.openclaw/tasks.md'))
 lines = f.read_text().splitlines() if f.exists() else []
 open_tasks = [l for l in lines if l.startswith('☐')]
 n = len(open_tasks) + 1
 f.write_text('\n'.join(lines + [f'☐ {n}. {desc}']) + '\n')
 print(f'added #{n}')
-" <description>
+"
 ```
 
 Reply: `Task added: ☐ <n>. <description>`
@@ -207,19 +210,19 @@ Reply: last 50 lines of `pm-memory.md`. If empty: `No memory saved yet.`
 ## On `/memory save <key> <value>`
 
 ```bash
-python3 -c "
-import pathlib, os, sys, datetime
-if len(sys.argv) < 3:
+BODHI_KEY='<key>' BODHI_VAL='<value>' python3 -c "
+import pathlib, os
+key = os.environ.get('BODHI_KEY', '').strip()
+val = os.environ.get('BODHI_VAL', '').strip()
+if not key or not val:
     print('INVALID_ARG')
     exit()
-key = sys.argv[1]
-val = ' '.join(sys.argv[2:])
 f = pathlib.Path(os.path.expanduser('~/.openclaw/pm-memory.md'))
 existing = f.read_text() if f.exists() else ''
 entry = f'**{key}**: {val}'
 f.write_text(existing.rstrip() + '\n' + entry + '\n')
 print('saved')
-" <key> <value>
+"
 ```
 
 Reply: `Memory saved: **<key>**: <value>`

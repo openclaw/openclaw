@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -116,7 +117,6 @@ class SiYuanClient:
     @staticmethod
     def _validate_notebook_id(notebook_id: str) -> bool:
         """SiYuan notebook IDs are alphanumeric + hyphens, typically 20 chars."""
-        import re
         return bool(re.fullmatch(r"[A-Za-z0-9\-]{1,64}", notebook_id))
 
     def _find_person_doc(self, notebook_id: str, person_name: str) -> str | None:
@@ -263,6 +263,22 @@ def _interaction_block(node: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+_client: SiYuanClient | None = None
+
+
+def _get_client() -> SiYuanClient | None:
+    """Return a cached SiYuanClient, or None when token is absent."""
+    global _client  # noqa: PLW0603
+    token = os.environ.get("SIYUAN_API_TOKEN", "").strip()
+    if not token:
+        return None
+    # Rebuild when credentials or URL change at runtime
+    base_url = os.environ.get("SIYUAN_API_URL", _DEFAULT_SIYUAN_URL)
+    if _client is None or _client._base != base_url.rstrip("/"):
+        _client = SiYuanClient(base_url, token)
+    return _client
+
+
 def sync_to_siyuan(node: dict[str, Any]) -> None:
     """
     Sync a vault node to SiYuan. Safe to call unconditionally — silently
@@ -270,12 +286,9 @@ def sync_to_siyuan(node: dict[str, Any]) -> None:
 
     Never raises. Vault writes are independent of SiYuan availability.
     """
-    token = os.environ.get("SIYUAN_API_TOKEN", "").strip()
-    if not token:
+    client = _get_client()
+    if client is None:
         return
-
-    base_url = os.environ.get("SIYUAN_API_URL", _DEFAULT_SIYUAN_URL)
-    client = SiYuanClient(base_url, token)
 
     try:
         client.sync_node(node)
