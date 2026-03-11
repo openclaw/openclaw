@@ -118,6 +118,21 @@ describe("computeSandboxStepPolicy", () => {
     });
     expect(result!.allow?.toSorted()).toEqual(["read", "start_task"]);
   });
+
+  it("matches plugin tools via wildcard alsoAllow patterns", () => {
+    const tools = asTools([{ name: "start_task" }, { name: "start_other" }, { name: "stop_task" }]);
+    const toolMeta = (t: AnyAgentTool) =>
+      t.name === "start_task" || t.name === "start_other" ? { pluginId: "p1" } : undefined;
+    const result = computeSandboxStepPolicy({
+      sandboxTools: { allow: ["gateway"] },
+      explicitProfileAlsoAllow: ["start_*"],
+      tools,
+      toolMeta,
+    });
+    expect(result).toBeDefined();
+    const allow = result!.allow?.toSorted();
+    expect(allow).toEqual(["gateway", "start_other", "start_task"]);
+  });
 });
 
 /**

@@ -15,6 +15,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -209,15 +210,40 @@ export function computeSandboxStepPolicy(params: {
   const pluginToolGroups = buildPluginToolGroups({ tools, toolMeta });
   const expandedExplicitAlsoAllow = expandPluginGroups(explicitProfileAlsoAllow, pluginToolGroups);
   const pluginToolNameSet = new Set(pluginToolGroups.all);
-  const pluginAllow =
-    expandedExplicitAlsoAllow && expandedExplicitAlsoAllow.length > 0
-      ? expandedExplicitAlsoAllow.filter((name) => pluginToolNameSet.has(normalizeToolName(name)))
-      : undefined;
-  if (!pluginAllow || pluginAllow.length === 0) {
+  if (!expandedExplicitAlsoAllow || expandedExplicitAlsoAllow.length === 0) {
+    return sandboxTools;
+  }
+
+  const concretePluginNames: string[] = [];
+  const wildcardEntries: string[] = [];
+  for (const entry of expandedExplicitAlsoAllow) {
+    const normalized = normalizeToolName(entry);
+    if (pluginToolNameSet.has(normalized)) {
+      concretePluginNames.push(normalized);
+    } else {
+      wildcardEntries.push(normalized);
+    }
+  }
+
+  let wildcardPluginNames: string[] = [];
+  if (wildcardEntries.length > 0 && pluginToolGroups.all.length > 0) {
+    const patterns = compileGlobPatterns({
+      raw: wildcardEntries,
+      normalize: normalizeToolName,
+    });
+    if (patterns.length > 0) {
+      wildcardPluginNames = pluginToolGroups.all.filter((toolName) =>
+        matchesAnyGlobPattern(toolName, patterns),
+      );
+    }
+  }
+
+  const pluginAllowSet = new Set([...concretePluginNames, ...wildcardPluginNames]);
+  if (pluginAllowSet.size === 0) {
     return sandboxTools;
   }
   return {
-    allow: Array.from(new Set([...sandboxAllow, ...pluginAllow])),
+    allow: Array.from(new Set([...sandboxAllow, ...pluginAllowSet])),
     deny: sandboxTools.deny,
   };
 }
