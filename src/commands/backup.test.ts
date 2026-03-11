@@ -151,8 +151,12 @@ describe("backup commands", () => {
           ]),
         );
 
-        const stateAsset = result.assets.find((asset) => asset.kind === "state");
-        const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
+        const stateAsset = result.assets.find(
+          (asset: (typeof result.assets)[number]) => asset.kind === "state",
+        );
+        const workspaceAsset = result.assets.find(
+          (asset: (typeof result.assets)[number]) => asset.kind === "workspace",
+        );
         expect(stateAsset).toBeDefined();
         expect(workspaceAsset).toBeDefined();
 
@@ -427,7 +431,9 @@ describe("backup commands", () => {
       });
 
       expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+      expect(
+        result.assets.some((asset: (typeof result.assets)[number]) => asset.kind === "workspace"),
+      ).toBe(false);
     } finally {
       delete process.env.OPENCLAW_CONFIG_PATH;
     }

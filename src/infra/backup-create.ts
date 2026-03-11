@@ -269,6 +269,35 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+async function assertPathTreeHasNoSymlinks(rootPath: string): Promise<void> {
+  const stat = await fs.lstat(rootPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Backup source contains symbolic links: ${rootPath}`);
+  }
+  if (!stat.isDirectory()) {
+    return;
+  }
+
+  const pending = [rootPath];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) {
+      continue;
+    }
+
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Backup source contains symbolic links: ${entryPath}`);
+      }
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+      }
+    }
+  }
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -304,6 +333,9 @@ export async function createBackupArchive(
 
   if (!opts.dryRun) {
     await assertOutputPathReady(outputPath);
+    for (const asset of plan.included) {
+      await assertPathTreeHasNoSymlinks(asset.sourcePath);
+    }
   }
 
   const createdAt = new Date(nowMs).toISOString();

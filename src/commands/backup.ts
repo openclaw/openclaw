@@ -1,4 +1,5 @@
 import { createBackupArchive, formatBackupCreateSummary } from "../infra/backup-create.js";
+import type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { backupVerifyCommand } from "./backup-verify.js";
 export type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
