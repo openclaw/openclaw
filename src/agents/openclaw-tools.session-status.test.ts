@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+const compactEmbeddedPiSessionDirectMock = vi.fn();
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 
@@ -76,10 +77,16 @@ vi.mock("../infra/provider-usage.js", () => ({
   formatUsageSummaryLine: () => null,
 }));
 
+vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
+  compactEmbeddedPiSessionDirect: (...args: unknown[]) =>
+    compactEmbeddedPiSessionDirectMock(...args),
+}));
+
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 function resetSessionStore(store: Record<string, unknown>) {
+  compactEmbeddedPiSessionDirectMock.mockReset();
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   loadSessionStoreMock.mockReturnValue(store);
@@ -97,6 +104,51 @@ function getSessionStatusTool(agentSessionKey = "main") {
 }
 
 describe("session_status tool", () => {
+  it("can self-compact the current session via action=compact", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        totalTokens: 12_345,
+        totalTokensFresh: true,
+        contextTokens: 64_000,
+      },
+    });
+    compactEmbeddedPiSessionDirectMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "done",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 12_345,
+        tokensAfter: 4_096,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-compact", { action: "compact" });
+    const details = result.details as { ok?: boolean; compacted?: boolean; statusText?: string };
+
+    expect(compactEmbeddedPiSessionDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s1",
+        sessionKey: "main",
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        trigger: "manual",
+      }),
+    );
+    expect(details.ok).toBe(true);
+    expect(details.compacted).toBe(true);
+    expect(details.statusText).toContain("Compacted (12345 -> 4096)");
+    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(savedStore.main?.compactionCount).toBe(1);
+    expect(savedStore.main?.totalTokens).toBe(4096);
+  });
+
   it("returns a status card for the current session", async () => {
     resetSessionStore({
       main: {

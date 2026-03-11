@@ -16,6 +16,12 @@ describe("tool mutation helpers", () => {
         model: "openai/gpt-4o",
       }),
     ).toBe(true);
+    expect(
+      isMutatingToolCall("session_status", {
+        sessionKey: "agent:main:main",
+        action: "compact",
+      }),
+    ).toBe(true);
   });
 
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {

@@ -117,7 +117,10 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         typeof record?.message === "string"
       );
     case "session_status":
-      return typeof record?.model === "string" && record.model.trim().length > 0;
+      return (
+        (typeof record?.model === "string" && record.model.trim().length > 0) ||
+        action === "compact"
+      );
     default: {
       if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);

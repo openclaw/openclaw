@@ -1,11 +1,15 @@
 import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
-import { buildStatusMessage } from "../../auto-reply/status.js";
+import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
+import { buildStatusMessage, formatContextUsageShort } from "../../auto-reply/status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  resolveFreshSessionTotalTokens,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
@@ -22,7 +26,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveAgentDir } from "../agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -33,6 +37,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../model-selection.js";
+import { compactEmbeddedPiSessionDirect } from "../pi-embedded-runner/compact.runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
@@ -43,6 +48,8 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
+  action: Type.Optional(Type.String()),
+  instructions: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
@@ -180,7 +187,7 @@ export function createSessionStatusTool(opts?: {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides), or run self-compaction with action=compact.",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -259,7 +266,14 @@ export function createSessionStatusTool(opts?: {
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
+      const actionRaw = readStringParam(params, "action")?.trim().toLowerCase();
+      if (actionRaw && actionRaw !== "compact") {
+        throw new Error(`Unsupported action "${actionRaw}".`);
+      }
       const modelRaw = readStringParam(params, "model");
+      if (actionRaw === "compact" && typeof modelRaw === "string" && modelRaw.trim().length > 0) {
+        throw new Error('session_status(action="compact") cannot be combined with model=');
+      }
       let changedModel = false;
       if (typeof modelRaw === "string") {
         const selection = await resolveModelOverride({
@@ -292,6 +306,80 @@ export function createSessionStatusTool(opts?: {
           resolved.entry = nextEntry;
           changedModel = true;
         }
+      }
+
+      if (actionRaw === "compact") {
+        if (!resolved.entry.sessionId) {
+          throw new Error("Compaction unavailable (missing session id).");
+        }
+        const providerForRun = resolved.entry.providerOverride?.trim() || configured.provider;
+        const modelForRun = resolved.entry.modelOverride?.trim() || configured.model;
+        const result = await compactEmbeddedPiSessionDirect({
+          sessionId: resolved.entry.sessionId,
+          sessionKey: resolved.key,
+          messageChannel: resolved.entry.channel ?? resolved.entry.lastChannel,
+          agentAccountId: resolved.entry.accountId,
+          authProfileId: resolved.entry.authProfileOverride,
+          groupId: resolved.entry.groupId,
+          groupChannel: resolved.entry.groupChannel,
+          groupSpace: resolved.entry.space,
+          spawnedBy: resolved.entry.spawnedBy,
+          senderIsOwner: false,
+          sessionFile: resolveSessionFilePath(
+            resolved.entry.sessionId,
+            resolved.entry,
+            resolveSessionFilePathOptions({ agentId, storePath }),
+          ),
+          workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+          agentDir: resolveAgentDir(cfg, agentId),
+          config: cfg,
+          skillsSnapshot: resolved.entry.skillsSnapshot,
+          provider: providerForRun,
+          model: modelForRun,
+          customInstructions: readStringParam(params, "instructions"),
+          trigger: "manual",
+        });
+
+        if (result.ok && result.compacted) {
+          await incrementCompactionCount({
+            sessionEntry: resolved.entry,
+            sessionStore: store,
+            sessionKey: resolved.key,
+            storePath,
+            tokensAfter: result.result?.tokensAfter,
+          });
+          resolved.entry = store[resolved.key] ?? resolved.entry;
+        }
+
+        const compactLabel = result.ok
+          ? result.compacted
+            ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+              ? `Compacted (${result.result.tokensBefore} -> ${result.result.tokensAfter})`
+              : result.result?.tokensBefore
+                ? `Compacted (${result.result.tokensBefore} before)`
+                : "Compacted"
+            : "Compaction skipped"
+          : "Compaction failed";
+        const totalTokens =
+          result.result?.tokensAfter ?? resolveFreshSessionTotalTokens(resolved.entry);
+        const contextSummary = formatContextUsageShort(
+          typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
+          resolved.entry.contextTokens ?? null,
+        );
+        const reason = result.reason?.trim();
+        const statusText = reason
+          ? `${compactLabel}: ${reason} • ${contextSummary}`
+          : `${compactLabel} • ${contextSummary}`;
+        return {
+          content: [{ type: "text", text: statusText }],
+          details: {
+            ok: result.ok,
+            compacted: result.compacted,
+            reason: result.reason,
+            sessionKey: resolved.key,
+            statusText,
+          },
+        };
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
