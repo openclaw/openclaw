@@ -81,6 +81,13 @@ function resolveZaiApiKey(): string | undefined {
   }
 }
 
+function resolveKilocodeApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "kilocode",
+    envDirect: [process.env.KILOCODE_API_KEY],
+  });
+}
+
 function resolveMinimaxApiKey(): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "minimax",
@@ -235,6 +242,13 @@ export async function resolveProviderAuths(params: {
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
+    if (provider === "kilocode") {
+      const apiKey = resolveKilocodeApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
     if (provider === "zai") {
       const apiKey = resolveZaiApiKey();
       if (apiKey) {

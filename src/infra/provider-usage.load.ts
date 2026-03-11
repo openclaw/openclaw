@@ -5,6 +5,7 @@ import {
   fetchCodexUsage,
   fetchCopilotUsage,
   fetchGeminiUsage,
+  fetchKilocodeUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
@@ -59,6 +60,8 @@ export async function loadProviderUsageSummary(
             return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
           case "google-gemini-cli":
             return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
+          case "kilocode":
+            return await fetchKilocodeUsage(auth.token, timeoutMs, fetchFn);
           case "openai-codex":
             return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
