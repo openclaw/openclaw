@@ -4,6 +4,31 @@ import os from "node:os";
 import path from "node:path";
 
 type RestoreEntry = { key: string; value: string | undefined };
+const trackedTempDirs = new Set<string>();
+
+export function trackTempDir(tempDir: string): string {
+  trackedTempDirs.add(tempDir);
+  return tempDir;
+}
+
+export function trackedMkdtempSync(prefix: string): string {
+  return trackTempDir(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
+export async function trackedMkdtemp(prefix: string): Promise<string> {
+  return trackTempDir(await fs.promises.mkdtemp(path.join(os.tmpdir(), prefix)));
+}
+
+function cleanupTrackedTempDirs(): void {
+  for (const tempDir of trackedTempDirs) {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+  trackedTempDirs.clear();
+}
 
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
@@ -61,7 +86,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   // The default test env isolates HOME to avoid touching real state.
   if (live) {
     loadProfileEnv();
-    return { cleanup: () => {}, tempHome: process.env.HOME ?? "" };
+    return { cleanup: () => cleanupTrackedTempDirs(), tempHome: process.env.HOME ?? "" };
   }
 
   const restore: RestoreEntry[] = [
@@ -132,6 +157,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
 
   const cleanup = () => {
     restoreEnv(restore);
+    cleanupTrackedTempDirs();
     try {
       fs.rmSync(tempHome, { recursive: true, force: true });
     } catch {
