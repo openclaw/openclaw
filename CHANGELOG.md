@@ -102,6 +102,7 @@ Docs: https://docs.openclaw.ai
 - Security/session_status: enforce sandbox session-tree visibility and shared agent-to-agent access guards before reading or mutating target session state, so sandboxed subagents can no longer inspect parent session metadata or write parent model overrides via `session_status`.
 - Security/nodes: treat the `nodes` agent tool as owner-only fallback policy so non-owner senders cannot reach paired-node approval or invoke paths through the shared tool set.
 - Telegram/final preview cleanup follow-up: clear stale cleanup-retain state only for transient preview finals so archived-preview retains no longer leave a stale partial bubble beside a later fallback-sent final. (#41763) Thanks @obviyus.
+- Signal/config schema: accept `channels.signal.accountUuid` in strict config validation so loop-protection configs no longer fail with an unrecognized-key error. (#35578) Thanks @ingyukoh.
 
 ## 2026.3.8
 

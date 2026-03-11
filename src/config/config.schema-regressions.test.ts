@@ -184,4 +184,16 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts signal accountUuid for loop protection", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
