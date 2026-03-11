@@ -107,10 +107,7 @@ async function mapWorkspaceTargetsBySourcePath(
     workspaceDirs.map(async (entry) => [await canonicalWorkspacePathKey(entry), entry] as const),
   );
   const workspaceMap = new Map(workspaceEntries);
-  if (
-    workspaceMap.size !== workspaceAssetSourceKeys.length ||
-    !workspaceAssetSourceKeys.every((key) => workspaceMap.has(key))
-  ) {
+  if (!workspaceAssetSourceKeys.every((key) => workspaceMap.has(key))) {
     return undefined;
   }
   return workspaceMap;

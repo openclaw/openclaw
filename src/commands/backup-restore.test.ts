@@ -260,6 +260,53 @@ describe("backup restore", () => {
     }
   });
 
+  it("matches workspace assets by source path when candidate dirs include extra workspaces", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const workspaceA = path.join(tempHome.home, "workspace-a");
+    const workspaceB = path.join(tempHome.home, "workspace-b");
+    const extraWorkspace = path.join(tempHome.home, "workspace-extra");
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-a"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "assets", "workspace-b"), { recursive: true });
+      const operations = await buildRestoreOperations({
+        mode: "workspace-only",
+        extractedRoot: rootDir,
+        manifest: {
+          schemaVersion: 1,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          archiveRoot: "archive-root",
+          runtimeVersion: "2026.3.9",
+          platform: process.platform,
+          nodeVersion: process.version,
+          paths: {
+            workspaceDirs: [extraWorkspace, workspaceB, workspaceA],
+          },
+          assets: [
+            {
+              kind: "workspace",
+              sourcePath: workspaceA,
+              archivePath: "archive-root/assets/workspace-a",
+            },
+            {
+              kind: "workspace",
+              sourcePath: workspaceB,
+              archivePath: "archive-root/assets/workspace-b",
+            },
+          ],
+        },
+      });
+
+      const workspaceOps = operations.filter((entry) => entry.kind === "workspace");
+      expect(workspaceOps).toEqual([
+        expect.objectContaining({ targetPath: workspaceA }),
+        expect.objectContaining({ targetPath: workspaceB }),
+      ]);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers current workspace targets over archived absolute paths", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");
