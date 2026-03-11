@@ -96,7 +96,7 @@ function parsePositiveInt(raw: string): number | undefined {
 }
 
 function parseNonNegativeNumber(raw: string): number | undefined {
-  const n = Number.parseFloat(raw.trim());
+  const n = Number(raw.trim());
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
