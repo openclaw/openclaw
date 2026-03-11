@@ -209,6 +209,8 @@ async function runBraveLlmContextSearch(params: {
   country?: string;
   search_lang?: string;
   freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -228,6 +230,15 @@ async function runBraveLlmContextSearch(params: {
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
+  } else if (params.dateAfter && params.dateBefore) {
+    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
+  } else if (params.dateAfter) {
+    url.searchParams.set(
+      "freshness",
+      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
+    );
+  } else if (params.dateBefore) {
+    url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
 
   return withTrustedWebSearchEndpoint(
@@ -443,14 +454,6 @@ function createBraveToolDefinition(
       }
 
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && braveMode === "llm-context") {
-        return {
-          error: "unsupported_freshness",
-          message:
-            "freshness filtering is not supported by Brave llm-context mode. Remove freshness or use Brave web mode.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "brave") : undefined;
       if (rawFreshness && !freshness) {
         return {
@@ -467,14 +470,6 @@ function createBraveToolDefinition(
           error: "conflicting_time_filters",
           message:
             "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
-      if ((rawDateAfter || rawDateBefore) && braveMode === "llm-context") {
-        return {
-          error: "unsupported_date_filter",
-          message:
-            "date_after/date_before filtering is not supported by Brave llm-context mode. Use Brave web mode for date filters.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -502,18 +497,35 @@ function createBraveToolDefinition(
         };
       }
 
-      const cacheKey = buildSearchCacheKey([
-        "brave",
-        braveMode,
-        query,
-        resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        country,
-        normalizedLanguage.search_lang,
-        normalizedLanguage.ui_lang,
-        freshness,
-        dateAfter,
-        dateBefore,
-      ]);
+      // When dateAfter is set without dateBefore, today is used as end date;
+      // include today in the cache key so UTC day rollover invalidates stale entries.
+      const llmContextDateEnd =
+        dateBefore || (dateAfter ? new Date().toISOString().slice(0, 10) : undefined);
+      const cacheKey = buildSearchCacheKey(
+        braveMode === "llm-context"
+          ? [
+              "brave",
+              braveMode,
+              query,
+              country,
+              normalizedLanguage.search_lang,
+              freshness,
+              dateAfter,
+              llmContextDateEnd,
+            ]
+          : [
+              "brave",
+              braveMode,
+              query,
+              resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+              country,
+              normalizedLanguage.search_lang,
+              normalizedLanguage.ui_lang,
+              freshness,
+              dateAfter,
+              dateBefore,
+            ],
+      );
       const cached = readCachedSearchPayload(cacheKey);
       if (cached) {
         return cached;
@@ -531,6 +543,8 @@ function createBraveToolDefinition(
           country: country ?? undefined,
           search_lang: normalizedLanguage.search_lang,
           freshness,
+          dateAfter,
+          dateBefore,
         });
         const payload = {
           query,
