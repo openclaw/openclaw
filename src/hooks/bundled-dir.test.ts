@@ -19,19 +19,28 @@ async function writeBundledHook(params: { hooksDir: string; name: string }): Pro
 
 describe("resolveBundledHooksDir", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempDirs: string[];
+
+  async function createTempDir(prefix: string): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
+    tempDirs = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     envSnapshot.restore();
+    for (const dir of tempDirs.toReversed()) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("returns OPENCLAW_BUNDLED_HOOKS_DIR override when set", async () => {
-    const overrideDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-bundled-hooks-override-"),
-    );
+    const overrideDir = await createTempDir("openclaw-bundled-hooks-override-");
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = ` ${overrideDir} `;
     expect(resolveBundledHooksDir()).toBe(overrideDir);
   });
@@ -39,7 +48,7 @@ describe("resolveBundledHooksDir", () => {
   it("resolves bundled hooks under a flattened dist layout", async () => {
     delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
 
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-hooks-"));
+    const root = await createTempDir("openclaw-bundled-hooks-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
     const distBundled = path.join(root, "dist", "bundled");
@@ -67,7 +76,7 @@ describe("resolveBundledHooksDir", () => {
   it("skips non-hook exec sibling dirs and falls back to package dist hooks", async () => {
     delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
 
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-hooks-fallback-"));
+    const root = await createTempDir("openclaw-bundled-hooks-fallback-");
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
     const execPath = path.join(root, "runtime", "node");
@@ -91,5 +100,35 @@ describe("resolveBundledHooksDir", () => {
     });
 
     expect(resolved).toBe(distBundled);
+  });
+
+  it("does not walk up past package root when package-root candidates are absent", async () => {
+    delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+
+    const root = await createTempDir("openclaw-bundled-hooks-root-");
+    const packageRoot = path.join(root, "package");
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw" }),
+    );
+
+    const unrelatedBundled = path.join(root, "bundled");
+    await writeBundledHook({ hooksDir: unrelatedBundled, name: "unrelated-hook" });
+
+    const moduleDir = path.join(packageRoot, "dist", "nested");
+    await fs.mkdir(moduleDir, { recursive: true });
+    const moduleUrl = pathToFileURL(path.join(moduleDir, "workspace.js")).href;
+    const argv1 = path.join(packageRoot, "dist", "entry.js");
+    await fs.writeFile(argv1, "// stub", "utf-8");
+
+    const resolved = resolveBundledHooksDir({
+      argv1,
+      moduleUrl,
+      cwd: moduleDir,
+      execPath: path.join(root, "runtime", "node"),
+    });
+
+    expect(resolved).toBeUndefined();
   });
 });

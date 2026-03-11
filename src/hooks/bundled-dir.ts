@@ -5,6 +5,11 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
 const HOOK_HANDLER_CANDIDATES = ["handler.js", "handler.ts", "index.js", "index.ts"];
 
+function isSameOrDescendantPath(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function isDirectoryLike(entry: fs.Dirent, fullPath: string): boolean {
   if (entry.isDirectory()) {
     return true;
@@ -73,7 +78,7 @@ export function resolveBundledHooksDir(opts: BundledHooksResolveOptions = {}): s
   // npm/dev: prefer package-root relative lookup so pnpm/global symlink layouts resolve reliably.
   try {
     const moduleUrl = opts.moduleUrl ?? import.meta.url;
-    const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+    const moduleDir = path.resolve(path.dirname(fileURLToPath(moduleUrl)));
     const argv1 = opts.argv1 ?? process.argv[1];
     const cwd = opts.cwd ?? process.cwd();
     const packageRoot = resolveOpenClawPackageRootSync({
@@ -81,6 +86,7 @@ export function resolveBundledHooksDir(opts: BundledHooksResolveOptions = {}): s
       moduleUrl,
       cwd,
     });
+    const normalizedPackageRoot = packageRoot ? path.resolve(packageRoot) : null;
     if (packageRoot) {
       const distBundled = path.join(packageRoot, "dist", "bundled");
       if (looksLikeBundledHooksDir(distBundled)) {
@@ -93,14 +99,23 @@ export function resolveBundledHooksDir(opts: BundledHooksResolveOptions = {}): s
     }
 
     // Fallback: walk up from the module location for layouts where package-root discovery fails.
-    let current = moduleDir;
+    let current =
+      normalizedPackageRoot && !isSameOrDescendantPath(moduleDir, normalizedPackageRoot)
+        ? normalizedPackageRoot
+        : moduleDir;
     for (let depth = 0; depth < 6; depth += 1) {
+      if (normalizedPackageRoot && !isSameOrDescendantPath(current, normalizedPackageRoot)) {
+        break;
+      }
       const candidate = path.join(current, "bundled");
       if (looksLikeBundledHooksDir(candidate)) {
         return candidate;
       }
       const parent = path.dirname(current);
-      if (parent === current) {
+      if (
+        parent === current ||
+        (normalizedPackageRoot && !isSameOrDescendantPath(parent, normalizedPackageRoot))
+      ) {
         break;
       }
       current = parent;
