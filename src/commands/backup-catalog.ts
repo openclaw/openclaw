@@ -35,6 +35,8 @@ export type BackupListOptions = {
 };
 
 const DEFAULT_BACKUP_DIRNAME = "Backups";
+const BACKUP_ARCHIVE_BASENAME_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z-openclaw-backup\.tar\.gz$/u;
 
 function compareCatalogEntries(left: BackupCatalogEntry, right: BackupCatalogEntry): number {
   const leftTime = Date.parse(left.createdAt);
@@ -86,21 +88,34 @@ async function resolveBackupSearchRoots(searchPath?: string): Promise<string[]> 
   return [...roots];
 }
 
-async function listCandidateArchives(searchRoot: string): Promise<string[]> {
+function isDefaultBackupArchiveName(fileName: string): boolean {
+  return BACKUP_ARCHIVE_BASENAME_RE.test(fileName);
+}
+
+async function listCandidateArchives(
+  searchRoot: string,
+  defaultSearch: boolean,
+): Promise<string[]> {
   const dirents = await fs.readdir(searchRoot, { withFileTypes: true });
   return dirents
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".tar.gz"))
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.endsWith(".tar.gz") &&
+        (!defaultSearch || isDefaultBackupArchiveName(entry.name)),
+    )
     .map((entry) => path.join(searchRoot, entry.name))
     .toSorted((left, right) => right.localeCompare(left));
 }
 
 export async function readBackupCatalog(searchPath?: string): Promise<BackupCatalogResult> {
+  const defaultSearch = !searchPath?.trim();
   const searchRoots = await resolveBackupSearchRoots(searchPath);
   const archives: BackupCatalogEntry[] = [];
   const skipped: BackupCatalogSkipped[] = [];
 
   for (const searchRoot of searchRoots) {
-    const candidates = await listCandidateArchives(searchRoot);
+    const candidates = await listCandidateArchives(searchRoot, defaultSearch);
     for (const archivePath of candidates) {
       try {
         const verified = await readVerifiedBackupArchive(archivePath);

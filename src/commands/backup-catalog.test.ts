@@ -129,7 +129,11 @@ describe("backup catalog", () => {
       const listed = await backupListCommand(runtime, { path: archiveDir });
       const resolved = await resolveLatestBackupArchiveForRestore({ searchPath: archiveDir });
 
-      expect(listed.skipped.some((entry) => entry.archivePath === invalidArchivePath)).toBe(true);
+      expect(
+        listed.skipped.some(
+          (entry) => path.basename(entry.archivePath) === path.basename(invalidArchivePath),
+        ),
+      ).toBe(true);
       expect(resolved).toBe(await fs.realpath(valid.archivePath));
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
@@ -290,6 +294,39 @@ describe("backup catalog", () => {
               .map((entry) => fs.rm(path.join(tempHome.home, entry), { force: true })),
           ),
         );
+    }
+  });
+
+  it("ignores non-backup tarballs during default catalog discovery", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const cwdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-catalog-filter-"));
+    const previousCwd = process.cwd();
+
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(cwdDir, "random.tar.gz"), "not-a-backup\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: cwdDir,
+        nowMs: Date.parse("2026-03-12T00:00:00.000Z"),
+      });
+
+      process.chdir(cwdDir);
+      const result = await backupListCommand(runtime, {});
+
+      expect(result.archives.map((entry) => entry.archivePath)).toEqual([
+        await fs.realpath(created.archivePath),
+      ]);
+      expect(result.skipped).toHaveLength(0);
+    } finally {
+      process.chdir(previousCwd);
+      await fs.rm(cwdDir, { recursive: true, force: true });
     }
   });
 });
