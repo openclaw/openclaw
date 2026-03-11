@@ -18,8 +18,30 @@ const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
+  // Preserve whitespace inside fenced code blocks
+  const lines = text.split("\n");
+  let insideFence = false;
+  const result: string[] = [];
+
+  for (const line of lines) {
+    // Check for fenced code block boundaries
+    if (/^```/.test(line.trim())) {
+      insideFence = !insideFence;
+      result.push(line);
+      continue;
+    }
+
+    if (insideFence) {
+      // Don't normalize whitespace inside code blocks
+      result.push(line);
+    } else {
+      // Normalize whitespace outside code blocks
+      result.push(line.replace(/[ \t]+/g, " "));
+    }
+  }
+
+  return result
+    .join("\n")
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .trim();
 }
