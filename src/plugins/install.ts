@@ -95,6 +95,13 @@ function encodePluginInstallDirName(pluginId: string): string {
   return `@${safePathSegmentHashed(trimmed)}`;
 }
 
+/**
+ * Channel IDs that are reserved for internal OpenClaw routing and must never
+ * be used as plugin identifiers. Claiming one of these would silently shadow
+ * a sentinel value and break cross-session message delivery.
+ */
+const RESERVED_CHANNEL_IDS = new Set(["inter_session", "webchat"]);
+
 function validatePluginId(pluginId: string): string | null {
   const trimmed = pluginId.trim();
   if (!trimmed) {
@@ -114,7 +121,13 @@ function validatePluginId(pluginId: string): string | null {
     if (trimmed.startsWith("@")) {
       return "invalid plugin name: scoped ids must use @scope/name format";
     }
+    if (RESERVED_CHANNEL_IDS.has(trimmed.toLowerCase())) {
+      return `invalid plugin name: "${pluginId}" is a reserved internal channel id`;
+    }
     return null;
+  }
+  if (RESERVED_CHANNEL_IDS.has(unscopedPackageName(trimmed).toLowerCase())) {
+    return `invalid plugin name: "${pluginId}" is a reserved internal channel id`;
   }
   if (segments.length !== 2) {
     return "invalid plugin name: path separators not allowed";
