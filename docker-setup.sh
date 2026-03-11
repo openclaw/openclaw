@@ -32,6 +32,27 @@ is_truthy_value() {
   esac
 }
 
+# Check whether the Docker daemon is responsive, with a timeout.
+# When Docker Desktop is still starting, `docker info` can hang indefinitely.
+# This wraps the call in a background process and polls for completion.
+docker_is_ready() {
+  local wait_secs="${1:-10}"
+  ( docker info >/dev/null 2>&1 ) &
+  local pid=$!
+  local i=0
+  while [ "$i" -lt "$wait_secs" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null
+      return $?
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 1
+}
+
 read_config_gateway_token() {
   local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
   if [[ ! -f "$config_path" ]]; then
@@ -172,6 +193,21 @@ require_cmd docker
 if ! docker compose version >/dev/null 2>&1; then
   echo "Docker Compose not available (try: docker compose version)" >&2
   exit 1
+fi
+
+# Wait for the Docker daemon to become responsive.
+# On macOS/Windows, Docker Desktop may still be starting when this script runs.
+if ! docker_is_ready 10; then
+  echo "Waiting for Docker daemon to start..."
+  local_wait=0
+  while ! docker_is_ready 10; do
+    local_wait=$((local_wait + 10))
+    if [ "$local_wait" -ge 60 ]; then
+      fail "Docker daemon did not start within 60 seconds. Please start Docker Desktop and retry."
+    fi
+    echo "  still waiting... (${local_wait}s elapsed)"
+  done
+  echo "Docker daemon is ready."
 fi
 
 if [[ -z "$DOCKER_SOCKET_PATH" && "${DOCKER_HOST:-}" == unix://* ]]; then
