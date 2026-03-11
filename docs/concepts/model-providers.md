@@ -357,7 +357,7 @@ Ollama is a local LLM runtime that provides an OpenAI-compatible API:
 - Provider: `ollama`
 - Auth: None required (local server)
 - Example model: `ollama/llama3.3`
-- Installation: [https://ollama.ai](https://ollama.ai)
+- Installation: [https://ollama.com/download](https://ollama.com/download)
 
 ```bash
 # Install Ollama, then pull a model:
@@ -372,7 +372,7 @@ ollama pull llama3.3
 }
 ```
 
-Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
+Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with `OLLAMA_API_KEY`, and `openclaw onboard` can configure it directly as a first-class provider. See [/providers/ollama](/providers/ollama) for onboarding, cloud/local mode, and custom configuration.
 
 ### vLLM
 
