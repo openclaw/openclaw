@@ -75,6 +75,7 @@ export function createExecApprovalHandlers(
       const effectiveAgentId = approvalContext.agentId;
       const effectiveSessionKey = approvalContext.sessionKey;
       const effectiveCommandText = approvalContext.commandText;
+      const effectiveCommandPreview = approvalContext.commandPreview;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -122,6 +123,7 @@ export function createExecApprovalHandlers(
       }
       const request = {
         command: effectiveCommandText,
+        commandPreview: effectiveCommandPreview,
         commandArgv: effectiveCommandArgv,
         envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,

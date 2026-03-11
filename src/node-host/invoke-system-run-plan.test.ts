@@ -22,6 +22,7 @@ type HardeningCase = {
   expectedArgvChanged?: boolean;
   expectedCmdText?: string;
   checkRawCommandMatchesArgv?: boolean;
+  expectedCommandPreview?: string | null;
 };
 
 type ScriptOperandFixture = {
@@ -101,6 +102,7 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["env", "sh", "-c", "echo SAFE"],
       expectedArgv: () => ["env", "sh", "-c", "echo SAFE"],
       expectedCmdText: "echo SAFE",
+      expectedCommandPreview: "echo SAFE",
     },
     {
       name: "preserves dispatch-wrapper argv during approval hardening",
@@ -135,6 +137,16 @@ describe("hardenApprovedExecutionPaths", () => {
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
       checkRawCommandMatchesArgv: true,
+      expectedCommandPreview: null,
+    },
+    {
+      name: "stores full approval text and preview for path-qualified env wrappers",
+      mode: "build-plan",
+      argv: ["./env", "sh", "-c", "echo SAFE"],
+      expectedArgv: () => ["./env", "sh", "-c", "echo SAFE"],
+      expectedCmdText: "echo SAFE",
+      checkRawCommandMatchesArgv: true,
+      expectedCommandPreview: "echo SAFE",
     },
   ];
 
@@ -167,6 +179,9 @@ describe("hardenApprovedExecutionPaths", () => {
           }
           if (testCase.checkRawCommandMatchesArgv) {
             expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
+          }
+          if ("expectedCommandPreview" in testCase) {
+            expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
           }
           return;
         }
