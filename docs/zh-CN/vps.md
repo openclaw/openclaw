@@ -157,7 +157,7 @@ sudo systemctl restart openclaw
 2. **检查进程环境变量**（验证变量是否加载）：
 
    ```bash
-   cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
+   sudo cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
    ```
 
 3. **检查 OpenClaw 日志中的代理/TLS 错误**（不需要额外 Node 包）：

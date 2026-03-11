@@ -165,7 +165,7 @@ If LLM requests still fail after configuration:
 2. **Check process environment** (verify vars are loaded):
 
    ```bash
-   cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
+   sudo cat /proc/$(pgrep -fn openclaw)/environ | tr '\0' '\n' | grep -i proxy
    ```
 
 3. **Check OpenClaw logs for proxy/TLS errors** (no extra Node packages required):
