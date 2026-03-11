@@ -3,7 +3,12 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../../src/routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  DEFAULT_MAIN_KEY,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../../../src/routing/session-key.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -350,6 +355,9 @@ function resolveKillTargets(
   const keys = new Set<string>();
   const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
   const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
+  const currentAgentId =
+    currentParsed?.agentId ??
+    (normalizedCurrentSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
   for (const session of sessions) {
     const key = session?.key?.trim();
     if (!key || !isSubagentSessionKey(key)) {
@@ -360,7 +368,7 @@ function resolveKillTargets(
     const belongsToCurrentSession = isWithinCurrentSessionSubtree(
       normalizedKey,
       normalizedCurrentSessionKey,
-      currentParsed?.agentId,
+      currentAgentId,
       parsed?.agentId,
     );
     const isMatch =

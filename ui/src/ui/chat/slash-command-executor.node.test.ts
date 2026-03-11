@@ -141,4 +141,39 @@ describe("executeSlashCommand /kill", () => {
       sessionKey: "agent:main:subagent:two",
     });
   });
+
+  it("treats the legacy main session key as the default agent scope", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("main"),
+            row("agent:main:subagent:one"),
+            row("agent:main:subagent:two"),
+            row("agent:other:subagent:three"),
+          ],
+        };
+      }
+      if (method === "chat.abort") {
+        return { ok: true, aborted: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "kill",
+      "all",
+    );
+
+    expect(result.content).toBe("Aborted 2 sub-agent sessions.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: "agent:main:subagent:one",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
+      sessionKey: "agent:main:subagent:two",
+    });
+  });
 });
