@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   hasUsableCustomProviderApiKey,
   requireApiKey,
+  resolveApiKeyForProvider,
   resolveAwsSdkEnvVarName,
   resolveModelAuthMode,
   resolveUsableCustomProviderApiKey,
@@ -221,5 +222,63 @@ describe("resolveUsableCustomProviderApiKey", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+});
+
+describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
+  it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "custom-127-0-0-1-8080",
+      cfg: {
+        models: {
+          providers: {
+            "custom-127-0-0-1-8080": {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              api: "openai-completions",
+              models: [{ id: "qwen-3.5", name: "Qwen 3.5" }],
+            },
+          },
+        },
+      },
+    });
+    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+    expect(auth.source).toContain("synthetic local key");
+  });
+
+  it("synthesizes a local auth marker for localhost custom providers", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "my-local",
+      cfg: {
+        models: {
+          providers: {
+            "my-local": {
+              baseUrl: "http://localhost:11434/v1",
+              api: "openai-completions",
+              models: [{ id: "llama3", name: "Llama 3" }],
+            },
+          },
+        },
+      },
+    });
+    expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+  });
+
+  it("does not synthesize auth for remote custom providers without apiKey", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "my-remote",
+        cfg: {
+          models: {
+            providers: {
+              "my-remote": {
+                baseUrl: "https://api.example.com/v1",
+                api: "openai-completions",
+                models: [{ id: "gpt-5", name: "GPT-5" }],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("No API key found");
   });
 });

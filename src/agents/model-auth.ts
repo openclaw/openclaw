@@ -19,6 +19,7 @@ import {
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import {
+  CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
@@ -119,15 +120,25 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | null {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizedProvider !== "ollama") {
-    return null;
-  }
-
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (!providerConfig) {
     return null;
@@ -141,11 +152,27 @@ function resolveSyntheticLocalProviderAuth(params: {
     return null;
   }
 
-  return {
-    apiKey: OLLAMA_LOCAL_AUTH_MARKER,
-    source: "models.providers.ollama (synthetic local key)",
-    mode: "api-key",
-  };
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider === "ollama") {
+    return {
+      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    };
+  }
+
+  // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
+  // typically don't require auth. Synthesize a local key so the auth resolver
+  // doesn't reject them when the user left the API key blank during onboarding.
+  if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
+    return {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key",
+    };
+  }
+
+  return null;
 }
 
 function resolveEnvSourceLabel(params: {
