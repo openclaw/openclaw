@@ -446,6 +446,7 @@ const DiscordVoiceSchema = z
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
@@ -828,6 +829,7 @@ const SlackReplyToModeByChatTypeSchema = z
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
@@ -974,6 +976,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
@@ -1206,6 +1209,7 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
 export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
+    soulFile: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),

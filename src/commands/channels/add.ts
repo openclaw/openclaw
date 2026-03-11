@@ -28,8 +28,6 @@ export type ChannelsAddOptions = {
   dmAllowlist?: string;
   /** Custom SOUL file for this channel account (e.g., "SOUL.fin.md") */
   soul?: string;
-  /** Auto-approve current user (skip pairing) */
-  autoApprove?: boolean;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function parseList(value: string | undefined): string[] | undefined {
@@ -329,34 +327,6 @@ export async function channelsAddCommand(
         },
       },
     };
-  }
-
-  // Apply auto-approve if specified (currently Telegram only)
-  if (opts.autoApprove && channel === "telegram") {
-    // For auto-approve, we need the user's Telegram ID
-    // This is typically done via getUpdates or manual input
-    // For now, we'll set dmPolicy to allowlist but require manual allowFrom entry
-    nextConfig = {
-      ...nextConfig,
-      channels: {
-        ...nextConfig.channels,
-        telegram: {
-          ...nextConfig.channels?.telegram,
-          accounts: {
-            ...nextConfig.channels?.telegram?.accounts,
-            [accountId]: {
-              ...nextConfig.channels?.telegram?.accounts?.[accountId],
-              dmPolicy: "allowlist",
-              // Note: allowFrom should be set manually or via onboard wizard
-            },
-          },
-        },
-      },
-    };
-    runtime.log(
-      `Note: Auto-approve enabled for ${channelLabel(channel)} account "${accountId}". ` +
-        `Set allowFrom with your Telegram user ID or use the onboard wizard for automatic detection.`,
-    );
   }
 
   if (channel === "telegram") {

@@ -59,4 +59,38 @@ describe("channelsAddCommand", () => {
 
     expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
   });
+
+  it("stores a per-account soul file when --soul is provided", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "slack",
+        account: "work",
+        botToken: "xoxb-1",
+        appToken: "xapp-1",
+        soul: "SOUL.work.md",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(configMocks.writeConfigFile.mock.calls[0]?.[0]).toMatchObject({
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              botToken: "xoxb-1",
+              appToken: "xapp-1",
+              soulFile: "SOUL.work.md",
+            },
+          },
+        },
+      },
+    });
+  });
 });
