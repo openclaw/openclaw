@@ -441,6 +441,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     ? createThreadBindingManager({
         accountId: account.accountId,
         token,
+        cfg,
         idleTimeoutMs: threadBindingIdleTimeoutMs,
         maxAgeMs: threadBindingMaxAgeMs,
       })

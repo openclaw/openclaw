@@ -83,6 +83,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
   "agents.defaults.memorySearch.store.path",
+  "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
   "agents.defaults.memorySearch.query.hybrid.enabled",
@@ -522,6 +523,12 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "channels.telegram",
   "channels.telegram.botToken",
   "channels.telegram.capabilities.inlineButtons",
+  "channels.telegram.execApprovals",
+  "channels.telegram.execApprovals.enabled",
+  "channels.telegram.execApprovals.approvers",
+  "channels.telegram.execApprovals.agentFilter",
+  "channels.telegram.execApprovals.sessionFilter",
+  "channels.telegram.execApprovals.target",
   "channels.whatsapp",
 ] as const;
 

@@ -2,8 +2,10 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
+  createAccountStatusSink,
   formatAllowFromLowercase,
   mapAllowFromEntries,
+  runPassiveAccountLifecycle,
 } from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
@@ -15,7 +17,6 @@ import {
   deleteAccountFromConfigSection,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
-  waitForAbortSignal,
   type ChannelPlugin,
   type OpenClawConfig,
   type ChannelSetupInput,
@@ -338,17 +339,25 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
 
       ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk webhook server`);
 
-      const { stop } = await monitorNextcloudTalkProvider({
-        accountId: account.accountId,
-        config: ctx.cfg as CoreConfig,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
       });
 
-      // Keep webhook channels pending for the account lifecycle.
-      await waitForAbortSignal(ctx.abortSignal);
-      stop();
+      await runPassiveAccountLifecycle({
+        abortSignal: ctx.abortSignal,
+        start: async () =>
+          await monitorNextcloudTalkProvider({
+            accountId: account.accountId,
+            config: ctx.cfg as CoreConfig,
+            runtime: ctx.runtime,
+            abortSignal: ctx.abortSignal,
+            statusSink,
+          }),
+        stop: async (monitor) => {
+          monitor.stop();
+        },
+      });
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;
