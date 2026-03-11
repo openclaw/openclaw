@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/pilot";
 import { resolvePilotAccount } from "../accounts.js";
+import { normalizePilotTarget } from "../normalize.js";
 import * as pilotctl from "../pilotctl.js";
 import type { CoreConfig } from "../types.js";
 
@@ -32,7 +33,9 @@ export function registerPilotEventTools(api: OpenClawPluginApi) {
       try {
         const cfg = api.runtime.config.loadConfig() as CoreConfig;
         const account = resolvePilotAccount({ cfg });
-        const result = await pilotctl.publish(params.target, params.topic, params.data, {
+        const target = normalizePilotTarget(params.target);
+        if (!target) throw new Error(`Invalid Pilot target: ${params.target}`);
+        const result = await pilotctl.publish(target, params.topic, params.data, {
           socketPath: account.socketPath,
           pilotctlPath: account.pilotctlPath,
         });
@@ -74,7 +77,9 @@ export function registerPilotEventTools(api: OpenClawPluginApi) {
       try {
         const cfg = api.runtime.config.loadConfig() as CoreConfig;
         const account = resolvePilotAccount({ cfg });
-        const result = await pilotctl.subscribe(params.target, params.topic, {
+        const target = normalizePilotTarget(params.target);
+        if (!target) throw new Error(`Invalid Pilot target: ${params.target}`);
+        const result = await pilotctl.subscribe(target, params.topic, {
           socketPath: account.socketPath,
           pilotctlPath: account.pilotctlPath,
         });

@@ -3,6 +3,7 @@ import {
   dispatchInboundReplyWithBase,
   formatTextWithAttachmentLinks,
   issuePairingChallenge,
+  readStoreAllowFromForDmPolicy,
   resolveOutboundMediaUrls,
   type OutboundReplyPayload,
   type OpenClawConfig,
@@ -68,7 +69,14 @@ export async function handlePilotInbound(params: {
   }
 
   if (dmPolicy !== "open") {
-    const storeAllowFrom = normalizePilotAllowlist(await pairing.readStoreForDmPolicy(dmPolicy));
+    const storeAllowFrom = normalizePilotAllowlist(
+      await readStoreAllowFromForDmPolicy({
+        provider: CHANNEL_ID,
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
+    );
     const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
 
     const dmAllowed = resolvePilotAllowlistMatch({

@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/pilot";
 import { resolvePilotAccount } from "../accounts.js";
+import { normalizePilotTarget } from "../normalize.js";
 import * as trust from "../trust.js";
 import type { CoreConfig } from "../types.js";
 
@@ -33,19 +34,23 @@ export function registerPilotTrustTool(api: OpenClawPluginApi) {
           pilotctlPath: account.pilotctlPath,
         };
 
+        const resolveTarget = (raw?: string): string => {
+          if (!raw) throw new Error("target required");
+          const normalized = normalizePilotTarget(raw);
+          if (!normalized) throw new Error(`Invalid Pilot target: ${raw}`);
+          return normalized;
+        };
+
         let result: unknown;
         switch (params.action) {
           case "handshake":
-            if (!params.target) throw new Error("target required for handshake");
-            result = await trust.handshake(params.target, opts);
+            result = await trust.handshake(resolveTarget(params.target), opts);
             break;
           case "approve":
-            if (!params.target) throw new Error("target required for approve");
-            result = await trust.approve(params.target, opts);
+            result = await trust.approve(resolveTarget(params.target), opts);
             break;
           case "reject":
-            if (!params.target) throw new Error("target required for reject");
-            result = await trust.reject(params.target, opts);
+            result = await trust.reject(resolveTarget(params.target), opts);
             break;
           case "list":
             result = await trust.listTrusted(opts);

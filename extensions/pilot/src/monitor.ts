@@ -20,15 +20,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       reject(signal.reason);
       return;
     }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -102,25 +102,31 @@ export async function monitorPilotProvider(
       try {
         const messages = await pilotctl.receiveMessages(pilotctlOpts);
         for (const message of messages) {
-          core.channel.activity.record({
-            channel: "pilot",
-            accountId: account.accountId,
-            direction: "inbound",
-            at: message.timestamp,
-          });
+          try {
+            core.channel.activity.record({
+              channel: "pilot",
+              accountId: account.accountId,
+              direction: "inbound",
+              at: message.timestamp,
+            });
 
-          if (opts.onMessage) {
-            await opts.onMessage(message);
-            continue;
+            if (opts.onMessage) {
+              await opts.onMessage(message);
+              continue;
+            }
+
+            await handlePilotInbound({
+              message,
+              account,
+              config: cfg,
+              runtime,
+              statusSink: opts.statusSink,
+            });
+          } catch (msgErr) {
+            logger.error(
+              `[${account.accountId}] failed processing message from ${message.sender}: ${String(msgErr)}`,
+            );
           }
-
-          await handlePilotInbound({
-            message,
-            account,
-            config: cfg,
-            runtime,
-            statusSink: opts.statusSink,
-          });
         }
       } catch (err) {
         if (!stopped) {

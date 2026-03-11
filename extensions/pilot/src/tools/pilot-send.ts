@@ -1,7 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/pilot";
-import { resolvePilotAccount } from "../accounts.js";
-import * as pilotctl from "../pilotctl.js";
-import type { CoreConfig } from "../types.js";
+import { sendPilotMessage } from "../send.js";
 
 export function registerPilotSendTool(api: OpenClawPluginApi) {
   api.registerTool({
@@ -26,12 +24,7 @@ export function registerPilotSendTool(api: OpenClawPluginApi) {
     },
     async execute(_id: string, params: { target: string; message: string }) {
       try {
-        const cfg = api.runtime.config.loadConfig() as CoreConfig;
-        const account = resolvePilotAccount({ cfg });
-        const result = await pilotctl.sendMessage(params.target, params.message, {
-          socketPath: account.socketPath,
-          pilotctlPath: account.pilotctlPath,
-        });
+        const result = await sendPilotMessage(params.target, params.message);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
           details: undefined,

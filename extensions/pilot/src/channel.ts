@@ -1,4 +1,5 @@
 import {
+  buildAccountScopedDmSecurityPolicy,
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -31,6 +32,7 @@ const meta = {
   id: "pilot" as const,
   label: "Pilot Protocol",
   selectionLabel: "Pilot Protocol",
+  docsPath: "/channels/pilot",
   blurb: "P2P overlay network for autonomous agents",
   order: 900,
 };
@@ -73,12 +75,17 @@ export const pilotPlugin: ChannelPlugin<ResolvedPilotAccount, PilotProbe> = {
     }),
   },
   security: {
-    resolveDmPolicy: ({ account }) => {
-      const policy = account.config.dmPolicy ?? "pairing";
-      return {
-        policy,
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "pilot",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom ?? [],
-      };
+        policyPathSuffix: "dmPolicy",
+        normalizeEntry: (raw) => normalizePilotAllowEntry(raw),
+      });
     },
   },
   messaging: {

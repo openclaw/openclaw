@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/pilot";
 import { resolvePilotAccount } from "../accounts.js";
+import { normalizePilotTarget } from "../normalize.js";
 import * as pilotctl from "../pilotctl.js";
 import type { CoreConfig } from "../types.js";
 
@@ -40,9 +41,13 @@ export function registerPilotTaskTool(api: OpenClawPluginApi) {
         let result: unknown;
         switch (params.action) {
           case "submit":
-            if (!params.target) throw new Error("target required for submit");
-            if (!params.task) throw new Error("task required for submit");
-            result = await pilotctl.submitTask(params.target, params.task, opts);
+            {
+              if (!params.target) throw new Error("target required for submit");
+              if (!params.task) throw new Error("task required for submit");
+              const normalized = normalizePilotTarget(params.target);
+              if (!normalized) throw new Error(`Invalid Pilot target: ${params.target}`);
+              result = await pilotctl.submitTask(normalized, params.task, opts);
+            }
             break;
           case "list":
             result = await pilotctl.taskList(opts);

@@ -3,7 +3,11 @@
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  buildAccountScopedDmSecurityPolicy,
+  formatPairingApproveHint,
+} from "../channels/plugins/helpers.js";
+export { readStoreAllowFromForDmPolicy } from "../security/dm-policy-shared.js";
 export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,

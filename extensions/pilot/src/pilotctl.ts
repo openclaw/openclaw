@@ -47,10 +47,11 @@ export async function daemonStart(
   registry: string,
   opts?: PilotctlOptions,
 ): Promise<PilotDaemonStatus> {
-  return run<PilotDaemonStatus>(
-    ["daemon", "start", "--hostname", hostname, "--registry", registry],
-    opts,
-  );
+  const args = ["daemon", "start", "--hostname", hostname];
+  if (registry) {
+    args.push("--registry", registry);
+  }
+  return run<PilotDaemonStatus>(args, opts);
 }
 
 export async function daemonInfo(opts?: PilotctlOptions): Promise<PilotDaemonStatus> {
@@ -67,11 +68,6 @@ export async function sendMessage(
 
 export async function receiveMessages(opts?: PilotctlOptions): Promise<PilotInboundMessage[]> {
   const data = await run<PilotInboundMessage[] | null>(["received", "--clear"], opts);
-  return data ?? [];
-}
-
-export async function inbox(opts?: PilotctlOptions): Promise<PilotInboundMessage[]> {
-  const data = await run<PilotInboundMessage[] | null>(["inbox", "--clear"], opts);
   return data ?? [];
 }
 
