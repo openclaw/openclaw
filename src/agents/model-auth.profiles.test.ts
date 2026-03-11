@@ -426,4 +426,29 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('bailian') returns BAILIAN_API_KEY when set", async () => {
+    await withEnvAsync(
+      {
+        BAILIAN_API_KEY: "sk-bailian-xyz",
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("bailian");
+        expect(resolved?.apiKey).toBe("sk-bailian-xyz");
+        expect(resolved?.source).toContain("BAILIAN_API_KEY");
+      },
+    );
+  });
+
+  it("resolveEnvApiKey('bailian') returns null when not set", async () => {
+    await withEnvAsync(
+      {
+        BAILIAN_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("bailian");
+        expect(resolved).toBeNull();
+      },
+    );
+  });
 });

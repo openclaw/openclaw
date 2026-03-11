@@ -37,6 +37,7 @@ export const PROVIDER_ENV_API_KEY_CANDIDATES: Record<string, string[]> = {
   ollama: ["OLLAMA_API_KEY"],
   vllm: ["VLLM_API_KEY"],
   kilocode: ["KILOCODE_API_KEY"],
+  bailian: ["BAILIAN_API_KEY"],
 };
 
 export function listKnownProviderEnvApiKeyNames(): string[] {
