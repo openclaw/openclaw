@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
@@ -19,6 +20,7 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  configPatch?: Partial<OpenClawConfig>;
 };
 
 export type PluginManifestLoadResult =
@@ -99,6 +101,9 @@ export function loadPluginManifest(
   if (isRecord(raw.uiHints)) {
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
+  const configPatch = isRecord(raw.configPatch)
+    ? (raw.configPatch as Partial<OpenClawConfig>)
+    : undefined;
 
   return {
     ok: true,
@@ -113,6 +118,7 @@ export function loadPluginManifest(
       description,
       version,
       uiHints,
+      configPatch,
     },
     manifestPath,
   };

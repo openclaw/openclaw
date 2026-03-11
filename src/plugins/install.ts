@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
 import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
 import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
@@ -67,6 +68,7 @@ export type InstallPluginResult =
       manifestName?: string;
       version?: string;
       extensions: string[];
+      configPatch?: Partial<OpenClawConfig>;
       npmResolution?: NpmSpecResolution;
       integrityDrift?: NpmIntegrityDrift;
     }
@@ -245,6 +247,9 @@ async function installPluginFromPackageDir(
     ocManifestResult.ok && ocManifestResult.manifest.id
       ? unscopedPackageName(ocManifestResult.manifest.id)
       : undefined;
+  const manifestConfigPatch = ocManifestResult.ok
+    ? ocManifestResult.manifest.configPatch
+    : undefined;
 
   const pluginId = manifestPluginId ?? npmPluginId;
   const pluginIdError = validatePluginId(pluginId);
@@ -335,6 +340,7 @@ async function installPluginFromPackageDir(
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
       extensions,
+      configPatch: manifestConfigPatch,
     };
   }
 
@@ -373,6 +379,7 @@ async function installPluginFromPackageDir(
     manifestName: pkgName || undefined,
     version: typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
+    configPatch: manifestConfigPatch,
   };
 }
 

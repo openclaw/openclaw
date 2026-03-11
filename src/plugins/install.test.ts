@@ -214,7 +214,10 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
   return { result, warnings };
 }
 
-function setupManifestInstallFixture(params: { manifestId: string }) {
+function setupManifestInstallFixture(params: {
+  manifestId: string;
+  configPatch?: Record<string, unknown>;
+}) {
   const caseDir = makeTempDir();
   const stateDir = path.join(caseDir, "state");
   const pluginDir = path.join(caseDir, "plugin-src");
@@ -225,6 +228,7 @@ function setupManifestInstallFixture(params: { manifestId: string }) {
     JSON.stringify({
       id: params.manifestId,
       configSchema: { type: "object", properties: {} },
+      ...(params.configPatch ? { configPatch: params.configPatch } : {}),
     }),
     "utf-8",
   );
@@ -712,6 +716,36 @@ describe("installPluginFromDir", () => {
     });
 
     expectInstalledAsMemoryCognee(res, extensionsDir);
+  });
+
+  it("returns manifest configPatch so install flows can apply it", async () => {
+    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
+      manifestId: "memory-cognee",
+      configPatch: {
+        providers: {
+          cognee: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectInstalledAsMemoryCognee(res, extensionsDir);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.configPatch).toEqual({
+      providers: {
+        cognee: {
+          enabled: true,
+        },
+      },
+    });
   });
 });
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
+import { mergeConfigPatch } from "../commands/provider-auth-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -11,6 +12,7 @@ import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
@@ -144,6 +146,16 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   };
 }
 
+export function applyPluginInstallConfigPatch(
+  config: OpenClawConfig,
+  patch?: Partial<OpenClawConfig>,
+): OpenClawConfig {
+  if (!patch) {
+    return config;
+  }
+  return mergeConfigPatch(config, patch);
+}
+
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) {
     return;
@@ -180,6 +192,11 @@ async function installBundledPluginSource(params: {
       },
     },
   };
+  const manifestResult = loadPluginManifest(params.bundledSource.localPath, false);
+  next = applyPluginInstallConfigPatch(
+    next,
+    manifestResult.ok ? manifestResult.manifest.configPatch : undefined,
+  );
   next = recordPluginInstall(next, {
     pluginId: params.bundledSource.pluginId,
     source: "path",
@@ -233,6 +250,7 @@ async function runPluginInstallCommand(params: {
         },
         probe.pluginId,
       ).config;
+      next = applyPluginInstallConfigPatch(next, probe.configPatch);
       next = recordPluginInstall(next, {
         pluginId: probe.pluginId,
         source: "path",
@@ -262,6 +280,7 @@ async function runPluginInstallCommand(params: {
     clearPluginManifestRegistryCache();
 
     let next = enablePluginInConfig(cfg, result.pluginId).config;
+    next = applyPluginInstallConfigPatch(next, result.configPatch);
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     next = recordPluginInstall(next, {
       pluginId: result.pluginId,
@@ -341,6 +360,7 @@ async function runPluginInstallCommand(params: {
   clearPluginManifestRegistryCache();
 
   let next = enablePluginInConfig(cfg, result.pluginId).config;
+  next = applyPluginInstallConfigPatch(next, result.configPatch);
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     raw,
     Boolean(opts.pin),
