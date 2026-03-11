@@ -243,5 +243,46 @@ describe("skills-cli", () => {
       const parsed = JSON.parse(output) as Record<string, unknown>;
       assert(parsed);
     });
+
+    it("sanitizes ANSI and C1 controls in skills list JSON output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "json-skill",
+          emoji: "\u001b[31m📧\u001b[0m\u009f",
+          description: "desc\u0093\u001b[2J\u001b[33m colored\u001b[0m",
+        }),
+      ]);
+
+      const output = formatSkillsList(report, { json: true });
+      const parsed = JSON.parse(output) as {
+        skills: Array<{ emoji: string; description: string }>;
+      };
+
+      expect(parsed.skills[0]?.emoji).toBe("📧");
+      expect(parsed.skills[0]?.description).toBe("desc colored");
+      expect(output).not.toContain("\\u001b");
+    });
+
+    it("sanitizes skills info JSON output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "info-json",
+          emoji: "\u001b[31m🎙\u001b[0m\u009f",
+          description: "hi\u0091",
+          homepage: "https://example.com/\u0092docs",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "info-json", { json: true });
+      const parsed = JSON.parse(output) as {
+        emoji: string;
+        description: string;
+        homepage: string;
+      };
+
+      expect(parsed.emoji).toBe("🎙");
+      expect(parsed.description).toBe("hi");
+      expect(parsed.homepage).toBe("https://example.com/docs");
+    });
   });
 });
