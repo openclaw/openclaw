@@ -20,15 +20,14 @@ import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onb
 import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 import {
   applySingleTokenPromptResult,
-  buildSingleChannelSecretPromptState,
   parseMentionOrPrefixedId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
-  promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
   resolveOnboardingAccountId,
+  runSingleChannelSecretStep,
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
@@ -179,52 +178,39 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
       accountId: discordAccountId,
     });
     const allowEnv = discordAccountId === DEFAULT_ACCOUNT_ID;
-    const tokenPromptState = buildSingleChannelSecretPromptState({
-      accountConfigured: Boolean(resolvedAccount.token),
-      hasConfigToken: hasConfiguredSecretInput(resolvedAccount.config.token),
-      allowEnv,
-      envValue: process.env.DISCORD_BOT_TOKEN,
-    });
-
-    if (!tokenPromptState.accountConfigured) {
-      await noteDiscordTokenHelp(prompter);
-    }
-
-    const tokenResult = await promptSingleChannelSecretInput({
+    const tokenStep = await runSingleChannelSecretStep({
       cfg: next,
       prompter,
       providerHint: "discord",
       credentialLabel: "Discord bot token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured: tokenPromptState.accountConfigured,
-      canUseEnv: tokenPromptState.canUseEnv,
-      hasConfigToken: tokenPromptState.hasConfigToken,
+      accountConfigured: Boolean(resolvedAccount.token),
+      hasConfigToken: hasConfiguredSecretInput(resolvedAccount.config.token),
+      allowEnv,
+      envValue: process.env.DISCORD_BOT_TOKEN,
       envPrompt: "DISCORD_BOT_TOKEN detected. Use env var?",
       keepPrompt: "Discord token already configured. Keep it?",
       inputPrompt: "Enter Discord bot token",
       preferredEnvVar: allowEnv ? "DISCORD_BOT_TOKEN" : undefined,
+      onMissingConfigured: async () => await noteDiscordTokenHelp(prompter),
+      applyUseEnv: async (cfg) =>
+        applySingleTokenPromptResult({
+          cfg,
+          channel: "discord",
+          accountId: discordAccountId,
+          tokenPatchKey: "token",
+          tokenResult: { useEnv: true, token: null },
+        }),
+      applySet: async (cfg, value) =>
+        applySingleTokenPromptResult({
+          cfg,
+          channel: "discord",
+          accountId: discordAccountId,
+          tokenPatchKey: "token",
+          tokenResult: { useEnv: false, token: value },
+        }),
     });
-
-    let resolvedTokenForAllowlist: string | undefined;
-    if (tokenResult.action === "use-env") {
-      next = applySingleTokenPromptResult({
-        cfg: next,
-        channel: "discord",
-        accountId: discordAccountId,
-        tokenPatchKey: "token",
-        tokenResult: { useEnv: true, token: null },
-      });
-      resolvedTokenForAllowlist = process.env.DISCORD_BOT_TOKEN?.trim() || undefined;
-    } else if (tokenResult.action === "set") {
-      next = applySingleTokenPromptResult({
-        cfg: next,
-        channel: "discord",
-        accountId: discordAccountId,
-        tokenPatchKey: "token",
-        tokenResult: { useEnv: false, token: tokenResult.value },
-      });
-      resolvedTokenForAllowlist = tokenResult.resolvedValue;
-    }
+    next = tokenStep.cfg;
 
     const currentEntries = Object.entries(resolvedAccount.config.guilds ?? {}).flatMap(
       ([guildKey, value]) => {
@@ -261,7 +247,7 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
           input,
           resolved: false,
         }));
-        const activeToken = accountWithTokens.token || resolvedTokenForAllowlist || "";
+        const activeToken = accountWithTokens.token || tokenStep.resolvedValue || "";
         if (activeToken && entries.length > 0) {
           try {
             resolved = await resolveDiscordChannelAllowlist({
