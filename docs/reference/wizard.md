@@ -38,7 +38,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
       - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
-    - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
+    - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
     - **API key**: stores the key for you.
     - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
@@ -228,7 +228,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen example">
+  <Accordion title="OpenCode example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -237,6 +237,7 @@ openclaw onboard --non-interactive \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
+    Swap to `--auth-choice opencode-go --opencode-go-api-key "$OPENCODE_API_KEY"` for the Go catalog.
   </Accordion>
 </AccordionGroup>
 

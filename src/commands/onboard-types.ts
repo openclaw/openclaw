@@ -41,6 +41,7 @@ export type AuthChoice =
   | "minimax-api-lightning"
   | "minimax-portal"
   | "opencode-zen"
+  | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
@@ -50,6 +51,8 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-api-key-cn"
+  | "modelstudio-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -68,7 +71,7 @@ export type AuthChoiceGroupId =
   | "zai"
   | "xiaomi"
   | "ernie"
-  | "opencode-zen"
+  | "opencode"
   | "minimax"
   | "synthetic"
   | "venice"
@@ -77,6 +80,7 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "modelstudio"
   | "xai"
   | "volcengine"
   | "byteplus"
@@ -134,10 +138,13 @@ export type OnboardOptions = {
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   ernieApiKey?: string;
+  opencodeGoApiKey?: string;
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioApiKeyCn?: string;
+  modelstudioApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

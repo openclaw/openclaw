@@ -1,4 +1,4 @@
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai/oauth";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { getOAuthApiKey, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";

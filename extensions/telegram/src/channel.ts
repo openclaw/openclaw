@@ -1,9 +1,9 @@
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
-  buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedAccountConfigAccessors,
+  createScopedDmSecurityResolver,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
@@ -31,6 +31,7 @@ import {
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
+  sendTelegramPayloadMessages,
   telegramOnboardingAdapter,
   TelegramConfigSchema,
   type ChannelMessageActionAdapter,
@@ -108,6 +109,14 @@ const telegramConfigBase = createScopedChannelConfigBase<ResolvedTelegramAccount
   clearBaseFields: ["botToken", "tokenFile", "name"],
 });
 
+const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramAccount>({
+  channelKey: "telegram",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
+});
+
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
   meta: {
@@ -176,18 +185,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     ...telegramConfigAccessors,
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "telegram",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
-      });
-    },
+    resolveDmPolicy: resolveTelegramDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
@@ -317,6 +315,36 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
+    sendPayload: async ({
+      cfg,
+      to,
+      payload,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
+      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+      const messageThreadId = parseTelegramThreadId(threadId);
+      const result = await sendTelegramPayloadMessages({
+        send,
+        to,
+        payload,
+        baseOpts: {
+          verbose: false,
+          cfg,
+          mediaLocalRoots,
+          messageThreadId,
+          replyToMessageId,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+        },
+      });
+      return { channel: "telegram", ...result };
+    },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
@@ -378,11 +406,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     collectStatusIssues: collectTelegramStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      getTelegramRuntime().channel.telegram.probeTelegram(
-        account.token,
-        timeoutMs,
-        account.config.proxy,
-      ),
+      getTelegramRuntime().channel.telegram.probeTelegram(account.token, timeoutMs, {
+        accountId: account.accountId,
+        proxyUrl: account.config.proxy,
+        network: account.config.network,
+      }),
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
@@ -408,6 +436,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         botId,
         groupIds,
         proxyUrl: account.config.proxy,
+        network: account.config.network,
         timeoutMs,
       });
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
@@ -471,11 +500,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
       try {
-        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(
-          token,
-          2500,
-          account.config.proxy,
-        );
+        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
+          accountId: account.accountId,
+          proxyUrl: account.config.proxy,
+          network: account.config.network,
+        });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) {
           telegramBotLabel = ` (@${username})`;

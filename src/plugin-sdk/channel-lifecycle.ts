@@ -1,23 +1,64 @@
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+
 type CloseAwareServer = {
   once: (event: "close", listener: () => void) => unknown;
 };
 
+type PassiveAccountLifecycleParams<Handle> = {
+  abortSignal?: AbortSignal;
+  start: () => Promise<Handle>;
+  stop?: (handle: Handle) => void | Promise<void>;
+  onStop?: () => void | Promise<void>;
+};
+
+export function createAccountStatusSink(params: {
+  accountId: string;
+  setStatus: (next: ChannelAccountSnapshot) => void;
+}): (patch: Omit<ChannelAccountSnapshot, "accountId">) => void {
+  return (patch) => {
+    params.setStatus({ accountId: params.accountId, ...patch });
+  };
+}
+
 /**
  * Return a promise that resolves when the signal is aborted.
  *
- * If no signal is provided, the promise stays pending forever.
+ * If no signal is provided, the promise stays pending forever. When provided,
+ * `onAbort` runs once before the promise resolves.
  */
-export function waitUntilAbort(signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
+export function waitUntilAbort(
+  signal?: AbortSignal,
+  onAbort?: () => void | Promise<void>,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const complete = () => {
+      Promise.resolve(onAbort?.()).then(() => resolve(), reject);
+    };
     if (!signal) {
       return;
     }
     if (signal.aborted) {
-      resolve();
+      complete();
       return;
     }
-    signal.addEventListener("abort", () => resolve(), { once: true });
+    signal.addEventListener("abort", complete, { once: true });
   });
+}
+
+/**
+ * Keep a passive account task alive until abort, then run optional cleanup.
+ */
+export async function runPassiveAccountLifecycle<Handle>(
+  params: PassiveAccountLifecycleParams<Handle>,
+): Promise<void> {
+  const handle = await params.start();
+
+  try {
+    await waitUntilAbort(params.abortSignal);
+  } finally {
+    await params.stop?.(handle);
+    await params.onStop?.();
+  }
 }
 
 /**
