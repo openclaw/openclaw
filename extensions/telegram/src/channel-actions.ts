@@ -71,6 +71,7 @@ function readTelegramMessageIdParam(
     required,
     integer: true,
     strict: true,
+    strictInteger: true,
   });
   if (required && typeof messageId !== "number") {
     throw new Error("messageId is required.");
