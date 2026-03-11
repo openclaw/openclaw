@@ -29,9 +29,8 @@ export async function loadResolvedSnapshotBackup(params: { env?: NodeJS.ProcessE
   stateDir: string;
 }> {
   const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.valid) {
-    throw new Error("Config is invalid. Backup snapshot commands require a valid config file.");
-  }
+  // Use best-effort config even when unrelated sections are invalid;
+  // resolveSnapshotStoreConfig will still validate backup-specific fields.
   return {
     snapshotStore: await resolveSnapshotStoreConfig({
       config: snapshot.config,
@@ -53,9 +52,8 @@ export async function loadResolvedSnapshotBackupTarget(params: {
   stateDir: string;
 }> {
   const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.valid) {
-    throw new Error("Config is invalid. Backup snapshot commands require a valid config file.");
-  }
+  // Use best-effort config even when unrelated sections are invalid;
+  // resolveSnapshotStoreTargetConfig will still validate backup-specific fields.
   return {
     snapshotStore: await resolveSnapshotStoreTargetConfig({
       config: snapshot.config,
