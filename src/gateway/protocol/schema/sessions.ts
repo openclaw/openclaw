@@ -83,6 +83,12 @@ export const SessionsPatchParamsSchema = Type.Object(
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    subagentRole: Type.Optional(
+      Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf"), Type.Null()]),
+    ),
+    subagentControlScope: Type.Optional(
+      Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
+    ),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),

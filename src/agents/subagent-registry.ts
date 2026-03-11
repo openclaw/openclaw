@@ -45,6 +45,7 @@ import {
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   findRunIdsByChildSessionKeyFromRuns,
+  listRunsForControllerFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
@@ -1163,6 +1164,7 @@ export function replaceSubagentRunAfterSteer(params: {
 export function registerSubagentRun(params: {
   runId: string;
   childSessionKey: string;
+  controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
@@ -1192,6 +1194,7 @@ export function registerSubagentRun(params: {
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
+    controllerSessionKey: params.controllerSessionKey ?? params.requesterSessionKey,
     requesterSessionKey: params.requesterSessionKey,
     requesterOrigin,
     requesterDisplayKey: params.requesterDisplayKey,
@@ -1428,6 +1431,13 @@ export function markSubagentRunTerminated(params: {
 
 export function listSubagentRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey);
+}
+
+export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
+  return listRunsForControllerFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    controllerSessionKey,
+  );
 }
 
 export function countActiveRunsForSession(requesterSessionKey: string): number {

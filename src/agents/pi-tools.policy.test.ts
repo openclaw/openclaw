@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -5,6 +8,7 @@ import {
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
   resolveSubagentToolPolicy,
+  resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 
@@ -163,6 +167,41 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   it("depth-1 leaf (maxSpawnDepth=1) denies sessions_list", () => {
     const policy = resolveSubagentToolPolicy(leafCfg, 1);
     expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
+  });
+
+  it("uses stored leaf role for flat depth-1 session keys", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:flat-leaf": {
+            sessionId: "flat-leaf",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "leaf",
+            subagentControlScope: "none",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
   it("defaults to leaf behavior when no depth is provided", () => {

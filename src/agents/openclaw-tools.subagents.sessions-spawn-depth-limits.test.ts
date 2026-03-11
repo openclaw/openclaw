@@ -6,11 +6,6 @@ import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagen
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: () => undefined,
-  getOAuthProviders: () => [],
-}));
-
 const callGatewayMock = vi.fn();
 
 vi.mock("../gateway/call.js", () => ({
@@ -121,6 +116,8 @@ describe("sessions_spawn depth + child limits", () => {
       (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
     );
     expect(spawnDepthPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(spawnDepthPatch?.params?.subagentRole).toBe("leaf");
+    expect(spawnDepthPatch?.params?.subagentControlScope).toBe("none");
   });
 
   it("rejects depth-2 callers when maxSpawnDepth is 2 (using stored spawnDepth on flat keys)", async () => {
