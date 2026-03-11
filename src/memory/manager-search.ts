@@ -25,8 +25,8 @@ export async function searchVector(params: {
   limit: number;
   snippetMaxChars: number;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
-  sourceFilterVec: { sql: string; params: SearchSource[] };
-  sourceFilterChunks: { sql: string; params: SearchSource[] };
+  sourceFilterVec: { sql: string; params: string[] };
+  sourceFilterChunks: { sql: string; params: string[] };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -96,7 +96,7 @@ export async function searchVector(params: {
 export function listChunks(params: {
   db: DatabaseSync;
   providerModel: string;
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: string[] };
 }): Array<{
   id: string;
   path: string;
@@ -140,7 +140,7 @@ export async function searchKeyword(params: {
   query: string;
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: string[] };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
@@ -153,14 +153,15 @@ export async function searchKeyword(params: {
   }
 
   // When providerModel is undefined (FTS-only mode), search all models
-  const modelClause = params.providerModel ? " AND model = ?" : "";
+  const modelClause = params.providerModel ? " AND c.model = ?" : "";
   const modelParams = params.providerModel ? [params.providerModel] : [];
 
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
         `  FROM ${params.ftsTable}\n` +
+        `  JOIN chunks c ON c.id = ${params.ftsTable}.id\n` +
         ` WHERE ${params.ftsTable} MATCH ?${modelClause}${params.sourceFilter.sql}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
