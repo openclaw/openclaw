@@ -91,6 +91,10 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (!effectiveCommandText) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        return;
+      }
       if (
         host === "node" &&
         (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
@@ -122,7 +126,8 @@ export function createExecApprovalHandlers(
       }
       const request = {
         command: effectiveCommandText,
-        commandArgv: effectiveCommandArgv,
+        commandPreview: host === "node" ? undefined : approvalContext.commandPreview,
+        commandArgv: host === "node" ? undefined : effectiveCommandArgv,
         envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
