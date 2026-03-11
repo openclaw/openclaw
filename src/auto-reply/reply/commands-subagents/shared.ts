@@ -409,7 +409,6 @@ export function buildSubagentsHelp() {
     "- /subagents info <id|#>",
     "- /subagents send <id|#> <message>",
     "- /subagents steer <id|#> <message>",
-    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     "- /focus <subagent-label|session-key|session-id|session-label>",
     "- /unfocus",
     "- /agents",
