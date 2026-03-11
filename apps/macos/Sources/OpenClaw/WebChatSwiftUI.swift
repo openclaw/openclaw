@@ -310,7 +310,7 @@ final class WebChatSwiftUIWindowController {
         let stored = UserDefaults.standard.string(forKey: webChatThinkingLevelDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        guard let stored, ["off", "low", "medium", "high"].contains(stored) else {
+        guard let stored, ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(stored) else {
             return nil
         }
         return stored
