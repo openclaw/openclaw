@@ -15,7 +15,7 @@
  *   const bridge = new OpenAIRealtimeVoiceBridge({
  *     apiKey: process.env.OPENAI_API_KEY!,
  *     instructions: "You are Gracie, a helpful AI assistant...",
- *     voice: "nova",
+ *     voice: "alloy",
  *     onAudio: (muLaw) => mediaStreamHandler.sendAudio(streamSid, muLaw),
  *     onClearAudio: () => mediaStreamHandler.clearAudio(streamSid),
  *     onTranscript: (role, text) => console.log(`[${role}]: ${text}`),
@@ -38,16 +38,18 @@ import WebSocket from "ws";
 // Types
 // ---------------------------------------------------------------------------
 
-/** OpenAI Realtime API voice options */
+/** OpenAI Realtime API voice options.
+ * NOTE: These differ from the TTS-1 voices — nova/fable/onyx are NOT supported here.
+ * Source: live API error "Supported values are: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse"
+ */
 export type RealtimeVoice =
   | "alloy"
   | "ash"
   | "ballad"
+  | "cedar"
   | "coral"
   | "echo"
-  | "fable"
-  | "onyx"
-  | "nova"
+  | "marin"
   | "sage"
   | "shimmer"
   | "verse";
@@ -87,7 +89,7 @@ export interface RealtimeVoiceConfig {
   // ---- Voice/personality ----
   /** System instructions (persona / behaviour) */
   instructions?: string;
-  /** Voice to use for AI speech output (default: "nova") */
+  /** Voice to use for AI speech output (default: "alloy") */
   voice?: RealtimeVoice;
   /** Response temperature 0–1 (default: 0.8) */
   temperature?: number;
@@ -404,7 +406,7 @@ export class OpenAIRealtimeVoiceBridge {
       session: {
         modalities: ["text", "audio"],
         instructions: cfg.instructions,
-        voice: cfg.voice ?? "nova",
+        voice: cfg.voice ?? "alloy",
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         input_audio_transcription: {
@@ -720,7 +722,7 @@ export interface RealtimeVoiceProviderConfig {
   apiKey: string;
   /** Default model (default: "gpt-4o-mini-realtime-preview") */
   model?: string;
-  /** Default voice (default: "nova") */
+  /** Default voice (default: "alloy") */
   voice?: RealtimeVoice;
   /** Default system instructions */
   instructions?: string;
@@ -802,7 +804,7 @@ export interface MediaStreamHandlerLike {
  *   config: {
  *     apiKey: "...",
  *     instructions: "You are Gracie...",
- *     voice: "nova",
+ *     voice: "alloy",
  *     onTranscript: (role, text, final) => {
  *       if (final && role === "user") config.onTranscript?.(callId, text);
  *     },
