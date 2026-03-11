@@ -450,9 +450,11 @@ export function renderApp(state: AppViewState) {
                 onOpenSession: (sessionKey) => {
                   state.sessionKey = sessionKey;
                   state.chatMessage = "";
+                  state.chatAttachments = [];
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
+                  state.chatQueue = [];
                   state.resetToolStream();
                   state.resetChatScroll();
                   state.applySettings({

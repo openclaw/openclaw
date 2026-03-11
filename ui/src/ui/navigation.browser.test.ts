@@ -84,6 +84,21 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     app.applySettings({ ...app.settings, token: "abc123" });
+    app.chatAttachments = [
+      {
+        id: "a1",
+        dataUrl: "data:text/plain;base64,QQ==",
+        mimeType: "text/plain",
+      },
+    ];
+    app.chatQueue = [
+      {
+        id: "q1",
+        text: "queued message",
+        createdAt: Date.now(),
+      },
+    ];
+    app.chatRunId = "run-123";
     app.sessionsResult = {
       ts: Date.now(),
       path: "(multiple)",
@@ -107,6 +122,9 @@ describe("control UI routing", () => {
     expect(app.settings.token).toBe("abc123");
     expect(app.tab).toBe("chat");
     expect(app.sessionKey).toBe("agent:main:subagent:task-123");
+    expect(app.chatAttachments).toEqual([]);
+    expect(app.chatQueue).toEqual([]);
+    expect(app.chatRunId).toBeNull();
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
   });
