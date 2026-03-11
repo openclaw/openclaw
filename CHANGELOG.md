@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - iOS/TestFlight: add a local beta release flow with Fastlane prepare/archive/upload support, canonical beta bundle IDs, and watch-app archive fixes. (#42991) Thanks @ngutman.
 - macOS/onboarding: detect when remote gateways need a shared auth token, explain where to find it on the gateway host, and clarify when a successful check used paired-device auth instead. (#43100) Thanks @ngutman.
 - Onboarding/Ollama: add first-class Ollama setup with Local or Cloud + Local modes, browser-based cloud sign-in, curated model suggestions, and cloud-model handling that skips unnecessary local pulls. (#41529) Thanks @BruceMacD.
+- Memory: add opt-in multimodal image and audio indexing for `memorySearch.extraPaths` with Gemini `gemini-embedding-2-preview`, strict fallback gating, and scope-based reindexing. (#43460) Thanks @gumadeiras.
 
 ### Breaking
 
@@ -110,6 +111,8 @@ Docs: https://docs.openclaw.ai
 - Agents/error rendering: ignore stale assistant `errorMessage` fields on successful turns so background/tool-side failures no longer prepend synthetic billing errors over valid replies. (#40616) Thanks @ingyukoh.
 - Agents/fallback: recognize Venice `402 Insufficient USD or Diem balance` billing errors so configured model fallbacks trigger instead of surfacing the raw provider error. (#43205) Thanks @Squabble9.
 - Dependencies: refresh workspace dependencies except the pinned Carbon package, and harden ACP session-config writes against non-string SDK values so newer ACP clients fail fast instead of tripping type/runtime mismatches.
+- Gateway/config errors: surface up to three validation issues in top-level `config.set`, `config.patch`, and `config.apply` error messages while preserving structured issue details. (#42664) Thanks @huntharo.
+- Hooks/plugin context parity followup: pass `trigger` and `channelId` through embedded `llm_input`, `agent_end`, and `llm_output` hook contexts so plugins receive the same agent metadata across hook phases. (#42362) Thanks @zhoulf1006.
 
 ## 2026.3.8
 
