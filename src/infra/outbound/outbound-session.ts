@@ -219,6 +219,7 @@ async function resolveSlackSession(
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId,
+    useSuffix: params.cfg.session?.threadIsolation ?? true,
   });
   return {
     sessionKey: threadKeys.sessionKey,

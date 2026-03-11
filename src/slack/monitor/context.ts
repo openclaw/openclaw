@@ -51,6 +51,8 @@ export type SlackMonitorContext = {
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
   threadIsolation: boolean;
+  /** Tracks which threadTs values have been seen this session, to avoid redundant first-turn work. */
+  seenThreadIds: Set<string>;
   slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
@@ -416,6 +418,7 @@ export function createSlackMonitorContext(params: {
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
     threadIsolation: params.threadIsolation,
+    seenThreadIds: new Set(),
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,

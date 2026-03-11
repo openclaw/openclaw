@@ -303,7 +303,9 @@ function resolveSlackRoutingContext(params: {
   // don't share the same history bucket on the now-shared session key.
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread"
-      ? (ctx.threadIsolation ? sessionKey : threadTs ?? sessionKey)
+      ? ctx.threadIsolation
+        ? sessionKey
+        : (threadTs ?? sessionKey)
       : message.channel;
 
   return {
@@ -710,14 +712,21 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    // Include thread starter body for new sessions, or always when thread isolation
-    // is disabled (shared session means the "previous timestamp" check is unreliable
-    // since it reflects activity from any thread, not just this one).
-    ThreadStarterBody:
-      !ctx.threadIsolation || !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
+    // Include thread starter body on the first encounter of each thread.
+    // When isolation is off, use seenThreadIds (shared session timestamp is unreliable).
+    // When isolation is on, use threadSessionPreviousTimestamp as before.
+    ThreadStarterBody: !ctx.threadIsolation
+      ? threadTs && !ctx.seenThreadIds.has(threadTs)
+        ? threadStarterBody
+        : undefined
+      : !threadSessionPreviousTimestamp
+        ? threadStarterBody
+        : undefined,
     ThreadHistoryBody: threadHistoryBody,
     IsFirstThreadTurn:
-      isThreadReply && threadTs && (!ctx.threadIsolation || !threadSessionPreviousTimestamp)
+      isThreadReply &&
+      threadTs &&
+      (!ctx.threadIsolation ? !ctx.seenThreadIds.has(threadTs) : !threadSessionPreviousTimestamp)
         ? true
         : undefined,
     ThreadLabel: threadLabel,
@@ -739,6 +748,13 @@ export async function prepareSlackMessage(params: {
     OriginatingTo: slackTo,
     NativeChannelId: message.channel,
   }) satisfies FinalizedMsgContext;
+
+  // Mark this threadTs as seen so subsequent turns skip first-turn work
+  // (thread starter injection, history fetch, IsFirstThreadTurn flag).
+  if (threadTs && !ctx.threadIsolation) {
+    ctx.seenThreadIds.add(threadTs);
+  }
+
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,

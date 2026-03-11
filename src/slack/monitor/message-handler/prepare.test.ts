@@ -647,6 +647,62 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("old reply");
   });
 
+  it("skips first-turn injection on subsequent turns to the same thread when threadIsolation is false", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+
+    const replies = vi
+      .fn()
+      // First turn: starter lookup + history fetch
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter msg", user: "U2", ts: "400.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter msg", user: "U2", ts: "400.000" },
+          { text: "first reply", user: "U1", ts: "401.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      })
+      // Second turn: starter lookup only (history should be skipped)
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter msg", user: "U2", ts: "400.000" }],
+      });
+
+    // Use the same ctx instance so seenThreadIds persists between calls
+    const ctx = createThreadIsolationOffCtx({ cfg, replies });
+    ctx.resolveUserName = async (id: string) => ({
+      name: id === "U1" ? "Alice" : "Bob",
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    // First turn to thread 400.000
+    const first = await prepareThreadMessage(ctx, {
+      text: "first reply",
+      ts: "401.000",
+      thread_ts: "400.000",
+    });
+    expect(first).toBeTruthy();
+    expect(first!.ctxPayload.IsFirstThreadTurn).toBe(true);
+    expect(first!.ctxPayload.ThreadStarterBody).toContain("starter msg");
+
+    // Second turn to the SAME thread — should NOT be first turn
+    const second = await prepareThreadMessage(ctx, {
+      text: "second reply",
+      ts: "402.000",
+      thread_ts: "400.000",
+    });
+    expect(second).toBeTruthy();
+    expect(second!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(second!.ctxPayload.ThreadStarterBody).toBeUndefined();
+    // replies called 2 times total:
+    // turn 1: starter lookup + history fetch; turn 2: starter cached, history skipped
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",
