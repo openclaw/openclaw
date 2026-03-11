@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 
 let capturedCtx: unknown;
 let capturedDispatchParams: unknown;
@@ -207,6 +208,28 @@ describe("web processMessage inbound contract", () => {
         }),
       }),
     );
+  });
+
+  it("skips silent commentary payloads after directive normalization", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      createWhatsAppDirectStreamingArgs({
+        commentaryDelivery: "live",
+        rememberSentText,
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((payload: { text?: string }) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    deliverWebReplyMock.mockClear();
+    await onCommentaryReply?.({ text: SILENT_REPLY_TOKEN });
+
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("falls back SenderId to SenderE164 when senderJid is empty", async () => {

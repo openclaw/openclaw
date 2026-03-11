@@ -67,15 +67,26 @@ function resolveAssistantTextBlockSignatureId(block: Record<string, unknown>) {
   }
 }
 
-function resolveAssistantMessageStableId(messageRecord?: Record<string, unknown>) {
+function resolveAssistantMessageStableId(
+  messageRecord?: Record<string, unknown>,
+  fallbackMessageStableId?: string,
+) {
   const id = messageRecord?.id;
-  return typeof id === "string" && id.trim().length > 0 ? id : "message";
+  return typeof id === "string" && id.trim().length > 0
+    ? id
+    : (fallbackMessageStableId ?? "message");
 }
 
-function extractAssistantOutputCandidates(msg: AgentMessage): AssistantOutputCandidate[] {
+function extractAssistantOutputCandidates(
+  msg: AgentMessage,
+  options?: { fallbackMessageStableId?: string },
+): AssistantOutputCandidate[] {
   const messageRecord =
     msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
-  const messageStableId = resolveAssistantMessageStableId(messageRecord);
+  const messageStableId = resolveAssistantMessageStableId(
+    messageRecord,
+    options?.fallbackMessageStableId,
+  );
   const defaultPhase = normalizeAssistantMessagePhase(messageRecord?.phase);
   const errorContext =
     messageRecord?.stopReason === "error" ||
@@ -142,10 +153,15 @@ function extractAssistantOutputCandidates(msg: AgentMessage): AssistantOutputCan
     .filter((segment): segment is AssistantOutputCandidate => Boolean(segment));
 }
 
-export function extractAssistantOutputSegments(msg: AgentMessage): AssistantOutputEntry[] {
-  return extractAssistantOutputCandidates(msg).map(({ isTerminal: _isTerminal, ...segment }) => {
-    return segment;
-  });
+export function extractAssistantOutputSegments(
+  msg: AgentMessage,
+  options?: { fallbackMessageStableId?: string },
+): AssistantOutputEntry[] {
+  return extractAssistantOutputCandidates(msg, options).map(
+    ({ isTerminal: _isTerminal, ...segment }) => {
+      return segment;
+    },
+  );
 }
 
 export async function reconcileLiveAssistantCommentary(params: {
@@ -158,7 +174,9 @@ export async function reconcileLiveAssistantCommentary(params: {
   }
 
   const newOutputs: AssistantOutputEntry[] = [];
-  for (const segment of extractAssistantOutputCandidates(params.message)) {
+  for (const segment of extractAssistantOutputCandidates(params.message, {
+    fallbackMessageStableId: "stream",
+  })) {
     if (
       segment.phase !== "commentary" ||
       segment.isTerminal ||
@@ -184,16 +202,19 @@ export async function reconcileAssistantOutputs(params: {
   let nextStartIndex = params.messages.length;
 
   for (const [index, msg] of params.messages.slice(params.startIndex).entries()) {
+    const absoluteIndex = params.startIndex + index;
     if (msg?.role !== "assistant") {
       continue;
     }
     const messageRecord =
       msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
     if (typeof messageRecord?.stopReason !== "string" || messageRecord.stopReason.trim() === "") {
-      nextStartIndex = Math.min(nextStartIndex, params.startIndex + index);
-      continue;
+      nextStartIndex = absoluteIndex;
+      break;
     }
-    for (const segment of extractAssistantOutputSegments(msg)) {
+    for (const segment of extractAssistantOutputSegments(msg, {
+      fallbackMessageStableId: `finalized-${absoluteIndex}`,
+    })) {
       if (params.seenSegmentIds.has(segment.segmentId)) {
         continue;
       }

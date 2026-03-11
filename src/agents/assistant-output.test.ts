@@ -204,6 +204,95 @@ describe("assistant output reconciliation", () => {
     expect(secondPass.nextStartIndex).toBe(1);
   });
 
+  it("uses unique fallback ids for finalized assistant messages without ids or signatures", async () => {
+    const seenSegmentIds = new Set<string>();
+    const messages = [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [{ type: "text", text: "First assistant message." }],
+      },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Second assistant message." }],
+      },
+    ];
+
+    const result = await reconcileAssistantOutputs({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: messages as any,
+      startIndex: 0,
+      seenSegmentIds,
+    });
+
+    expect(result.newOutputs).toEqual([
+      {
+        segmentId: "assistant:finalized-0:segment:0",
+        text: "First assistant message.",
+      },
+      {
+        segmentId: "assistant:finalized-1:segment:0",
+        text: "Second assistant message.",
+      },
+    ]);
+    expect(result.nextStartIndex).toBe(2);
+  });
+
+  it("stops finalized reconciliation at the first in-flight assistant message", async () => {
+    const seenSegmentIds = new Set<string>();
+    const messages = [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [{ type: "text", text: "Done before in-flight." }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Still streaming." }],
+      },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Completed after in-flight." }],
+      },
+    ];
+
+    const firstPass = await reconcileAssistantOutputs({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: messages as any,
+      startIndex: 0,
+      seenSegmentIds,
+    });
+    expect(firstPass.newOutputs).toEqual([
+      {
+        segmentId: "assistant:finalized-0:segment:0",
+        text: "Done before in-flight.",
+      },
+    ]);
+    expect(firstPass.nextStartIndex).toBe(1);
+
+    Object.assign(messages[1], { stopReason: "toolUse" });
+    const secondPass = await reconcileAssistantOutputs({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: messages as any,
+      startIndex: firstPass.nextStartIndex,
+      seenSegmentIds,
+    });
+
+    expect(secondPass.newOutputs).toEqual([
+      {
+        segmentId: "assistant:finalized-1:segment:0",
+        text: "Still streaming.",
+      },
+      {
+        segmentId: "assistant:finalized-2:segment:0",
+        text: "Completed after in-flight.",
+      },
+    ]);
+    expect(secondPass.nextStartIndex).toBe(3);
+  });
+
   it("falls back to assistant message id and segment ordinal when no signature id exists", async () => {
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();

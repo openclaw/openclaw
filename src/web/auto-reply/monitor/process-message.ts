@@ -403,6 +403,10 @@ export async function processMessage(params: {
       trimLeadingWhitespace: true,
       parseMode: "auto",
     });
+    const hasMedia = Boolean(normalized.payload.mediaUrl || normalized.payload.mediaUrls?.length);
+    if (normalized.isSilent && !hasMedia) {
+      return;
+    }
     await deliverWebReply({
       replyResult: normalized.payload,
       msg: params.msg,
@@ -424,7 +428,6 @@ export async function processMessage(params: {
     });
     const fromDisplay =
       params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-    const hasMedia = Boolean(normalized.payload.mediaUrl || normalized.payload.mediaUrls?.length);
     if (kind === "commentary") {
       whatsappOutboundLog.info(
         `Sent commentary update to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
