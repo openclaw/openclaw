@@ -1,8 +1,58 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
-export function resolveBundledHooksDir(): string | undefined {
+const HOOK_HANDLER_CANDIDATES = ["handler.js", "handler.ts", "index.js", "index.ts"];
+
+function isDirectoryLike(entry: fs.Dirent, fullPath: string): boolean {
+  if (entry.isDirectory()) {
+    return true;
+  }
+  if (!entry.isSymbolicLink()) {
+    return false;
+  }
+  try {
+    return fs.statSync(fullPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeBundledHooksDir(dir: string): boolean {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) {
+        continue;
+      }
+      const hookDir = path.join(dir, entry.name);
+      if (!isDirectoryLike(entry, hookDir)) {
+        continue;
+      }
+      if (!fs.existsSync(path.join(hookDir, "HOOK.md"))) {
+        continue;
+      }
+      if (
+        HOOK_HANDLER_CANDIDATES.some((candidate) => fs.existsSync(path.join(hookDir, candidate)))
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export type BundledHooksResolveOptions = {
+  argv1?: string;
+  moduleUrl?: string;
+  cwd?: string;
+  execPath?: string;
+};
+
+export function resolveBundledHooksDir(opts: BundledHooksResolveOptions = {}): string | undefined {
   const override = process.env.OPENCLAW_BUNDLED_HOOKS_DIR?.trim();
   if (override) {
     return override;
@@ -10,35 +60,50 @@ export function resolveBundledHooksDir(): string | undefined {
 
   // bun --compile: ship a sibling `hooks/bundled/` next to the executable.
   try {
-    const execDir = path.dirname(process.execPath);
+    const execPath = opts.execPath ?? process.execPath;
+    const execDir = path.dirname(execPath);
     const sibling = path.join(execDir, "hooks", "bundled");
-    if (fs.existsSync(sibling)) {
+    if (looksLikeBundledHooksDir(sibling)) {
       return sibling;
     }
   } catch {
     // ignore
   }
 
-  // npm: resolve `<packageRoot>/dist/hooks/bundled` relative to this module (compiled hooks).
-  // This path works when installed via npm: node_modules/openclaw/dist/hooks/bundled-dir.js
+  // npm/dev: prefer package-root relative lookup so pnpm/global symlink layouts resolve reliably.
   try {
-    const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-    const distBundled = path.join(moduleDir, "bundled");
-    if (fs.existsSync(distBundled)) {
-      return distBundled;
+    const moduleUrl = opts.moduleUrl ?? import.meta.url;
+    const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+    const argv1 = opts.argv1 ?? process.argv[1];
+    const cwd = opts.cwd ?? process.cwd();
+    const packageRoot = resolveOpenClawPackageRootSync({
+      argv1,
+      moduleUrl,
+      cwd,
+    });
+    if (packageRoot) {
+      const distBundled = path.join(packageRoot, "dist", "bundled");
+      if (looksLikeBundledHooksDir(distBundled)) {
+        return distBundled;
+      }
+      const srcBundled = path.join(packageRoot, "src", "hooks", "bundled");
+      if (looksLikeBundledHooksDir(srcBundled)) {
+        return srcBundled;
+      }
     }
-  } catch {
-    // ignore
-  }
 
-  // dev: resolve `<packageRoot>/src/hooks/bundled` relative to dist/hooks/bundled-dir.js
-  // This path works in dev: dist/hooks/bundled-dir.js -> ../../src/hooks/bundled
-  try {
-    const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-    const root = path.resolve(moduleDir, "..", "..");
-    const srcBundled = path.join(root, "src", "hooks", "bundled");
-    if (fs.existsSync(srcBundled)) {
-      return srcBundled;
+    // Fallback: walk up from the module location for layouts where package-root discovery fails.
+    let current = moduleDir;
+    for (let depth = 0; depth < 6; depth += 1) {
+      const candidate = path.join(current, "bundled");
+      if (looksLikeBundledHooksDir(candidate)) {
+        return candidate;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
     }
   } catch {
     // ignore
