@@ -5,8 +5,19 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
-import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import {
+  loadConfig,
+  readConfigFileSnapshot,
+  validateConfigObject,
+  validateConfigObjectWithPlugins,
+  writeConfigFile,
+} from "./config.js";
+import {
+  buildWebSearchProviderConfig,
+  withEnvOverride,
+  withTempHome,
+  writeOpenClawConfig,
+} from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -406,6 +417,103 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+    });
+  });
+
+  it("does not reject env-driven legacy messaging profile defaults that cannot be auto-migrated", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: "2026.3.2",
+        },
+        tools: {
+          profile: "${OPENCLAW_TOOLS_PROFILE}",
+        },
+      });
+
+      await withEnvOverride({ OPENCLAW_TOOLS_PROFILE: "messaging" }, async () => {
+        const snap = await readConfigFileSnapshot();
+        expect(snap.resolved.tools?.profile).toBe("messaging");
+        expect(snap.valid).toBe(true);
+        expect(snap.legacyIssues.some((issue) => issue.path === "tools.profile")).toBe(false);
+        expect(snap.issues.some((issue) => issue.path === "tools.profile")).toBe(false);
+      });
+    });
+  });
+
+  it("accepts resolved env messaging defaults when source config keeps tools.profile as env", () => {
+    const resolved = {
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "messaging",
+      },
+    };
+
+    const source = {
+      wizard: {
+        lastRunCommand: "onboard",
+        lastRunMode: "local",
+        lastRunVersion: "2026.3.2",
+      },
+      tools: {
+        profile: "${OPENCLAW_TOOLS_PROFILE}",
+      },
+    };
+
+    const withoutSource = validateConfigObjectWithPlugins(resolved);
+    expect(withoutSource.ok).toBe(false);
+    if (!withoutSource.ok) {
+      expect(withoutSource.issues.some((issue) => issue.path === "tools.profile")).toBe(true);
+    }
+
+    const withSource = validateConfigObjectWithPlugins(resolved, source);
+    expect(withSource.ok).toBe(true);
+  });
+
+  it("does not throw in loadConfig() for env-driven messaging defaults that are not source-literal", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: "2026.3.2",
+        },
+        tools: {
+          profile: "${OPENCLAW_TOOLS_PROFILE}",
+        },
+      });
+
+      await withEnvOverride({ OPENCLAW_TOOLS_PROFILE: "messaging" }, async () => {
+        expect(() => loadConfig()).not.toThrow();
+        expect(loadConfig().tools?.profile).toBe("messaging");
+      });
+    });
+  });
+
+  it("does not throw in writeConfigFile() for env-driven messaging defaults that are not source-literal", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: "2026.3.2",
+        },
+        tools: {
+          profile: "${OPENCLAW_TOOLS_PROFILE}",
+        },
+      });
+
+      await withEnvOverride({ OPENCLAW_TOOLS_PROFILE: "messaging" }, async () => {
+        const loaded = loadConfig();
+        await expect(writeConfigFile(loaded)).resolves.toBeUndefined();
+        expect(loadConfig().tools?.profile).toBe("messaging");
+      });
     });
   });
 });

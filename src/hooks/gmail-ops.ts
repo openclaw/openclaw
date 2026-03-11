@@ -9,6 +9,7 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../config/config.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { displayPath } from "../utils.js";
@@ -197,42 +198,37 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
     true,
   );
 
-  const nextConfig: OpenClawConfig = {
-    ...baseConfig,
-    hooks: {
-      ...baseConfig.hooks,
-      enabled: true,
-      path: hooksPath,
-      token: hookToken,
-      presets: mergeHookPresets(baseConfig.hooks?.presets, "gmail"),
-      gmail: {
-        ...baseConfig.hooks?.gmail,
-        account: opts.account,
-        label,
-        topic: topicPath,
-        subscription,
-        pushToken,
-        hookUrl,
-        includeBody,
-        maxBytes,
-        renewEveryMinutes,
-        serve: {
-          ...baseConfig.hooks?.gmail?.serve,
-          bind: serveBind,
-          port: servePort,
-          path: servePath,
-        },
-        tailscale: {
-          ...baseConfig.hooks?.gmail?.tailscale,
-          mode: tailscaleMode,
-          path: tailscalePath,
-          target: normalizedTailscaleTarget,
-        },
+  const hooksPatch = {
+    enabled: true,
+    path: hooksPath,
+    token: hookToken,
+    presets: mergeHookPresets(baseConfig.hooks?.presets, "gmail"),
+    gmail: {
+      account: opts.account,
+      label,
+      topic: topicPath,
+      subscription,
+      pushToken,
+      hookUrl,
+      includeBody,
+      maxBytes,
+      renewEveryMinutes,
+      serve: {
+        bind: serveBind,
+        port: servePort,
+        path: servePath,
+      },
+      tailscale: {
+        mode: tailscaleMode,
+        path: tailscalePath,
+        target: normalizedTailscaleTarget,
       },
     },
   };
+  const nextConfig = applyMergePatch(baseConfig, { hooks: hooksPatch }) as OpenClawConfig;
+  const nextConfigSource = applyMergePatch(configSnapshot.parsed, { hooks: hooksPatch });
 
-  const validated = validateConfigObjectWithPlugins(nextConfig);
+  const validated = validateConfigObjectWithPlugins(nextConfig, nextConfigSource);
   if (!validated.ok) {
     throw new Error(`Config validation failed: ${validated.issues[0]?.message ?? "invalid"}`);
   }

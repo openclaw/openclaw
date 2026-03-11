@@ -27,6 +27,32 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCHD_LOG_PREFIX_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+function joinLaunchdPath(base: string, ...segments: string[]): string {
+  return path.posix.join(toPosixPath(base), ...segments.map(toPosixPath));
+}
+
+function resolveLaunchdLogPrefix(env: GatewayServiceEnv): string {
+  const rawPrefix = env.OPENCLAW_LOG_PREFIX?.trim();
+  if (!rawPrefix) {
+    return "gateway";
+  }
+
+  const normalized = toPosixPath(rawPrefix);
+  const basename = path.posix.basename(normalized);
+  if (
+    basename !== normalized ||
+    basename === "." ||
+    basename === ".." ||
+    !LAUNCHD_LOG_PREFIX_PATTERN.test(basename)
+  ) {
+    throw new Error(
+      "Invalid OPENCLAW_LOG_PREFIX: use only letters, numbers, dot, underscore, or dash.",
+    );
+  }
+  return basename;
+}
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -40,8 +66,7 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
-  return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  return joinLaunchdPath(resolveHomeDir(env), "Library", "LaunchAgents", `${label}.plist`);
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -54,13 +79,13 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
   stdoutPath: string;
   stderrPath: string;
 } {
-  const stateDir = resolveGatewayStateDir(env);
-  const logDir = path.join(stateDir, "logs");
-  const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
+  const stateDir = toPosixPath(resolveGatewayStateDir(env));
+  const logDir = joinLaunchdPath(stateDir, "logs");
+  const prefix = resolveLaunchdLogPrefix(env);
   return {
     logDir,
-    stdoutPath: path.join(logDir, `${prefix}.log`),
-    stderrPath: path.join(logDir, `${prefix}.err.log`),
+    stdoutPath: joinLaunchdPath(logDir, `${prefix}.log`),
+    stderrPath: joinLaunchdPath(logDir, `${prefix}.err.log`),
   };
 }
 
@@ -277,7 +302,7 @@ export async function uninstallLegacyLaunchAgents({
   }
 
   const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
+  const trashDir = joinLaunchdPath(home, ".Trash");
   try {
     await fs.mkdir(trashDir, { recursive: true });
   } catch {
@@ -294,7 +319,7 @@ export async function uninstallLegacyLaunchAgents({
       continue;
     }
 
-    const dest = path.join(trashDir, `${agent.label}.plist`);
+    const dest = joinLaunchdPath(trashDir, `${agent.label}.plist`);
     try {
       await fs.rename(agent.plistPath, dest);
       stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
@@ -324,8 +349,8 @@ export async function uninstallLaunchAgent({
   }
 
   const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
-  const dest = path.join(trashDir, `${label}.plist`);
+  const trashDir = joinLaunchdPath(home, ".Trash");
+  const dest = joinLaunchdPath(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
     await fs.rename(plistPath, dest);
@@ -416,10 +441,9 @@ export async function installLaunchAgent({
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
   const home = toPosixPath(resolveHomeDir(env));
-  const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
-  await ensureSecureDirectory(libraryDir);
-  await ensureSecureDirectory(path.dirname(plistPath));
+  await ensureSecureDirectory(joinLaunchdPath(home, "Library"));
+  await ensureSecureDirectory(path.posix.dirname(plistPath));
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({

@@ -37,15 +37,15 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
-  if (options.cwd) {
-    return path.resolve(options.cwd);
-  }
   if (options.moduleUrl) {
     try {
       return path.dirname(fileURLToPath(options.moduleUrl));
     } catch {
-      // moduleUrl is not a valid file:// URL; fall back to process.cwd().
+      // moduleUrl is not a valid file:// URL; fall back to cwd/process.cwd().
     }
+  }
+  if (options.cwd) {
+    return path.resolve(options.cwd);
   }
   return process.cwd();
 };
@@ -103,8 +103,15 @@ const readCommitFromGit = (
     if (!refPath) {
       return null;
     }
-    const refHash = safeReadFilePrefix(refPath).trim();
-    return formatCommit(refHash);
+    try {
+      const refHash = safeReadFilePrefix(refPath).trim();
+      return formatCommit(refHash);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      return readCommitFromPackedRefs(headPath, ref);
+    }
   }
   return formatCommit(head);
 };
@@ -123,6 +130,30 @@ const resolveGitRefsBase = (headPath: string) => {
     // Plain repo git dirs do not have commondir.
   }
   return gitDir;
+};
+
+const readCommitFromPackedRefs = (headPath: string, ref: string) => {
+  const refsBase = resolveGitRefsBase(headPath);
+  const packedRefsPath = path.join(refsBase, "packed-refs");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(packedRefsPath, "utf-8");
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line || line.startsWith("#") || line.startsWith("^")) {
+      continue;
+    }
+    const [hash, packedRef] = line.trim().split(/\s+/, 2);
+    if (packedRef === ref) {
+      return formatCommit(hash);
+    }
+  }
+  return null;
 };
 
 /** Safely resolve a git ref path, rejecting traversal attacks from a crafted HEAD file. */

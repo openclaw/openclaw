@@ -10,6 +10,7 @@ import {
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
+  resolveGatewayLogPaths,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
 
@@ -445,5 +446,44 @@ describe("resolveLaunchAgentPlistPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
+  });
+});
+
+describe("resolveGatewayLogPaths", () => {
+  it("normalizes mixed separators to POSIX paths for launchd plist output", () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_STATE_DIR: "/Users/test\\.openclaw",
+    };
+    const paths = resolveGatewayLogPaths(env);
+
+    expect(paths.logDir).not.toContain("\\");
+    expect(paths.stdoutPath).not.toContain("\\");
+    expect(paths.stderrPath).not.toContain("\\");
+    expect(paths.logDir.endsWith("/Users/test/.openclaw/logs")).toBe(true);
+    expect(paths.stdoutPath.endsWith("/Users/test/.openclaw/logs/gateway.log")).toBe(true);
+    expect(paths.stderrPath.endsWith("/Users/test/.openclaw/logs/gateway.err.log")).toBe(true);
+  });
+
+  it.each(["../../Library/LaunchAgents/other", "/tmp/evil", "..\\..\\LaunchAgents\\other"])(
+    "rejects invalid log prefix path %s",
+    (prefix) => {
+      expect(() =>
+        resolveGatewayLogPaths({
+          HOME: "/Users/test",
+          OPENCLAW_LOG_PREFIX: prefix,
+        }),
+      ).toThrow(/Invalid OPENCLAW_LOG_PREFIX/);
+    },
+  );
+
+  it("accepts safe custom log prefixes", () => {
+    const paths = resolveGatewayLogPaths({
+      HOME: "/Users/test",
+      OPENCLAW_LOG_PREFIX: "gateway-launchd-int-123",
+    });
+
+    expect(paths.stdoutPath.endsWith("/logs/gateway-launchd-int-123.log")).toBe(true);
+    expect(paths.stderrPath.endsWith("/logs/gateway-launchd-int-123.err.log")).toBe(true);
   });
 });

@@ -5,6 +5,10 @@ import {
   resolveGatewayPortWithDefault,
 } from "./gateway-control-ui-origins.js";
 import {
+  markLegacyLocalOnboardMessagingProfileMigrated,
+  resolveLegacyLocalOnboardMessagingProfileVersion,
+} from "./legacy.local-onboard-tools-profile.js";
+import {
   ensureAgentEntry,
   ensureRecord,
   getAgentsList,
@@ -200,6 +204,22 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         changes.push("Removed tools.bash (tools.exec already set).");
       }
       delete tools.bash;
+    },
+  },
+  {
+    id: "tools.profile.messaging->coding-legacy-local-onboard",
+    describe: "Migrate legacy local onboarding tools.profile from messaging to coding",
+    apply: (raw, changes) => {
+      const lastRunVersion = resolveLegacyLocalOnboardMessagingProfileVersion(raw);
+      if (!lastRunVersion) {
+        return;
+      }
+      const tools = ensureRecord(raw, "tools");
+      tools.profile = "coding";
+      markLegacyLocalOnboardMessagingProfileMigrated(raw);
+      changes.push(
+        `Migrated tools.profile messaging → coding for legacy local onboarding config (${lastRunVersion}) to restore file/runtime tools.`,
+      );
     },
   },
   {

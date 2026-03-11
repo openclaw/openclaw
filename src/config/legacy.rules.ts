@@ -1,3 +1,4 @@
+import { isLegacyLocalOnboardMessagingToolsProfile } from "./legacy.local-onboard-tools-profile.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -157,6 +158,13 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["tools", "bash"],
     message: "tools.bash was removed; use tools.exec instead (auto-migrated on load).",
+  },
+  {
+    path: ["tools", "profile"],
+    message:
+      'tools.profile "messaging" from legacy local onboarding defaults is auto-migrated to "coding" (auto-migrated on load).',
+    match: (value, root) => isLegacyLocalOnboardMessagingToolsProfile(value, root),
+    requireSourceLiteral: true,
   },
   {
     path: ["agent", "model"],

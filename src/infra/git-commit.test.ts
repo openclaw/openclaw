@@ -354,6 +354,32 @@ describe("git commit resolution", () => {
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("bbbbbbb");
   });
 
+  it("falls back to packed refs in worktree layouts", async () => {
+    const temp = await makeTempDir("git-commit-worktree-packed");
+    const repoRoot = path.join(temp, "repo");
+    const worktreeGitDir = path.join(temp, "worktree-git");
+    const commonGitDir = path.join(temp, "common-git");
+    await fs.mkdir(commonGitDir, { recursive: true });
+    await fs.writeFile(
+      path.join(commonGitDir, "packed-refs"),
+      [
+        "# pack-refs with: peeled fully-peeled sorted",
+        "dddddddddddddddddddddddddddddddddddddddd refs/heads/main",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    await makeFakeGitRepo(repoRoot, {
+      gitdir: worktreeGitDir,
+      head: "ref: refs/heads/main\n",
+      commondir: "../common-git",
+    });
+
+    const { resolveCommitHash } = await import("./git-commit.js");
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ddddddd");
+  });
+
   it("reads full HEAD refs before parsing long branch names", async () => {
     const temp = await makeTempDir("git-commit-long-head");
     const repoRoot = path.join(temp, "repo");

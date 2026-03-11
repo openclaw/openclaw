@@ -3,6 +3,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   applySetupAccountConfigPatch,
   addWildcardAllowFrom,
+  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
   resolveAccountIdForConfigure,
