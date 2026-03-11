@@ -30,11 +30,54 @@ export type EmbeddedPiAgentMeta = {
   };
 };
 
+export type EmbeddedPiPlanSearchCandidateMeta = {
+  id: string;
+  title: string;
+  strategy: string;
+  score: number;
+  performanceGain: number;
+  computeCost: number;
+  estimatedTokens: number;
+  estimatedRuntimeMs: number;
+  estimatedCostUsd: number;
+  withinBudget: boolean;
+  budgetViolations: Array<"tokens" | "runtime_ms" | "cost_usd">;
+  rationale: string[];
+  stepCount: number;
+};
+
+export type EmbeddedPiPlanSearchBudgetMeta = {
+  maxTokens?: number;
+  maxRuntimeMs?: number;
+  maxCostUsd?: number;
+  withinBudgetCount: number;
+  overBudgetCount: number;
+};
+
+export type EmbeddedPiPlanSearchMeta = {
+  enabled: boolean;
+  candidateCount: number;
+  configuredScoringMode: "heuristic" | "llm";
+  appliedScoringMode: "heuristic" | "llm";
+  objective: "performance_gain / compute_cost";
+  selectedCandidateId: string;
+  selectedScore: number;
+  selectedPerformanceGain: number;
+  selectedComputeCost: number;
+  selectedWithinBudget: boolean;
+  promptIncludesSelectedPlan: boolean;
+  budget: EmbeddedPiPlanSearchBudgetMeta;
+  considered: EmbeddedPiPlanSearchCandidateMeta[];
+  scoringFailed?: boolean;
+  scoringError?: string;
+};
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  planSearch?: EmbeddedPiPlanSearchMeta;
   error?: {
     kind:
       | "context_overflow"

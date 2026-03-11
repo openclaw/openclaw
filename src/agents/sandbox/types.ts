@@ -8,6 +8,19 @@ export type SandboxToolPolicy = {
   deny?: string[];
 };
 
+export type SandboxExecutionTemplateId = "python-research-v1";
+
+export type SandboxExecutionNamePolicy = {
+  allow: string[];
+  deny: string[];
+};
+
+export type SandboxExecutionConfig = {
+  template: SandboxExecutionTemplateId;
+  imports: SandboxExecutionNamePolicy;
+  dependencies: SandboxExecutionNamePolicy;
+};
+
 export type SandboxToolPolicySource = {
   source: "agent" | "global" | "default";
   /**
@@ -58,6 +71,7 @@ export type SandboxConfig = {
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
+  execution: SandboxExecutionConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
