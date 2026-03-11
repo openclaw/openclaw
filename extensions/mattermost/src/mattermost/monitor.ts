@@ -1848,6 +1848,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   streamMessageId = null;
                   pendingPatchText = "";
                   lastSentText = "";
+                  // Guard: pendingPatchText is set only by the interval which requires
+                  // non-empty text, so finalizeText is always non-empty here in practice.
+                  // Moving the guard before the increment avoids any ambiguity about
+                  // whether streamedTurnCount could be left inflated without a matching
+                  // finalization (the concern raised in review).
+                  if (!finalizeText) return;
                   streamedTurnCount++;
 
                   // Wait for any in-flight patch to complete before finalizing.
@@ -1855,9 +1861,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   while (patchSending && Date.now() < deadline) {
                     await new Promise<void>((r) => setTimeout(r, 20));
                   }
-
-                  // Finalize the old streaming message with its complete text.
-                  if (!finalizeText) return;
                   try {
                     await updateMattermostPost(blockStreamingClient, finalizeId, {
                       message: finalizeText,
