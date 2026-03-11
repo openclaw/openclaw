@@ -1,14 +1,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/pi-tools.before-tool-call.js";
+
+type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
+type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
+type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
-  runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
-    blocked: false as const,
-    params,
-  })),
+  runBeforeToolCallHook: vi.fn(
+    async (args: RunBeforeToolCallHookArgs): Promise<RunBeforeToolCallHookResult> => ({
+      blocked: false,
+      params: args.params,
+    }),
+  ),
 }));
 
 let cfg: Record<string, unknown> = {};
@@ -224,10 +231,12 @@ beforeEach(() => {
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
-  hookMocks.runBeforeToolCallHook.mockImplementation(async ({ params }: { params: unknown }) => ({
-    blocked: false,
-    params,
-  }));
+  hookMocks.runBeforeToolCallHook.mockImplementation(
+    async (args: RunBeforeToolCallHookArgs): Promise<RunBeforeToolCallHookResult> => ({
+      blocked: false,
+      params: args.params,
+    }),
+  );
 });
 
 const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
