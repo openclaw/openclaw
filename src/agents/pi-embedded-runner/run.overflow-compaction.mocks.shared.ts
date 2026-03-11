@@ -30,6 +30,7 @@ export const mockedGlobalHookRunner = {
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+  initializeGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("../auth-profiles.js", () => ({
@@ -142,6 +143,7 @@ vi.mock("../../process/command-queue.js", () => ({
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
   isMarkdownCapableMessageChannel: vi.fn(() => true),
 }));
 

@@ -65,6 +65,10 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
+  buildApiErrorNotice,
+  resolveEffectiveToolOnlyTurnSafetyConfig,
+} from "./tool-only-turn-safety.js";
+import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
@@ -800,6 +804,45 @@ export async function runEmbeddedPiAgent(
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
+      const toolOnlySafetyConfig = resolveEffectiveToolOnlyTurnSafetyConfig({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      });
+      // Track whether we've already notified the user about an API error in
+      // this run to avoid spamming multiple notices across retries.
+      let apiErrorNotified = false;
+      /**
+       * If the agent hasn't produced any text reply yet and the config
+       * allows it, emit a brief notice to the user about the API error
+       * so they know the system is still working on their request.
+       */
+      const maybeNotifyUserOfApiError = (
+        errorSummary: string,
+        attempt?: { assistantTexts: string[] },
+      ) => {
+        if (apiErrorNotified) {
+          return;
+        }
+        if (!params.onBlockReply) {
+          return;
+        }
+        // Only notify when the agent hasn't replied to the user yet.
+        const hasText = attempt && attempt.assistantTexts.length > 0;
+        if (hasText) {
+          return;
+        }
+        const notice = buildApiErrorNotice(errorSummary, toolOnlySafetyConfig);
+        if (!notice) {
+          return;
+        }
+        apiErrorNotified = true;
+        void Promise.resolve()
+          .then(() => params.onBlockReply?.({ text: notice }))
+          .catch((err) => {
+            log.warn(`API error user notification failed: ${String(err)}`);
+          });
+      };
       try {
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
@@ -1248,6 +1291,7 @@ export async function runEmbeddedPiAgent(
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
+              maybeNotifyUserOfApiError(promptFailoverReason ?? "service_error", attempt);
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
@@ -1268,6 +1312,7 @@ export async function runEmbeddedPiAgent(
             // rate-limit, auth, or billing failures.
             if (fallbackConfigured && promptFailoverFailure) {
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
+              maybeNotifyUserOfApiError(promptFailoverReason ?? "service_error", attempt);
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw new FailoverError(errorText, {
@@ -1377,12 +1422,14 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              maybeNotifyUserOfApiError(assistantFailoverReason ?? "service_error", attempt);
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
 
             if (fallbackConfigured) {
+              maybeNotifyUserOfApiError(assistantFailoverReason ?? "service_error", attempt);
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
