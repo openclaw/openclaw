@@ -6,6 +6,7 @@ import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/regist
 import type { OpenClawConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { formatProviderModelRef } from "../model-runtime.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -126,6 +127,23 @@ export const formatResponseUsageLine = (params: {
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   const suffix = costLabel ? ` · est ${costLabel}` : "";
   return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+};
+
+export const formatResolvedOpenRouterAutoUsageSuffix = (params: {
+  selectedProvider: string;
+  selectedModel: string;
+  activeProvider: string;
+  activeModel: string;
+}): string | null => {
+  const selectedRef = formatProviderModelRef(params.selectedProvider, params.selectedModel).trim();
+  if (selectedRef.toLowerCase() !== "openrouter/auto") {
+    return null;
+  }
+  const activeRef = formatProviderModelRef(params.activeProvider, params.activeModel).trim();
+  if (!activeRef || activeRef.toLowerCase() === selectedRef.toLowerCase()) {
+    return null;
+  }
+  return ` · model ${activeRef}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {

@@ -1547,6 +1547,86 @@ describe("runReplyAgent response usage footer", () => {
     expect(String(payload?.text ?? "")).toContain("Usage:");
     expect(String(payload?.text ?? "")).not.toContain("· session ");
   });
+
+  it("shows the resolved OpenRouter model when selected model is openrouter/auto", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openrouter",
+          model: "google/gemini-2.5-flash",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+15550001111",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const sessionKey = "agent:main:whatsapp:dm:+1000";
+
+    const res = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session",
+          sessionKey,
+          messageProvider: "whatsapp",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          provider: "openrouter",
+          model: "openrouter/auto",
+          thinkLevel: "low",
+          verboseLevel: "off",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        responseUsage: "tokens",
+      },
+      sessionKey,
+      defaultModel: "openrouter/openrouter/auto",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(String(payload?.text ?? "")).toContain("Usage:");
+    expect(String(payload?.text ?? "")).toContain("· model openrouter/google/gemini-2.5-flash");
+  });
 });
 
 describe("runReplyAgent transient HTTP retry", () => {
