@@ -537,6 +537,35 @@ async function resolveWorkspaceRestoreTargets(params: {
   );
 }
 
+async function buildCoveredWorkspaceRewrites(params: {
+  manifestWorkspaceDirs: string[] | undefined;
+  backupStateDir: string | undefined;
+  backupStateCanonicalDir: string | undefined;
+  currentStateDir: string;
+}): Promise<Map<string, string>> {
+  const rewrites = new Map<string, string>();
+  const workspaceDirs = params.manifestWorkspaceDirs ?? [];
+  for (const workspaceDir of workspaceDirs) {
+    const relative = resolvePathRelativeToStateDir({
+      targetPath: workspaceDir,
+      stateDir: params.backupStateDir,
+      stateCanonicalDir: params.backupStateCanonicalDir,
+    });
+    if (!relative) {
+      continue;
+    }
+
+    const targetPath = path.resolve(params.currentStateDir, relative);
+    for (const alias of buildPathAliases(workspaceDir)) {
+      rewrites.set(alias, targetPath);
+    }
+    for (const alias of buildPathAliases(await canonicalizePath(path.resolve(workspaceDir)))) {
+      rewrites.set(alias, targetPath);
+    }
+  }
+  return rewrites;
+}
+
 async function buildRestoreItems(params: {
   archivePath: string;
   includeWorkspace: boolean;
@@ -581,6 +610,15 @@ async function buildRestoreItems(params: {
   const skipped: BackupRestoreSkipped[] = [];
   const workspaceRewrites = new Map<string, string>();
   const workspaceSourceAliases = new Map<string, string[]>();
+  const coveredWorkspaceRewrites = await buildCoveredWorkspaceRewrites({
+    manifestWorkspaceDirs: manifest.paths?.workspaceDirs,
+    backupStateDir: manifest.paths?.stateDir,
+    backupStateCanonicalDir: stateAsset?.sourcePath,
+    currentStateDir,
+  });
+  for (const [sourceAlias, rewritePath] of coveredWorkspaceRewrites) {
+    workspaceRewrites.set(sourceAlias, rewritePath);
+  }
   await Promise.all(
     (manifest.paths?.workspaceDirs ?? []).map(async (workspaceDir) => {
       const canonicalWorkspaceDir = await canonicalizePath(path.resolve(workspaceDir));

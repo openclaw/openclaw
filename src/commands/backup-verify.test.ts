@@ -152,6 +152,51 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("fails when the manifest contains an unsupported asset kind", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-unknown-kind-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const payloadDir = path.join(root, "payload", "posix", "tmp", ".openclaw");
+      await fs.mkdir(payloadDir, { recursive: true });
+      await fs.writeFile(path.join(payloadDir, "state.txt"), "state\n", "utf8");
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "unknown",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw`,
+          },
+        ],
+      };
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        "utf8",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /asset kind is unsupported/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when the manifest references a missing asset payload", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-asset-"));
     const archivePath = path.join(tempDir, "broken.tar.gz");

@@ -4,6 +4,7 @@ import * as tar from "tar";
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const MAX_BACKUP_ARCHIVE_ENTRIES = 200_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
+const KNOWN_BACKUP_ASSET_KINDS = new Set(["state", "config", "credentials", "workspace"]);
 
 type ArchiveEntryRecord = {
   raw: string;
@@ -154,6 +155,9 @@ function parseManifest(raw: string): BackupManifest {
     }
     if (typeof asset.kind !== "string" || !asset.kind.trim()) {
       throw new Error("Backup manifest asset is missing kind.");
+    }
+    if (!KNOWN_BACKUP_ASSET_KINDS.has(asset.kind)) {
+      throw new Error(`Backup manifest asset kind is unsupported: ${asset.kind}`);
     }
     if (typeof asset.sourcePath !== "string" || !asset.sourcePath.trim()) {
       throw new Error("Backup manifest asset is missing sourcePath.");

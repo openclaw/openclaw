@@ -348,6 +348,63 @@ describe("backupRestoreCommand", () => {
     }
   });
 
+  it("rewrites covered in-state workspace paths when workspace assets are omitted", async () => {
+    const sourceStateDir = path.join(sourceHome.home, ".openclaw");
+    const sourceWorkspace = path.join(sourceStateDir, "workspace-in-state");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-restore-covered-workspace-in-state-"),
+    );
+
+    try {
+      setActiveHome(sourceHome.home);
+      await fs.mkdir(path.join(sourceStateDir, "credentials"), { recursive: true });
+      await fs.mkdir(sourceWorkspace, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceStateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: sourceWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(sourceStateDir, "credentials", "oauth.json"), "{}", "utf8");
+      await fs.writeFile(path.join(sourceStateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(sourceWorkspace, "SOUL.md"), "# soul\n", "utf8");
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+      });
+
+      const targetHome = await createExtraHome("openclaw-backup-restore-covered-workspace-home-");
+      setActiveHome(targetHome);
+
+      const restored = await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        force: true,
+      });
+
+      const targetWorkspace = path.join(targetHome, ".openclaw", "workspace-in-state");
+      expect(await fs.readFile(path.join(targetWorkspace, "SOUL.md"), "utf8")).toBe("# soul\n");
+      const restoredConfig = await fs.readFile(
+        path.join(targetHome, ".openclaw", "openclaw.json"),
+        "utf8",
+      );
+      expect(restoredConfig).toContain(targetWorkspace);
+      expect(restoredConfig).not.toContain(sourceWorkspace);
+      expect(restored.updatedConfigWorkspacePaths).toBe(1);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("rewrites covered config workspace paths when backup stateDir is a symlink alias", async () => {
     const sourceHomeDir = sourceHome.home;
     const sourceStateLinkDir = path.join(sourceHomeDir, "state-link");
