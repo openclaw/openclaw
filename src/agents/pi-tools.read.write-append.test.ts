@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createHostWorkspaceWriteTool } from "./pi-tools.read.js";
+import { createSandboxedWriteTool, createHostWorkspaceWriteTool } from "./pi-tools.read.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 describe("createHostWorkspaceWriteTool append mode", () => {
   let tmpDir: string;
@@ -82,5 +83,85 @@ describe("createHostWorkspaceWriteTool append mode", () => {
       undefined as never,
     );
     expect(JSON.stringify(result)).toContain("Error");
+  });
+
+  it("allows append outside workspace when workspaceOnly=false", async () => {
+    const tool = createHostWorkspaceWriteTool(tmpDir, { workspaceOnly: false });
+    const outsideFile = path.join(path.dirname(tmpDir), "outside-append.txt");
+    await fs.writeFile(outsideFile, "before\n", "utf-8");
+
+    await tool.execute(
+      "call1",
+      { path: outsideFile, content: "after\n", append: true },
+      undefined as never,
+    );
+
+    expect(await fs.readFile(outsideFile, "utf-8")).toBe("before\nafter\n");
+    await fs.rm(outsideFile, { force: true });
+  });
+
+  it("allows append outside workspace when workspaceOnly is unset", async () => {
+    const tool = createHostWorkspaceWriteTool(tmpDir);
+    const outsideFile = path.join(path.dirname(tmpDir), "outside-unset-append.txt");
+    await fs.writeFile(outsideFile, "before\n", "utf-8");
+
+    await tool.execute(
+      "call1",
+      { path: outsideFile, content: "after\n", append: true },
+      undefined as never,
+    );
+
+    expect(await fs.readFile(outsideFile, "utf-8")).toBe("before\nafter\n");
+    await fs.rm(outsideFile, { force: true });
+  });
+
+  it("rejects whitespace-only append content", async () => {
+    const tool = createHostWorkspaceWriteTool(tmpDir);
+    const result = await tool.execute(
+      "call1",
+      { path: "test.txt", content: "   ", append: true },
+      undefined as never,
+    );
+
+    expect(JSON.stringify(result)).toContain("content is required");
+    await expect(fs.access(path.join(tmpDir, "test.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("normalizes structured append content before writing", async () => {
+    const tool = createHostWorkspaceWriteTool(tmpDir);
+    const filePath = path.join(tmpDir, "structured.txt");
+    await fs.writeFile(filePath, "before\n", "utf-8");
+
+    await tool.execute(
+      "call1",
+      {
+        path: "structured.txt",
+        content: [{ type: "text", text: "after\n" }],
+        append: true,
+      },
+      undefined as never,
+    );
+
+    expect(await fs.readFile(filePath, "utf-8")).toBe("before\nafter\n");
+  });
+
+  it("rejects malformed append flags in sandbox mode instead of overwriting", async () => {
+    const tool = createSandboxedWriteTool({
+      root: tmpDir,
+      bridge: createHostSandboxFsBridge(tmpDir),
+    });
+    const filePath = path.join(tmpDir, "sandbox.txt");
+    await fs.writeFile(filePath, "original\n", "utf-8");
+
+    const result = await tool.execute(
+      "call1",
+      { path: "sandbox.txt", content: "appended?\n", append: "true" },
+      undefined as never,
+    );
+
+    expect(JSON.stringify(result)).toContain("append must be a boolean");
+    expect(await fs.readFile(filePath, "utf-8")).toBe("original\n");
   });
 });

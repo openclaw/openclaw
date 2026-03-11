@@ -470,16 +470,26 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
     ) => {
       const record =
         params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-      // Reject any truthy append value (boolean true, string "true", number 1, etc.)
-      // in sandbox mode — the bridge has no appendFile support.
-      if (record?.append) {
+      const rawAppend = record?.append;
+      // Reject malformed append payloads up front so sandbox writes never
+      // silently fall through to overwrite mode when append semantics were requested.
+      if (rawAppend !== undefined && rawAppend !== null && typeof rawAppend !== "boolean") {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Error: append must be a boolean (true/false), got ${typeof rawAppend}: ${JSON.stringify(rawAppend)}. ` +
+                "Additionally, append mode is not supported in sandboxed sessions.",
+            },
+          ],
+        } as AgentToolResult;
+      }
+      if (rawAppend === true) {
         const msg =
-          typeof record.append !== "boolean"
-            ? `Error: append must be a boolean (true/false), got ${typeof record.append}: ${JSON.stringify(record.append)}. ` +
-              "Additionally, append mode is not supported in sandboxed sessions."
-            : "Error: append mode is not supported in sandboxed sessions. " +
-              "The sandbox bridge does not expose appendFile. " +
-              "Use the default overwrite mode or run outside the sandbox.";
+          "Error: append mode is not supported in sandboxed sessions. " +
+          "The sandbox bridge does not expose appendFile. " +
+          "Use the default overwrite mode or run outside the sandbox.";
         return {
           content: [{ type: "text", text: msg }],
         } as AgentToolResult;
@@ -718,11 +728,10 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
  * overwriting it.  This prevents silent data loss when multiple isolated
  * sessions (e.g. cron jobs) write to the same file concurrently.
  *
- * **Atomicity note:** `fs.appendFile` reduces but does not eliminate data
- * races for concurrent appenders.  On POSIX systems, `O_APPEND` writes
- * are atomic up to `PIPE_BUF` (4 KB on Linux/macOS), but larger appends
- * may interleave.  Callers that need strict ordering should use external
- * coordination (e.g. a file lock or write queue).
+ * **Atomicity note:** `fs.appendFile` reduces the contention window between
+ * concurrent appenders, but it is not a complete atomicity guarantee for
+ * higher-level write ordering. Callers that need strict sequencing should
+ * still use external coordination (for example a file lock or write queue).
  *
  * The upstream `createWriteTool` from `@mariozechner/pi-coding-agent` does
  * not support append — this wrapper intercepts the parameter at the OpenClaw
@@ -793,12 +802,14 @@ function wrapWriteToolWithAppendMode(
       if (!filePath) {
         return { content: [{ type: "text", text: "Error: path is required (must be non-empty)" }] };
       }
-      if (content === undefined || content === null) {
-        return { content: [{ type: "text", text: "Error: content is required" }] };
+      if (typeof content !== "string" || content.trim().length === 0) {
+        return {
+          content: [{ type: "text", text: "Error: content is required (must be non-empty)" }],
+        };
       }
 
       try {
-        const workspaceOnly = _options?.workspaceOnly !== false;
+        const workspaceOnly = _options?.workspaceOnly ?? false;
         if (workspaceOnly) {
           // Use the same path-safety validation as writeFileWithinRoot to prevent
           // symlink escapes and path traversal attacks.  openWritableFileWithinRoot
@@ -810,21 +821,26 @@ function wrapWriteToolWithAppendMode(
             rootDir: root,
             relativePath: relative,
             mkdir: true,
+            appendExisting: true,
             truncateExisting: false,
           });
-          // Close the validated handle — we only needed it to verify the
-          // path is inside workspace and not a symlink escape.  Then append
-          // to the verified real path, which is safe because realpath was
-          // already resolved and checked against the workspace root.
-          const verifiedRealPath = target.openedRealPath;
-          await target.handle.close().catch(() => {});
-          await fs.appendFile(verifiedRealPath, content, { encoding: "utf-8", signal });
+          try {
+            await fs.appendFile(target.handle, content, {
+              encoding: "utf-8",
+              signal: signal ?? undefined,
+            });
+          } finally {
+            await target.handle.close().catch(() => {});
+          }
         } else {
           // workspaceOnly=false: allow writes outside workspace (matches
           // non-append behavior). Resolve path and create parent dirs.
           const resolved = path.resolve(root, filePath);
           await fs.mkdir(path.dirname(resolved), { recursive: true });
-          await fs.appendFile(resolved, content, { encoding: "utf-8", signal });
+          await fs.appendFile(resolved, content, {
+            encoding: "utf-8",
+            signal: signal ?? undefined,
+          });
         }
 
         return {
