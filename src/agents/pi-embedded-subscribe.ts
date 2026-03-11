@@ -107,11 +107,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
+    try {
+      const maybePromise = params.onBlockReply(payload);
+      void Promise.resolve(maybePromise).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {

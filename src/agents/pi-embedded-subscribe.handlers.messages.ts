@@ -375,11 +375,14 @@ export function handleMessageEnd(
     if (!onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
+    try {
+      const maybePromise = onBlockReply(payload);
+      void Promise.resolve(maybePromise).catch((err) => {
         ctx.log.warn(`block reply callback failed: ${String(err)}`);
       });
+    } catch (err) {
+      ctx.log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
