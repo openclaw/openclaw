@@ -170,6 +170,8 @@ private struct ChatMessageBody: View {
     let userAccent: Color?
     let showsAssistantTrace: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
         let text = self.primaryText
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
@@ -222,6 +224,19 @@ private struct ChatMessageBody: View {
                         toolName: toolResult.name)
                 }
             }
+
+            if !text.isEmpty && self.message.role.lowercased() == "assistant" {
+                HStack {
+                    Spacer()
+                    CopyMessageButton(text: text)
+                        #if os(macOS)
+                        .opacity(self.isHovered ? 1 : 0)
+                        .allowsHitTesting(self.isHovered)
+                        #endif
+                }
+                .padding(.top, -2)
+                .padding(.bottom, -6)
+            }
         }
         .textSelection(.enabled)
         .padding(.vertical, 10)
@@ -233,6 +248,11 @@ private struct ChatMessageBody: View {
         .shadow(color: self.bubbleShadowColor, radius: self.bubbleShadowRadius, y: self.bubbleShadowYOffset)
         .padding(.leading, self.tailPaddingLeading)
         .padding(.trailing, self.tailPaddingTrailing)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                self.isHovered = hovering
+            }
+        }
     }
 
     private var primaryText: String {
@@ -347,6 +367,40 @@ private struct ChatMessageBody: View {
 
     private var bubbleShadowYOffset: CGFloat {
         self.style == .onboarding && !self.isUser ? 2 : 0
+    }
+}
+
+private struct CopyMessageButton: View {
+    let text: String
+    @State private var isCopied = false
+    @State private var copyTask: Task<Void, Never>?
+
+    var body: some View {
+        Button(action: {
+            #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(self.text, forType: .string)
+            #elseif os(iOS)
+            UIPasteboard.general.string = self.text
+            #endif
+            withAnimation { self.isCopied = true }
+            
+            self.copyTask?.cancel()
+            self.copyTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                withAnimation { self.isCopied = false }
+            }
+        }) {
+            Image(systemName: self.isCopied ? "checkmark" : "doc.on.doc")
+                .imageScale(.small)
+                .foregroundStyle(self.isCopied ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Copy message")
+        .onDisappear {
+            self.copyTask?.cancel()
+        }
     }
 }
 
