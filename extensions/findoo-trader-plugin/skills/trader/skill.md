@@ -20,15 +20,16 @@ Place orders, manage positions, and view market data (K-line, order book) for li
 - "取消订单" / "cancel order"
 - "设置止损" / "set stop loss"
 - "查看订单" / "open orders"
+- "place order" / "limit order BTC at 60k"
+- "cancel all orders"
 
 ## When NOT to Use
 
 **DON'T use this skill when:**
 
 - User wants to create or manage strategies -- use fin-strategy
-- User asks for portfolio-level analysis -- use fin-portfolio
 - User wants overall account overview -- use fin-overview
-- User wants to configure exchanges -- refer to /dashboard/setting
+- User wants to configure exchanges -- use fin-setting
 
 ## CRITICAL: Confirmation Required
 
@@ -52,7 +53,9 @@ fin_place_order({
   type: "limit",
   amount: 0.01,
   price: 65000,
-  exchange: "binance"
+  exchange: "binance",
+  stopLoss: 62000,
+  takeProfit: 70000
 })
 ```
 
@@ -70,13 +73,14 @@ fin_cancel_order({
 
 ### fin_modify_order
 
-Modify an existing order.
+Modify an existing order (price or amount).
 
 ```
 fin_modify_order({
   orderId: "order-abc123",
   symbol: "BTC/USDT",
-  price: 64500
+  price: 64500,
+  amount: 0.02
 })
 ```
 
@@ -127,3 +131,4 @@ fin_paper_positions({ accountId: "acct-1" })
 - After order placement, show order ID and status.
 - If rejected (insufficient balance, risk limits), explain why clearly.
 - For "sell all" requests, first check positions, then confirm exact amount.
+- Never assume the user wants a market order -- if unspecified, ask whether they prefer market or limit.

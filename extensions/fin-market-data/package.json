@@ -33,8 +33,6 @@
     "openfinclaw": ">=0.0.1"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": []
   }
 }

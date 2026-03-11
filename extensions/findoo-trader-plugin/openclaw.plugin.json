@@ -4,6 +4,7 @@
   "description": "Unified trading infrastructure — exchange registry, risk control, paper trading, strategy engine, fund management. Replaces fin-core + fin-trading + fin-paper-trading + fin-strategy-engine + fin-fund-manager.",
   "kind": "financial",
   "version": "2026.3.2",
+  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "properties": {

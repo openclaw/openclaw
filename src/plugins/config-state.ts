@@ -27,15 +27,10 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "device-pair",
   "phone-control",
   "talk-voice",
-  // OpenFinClaw financial extensions
+  // OpenFinClaw financial plugins
   "findoo-trader-plugin",
   "findoo-datahub-plugin",
-  "fin-market-data",
-  "fin-portfolio",
-  "fin-monitoring",
-  "fin-strategy-memory",
-  "fin-expert-sdk",
-  "fin-info-feed",
+  "findoo-backtest-plugin",
 ]);
 
 const normalizeList = (value: unknown): string[] => {
