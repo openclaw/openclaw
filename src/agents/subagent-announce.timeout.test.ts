@@ -357,4 +357,80 @@ describe("subagent announce timeout config", () => {
     // Should report tool call count even without assistant text.
     expect(internalEvents[0]?.result).toContain("2 tool call(s)");
   });
+
+  it("counts toolUse blocks in timeout partial progress", async () => {
+    chatHistoryMessages = [
+      { role: "user", content: "do something" },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call1", name: "read", input: {} }],
+      },
+      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call2", name: "exec", input: {} }],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-tooluse", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toContain("2 tool call(s)");
+  });
+
+  it("counts functionCall blocks in timeout partial progress", async () => {
+    chatHistoryMessages = [
+      { role: "user", content: "do something" },
+      {
+        role: "assistant",
+        content: [{ type: "functionCall", id: "call1", name: "read", arguments: {} }],
+      },
+      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
+      {
+        role: "assistant",
+        content: [{ type: "functionCall", id: "call2", name: "exec", arguments: {} }],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-functioncall", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toContain("2 tool call(s)");
+  });
+
+  it("preserves NO_REPLY when timeout partial progress exists", async () => {
+    chatHistoryMessages = [
+      { role: "user", content: "do something" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Still working through the files." },
+          { type: "toolCall", id: "call1", name: "read", arguments: {} },
+        ],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-no-reply", {
+      outcome: { status: "timeout" },
+      roundOneReply: " NO_REPLY ",
+    });
+
+    expect(
+      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
+    ).toBeUndefined();
+  });
 });
