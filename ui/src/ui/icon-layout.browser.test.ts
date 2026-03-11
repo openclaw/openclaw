@@ -45,4 +45,23 @@ describe("icon layout styling", () => {
     expect(getComputedStyle(svg!).width).toBe("14px");
     expect(getComputedStyle(svg!).height).toBe("14px");
   });
+
+  it("renders the shared nav collapse trigger with the compact hamburger icon", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`<button class="nav-collapse-toggle" type="button">
+        <span class="nav-collapse-toggle__icon">${icons.menu}</span>
+      </button>`,
+      container,
+    );
+
+    const button = container.querySelector<HTMLElement>(".nav-collapse-toggle");
+    const svg = container.querySelector<SVGElement>(".nav-collapse-toggle__icon svg");
+    expect(button).not.toBeNull();
+    expect(svg).not.toBeNull();
+    expect(getComputedStyle(button!).display).toBe("flex");
+    expect(getComputedStyle(svg!).width).toBe("18px");
+    expect(getComputedStyle(svg!).height).toBe("18px");
+  });
 });

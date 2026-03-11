@@ -425,7 +425,8 @@ export function renderApp(state: AppViewState) {
         `
         }
         <button
-          class="sidebar-collapse-btn"
+          type="button"
+          class="nav-collapse-toggle"
           @click=${() =>
             state.applySettings({
               ...state.settings,
@@ -434,7 +435,7 @@ export function renderApp(state: AppViewState) {
           title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
           aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
         >
-          ${state.settings.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+          <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
         </button>
       </div>
  

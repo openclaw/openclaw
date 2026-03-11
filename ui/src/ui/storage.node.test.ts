@@ -58,6 +58,33 @@ function setControlUiBasePath(value: string | undefined) {
   });
 }
 
+function setViteDevScript(enabled: boolean) {
+  if (
+    typeof document === "undefined" ||
+    typeof (document as Partial<Document>).querySelectorAll !== "function" ||
+    typeof (document as Partial<Document>).createElement !== "function"
+  ) {
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) =>
+        enabled && selector.includes("/@vite/client") ? ({} as Element) : null,
+      querySelectorAll: () => [],
+      createElement: () => ({ setAttribute() {}, remove() {} }) as unknown as HTMLScriptElement,
+      head: { append() {} },
+    } as Document);
+    return;
+  }
+  document
+    .querySelectorAll('script[data-test-vite-client="true"]')
+    .forEach((node) => node.remove());
+  if (!enabled) {
+    return;
+  }
+  const script = document.createElement("script");
+  script.setAttribute("data-test-vite-client", "true");
+  script.setAttribute("src", "/@vite/client");
+  document.head.append(script);
+}
+
 function expectedGatewayUrl(basePath: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}${basePath}`;
@@ -90,11 +117,13 @@ describe("loadSettings default gateway URL derivation", () => {
     localStorage.clear();
     sessionStorage.clear();
     setControlUiBasePath(undefined);
+    setViteDevScript(false);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     setControlUiBasePath(undefined);
+    setViteDevScript(false);
     vi.unstubAllGlobals();
   });
 
@@ -119,6 +148,44 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
+  });
+
+  it("defaults vite dev pages to the local gateway port", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:5174",
+      pathname: "/chat",
+    });
+    setViteDevScript(true);
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("migrates persisted vite dev gateway URLs to the local gateway port", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:5174",
+      pathname: "/chat",
+    });
+    setViteDevScript(true);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "ws://127.0.0.1:5174",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navGroupsCollapsed: {},
+      }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
   });
 
   it("ignores and scrubs legacy persisted tokens", async () => {

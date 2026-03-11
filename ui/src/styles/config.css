@@ -5,7 +5,7 @@
 /* Layout Container */
 .config-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   height: calc(100vh - 160px);
   margin: 0 -16px -32px; /* preserve margin-top: 0 for onboarding mode */
@@ -436,6 +436,78 @@
   color: var(--muted);
 }
 
+.config-top-tabs {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 22px;
+  background: var(--bg-accent);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+:root[data-theme="light"] .config-top-tabs {
+  background: var(--bg-hover);
+}
+
+.config-search--top {
+  padding: 0;
+  border-bottom: none;
+  min-width: 0;
+}
+
+.config-top-tabs__scroller {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.config-top-tabs__tab {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+:root[data-theme="light"] .config-top-tabs__tab {
+  background: white;
+}
+
+.config-top-tabs__tab:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.config-top-tabs__tab.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-subtle);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
+}
+
+.config-top-tabs__right {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
 /* Diff Panel */
 .config-diff {
   margin: 18px 22px 0;
@@ -624,6 +696,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 22px;
+  min-width: 0;
 }
 
 .config-raw-field textarea {
@@ -687,9 +760,12 @@
 .config-form--modern {
   display: grid;
   gap: 20px;
+  width: 100%;
+  min-width: 0;
 }
 
 .config-section-card {
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
@@ -754,6 +830,7 @@
 
 .config-section-card__content {
   padding: 18px;
+  min-width: 0;
 }
 
 /* ===========================================
@@ -1542,10 +1619,6 @@
    =========================================== */
 
 @media (max-width: 768px) {
-  .config-layout {
-    grid-template-columns: 1fr;
-  }
-
   .config-sidebar {
     border-right: none;
     border-bottom: 1px solid var(--border);
@@ -1587,6 +1660,24 @@
   .config-actions__right {
     width: 100%;
     justify-content: center;
+  }
+
+  .config-top-tabs {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    padding: 12px 16px;
+  }
+
+  .config-top-tabs__right {
+    justify-content: stretch;
+  }
+
+  .config-top-tabs__right .config-mode-toggle {
+    width: 100%;
+  }
+
+  .config-top-tabs__right .config-mode-toggle__btn {
+    flex: 1 1 50%;
   }
 
   .config-section-hero {

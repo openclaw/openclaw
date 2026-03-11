@@ -185,6 +185,64 @@
   font-size: 13px;
 }
 
+.topbar-theme-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+}
+
+.topbar-theme-mode__btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.topbar-theme-mode__btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
+}
+
+.topbar-theme-mode__btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.topbar-theme-mode__btn--active {
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 14%, transparent);
+}
+
+.topbar-theme-mode__btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ===========================================
    Navigation Sidebar
    =========================================== */
