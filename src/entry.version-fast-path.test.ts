@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const applyCliProfileEnvMock = vi.hoisted(() => vi.fn());
 const attachChildProcessBridgeMock = vi.hoisted(() => vi.fn());
 const installProcessWarningFilterMock = vi.hoisted(() => vi.fn());
+const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
 const isMainModuleMock = vi.hoisted(() => vi.fn(() => true));
 const isRootHelpInvocationMock = vi.hoisted(() => vi.fn(() => false));
 const isRootVersionInvocationMock = vi.hoisted(() => vi.fn(() => true));
@@ -42,6 +43,10 @@ vi.mock("./infra/git-commit.js", () => ({
 
 vi.mock("./infra/is-main.js", () => ({
   isMainModule: isMainModuleMock,
+}));
+
+vi.mock("./infra/net/undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
 }));
 
 vi.mock("./infra/warning-filter.js", () => ({
@@ -85,6 +90,8 @@ describe("entry root version fast path", () => {
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
+
     logSpy.mockRestore();
   });
 
@@ -98,6 +105,8 @@ describe("entry root version fast path", () => {
       expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
+
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
 
     logSpy.mockRestore();
   });
