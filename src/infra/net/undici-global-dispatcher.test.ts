@@ -15,7 +15,13 @@ const {
   }
 
   class EnvHttpProxyAgent {
-    constructor(public readonly options?: Record<string, unknown>) {}
+    static shouldThrow = false;
+
+    constructor(public readonly options?: Record<string, unknown>) {
+      if (EnvHttpProxyAgent.shouldThrow) {
+        throw new Error("invalid proxy env");
+      }
+    }
   }
 
   class ProxyAgent {
@@ -75,6 +81,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
     vi.mocked(hasProxyEnvConfigured).mockReturnValue(false);
+    EnvHttpProxyAgent.shouldThrow = false;
   });
 
   it("replaces default Agent dispatcher with extended stream timeouts", () => {
@@ -119,6 +126,24 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.connect).toEqual({
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 300,
+    });
+  });
+
+  it("falls back to Agent hardening when env-proxy upgrade fails", () => {
+    vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+    EnvHttpProxyAgent.shouldThrow = true;
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(Agent);
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.connect).toEqual({

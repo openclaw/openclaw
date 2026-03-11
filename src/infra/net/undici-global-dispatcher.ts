@@ -75,38 +75,70 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   }
 
   const currentKind = resolveDispatcherKind(dispatcher);
-  const kind =
-    currentKind === "agent" && hasProxyEnvConfigured() ? ("env-proxy" as const) : currentKind;
-  if (kind === "unsupported") {
+  if (currentKind === "unsupported") {
     return;
   }
 
   const autoSelectFamily = resolveAutoSelectFamily();
-  const nextKey = resolveDispatcherKey({ kind, timeoutMs, autoSelectFamily });
-  if (lastAppliedDispatcherKey === nextKey) {
+  const connect = resolveConnectOptions(autoSelectFamily);
+  const agentKey = resolveDispatcherKey({ kind: currentKind, timeoutMs, autoSelectFamily });
+  const envProxyRequested = currentKind === "agent" && hasProxyEnvConfigured();
+  const envProxyKey = envProxyRequested
+    ? resolveDispatcherKey({ kind: "env-proxy", timeoutMs, autoSelectFamily })
+    : null;
+  const appliedKey = envProxyKey ?? agentKey;
+  if (lastAppliedDispatcherKey === appliedKey) {
     return;
   }
 
-  const connect = resolveConnectOptions(autoSelectFamily);
   try {
-    if (kind === "env-proxy") {
+    if (envProxyRequested) {
       const proxyOptions = {
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),
       } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
       setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
-    } else {
-      setGlobalDispatcher(
-        new Agent({
-          bodyTimeout: timeoutMs,
-          headersTimeout: timeoutMs,
-          ...(connect ? { connect } : {}),
-        }),
-      );
+      lastAppliedDispatcherKey = envProxyKey;
+      return;
     }
-    lastAppliedDispatcherKey = nextKey;
+
+    if (currentKind === "env-proxy") {
+      const proxyOptions = {
+        bodyTimeout: timeoutMs,
+        headersTimeout: timeoutMs,
+        ...(connect ? { connect } : {}),
+      } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+      setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
+      lastAppliedDispatcherKey = agentKey;
+      return;
+    }
+
+    setGlobalDispatcher(
+      new Agent({
+        bodyTimeout: timeoutMs,
+        headersTimeout: timeoutMs,
+        ...(connect ? { connect } : {}),
+      }),
+    );
+    lastAppliedDispatcherKey = agentKey;
   } catch {
+    if (envProxyRequested) {
+      try {
+        setGlobalDispatcher(
+          new Agent({
+            bodyTimeout: timeoutMs,
+            headersTimeout: timeoutMs,
+            ...(connect ? { connect } : {}),
+          }),
+        );
+        lastAppliedDispatcherKey = agentKey;
+      } catch {
+        // Best-effort hardening only.
+      }
+      return;
+    }
+
     // Best-effort hardening only.
   }
 }
