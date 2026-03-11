@@ -240,6 +240,13 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
+  const shouldBypassChatQueue = (event: FeishuMessageEvent): boolean => {
+    const text = resolveDebounceText(event);
+    if (!text) {
+      return false;
+    }
+    return core.channel.commands.isControlCommandMessage(text, cfg);
+  };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
     const task = () =>
@@ -252,6 +259,10 @@ function registerEventHandlers(
         chatHistories,
         accountId,
       });
+    if (shouldBypassChatQueue(event)) {
+      await task();
+      return;
+    }
     await enqueue(chatId, task);
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {

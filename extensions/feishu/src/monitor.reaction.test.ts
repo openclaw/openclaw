@@ -1,6 +1,9 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
+import {
+  hasControlCommand,
+  isControlCommandMessage,
+} from "../../../src/auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -77,13 +80,13 @@ async function resolveReactionWithLookup(params: {
 
 type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
-function buildDebounceConfig(): ClawdbotConfig {
+function buildDebounceConfig(debounceMsByChannel = 20): ClawdbotConfig {
   return {
     messages: {
       inbound: {
         debounceMs: 0,
         byChannel: {
-          feishu: 20,
+          feishu: debounceMsByChannel,
         },
       },
     },
@@ -136,6 +139,7 @@ function createTextEvent(params: {
 async function setupDebounceMonitor(params?: {
   botOpenId?: string;
   botName?: string;
+  debounceMsByChannel?: number;
 }): Promise<(data: unknown) => Promise<void>> {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -143,7 +147,7 @@ async function setupDebounceMonitor(params?: {
   createEventDispatcherMock.mockReturnValue({ register });
 
   await monitorSingleAccount({
-    cfg: buildDebounceConfig(),
+    cfg: buildDebounceConfig(params?.debounceMsByChannel),
     account: buildDebounceAccount(),
     runtime: {
       log: vi.fn(),
@@ -398,6 +402,9 @@ describe("Feishu inbound debounce regressions", () => {
           text: {
             hasControlCommand,
           },
+          commands: {
+            isControlCommandMessage,
+          },
         },
       }),
     );
@@ -580,5 +587,33 @@ describe("Feishu inbound debounce regressions", () => {
     expect(combined.text).toBe("fresh");
     expect(recordSpy).toHaveBeenCalledWith("default:om_old");
     expect(recordSpy).not.toHaveBeenCalledWith("default:om_new");
+  });
+
+  it("bypasses the per-chat queue for control-command messages", async () => {
+    setDedupPassThroughMocks();
+
+    let releaseBlocked: (() => void) | undefined;
+    handleFeishuMessageMock.mockImplementation(async (params: { event?: FeishuMessageEvent }) => {
+      if (params.event?.message.message_id !== "om_blocked") {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        releaseBlocked = resolve;
+      });
+    });
+
+    const onMessage = await setupDebounceMonitor({ debounceMsByChannel: 0 });
+    const first = onMessage(createTextEvent({ messageId: "om_blocked", text: "run long task" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+
+    const second = onMessage(createTextEvent({ messageId: "om_control", text: "/status" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+
+    releaseBlocked?.();
+    await Promise.all([first, second]);
   });
 });
