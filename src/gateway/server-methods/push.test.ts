@@ -3,7 +3,7 @@ import { ErrorCodes } from "../protocol/index.js";
 import { pushHandlers } from "./push.js";
 
 vi.mock("../../infra/push-apns.js", () => ({
-  clearApnsRegistration: vi.fn(),
+  clearApnsRegistrationIfCurrent: vi.fn(),
   loadApnsRegistration: vi.fn(),
   normalizeApnsEnvironment: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
@@ -13,7 +13,7 @@ vi.mock("../../infra/push-apns.js", () => ({
 }));
 
 import {
-  clearApnsRegistration,
+  clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
@@ -57,7 +57,7 @@ describe("push.test handler", () => {
     vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
     vi.mocked(resolveApnsRelayConfigFromEnv).mockClear();
     vi.mocked(sendApnsAlert).mockClear();
-    vi.mocked(clearApnsRegistration).mockClear();
+    vi.mocked(clearApnsRegistrationIfCurrent).mockClear();
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
   });
 
@@ -195,7 +195,17 @@ describe("push.test handler", () => {
     });
     await invoke();
 
-    expect(clearApnsRegistration).toHaveBeenCalledWith("ios-node-1");
+    expect(clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
+      nodeId: "ios-node-1",
+      registration: {
+        nodeId: "ios-node-1",
+        transport: "direct",
+        token: "abcd",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        updatedAtMs: 1,
+      },
+    });
   });
 
   it("does not clear relay registrations after invalidation-shaped failures", async () => {
@@ -260,7 +270,7 @@ describe("push.test handler", () => {
       },
       overrideEnvironment: null,
     });
-    expect(clearApnsRegistration).not.toHaveBeenCalled();
+    expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
   });
 
   it("does not clear direct registrations when push.test overrides the environment", async () => {
@@ -320,6 +330,6 @@ describe("push.test handler", () => {
       },
       overrideEnvironment: "production",
     });
-    expect(clearApnsRegistration).not.toHaveBeenCalled();
+    expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
   });
 });

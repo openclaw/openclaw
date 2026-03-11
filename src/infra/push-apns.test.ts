@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearApnsRegistration,
+  clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
   registerApnsRegistration,
@@ -16,6 +17,7 @@ import {
   shouldClearStoredApnsRegistration,
   shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
+import { sendApnsRelayPush } from "./push-apns.relay.js";
 
 const tempDirs: string[] = [];
 const testAuthPrivateKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
@@ -29,6 +31,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -170,6 +173,41 @@ describe("push APNs registration store", () => {
     await expect(clearApnsRegistration("ios-node-1", baseDir)).resolves.toBe(true);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toBeNull();
   });
+
+  it("only clears a registration when the stored entry still matches", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseDir = await makeTempDir();
+      vi.setSystemTime(new Date("2026-03-11T00:00:00Z"));
+      const stale = await registerApnsToken({
+        nodeId: "ios-node-1",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        baseDir,
+      });
+
+      vi.setSystemTime(new Date("2026-03-11T00:00:01Z"));
+      const fresh = await registerApnsToken({
+        nodeId: "ios-node-1",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        baseDir,
+      });
+
+      await expect(
+        clearApnsRegistrationIfCurrent({
+          nodeId: "ios-node-1",
+          registration: stale,
+          baseDir,
+        }),
+      ).resolves.toBe(false);
+      await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(fresh);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("push APNs env config", () => {
@@ -264,6 +302,26 @@ describe("push APNs env config", () => {
       return;
     }
     expect(resolved.error).toContain("loopback hosts");
+  });
+
+  it("rejects APNs relay URLs with query, fragment, or userinfo components", () => {
+    const withQuery = resolveApnsRelayConfigFromEnv({
+      OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com/path?debug=1",
+      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
+    } as NodeJS.ProcessEnv);
+    expect(withQuery.ok).toBe(false);
+    if (!withQuery.ok) {
+      expect(withQuery.error).toContain("query and fragment are not allowed");
+    }
+
+    const withUserinfo = resolveApnsRelayConfigFromEnv({
+      OPENCLAW_APNS_RELAY_BASE_URL: "https://user:pass@relay.example.com/path",
+      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
+    } as NodeJS.ProcessEnv);
+    expect(withUserinfo.ok).toBe(false);
+    if (!withUserinfo.ok) {
+      expect(withUserinfo.error).toContain("userinfo is not allowed");
+    }
   });
 });
 
@@ -448,6 +506,36 @@ describe("push APNs send semantics", () => {
       transport: "relay",
       environment: "production",
       tokenSuffix: "abcd1234",
+    });
+  });
+
+  it("does not follow relay redirects", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 302,
+      json: vi.fn().mockRejectedValue(new Error("no body")),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const result = await sendApnsRelayPush({
+      relayConfig: {
+        baseUrl: "https://relay.example.com",
+        authToken: "relay-secret",
+        timeoutMs: 1000,
+      },
+      relayHandle: "relay-handle-123",
+      payload: { aps: { "content-available": 1 } },
+      pushType: "background",
+      priority: "5",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 302,
+      reason: "RelayRedirectNotAllowed",
+      environment: "production",
     });
   });
 

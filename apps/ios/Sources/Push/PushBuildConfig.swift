@@ -47,7 +47,18 @@ struct PushBuildConfig {
         guard let raw = bundle.object(forInfoDictionaryKey: key) as? String else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return URL(string: trimmed)
+        guard let components = URLComponents(string: trimmed),
+              components.scheme?.lowercased() == "https",
+              let host = components.host,
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil
+        else {
+            return nil
+        }
+        return components.url
     }
 
     private static func readEnum<T: RawRepresentable>(

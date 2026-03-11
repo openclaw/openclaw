@@ -1,5 +1,5 @@
 import {
-  clearApnsRegistration,
+  clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
@@ -97,7 +97,10 @@ export const pushHandlers: GatewayRequestHandlers = {
           overrideEnvironment,
         })
       ) {
-        await clearApnsRegistration(nodeId);
+        await clearApnsRegistrationIfCurrent({
+          nodeId,
+          registration,
+        });
       }
       respond(true, result, undefined);
     });

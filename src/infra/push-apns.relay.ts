@@ -85,6 +85,9 @@ export function resolveApnsRelayConfigFromEnv(
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
       throw new Error("unsupported protocol");
     }
+    if (!parsed.hostname) {
+      throw new Error("host required");
+    }
     if (parsed.protocol === "http:" && !readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP)) {
       throw new Error(
         "http relay URLs require OPENCLAW_APNS_RELAY_ALLOW_HTTP=true (development only)",
@@ -92,6 +95,12 @@ export function resolveApnsRelayConfigFromEnv(
     }
     if (parsed.protocol === "http:" && !isLoopbackRelayHostname(parsed.hostname)) {
       throw new Error("http relay URLs are limited to loopback hosts");
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error("userinfo is not allowed");
+    }
+    if (parsed.search || parsed.hash) {
+      throw new Error("query and fragment are not allowed");
     }
     return {
       ok: true,
@@ -119,6 +128,7 @@ async function sendApnsRelayRequest(params: {
 }): Promise<ApnsRelayPushResponse> {
   const response = await fetch(`${params.relayConfig.baseUrl}/v1/push/send`, {
     method: "POST",
+    redirect: "manual",
     headers: {
       authorization: `Bearer ${params.relayConfig.authToken}`,
       "content-type": "application/json",
@@ -131,6 +141,14 @@ async function sendApnsRelayRequest(params: {
     }),
     signal: AbortSignal.timeout(params.relayConfig.timeoutMs),
   });
+  if (response.status >= 300 && response.status < 400) {
+    return {
+      ok: false,
+      status: response.status,
+      reason: "RelayRedirectNotAllowed",
+      environment: "production",
+    };
+  }
 
   let json: unknown = null;
   try {

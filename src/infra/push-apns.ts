@@ -353,7 +353,11 @@ async function persistRegistrationsState(
   baseDir?: string,
 ): Promise<void> {
   const filePath = resolveApnsRegistrationPath(baseDir);
-  await writeJsonAtomic(filePath, state);
+  await writeJsonAtomic(filePath, state, {
+    mode: 0o600,
+    ensureDirMode: 0o700,
+    trailingNewline: true,
+  });
 }
 
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
@@ -471,6 +475,51 @@ export async function clearApnsRegistration(nodeId: string, baseDir?: string): P
     }
     delete state.registrationsByNodeId[normalizedNodeId];
     await persistRegistrationsState(state, baseDir);
+    return true;
+  });
+}
+
+function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boolean {
+  if (
+    a.nodeId !== b.nodeId ||
+    a.transport !== b.transport ||
+    a.topic !== b.topic ||
+    a.environment !== b.environment ||
+    a.updatedAtMs !== b.updatedAtMs
+  ) {
+    return false;
+  }
+  if (a.transport === "direct" && b.transport === "direct") {
+    return a.token === b.token;
+  }
+  if (a.transport === "relay" && b.transport === "relay") {
+    return (
+      a.relayHandle === b.relayHandle &&
+      a.installationId === b.installationId &&
+      a.distribution === b.distribution &&
+      a.tokenDebugSuffix === b.tokenDebugSuffix
+    );
+  }
+  return false;
+}
+
+export async function clearApnsRegistrationIfCurrent(params: {
+  nodeId: string;
+  registration: ApnsRegistration;
+  baseDir?: string;
+}): Promise<boolean> {
+  const normalizedNodeId = normalizeNodeId(params.nodeId);
+  if (!normalizedNodeId) {
+    return false;
+  }
+  return await withLock(async () => {
+    const state = await loadRegistrationsState(params.baseDir);
+    const current = state.registrationsByNodeId[normalizedNodeId];
+    if (!current || !isSameApnsRegistration(current, params.registration)) {
+      return false;
+    }
+    delete state.registrationsByNodeId[normalizedNodeId];
+    await persistRegistrationsState(state, params.baseDir);
     return true;
   });
 }
@@ -806,17 +855,54 @@ function createBackgroundPayload(params: { nodeId: string; wakeReason?: string }
   };
 }
 
-export async function sendApnsAlert(params: {
-  auth?: ApnsAuthConfig;
-  relayConfig?: ApnsRelayConfig;
-  registration: ApnsRegistration;
+type ApnsAlertCommonParams = {
   nodeId: string;
   title: string;
   body: string;
   timeoutMs?: number;
+};
+
+type DirectApnsAlertParams = ApnsAlertCommonParams & {
+  registration: DirectApnsRegistration;
+  auth: ApnsAuthConfig;
   requestSender?: ApnsRequestSender;
+  relayConfig?: never;
+  relayRequestSender?: never;
+};
+
+type RelayApnsAlertParams = ApnsAlertCommonParams & {
+  registration: RelayApnsRegistration;
+  relayConfig: ApnsRelayConfig;
   relayRequestSender?: ApnsRelayRequestSender;
-}): Promise<ApnsPushAlertResult> {
+  auth?: never;
+  requestSender?: never;
+};
+
+type ApnsBackgroundWakeCommonParams = {
+  nodeId: string;
+  wakeReason?: string;
+  timeoutMs?: number;
+};
+
+type DirectApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
+  registration: DirectApnsRegistration;
+  auth: ApnsAuthConfig;
+  requestSender?: ApnsRequestSender;
+  relayConfig?: never;
+  relayRequestSender?: never;
+};
+
+type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
+  registration: RelayApnsRegistration;
+  relayConfig: ApnsRelayConfig;
+  relayRequestSender?: ApnsRelayRequestSender;
+  auth?: never;
+  requestSender?: never;
+};
+
+export async function sendApnsAlert(
+  params: DirectApnsAlertParams | RelayApnsAlertParams,
+): Promise<ApnsPushAlertResult> {
   const payload = createAlertPayload({
     nodeId: params.nodeId,
     title: params.title,
@@ -824,69 +910,54 @@ export async function sendApnsAlert(params: {
   });
 
   if (params.registration.transport === "relay") {
-    if (!params.relayConfig) {
-      throw new Error("APNs relay config required");
-    }
+    const relayParams = params as RelayApnsAlertParams;
     return await sendRelayApnsPush({
-      relayConfig: params.relayConfig,
-      registration: params.registration,
+      relayConfig: relayParams.relayConfig,
+      registration: relayParams.registration,
       payload,
       pushType: "alert",
       priority: "10",
-      requestSender: params.relayRequestSender,
+      requestSender: relayParams.relayRequestSender,
     });
   }
-  if (!params.auth) {
-    throw new Error("APNs auth required");
-  }
+  const directParams = params as DirectApnsAlertParams;
   return await sendDirectApnsPush({
-    auth: params.auth,
-    registration: params.registration,
+    auth: directParams.auth,
+    registration: directParams.registration,
     payload,
-    timeoutMs: params.timeoutMs,
-    requestSender: params.requestSender,
+    timeoutMs: directParams.timeoutMs,
+    requestSender: directParams.requestSender,
     pushType: "alert",
     priority: "10",
   });
 }
 
-export async function sendApnsBackgroundWake(params: {
-  auth?: ApnsAuthConfig;
-  relayConfig?: ApnsRelayConfig;
-  registration: ApnsRegistration;
-  nodeId: string;
-  wakeReason?: string;
-  timeoutMs?: number;
-  requestSender?: ApnsRequestSender;
-  relayRequestSender?: ApnsRelayRequestSender;
-}): Promise<ApnsPushWakeResult> {
+export async function sendApnsBackgroundWake(
+  params: DirectApnsBackgroundWakeParams | RelayApnsBackgroundWakeParams,
+): Promise<ApnsPushWakeResult> {
   const payload = createBackgroundPayload({
     nodeId: params.nodeId,
     wakeReason: params.wakeReason,
   });
 
   if (params.registration.transport === "relay") {
-    if (!params.relayConfig) {
-      throw new Error("APNs relay config required");
-    }
+    const relayParams = params as RelayApnsBackgroundWakeParams;
     return await sendRelayApnsPush({
-      relayConfig: params.relayConfig,
-      registration: params.registration,
+      relayConfig: relayParams.relayConfig,
+      registration: relayParams.registration,
       payload,
       pushType: "background",
       priority: "5",
-      requestSender: params.relayRequestSender,
+      requestSender: relayParams.relayRequestSender,
     });
   }
-  if (!params.auth) {
-    throw new Error("APNs auth required");
-  }
+  const directParams = params as DirectApnsBackgroundWakeParams;
   return await sendDirectApnsPush({
-    auth: params.auth,
-    registration: params.registration,
+    auth: directParams.auth,
+    registration: directParams.registration,
     payload,
-    timeoutMs: params.timeoutMs,
-    requestSender: params.requestSender,
+    timeoutMs: directParams.timeoutMs,
+    requestSender: directParams.requestSender,
     pushType: "background",
     priority: "5",
   });

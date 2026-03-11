@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
     ok: true,
     params: rawParams,
   })),
-  clearApnsRegistration: vi.fn(),
+  clearApnsRegistrationIfCurrent: vi.fn(),
   loadApnsRegistration: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
   resolveApnsRelayConfigFromEnv: vi.fn(),
@@ -33,7 +33,7 @@ vi.mock("../node-invoke-sanitize.js", () => ({
 }));
 
 vi.mock("../../infra/push-apns.js", () => ({
-  clearApnsRegistration: mocks.clearApnsRegistration,
+  clearApnsRegistrationIfCurrent: mocks.clearApnsRegistrationIfCurrent,
   loadApnsRegistration: mocks.loadApnsRegistration,
   resolveApnsAuthConfigFromEnv: mocks.resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv: mocks.resolveApnsRelayConfigFromEnv,
@@ -197,7 +197,7 @@ describe("node.invoke APNs wake path", () => {
       ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
     );
     mocks.loadApnsRegistration.mockClear();
-    mocks.clearApnsRegistration.mockClear();
+    mocks.clearApnsRegistrationIfCurrent.mockClear();
     mocks.resolveApnsAuthConfigFromEnv.mockClear();
     mocks.resolveApnsRelayConfigFromEnv.mockClear();
     mocks.sendApnsBackgroundWake.mockClear();
@@ -311,7 +311,17 @@ describe("node.invoke APNs wake path", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.message).toBe("node not connected");
-    expect(mocks.clearApnsRegistration).toHaveBeenCalledWith("ios-node-stale");
+    expect(mocks.clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
+      nodeId: "ios-node-stale",
+      registration: {
+        nodeId: "ios-node-stale",
+        transport: "direct",
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        updatedAtMs: 1,
+      },
+    });
   });
 
   it("does not clear relay registrations from wake failures", async () => {
@@ -380,7 +390,7 @@ describe("node.invoke APNs wake path", () => {
         transport: "relay",
       },
     });
-    expect(mocks.clearApnsRegistration).not.toHaveBeenCalled();
+    expect(mocks.clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
   });
 
   it("forces one retry wake when the first wake still fails to reconnect", async () => {

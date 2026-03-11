@@ -109,7 +109,7 @@ actor PushRegistrationManager {
     }
 
     private static func isExpired(_ expiresAtMs: Int64?) -> Bool {
-        guard let expiresAtMs else { return false }
+        guard let expiresAtMs else { return true }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         // Refresh shortly before expiry so reconnect-path republishes a live handle.
         return expiresAtMs <= nowMs + 60_000
