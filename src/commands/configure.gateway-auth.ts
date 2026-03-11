@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { promptModelMetadataForPrimary } from "./model-metadata.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -133,6 +134,8 @@ export async function promptAuthConfig(
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
     }
   }
+
+  next = await promptModelMetadataForPrimary(next, prompter);
 
   return next;
 }
